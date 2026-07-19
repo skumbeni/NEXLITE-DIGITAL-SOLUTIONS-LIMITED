@@ -297,6 +297,40 @@
   .section-head h2{ font-size:clamp(1.7rem,4vw,2.3rem); margin-top:10px; }
   .section-head p{ color:var(--bone-dim); margin-top:12px; font-size:0.98rem; }
 
+  /* ---------- APP SEARCH ---------- */
+  .app-search{
+    position:relative;
+    margin-bottom:20px;
+  }
+  .app-search input{
+    width:100%;
+    background:var(--ink-soft);
+    border:1px solid var(--line);
+    color:var(--bone);
+    font-family:'Inter',sans-serif;
+    font-size:0.95rem;
+    padding:14px 18px 14px 44px;
+    border-radius:9px;
+  }
+  .app-search input:focus{
+    outline:none;
+    border-color:var(--amber);
+  }
+  .app-search i{
+    position:absolute;
+    left:16px;
+    top:50%;
+    transform:translateY(-50%);
+    color:var(--bone-dim);
+    pointer-events:none;
+  }
+  .app-search-empty{
+    padding:28px 24px;
+    text-align:center;
+    color:var(--bone-dim);
+    font-size:0.92rem;
+  }
+
   /* ---------- APP DIRECTORY (signage rows) ---------- */
   .directory{
     border:1px solid var(--line);
@@ -970,6 +1004,11 @@
       <p>Every live app below is built and supported by NEXLITE-DIGITAL-SOLUTIONS-LIMITED. Tap into any of them for the full picture — what it does, what it costs, and where to get it.</p>
     </div>
 
+    <div class="app-search">
+      <i class="fa-solid fa-magnifying-glass"></i>
+      <input type="text" id="appSearchInput" placeholder="Search apps by name or need — e.g. depot, school, agro..." autocomplete="off">
+    </div>
+
     <div class="directory" id="appDirectory"><!-- rows injected by JS --></div>
   </div>
 </section>
@@ -1124,6 +1163,7 @@
         <h4>Get in touch</h4>
         <a href="https://wa.me/260977638790" target="_blank"><i class="fa-brands fa-whatsapp"></i> WhatsApp us</a>
         <a href="mailto:skumbeni@gmail.com"><i class="fa-solid fa-envelope"></i> Email us</a>
+        <a href="https://www.facebook.com/profile.php?id=61592228180017" target="_blank" rel="noopener"><i class="fa-brands fa-facebook"></i> Facebook</a>
       </div>
       <div class="footer-col">
         <h4>Company</h4>
@@ -1345,48 +1385,72 @@
   const appsLiveEl = document.getElementById('appsLiveCount');
   if (appsLiveEl) appsLiveEl.textContent = String(liveCount).padStart(2, '0');
 
-  apps.forEach((app, i) => {
-    const row = document.createElement('div');
-    row.className = 'app-row';
-    row.innerHTML = `
-      <div class="app-row-top">
-        <div class="app-mark">${app.iconImage ? `<img src="${app.iconImage}" alt="${app.name} icon" width="56" height="56" loading="lazy">` : `<i class="fa-solid ${app.icon}"></i>`}</div>
-        <div class="app-main">
-          <div class="app-name">${app.name}</div>
-          <div class="app-tagline">${app.tagline}</div>
-          <div class="app-features-inline">
-            ${app.features.slice(0,3).map(f => `<span><i class="fa-solid fa-circle-check"></i>${f}</span>`).join('')}
+  function renderDirectory(query) {
+    directory.innerHTML = '';
+    const q = (query || '').trim().toLowerCase();
+    const matches = !q ? apps : apps.filter(app => {
+      const haystack = [app.name, app.tagline, app.forWho, ...(app.features || [])].join(' ').toLowerCase();
+      return haystack.includes(q);
+    });
+
+    matches.forEach((app) => {
+      const i = apps.indexOf(app);
+      const row = document.createElement('div');
+      row.className = 'app-row';
+      row.innerHTML = `
+        <div class="app-row-top">
+          <div class="app-mark">${app.iconImage ? `<img src="${app.iconImage}" alt="${app.name} icon" width="56" height="56" loading="lazy">` : `<i class="fa-solid ${app.icon}"></i>`}</div>
+          <div class="app-main">
+            <div class="app-name">${app.name}</div>
+            <div class="app-tagline">${app.tagline}</div>
+            <div class="app-features-inline">
+              ${app.features.slice(0,3).map(f => `<span><i class="fa-solid fa-circle-check"></i>${f}</span>`).join('')}
+            </div>
+          </div>
+          <div class="app-side">
+            ${app.statusLabel ? `<span class="stamp ${app.status}">${app.statusLabel}</span>` : ''}
           </div>
         </div>
-        <div class="app-side">
-          ${app.statusLabel ? `<span class="stamp ${app.status}">${app.statusLabel}</span>` : ''}
+        <div class="app-actions">
+          <button class="btn btn-ghost" data-action="learn" type="button"><i class="fa-solid fa-circle-info"></i> Learn More</button>
+          <a class="btn btn-amber" data-action="open" href="${app.downloadUrl}" target="_blank" rel="noopener"><i class="fa-solid fa-arrow-up-right-from-square"></i> Open App</a>
         </div>
-      </div>
-      <div class="app-actions">
-        <button class="btn btn-ghost" data-action="learn" type="button"><i class="fa-solid fa-circle-info"></i> Learn More</button>
-        <a class="btn btn-amber" data-action="open" href="${app.downloadUrl}" target="_blank" rel="noopener"><i class="fa-solid fa-arrow-up-right-from-square"></i> Open App</a>
-      </div>
-    `;
-    row.querySelector('[data-action="learn"]').addEventListener('click', () => openModal(i));
-    directory.appendChild(row);
-  });
+      `;
+      row.querySelector('[data-action="learn"]').addEventListener('click', () => openModal(i));
+      directory.appendChild(row);
+    });
 
-  // Static "Coming Soon" placeholder for future products
-  const comingSoonRow = document.createElement('div');
-  comingSoonRow.className = 'app-row app-row-placeholder';
-  comingSoonRow.innerHTML = `
-    <div class="app-row-top">
-      <div class="app-mark app-mark-placeholder"><i class="fa-solid fa-plus"></i></div>
-      <div class="app-main">
-        <div class="app-name">More on the way</div>
-        <div class="app-tagline">We're always building. The next tool in the shelf is in development.</div>
-      </div>
-      <div class="app-side">
-        <span class="stamp soon">Coming Soon</span>
-      </div>
-    </div>
-  `;
-  directory.appendChild(comingSoonRow);
+    if (!q) {
+      // Static "Coming Soon" placeholder for future products (only shown when not searching)
+      const comingSoonRow = document.createElement('div');
+      comingSoonRow.className = 'app-row app-row-placeholder';
+      comingSoonRow.innerHTML = `
+        <div class="app-row-top">
+          <div class="app-mark app-mark-placeholder"><i class="fa-solid fa-plus"></i></div>
+          <div class="app-main">
+            <div class="app-name">More on the way</div>
+            <div class="app-tagline">We're always building. The next tool in the shelf is in development.</div>
+          </div>
+          <div class="app-side">
+            <span class="stamp soon">Coming Soon</span>
+          </div>
+        </div>
+      `;
+      directory.appendChild(comingSoonRow);
+    } else if (matches.length === 0) {
+      const emptyRow = document.createElement('div');
+      emptyRow.className = 'app-search-empty';
+      emptyRow.innerHTML = `<i class="fa-solid fa-circle-info"></i> No apps match "${query}". Try a different word, or <a href="#request">request one</a>.`;
+      directory.appendChild(emptyRow);
+    }
+  }
+
+  renderDirectory('');
+
+  const appSearchInput = document.getElementById('appSearchInput');
+  if (appSearchInput) {
+    appSearchInput.addEventListener('input', (e) => renderDirectory(e.target.value));
+  }
 
   function openModal(i) {
     const app = apps[i];
