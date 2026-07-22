@@ -639,7 +639,7 @@
     background:rgba(11,31,26,0.78);
     backdrop-filter: blur(6px);
     display:none;
-    align-items:flex-end;
+    align-items:stretch;
     justify-content:center;
     z-index:200;
     padding:0;
@@ -652,16 +652,27 @@
   .modal-panel{
     background:var(--ink-soft);
     width:100%;
-    max-width:640px;
-    max-height:92vh;
+    max-width:100%;
+    height:100vh;
+    height:100dvh;
+    max-height:100vh;
+    max-height:100dvh;
     overflow-y:auto;
-    border-radius:20px 20px 0 0;
-    border-top:1px solid var(--line);
+    border-radius:0;
     padding:28px;
+    padding-top:max(28px, env(safe-area-inset-top));
+    padding-bottom:max(28px, env(safe-area-inset-bottom));
     animation: slideUp 0.32s cubic-bezier(.2,.8,.2,1);
   }
   @media(min-width:680px){
-    .modal-panel{ border-radius:16px; }
+    .modal-panel{
+      width:100%;
+      max-width:640px;
+      height:auto;
+      max-height:92vh;
+      border-radius:16px;
+      border-top:1px solid var(--line);
+    }
   }
   @keyframes slideUp{ from{transform:translateY(40px); opacity:0;} to{transform:translateY(0); opacity:1;} }
 
@@ -1061,17 +1072,17 @@
     <div class="about-item">
       <span class="eyebrow">Why offline-first</span>
       <h3>Connectivity is a feature, not a given.</h3>
-      <p>Power cuts and patchy data are daily reality for depot operators. Our apps run fully offline and sync to the cloud the moment a connection appears.</p>
+      <p>Power cuts and patchy data are daily reality for depot operators, farmers, and rural schools alike. Our apps run fully offline — some, like Satellite Depot Tracker, even open with your last-known stock data when there's no signal at all — and sync the moment a connection reappears.</p>
     </div>
     <div class="about-item">
       <span class="eyebrow">Why mobile money</span>
       <h3>Billing in the currency people already use.</h3>
-      <p>Airtel Money, MTN MoMo, and Zamtel Kwacha aren't an afterthought — they're how our pricing and payments are built from day one.</p>
+      <p>Airtel Money, MTN MoMo, and Zamtel Kwacha aren't an afterthought — they're how our pricing and payments are built from day one, across depot billing, savings-group contributions, and transport fares alike.</p>
     </div>
     <div class="about-item">
       <span class="eyebrow">Why Zambia-first</span>
       <h3>Built here, priced for here.</h3>
-      <p>We design for the realities of the local market first, then carry those lessons to the rest of the continent — not the other way round.</p>
+      <p>From FISP-season tracking for farmers to chairperson-led chilimba accounts, we design around how business and community savings actually run in Zambia first — then carry those lessons to the rest of the continent.</p>
     </div>
   </div>
 </section>
@@ -1101,7 +1112,7 @@
       </details>
       <details class="faq-item">
         <summary>Is my data safe?</summary>
-        <p>Your data is stored securely and only accessible to you and the people you choose to give access to within your account. We don't sell customer data to third parties.</p>
+        <p>Yes. Our apps use hardened Firebase security rules to keep your data isolated from other accounts or depots, App Check to block automated abuse, and secure password hashing (PBKDF2 or bcrypt, depending on the app) rather than storing plain-text passwords. We don't sell customer data to third parties.</p>
       </details>
       <details class="faq-item">
         <summary>I need help — who do I contact?</summary>
@@ -1487,7 +1498,12 @@
     appSearchInput.addEventListener('input', (e) => renderDirectory(e.target.value));
   }
 
-  function openModal(i) {
+  function slugifyAppName(name) {
+    return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+  }
+
+  function openModal(i, opts) {
+    opts = opts || {};
     const app = apps[i];
     document.getElementById('modalIcon').innerHTML = app.iconImage ? `<img src="${app.iconImage}" alt="${app.name} icon" width="52" height="52">` : `<i class="fa-solid ${app.icon}"></i>`;
     document.getElementById('modalName').textContent = app.name;
@@ -1502,12 +1518,38 @@
 
     document.getElementById('appModal').classList.add('open');
     document.body.style.overflow = 'hidden';
+
+    // Push a history entry so the device/browser back button closes the
+    // modal instead of leaving the page, and give each app its own
+    // shareable URL (#app/<slug>). The modal is actually hidden by the
+    // popstate listener below, once the back navigation completes.
+    const slug = slugifyAppName(app.name);
+    const state = { nexliteModalOpen: true, appSlug: slug };
+    if (opts.replace || (history.state && history.state.nexliteModalOpen)) {
+      history.replaceState(state, '', `#app/${slug}`);
+    } else {
+      history.pushState(state, '', `#app/${slug}`);
+    }
   }
 
-  function closeModal() {
+  function hideModalUI() {
     document.getElementById('appModal').classList.remove('open');
     document.body.style.overflow = '';
   }
+
+  function closeModal() {
+    // If we're the ones who pushed the history entry for this modal,
+    // go back to consume it; popstate will call hideModalUI().
+    if (history.state && history.state.nexliteModalOpen) {
+      history.back();
+    } else {
+      hideModalUI();
+    }
+  }
+
+  window.addEventListener('popstate', () => {
+    hideModalUI();
+  });
 
   document.getElementById('appModal').addEventListener('click', (e) => {
     if (e.target.id === 'appModal') closeModal();
@@ -1515,6 +1557,17 @@
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeModal();
   });
+
+  // If someone opens or shares a direct link like #app/motoconnect, jump
+  // straight to that app's modal. Uses replaceState (not pushState) so the
+  // back button from a shared link leaves the site, same as any other page.
+  (function openModalFromHash() {
+    const match = location.hash.match(/^#app\/(.+)$/);
+    if (!match) return;
+    const slug = match[1];
+    const idx = apps.findIndex((a) => slugifyAppName(a.name) === slug);
+    if (idx !== -1) openModal(idx, { replace: true });
+  })();
 
   // ---------- REQUEST A FEATURE FORM ----------
   // Uses FormSubmit.co's AJAX endpoint so this static (no-backend) GitHub
