@@ -25,7 +25,16 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v71 (2026-07-28)
+// Current version: v72 (2026-07-28)
+//
+// v72 changes (2026-07-28) — signup ordering fix for Phase 4 readiness:
+//   - Reordered admin signup: Firebase Auth account creation + Phase 3's
+//     authorizedUids grant now happen BEFORE the depots/{id}/auth write,
+//     not after. Previously the depots write went out unauthenticated
+//     (before any UID existed for that depot), which works fine against
+//     open rules but would reject every new signup once Phase 4's depots
+//     rule requires auth.uid ∈ authorizedUids. No behavior change while
+//     depots stays open — this only matters once that rule ships.
 //
 // v71 changes (2026-07-28) — Phase 3 & 5: ownership records + admin auth:
 //   - Phase 3: new _grantAuthorizedUid(installId, uid) writes
@@ -543,7 +552,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'mdm-v71';   // ← bump this whenever you deploy a new version
+const CACHE     = 'mdm-v72';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

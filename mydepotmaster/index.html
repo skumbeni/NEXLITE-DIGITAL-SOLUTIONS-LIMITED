@@ -3187,7 +3187,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'mdm-v71';
+const SW_VERSION  = 'mdm-v72';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -3203,7 +3203,7 @@ const SW_VERSION  = 'mdm-v71';
   }
 
   // Step 2: Check if the URL already has our version stamp
-  const VER = 'mdm-v71';
+  const VER = 'mdm-v72';
   const url = new URL(location.href);
   const currentVer = url.searchParams.get('_mv');
 
@@ -4633,6 +4633,24 @@ async function signupFinish() {
           trialStart: now
         });
       } catch(fe) { console.warn('Firebase license register failed:', fe.message); }
+      // Phase 1 — provision a real Firebase Auth account BEFORE the depots
+      // write below. Order matters once Phase 4's depots rule requires
+      // auth.uid to already be in authorizedUids: this must run first so
+      // that grant exists by the time the depots/auth write happens.
+      // Non-fatal: if this fails (offline blip, Auth service hiccup), the
+      // account is simply picked up by the silent migration path in
+      // doLogin() on this user's very first sign-in — but their depots/auth
+      // write below will then also fail until that happens, so this isn't
+      // purely cosmetic anymore now that depots is locked.
+      let _newUserAuth = {};
+      if (isFbConfigured()) {
+        try {
+          const created = await fbAuthSignUp(_authEmailFor(username), pass);
+          _newUserAuth = { uid: created.uid, authMigrated: true };
+          // Phase 3 — grant this brand-new UID ownership of the depot it's about to create.
+          await _grantAuthorizedUid(newInstallId, created.uid);
+        } catch(ae) { console.warn('Firebase Auth signup failed (will migrate on first login):', ae.message); }
+      }
       // Lightweight credentials mirror — see _buildAuthSnapshot. Written here
       // immediately so login on another device works before the first
       // background sync, not just after.
@@ -4641,20 +4659,6 @@ async function signupFinish() {
       } catch(fe) { console.warn('Firebase auth snapshot write failed:', fe.message); }
     }
     // ── SAVE LOCALLY ONLY AFTER FIREBASE CONFIRMED ───────────────────────────
-
-    // Phase 1 — provision a real Firebase Auth account alongside the legacy
-    // hash. Non-fatal: if this fails (offline blip, Auth service hiccup), the
-    // account is simply picked up by the silent migration path in doLogin()
-    // on this user's very first sign-in.
-    let _newUserAuth = {};
-    if (isFbConfigured()) {
-      try {
-        const created = await fbAuthSignUp(_authEmailFor(username), pass);
-        _newUserAuth = { uid: created.uid, authMigrated: true };
-        // Phase 3 — grant this brand-new UID ownership of the depot it just created.
-        await _grantAuthorizedUid(newInstallId, created.uid);
-      } catch(ae) { console.warn('Firebase Auth signup failed (will migrate on first login):', ae.message); }
-    }
 
     const fresh = JSON.parse(JSON.stringify(DEFAULT));
     fresh.users = [{ username, password: hashed, role: 'admin', recoveryEmail: emailRaw || '', ..._newUserAuth }];
