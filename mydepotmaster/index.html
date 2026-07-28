@@ -4610,6 +4610,7 @@ async function signupFinish() {
     // ── REGISTER USERNAME IN FIREBASE FIRST ──────────────────────────────────
     // Must succeed before we save anything locally. This is the definitive
     // duplicate guard — if it throws ALREADY_EXISTS the signup is aborted.
+    let _newUserAuth = {};
     if (isFbConfigured()) {
       try {
         await fbSetIfNotExists('usernames/' + username, { installId: newInstallId, createdAt: now });
@@ -4642,15 +4643,12 @@ async function signupFinish() {
       // doLogin() on this user's very first sign-in — but their depots/auth
       // write below will then also fail until that happens, so this isn't
       // purely cosmetic anymore now that depots is locked.
-      let _newUserAuth = {};
-      if (isFbConfigured()) {
-        try {
-          const created = await fbAuthSignUp(_authEmailFor(username), pass);
-          _newUserAuth = { uid: created.uid, authMigrated: true };
-          // Phase 3 — grant this brand-new UID ownership of the depot it's about to create.
-          await _grantAuthorizedUid(newInstallId, created.uid);
-        } catch(ae) { console.warn('Firebase Auth signup failed (will migrate on first login):', ae.message); }
-      }
+      try {
+        const created = await fbAuthSignUp(_authEmailFor(username), pass);
+        _newUserAuth = { uid: created.uid, authMigrated: true };
+        // Phase 3 — grant this brand-new UID ownership of the depot it's about to create.
+        await _grantAuthorizedUid(newInstallId, created.uid);
+      } catch(ae) { console.warn('Firebase Auth signup failed (will migrate on first login):', ae.message); }
       // Lightweight credentials mirror — see _buildAuthSnapshot. Written here
       // immediately so login on another device works before the first
       // background sync, not just after.
