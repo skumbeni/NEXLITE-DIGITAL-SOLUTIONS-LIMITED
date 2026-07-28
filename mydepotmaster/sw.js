@@ -25,9 +25,87 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v64 (2026-07-09)
+// Current version: v71 (2026-07-28)
 //
-// v64 changes (2026-07-09) — Crash fix (Staff tab blank/Display Error):
+// v71 changes (2026-07-28) — Phase 3 & 5: ownership records + admin auth:
+//   - Phase 3: new _grantAuthorizedUid(installId, uid) writes
+//     depots/{installId}/authorizedUids/{uid}: true whenever a UID is
+//     confirmed for a depot — at signup, sub-user creation, and both
+//     login-time migration paths (already-Auth-confirmed backfill, and
+//     silent migration on legacy-verified login). This is the record
+//     Phase 4's tightened depots rule will check against once published;
+//     it does nothing on its own until that rule ships.
+//   - Phase 5 (mdm-admin.html only, not index.html, but versioned together
+//     since they deploy as one release): admin panel login now goes through
+//     real Firebase Auth (signInWithEmailAndPassword) instead of a
+//     client-side SHA-256 password comparison. Every fbGet/fbPatch/fbDelete
+//     in the admin panel now attaches the operator's ID token the same way
+//     index.html's v70 change did for the main app.
+//   - No rules changes shipped with this version — licenses and
+//     subscriptionRequests operator-gating rules are published separately
+//     once the admin panel above is confirmed working with the new login.
+//   - depots deliberately NOT gated in this version — still open. Gating it
+//     now would strand any account that hasn't completed the Phase 1 login
+//     migration yet, since an unmigrated account has no auth.uid at all
+//     during its own legacy-verification read. Held until migration
+//     coverage is confirmed near-total.
+//
+// v70 changes (2026-07-27) — Phase 2: authenticated RTDB requests:
+//   - fbAuthSignUp/fbAuthSignIn now go through the Firebase Auth SDK (loaded
+//     via CDN — firebase-app-compat.js + firebase-auth-compat.js, deferred —
+//     see index.html <head>) instead of hand-rolled Identity Toolkit REST
+//     calls. The SDK persists the session and refreshes ID tokens silently
+//     in the background (they expire hourly), which is what this phase
+//     needed — reimplementing that with raw refresh-token REST calls would
+//     just be a worse version of what the SDK already does.
+//   - Every fbGet/fbSet/fbSetIfNotExists/fbDelete call now attaches
+//     ?auth=<idToken> when a Firebase Auth session exists (_getIdToken()).
+//     No rules changed yet, so this doesn't restrict anything on its own —
+//     it just means requests are *carrying* proof of identity, ready for
+//     Phase 4 to actually require it. A request with no Auth session (not
+//     yet migrated, or the SDK failed to load) simply goes out
+//     unauthenticated, exactly as every request did before this phase.
+//   - Realtime Database and App Check both stay on the existing REST API —
+//     only Auth itself moved to the SDK.
+//   - Logout (_doLogoutNow) now also clears the Auth SDK session
+//     (fbAuthSignOutSilently), so no stale token lingers into the next login
+//     on a shared device.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// v69 changes (2026-07-27) — Phase 1: Firebase Auth migration:
+//   - Real Firebase Authentication accounts now exist alongside the legacy
+//     username/password-hash system, as the first step of migrating off the
+//     current "no auth, public rules" Firebase security model.
+//   - New signups (signupFinish) and admin-added sub-users (_confirmAddUser)
+//     provision a real Firebase Auth account (synthetic email
+//     {username}@mdm-depot.internal) immediately alongside the existing
+//     password hash.
+//   - Existing accounts migrate silently on their next successful login:
+//     doLogin() tries Firebase Auth first, and on any failure (not-yet-
+//     migrated, or a stale Auth password — see below) falls back to the
+//     existing hash check exactly as before, then provisions/repairs the
+//     Auth account using the plaintext password the user just typed.
+//   - Any password reset that happens without the old password (email/PIN
+//     recovery, admin reset, Settings > My Account change) now flags
+//     authMigrated:false, since it can't push the new password to Firebase
+//     Auth from the client — that needs either the old password or a
+//     privileged server-side call. Login is unaffected either way (Auth
+//     failures always fall back to the legacy check); fully closing this
+//     gap is a Phase 5 (server-side) follow-up.
+//   - No database rules changed yet — this phase only builds the dual-path
+//     login system rules will eventually depend on (Phase 4).
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// v68 changes (2026-07-27) — Staff Date of Birth:
+//   - Added optional Date of Birth field to Register Staff and Edit Staff
+//     Details forms, shown on the staff profile card, and included as a
+//     column in the Staff Roster CSV export.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// v67 changes (2026-07-09) — Crash fix (Staff tab blank/Display Error):
 //   - ROOT CAUSE: in renderStaffLogs(), the per-staff cumulative running-
 //     total map (cumMap) was rebuilt from approved entries only (v61
 //     approval workflow). But the fallback used when a log had no entry
@@ -465,7 +543,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'mdm-v67';   // ← bump this whenever you deploy a new version
+const CACHE     = 'mdm-v71';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

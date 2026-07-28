@@ -684,6 +684,29 @@ body.readonly-mode.trial-mode .content{padding-top:44px;}
   });
 </script>
 <script src="https://www.google.com/recaptcha/api.js?render=6LcLhystAAAAHClIZK1fQf1AbgAYJdDLwUNX9XT&onload=_onGrecaptchaLoad" async defer></script>
+<!-- ── FIREBASE AUTH SDK (Phase 2 — ID-token refresh only) ────────────────── -->
+<!-- Loaded purely so a signed-in Firebase Auth session persists across       -->
+<!-- reloads and its ID tokens (which expire hourly) refresh silently in the  -->
+<!-- background. Everything else — Realtime Database, App Check — stays on   -->
+<!-- the hand-rolled REST API used throughout this file (fbGet/fbSet/         -->
+<!-- fbDelete). `defer` preserves execution order across all three tags      -->
+<!-- below, and guarantees they run after the main inline script (which      -->
+<!-- defines FB_CONFIG) even though that script appears later in the file —  -->
+<!-- non-deferred scripts execute during parsing, before any deferred script -->
+<!-- runs, so FB_CONFIG is already defined by the time this init code needs it. -->
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js" defer></script>
+<script defer>
+  window._fbAuthSdkReady = new Promise(function(resolve) {
+    try {
+      firebase.initializeApp(FB_CONFIG);
+      resolve();
+    } catch (e) {
+      console.warn('Firebase Auth SDK init failed — falling back to unauthenticated RTDB requests:', e);
+      resolve(); // resolve anyway: _getIdToken() degrades to null, same as before Phase 2
+    }
+  });
+</script>
 </head>
 <body>
 <button id="global-fullscreen-btn" onclick="toggleAppFullscreen()" title="Full screen" aria-label="Toggle full screen" style="position:fixed;top:max(10px,env(safe-area-inset-top,10px));right:10px;z-index:5000;background:var(--surface,#16213E);border:1px solid var(--border,#2C3E50);border-radius:50%;width:34px;height:34px;display:flex;align-items:center;justify-content:center;color:var(--muted,#8a93a6);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;opacity:.85;box-shadow:0 2px 8px rgba(0,0,0,.3);">
@@ -1758,9 +1781,129 @@ function _fetchWithTimeout(url, opts, ms) {
 }
 const _FB_TIMEOUT_MS = 10000; // 10s — generous for slow mobile connections, still bounded
 
+// ── FIREBASE AUTH — Phase 1 (dual-path login migration) + Phase 2 (authenticated requests) ──
+// Real Firebase Authentication accounts, layered alongside the existing
+// username/password-hash system already stored in depots/{id}/data.users.
+// This does NOT yet gate any database rule (see doLogin()/signupFinish() for
+// how the two systems interact) — that's Phase 4, once every account has had
+// a chance to migrate.
+//
+// Firebase Auth requires an email-shaped identifier, but this app
+// authenticates by username — so every account gets a synthetic email at a
+// domain nobody can receive mail at. It's an identifier, not a real inbox,
+// and is never shown to the user.
+const AUTH_SYNTHETIC_DOMAIN = 'mdm-depot.internal';
+function _authEmailFor(username) {
+  return String(username || '').trim().toLowerCase() + '@' + AUTH_SYNTHETIC_DOMAIN;
+}
+
+// Phase 2: sign-in/sign-up now go through the Firebase Auth SDK (loaded via
+// CDN, see <head>) instead of hand-rolled Identity Toolkit REST calls. The
+// SDK persists the session and refreshes ID tokens silently in the
+// background (they expire hourly) — reimplementing that with raw
+// refresh-token REST calls would just be worse version of what it already
+// does. Everything else in this app (Realtime Database, App Check) stays on
+// the existing REST API; only Auth itself uses the SDK.
+//
+// Maps SDK error codes (e.g. 'auth/user-not-found') to the short codes the
+// rest of this file's error handling already expects, so doLogin()/
+// signupFinish() didn't need to change when this swapped from REST to SDK.
+function _sdkAuthErrCode(code) {
+  switch (code) {
+    case 'auth/email-already-in-use': return 'EMAIL_EXISTS';
+    case 'auth/user-not-found':       return 'EMAIL_NOT_FOUND';
+    case 'auth/wrong-password':
+    case 'auth/invalid-credential':
+    case 'auth/invalid-login-credentials': return 'INVALID_PASSWORD';
+    default: return code || '';
+  }
+}
+
+let _fbAuthApp = null;
+function _ensureFbAuthApp() {
+  if (_fbAuthApp) return _fbAuthApp;
+  if (typeof firebase === 'undefined' || !firebase.auth) throw new Error('Firebase Auth SDK not loaded');
+  _fbAuthApp = (firebase.apps && firebase.apps.length) ? firebase.app() : firebase.initializeApp(FB_CONFIG);
+  return _fbAuthApp;
+}
+
+// Creates a new Firebase Auth account. Throws with e.code === 'EMAIL_EXISTS'
+// if one is already there (e.g. a partially-completed prior migration).
+async function fbAuthSignUp(email, password) {
+  await window._fbAuthSdkReady;
+  try {
+    _ensureFbAuthApp();
+    const cred = await firebase.auth().createUserWithEmailAndPassword(email, password);
+    return { uid: cred.user.uid, idToken: await cred.user.getIdToken() };
+  } catch (e) {
+    const err = new Error(_sdkAuthErrCode(e.code) || e.message || 'auth-error');
+    err.code = _sdkAuthErrCode(e.code);
+    throw err;
+  }
+}
+
+// Signs in against an existing Firebase Auth account. Throws with
+// e.code === 'EMAIL_NOT_FOUND' (account never migrated) or
+// e.code === 'INVALID_PASSWORD' (wrong password, or a stale Auth password
+// left behind by a legacy-only recovery/admin reset — see doLogin(), which
+// treats both the same way: fall back to the legacy hash check rather than
+// assuming the worst).
+async function fbAuthSignIn(email, password) {
+  await window._fbAuthSdkReady;
+  try {
+    _ensureFbAuthApp();
+    const cred = await firebase.auth().signInWithEmailAndPassword(email, password);
+    return { uid: cred.user.uid, idToken: await cred.user.getIdToken() };
+  } catch (e) {
+    const err = new Error(_sdkAuthErrCode(e.code) || e.message || 'auth-error');
+    err.code = _sdkAuthErrCode(e.code);
+    throw err;
+  }
+}
+
+// Firebase Auth's own sign-out — clears the SDK session so no further stale
+// ID tokens get attached to RTDB requests after logout. Best-effort: if the
+// SDK never finished loading, there's no session to clear anyway.
+async function fbAuthSignOutSilently() {
+  try {
+    await window._fbAuthSdkReady;
+    if (typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser) {
+      await firebase.auth().signOut();
+    }
+  } catch (e) { console.warn('Firebase Auth sign-out failed (non-fatal):', e); }
+}
+
+// Phase 2: returns a fresh ID token for the current Auth SDK session, or
+// null if there isn't one (not yet signed in via Auth, or the SDK never
+// loaded — e.g. blocked CDN on a bad connection). getIdToken() only makes a
+// network call when the cached token is actually close to expiry; the rest
+// of the time it resolves from memory, so this doesn't add a round trip to
+// every request. Returning null here just means the RTDB request goes out
+// unauthenticated — harmless while rules stay open (pre-Phase 4).
+async function _getIdToken() {
+  try {
+    await window._fbAuthSdkReady;
+    if (typeof firebase === 'undefined' || !firebase.auth) return null;
+    const user = firebase.auth().currentUser;
+    if (!user) return null;
+    return await user.getIdToken();
+  } catch (e) {
+    console.warn('_getIdToken failed (request will go out unauthenticated):', e);
+    return null;
+  }
+}
+
+// Appends ?auth=<idToken> to a Firebase RTDB REST URL that may already have
+// its own query string (fbSetIfNotExists doesn't, but keep this general).
+function _withAuthParam(url, idToken) {
+  if (!idToken) return url;
+  return url + (url.includes('?') ? '&' : '?') + 'auth=' + encodeURIComponent(idToken);
+}
+
 // Firebase Realtime Database REST API helpers (no SDK needed)
 async function fbGet(path) {
-  const url = FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json';
+  const idToken = await _getIdToken();
+  const url = _withAuthParam(FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json', idToken);
   const acToken = await _getAppCheckToken();
   const headers = acToken ? { 'X-Firebase-AppCheck': acToken } : {};
   const res = await _fetchWithTimeout(url, { headers }, _FB_TIMEOUT_MS);
@@ -1772,7 +1915,8 @@ async function fbGet(path) {
 }
 
 async function fbSet(path, data) {
-  const url = FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json';
+  const idToken = await _getIdToken();
+  const url = _withAuthParam(FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json', idToken);
   const acToken = await _getAppCheckToken();
   const headers = { 'Content-Type': 'application/json', ...(acToken ? { 'X-Firebase-AppCheck': acToken } : {}) };
   const res = await _fetchWithTimeout(url, {
@@ -1794,9 +1938,10 @@ async function fbSetIfNotExists(path, data) {
   // Fix 14: use If-None-Match: * for a single atomic conditional PUT.
   // Firebase REST returns HTTP 412 if the node already exists, eliminating
   // the read-then-write race that allowed duplicate usernames under concurrent signups.
+  const idToken = await _getIdToken();
   const base = FB_CONFIG.databaseURL.replace(/\/+$/, '');
   const acToken = await _getAppCheckToken();
-  const res = await _fetchWithTimeout(base + '/' + path + '.json', {
+  const res = await _fetchWithTimeout(_withAuthParam(base + '/' + path + '.json', idToken), {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -1820,7 +1965,8 @@ async function fbSetIfNotExists(path, data) {
 
 // Delete a Firebase node by path. Used to free usernames when accounts are removed.
 async function fbDelete(path) {
-  const url = FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json';
+  const idToken = await _getIdToken();
+  const url = _withAuthParam(FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json', idToken);
   const acToken = await _getAppCheckToken();
   const headers = acToken ? { 'X-Firebase-AppCheck': acToken } : {};
   const res = await fetch(url, { method: 'DELETE', headers });
@@ -1829,6 +1975,23 @@ async function fbDelete(path) {
     throw new Error('HTTP ' + res.status + (body ? ': ' + body.slice(0,120) : ''));
   }
   return true;
+}
+
+// ── PHASE 3: OWNERSHIP RECORDS ───────────────────────────────────────────
+// Grants a Firebase Auth UID access to a depot by writing
+// depots/{installId}/authorizedUids/{uid}: true. This is the record Phase 4's
+// tightened rules will check against (auth.uid must exist under this path).
+// Best-effort and idempotent: called every time a UID is confirmed for a
+// depot (signup, sub-user creation, or login-time migration) rather than
+// only once, so a failed write here just gets retried on the next call site
+// that has the same (installId, uid) pair — never blocks the caller's flow.
+async function _grantAuthorizedUid(installId, uid) {
+  if (!installId || !uid) return;
+  try {
+    await fbSet('depots/' + installId + '/authorizedUids/' + uid, true);
+  } catch (e) {
+    console.warn('_grantAuthorizedUid failed (will retry on next confirmed login):', e && e.message || e);
+  }
 }
 
 // ── FIREBASE SYNC MUTEX ───────────────────────────────────────────────────
@@ -3024,7 +3187,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'mdm-v67';
+const SW_VERSION  = 'mdm-v71';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -3040,7 +3203,7 @@ const SW_VERSION  = 'mdm-v67';
   }
 
   // Step 2: Check if the URL already has our version stamp
-  const VER = 'mdm-v67';
+  const VER = 'mdm-v71';
   const url = new URL(location.href);
   const currentVer = url.searchParams.get('_mv');
 
@@ -4054,9 +4217,18 @@ async function doRecoveryAutomatic(mode) {
 
     await _recBfOk();
     const hashed = await hashPassword(np1);
+    // NOTE (Phase 1 known gap): this resets the password without the old one,
+    // so any migrated Firebase Auth account for this user is now stale (still
+    // has the pre-reset password) — and it can't be fixed from the client,
+    // since that needs either the old password or a privileged server call.
+    // Flagging authMigrated:false just means doLogin() keeps trusting the
+    // legacy hash for this user rather than a stale Auth record; login still
+    // works either way. Closing this properly is a Phase 5 (server-side)
+    // follow-up: reuse the Cloudflare Worker pattern to force-update/replace
+    // the Auth account via the Admin SDK.
     updateData(d => ({
       ...d,
-      users: d.users.map(u => u.role === 'admin' ? {...u, password: hashed} : u)
+      users: d.users.map(u => u.role === 'admin' ? {...u, password: hashed, authMigrated: false} : u)
     }));
     document.getElementById('recovery-screen').style.display = 'none';
     showLoginScreen();
@@ -4084,9 +4256,10 @@ async function doRecoveryAutomatic(mode) {
 
   await _recBfOk();
   const hashed = await hashPassword(np1);
+  // See NOTE in the email-recovery branch above — same Phase 1 gap.
   updateData(d => ({
     ...d,
-    users: d.users.map(u => u.role === 'admin' ? {...u, password: hashed} : u)
+    users: d.users.map(u => u.role === 'admin' ? {...u, password: hashed, authMigrated: false} : u)
   }));
 
   document.getElementById('recovery-screen').style.display = 'none';
@@ -4127,11 +4300,14 @@ async function _confirmAdminReset(username) {
   if (p1.length < 8) { err.style.display='block'; err.textContent='Password must be at least 8 characters.'; return; }
   if (p1 !== p2)     { err.style.display='block'; err.textContent='Passwords do not match.'; return; }
   const hashed = await hashPassword(p1);
+  // See NOTE near doRecoveryAutomatic() — same Phase 1 gap: an admin-driven
+  // reset can't reach Firebase Auth from the client, so flag it stale rather
+  // than leaving a mismatched Auth password in place.
   updateData(d => ({
     ...d,
     users: d.users.map(u =>
       (u.username||'').toLowerCase() === username.toLowerCase()
-        ? {...u, password: hashed}
+        ? {...u, password: hashed, authMigrated: false}
         : u
     )
   }));
@@ -4466,8 +4642,22 @@ async function signupFinish() {
     }
     // ── SAVE LOCALLY ONLY AFTER FIREBASE CONFIRMED ───────────────────────────
 
+    // Phase 1 — provision a real Firebase Auth account alongside the legacy
+    // hash. Non-fatal: if this fails (offline blip, Auth service hiccup), the
+    // account is simply picked up by the silent migration path in doLogin()
+    // on this user's very first sign-in.
+    let _newUserAuth = {};
+    if (isFbConfigured()) {
+      try {
+        const created = await fbAuthSignUp(_authEmailFor(username), pass);
+        _newUserAuth = { uid: created.uid, authMigrated: true };
+        // Phase 3 — grant this brand-new UID ownership of the depot it just created.
+        await _grantAuthorizedUid(newInstallId, created.uid);
+      } catch(ae) { console.warn('Firebase Auth signup failed (will migrate on first login):', ae.message); }
+    }
+
     const fresh = JSON.parse(JSON.stringify(DEFAULT));
-    fresh.users = [{ username, password: hashed, role: 'admin', recoveryEmail: emailRaw || '' }];
+    fresh.users = [{ username, password: hashed, role: 'admin', recoveryEmail: emailRaw || '', ..._newUserAuth }];
     fresh.depotInfo = { name: _signupData.name, district: _signupData.district, country: _signupData.country, setupDone: true, recoveryEmail: emailRaw || '' };
     fresh.currency = suCurrency;
     fresh.commodities=[];
@@ -4657,8 +4847,24 @@ async function doLogin(){
     //   - Same depot, different user     → version-gates; only overwrites if newer
     //   - Different depot on same device → loads the correct depot for this login
     let _loginTargetInstallId = null; // hoisted so cross-depot guard below can read it
+    // Phase 1 dual-path login migration:
+    //   _authResult          — set when Firebase Auth confirmed this password
+    //   _authFailCode        — Identity Toolkit error code when it didn't
+    // Any Auth failure (wrong code, network blip, or a stale Auth password
+    // left behind by a legacy-only recovery/admin reset — see the
+    // authMigrated:false notes elsewhere) falls through to the existing
+    // legacy verification below rather than failing the login outright, so
+    // a login can never be blocked by the migration itself.
+    let _authResult = null;
+    let _authFailCode = null;
     if (navigator.onLine && isFbConfigured()) {
       btn.textContent = '🔐 Verifying…';
+      try {
+        _authResult = await fbAuthSignIn(_authEmailFor(u), p);
+      } catch(authErr) {
+        _authFailCode = authErr && authErr.code;
+        console.warn('Firebase Auth sign-in did not confirm (falling back to legacy check):', _authFailCode || authErr);
+      }
       try {
         // Step 1: resolve installId for the typed username via the global index
         try {
@@ -4676,22 +4882,26 @@ async function doLogin(){
           // If no snapshot exists yet (older account, first login since this
           // shipped), fall through to the legacy full-data verification below —
           // that sync will write the snapshot and protect this depot going forward.
-          try {
-            const authRec = await fbGet('depots/' + _loginTargetInstallId + '/auth/' + u);
-            if (authRec && authRec.password) {
-              const ok = await verifyPassword(p, authRec.password);
-              if (!ok) {
-                btn.disabled = false; btn.textContent = '🔒 Sign In';
-                const _s = await _bfFail();
-                const _rem = _BF_MAX - (_s.attempts || 0);
-                err.style.display = 'block';
-                err.innerHTML = _rem > 0
-                  ? `❌ Invalid username or password. ${_rem} attempt${_rem!==1?'s':''} left before 60-second lockout.`
-                  : '⛔ Too many failed attempts. Try again in 60 seconds.';
-                return; // ← full depot data was never fetched
+          // Skipped entirely when Firebase Auth already confirmed this exact
+          // password above — no need to pay for a second round trip.
+          if (!_authResult) {
+            try {
+              const authRec = await fbGet('depots/' + _loginTargetInstallId + '/auth/' + u);
+              if (authRec && authRec.password) {
+                const ok = await verifyPassword(p, authRec.password);
+                if (!ok) {
+                  btn.disabled = false; btn.textContent = '🔒 Sign In';
+                  const _s = await _bfFail();
+                  const _rem = _BF_MAX - (_s.attempts || 0);
+                  err.style.display = 'block';
+                  err.innerHTML = _rem > 0
+                    ? `❌ Invalid username or password. ${_rem} attempt${_rem!==1?'s':''} left before 60-second lockout.`
+                    : '⛔ Too many failed attempts. Try again in 60 seconds.';
+                  return; // ← full depot data was never fetched
+                }
               }
-            }
-          } catch(e) { console.warn('Auth record lookup failed:', e); }
+            } catch(e) { console.warn('Auth record lookup failed:', e); }
+          }
 
           btn.textContent = '☁ Restoring data…';
           const prevId = DATA.installId;
@@ -4745,8 +4955,31 @@ async function doLogin(){
     }
     if (needsSave) { DATA._v=(DATA._v||0)+1; sv(DATA); }
 
-    const userObj = DATA.users.find(x=>(x.username||'').toLowerCase()===u);
-    const valid = userObj ? await verifyPassword(p, userObj.password) : false;
+    let userObj = DATA.users.find(x=>(x.username||'').toLowerCase()===u);
+    // Phase 1: if Firebase Auth already confirmed this exact password above,
+    // trust it outright rather than re-checking the legacy hash. Otherwise
+    // (no Auth account yet, or a transient Auth failure) fall back to the
+    // legacy check exactly as before.
+    const valid = userObj ? (_authResult ? true : await verifyPassword(p, userObj.password)) : false;
+
+    // Record the migration on this device's copy if it wasn't already —
+    // e.g. this account migrated from another device and this one just
+    // hasn't synced the flag down yet.
+    if (valid && _authResult && userObj && !userObj.authMigrated) {
+      userObj = {...userObj, uid: _authResult.uid, authMigrated: true};
+      const idx = DATA.users.findIndex(x=>(x.username||'').toLowerCase()===u);
+      if (idx > -1) {
+        DATA.users[idx] = {...DATA.users[idx], uid: _authResult.uid, authMigrated: true};
+        DATA._v = (DATA._v||0)+1;
+        sv(DATA);
+        scheduleFbSync();
+      }
+      // Phase 3 — backfill the ownership record for this UID. Runs here (not
+      // just at creation time) so accounts that migrated their Auth account
+      // on another device before this ownership record existed still end up
+      // with one, without needing a separate one-off migration script.
+      _grantAuthorizedUid(_loginTargetInstallId || DATA.installId, _authResult.uid);
+    }
 
     btn.disabled=false; btn.textContent='🔒 Sign In';
 
@@ -4779,6 +5012,45 @@ async function doLogin(){
     }
     // ─────────────────────────────────────────────────────────────────────────
     await _bfOk();
+
+    // ── Phase 1: silent Firebase Auth migration ───────────────────────────────
+    // Reached whenever the login above was confirmed the legacy way (not by
+    // Firebase Auth) — either a not-yet-migrated account, or an account whose
+    // Auth password went stale after a legacy-only recovery/admin password
+    // reset (see the authMigrated:false notes at those call sites). We just
+    // verified this exact plaintext password is correct, so this is the one
+    // moment we can provision/repair the matching Auth account without
+    // needing anything from the user beyond what they already typed.
+    // Entirely best-effort: any failure here just means this device tries
+    // again on the next login — the user's session is not affected either way.
+    if (!_authResult && isFbConfigured() && navigator.onLine && userObj && !userObj.authMigrated) {
+      try {
+        const created = await fbAuthSignUp(_authEmailFor(u), p);
+        userObj = {...userObj, uid: created.uid, authMigrated: true};
+        const idx = DATA.users.findIndex(x=>(x.username||'').toLowerCase()===u);
+        if (idx > -1) {
+          DATA.users[idx] = {...DATA.users[idx], uid: created.uid, authMigrated: true};
+          DATA._v = (DATA._v||0)+1;
+          sv(DATA);
+          scheduleFbSync();
+        }
+        // Phase 3 — this account just got a real UID for the first time via
+        // silent migration; grant it ownership of the depot it's logging into.
+        await _grantAuthorizedUid(_loginTargetInstallId || DATA.installId, created.uid);
+      } catch(migErr) {
+        // EMAIL_EXISTS means an Auth account is already sitting there with a
+        // *different* (stale) password — from a legacy-only recovery/admin
+        // reset, or a prior partial migration. We can't repair it from the
+        // client (that needs either the old Auth password, which we don't
+        // have, or a privileged server-side call — a Phase 5 follow-up).
+        // Leaving authMigrated false just means this account keeps using the
+        // legacy path, which is exactly what happened for this login too —
+        // nothing is broken, this simply isn't fixed yet.
+        console.warn('Silent Auth migration did not complete (will retry next login):', migErr && migErr.code || migErr);
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     err.style.display='none';
     USER = Object.freeze({...userObj}); // freeze to prevent console mutation
     localStorage.setItem(_TOS_PFX+userObj.username,'y');
@@ -4824,6 +5096,7 @@ async function doLogin(){
 function _doLogoutNow(){
   USER=null; TAB='dashboard';
   _idleClear(); // stop idle timers on explicit logout
+  fbAuthSignOutSilently(); // Phase 2: clear the Auth SDK session too — fire-and-forget, non-blocking
   _hideMainUI();
   document.getElementById('login-err').style.display='none';
   document.getElementById('l-user').value='';
@@ -8258,6 +8531,7 @@ function openStaffForm(){
     <div class="fw"><div class="fl">Pay Type</div><select class="fi" id="sf-paytype" onchange="_toggleSalaryField('sf')"><option value="rate">TASK / RATE-BASED (per bag, hour, day, etc.)</option><option value="salary">FIXED MONTHLY SALARY</option></select></div>
     <div class="fw" id="sf-salary-wrap" style="display:none"><div class="fl">Monthly Salary (K)</div><input class="fi" type="number" min="0" step="0.01" id="sf-salary" placeholder="E.G. 3500"/></div>
     <div class="fw"><div class="fl">Date Joined <span style="color:var(--red)">*</span></div><input class="fi" type="date" id="sf-joined" value="${today()}"/></div>
+    <div class="fw"><div class="fl">Date of Birth (optional)</div><input class="fi" type="date" id="sf-dob" max="${today()}"/></div>
     <div class="fw"><div class="fl">Phone (optional)</div><input class="fi" id="sf-phone" placeholder="0977 000 000" inputmode="tel" style="text-transform:none"/></div>
     ${isAdmin()?`<div class="fw"><div class="fl">Employee ID / NRC Number <span style="font-size:15px;color:var(--muted)">(Admin only)</span></div><input class="fi" id="sf-empid" placeholder="E.G. NRC 123456/10/1" style="text-transform:none"/></div>`:'<input type="hidden" id="sf-empid"/>'}
     <div class="fw"><div class="fl">Emergency Contact Name</div><input class="fi" id="sf-ecname" placeholder="E.G. MARY BANDA"/></div>
@@ -8281,7 +8555,7 @@ function saveStaff(){if(isReadOnly()){alert("🔒 This account is in read-only m
   if(payType==='salary'&&monthlySalary<=0){alert('Enter a monthly salary amount.');return;}
   const photoFile=document.getElementById('sf-photo')?.files?.[0]||null;
   const finish=(photoDataUrl)=>{
-    const payload={id:uid(),name,role:document.getElementById('sf-role').value,contractType:document.getElementById('sf-contract').value||'permanent',payType,monthlySalary,dateJoined:joined,phone:document.getElementById('sf-phone').value,employeeId:(document.getElementById('sf-empid').value||'').trim(),emergencyContactName:uc(document.getElementById('sf-ecname').value),emergencyContactPhone:(document.getElementById('sf-ecphone').value||'').trim(),notes:uc(document.getElementById('sf-notes').value),status:'active',photoDataUrl:photoDataUrl||null};
+    const payload={id:uid(),name,role:document.getElementById('sf-role').value,contractType:document.getElementById('sf-contract').value||'permanent',payType,monthlySalary,dateJoined:joined,dateOfBirth:document.getElementById('sf-dob')?.value||'',phone:document.getElementById('sf-phone').value,employeeId:(document.getElementById('sf-empid').value||'').trim(),emergencyContactName:uc(document.getElementById('sf-ecname').value),emergencyContactPhone:(document.getElementById('sf-ecphone').value||'').trim(),notes:uc(document.getElementById('sf-notes').value),status:'active',photoDataUrl:photoDataUrl||null};
     updateData(d=>({...d,staff:[...d.staff,payload]}));
     closeModal();
   };
@@ -8962,6 +9236,7 @@ function openStaffDetail(id){
         <div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span class="tag">${esc(s.role)}</span>${statusBadge}${s.contractType&&s.contractType!=='permanent'?`<span style="background:rgba(139,92,246,.15);color:var(--purple);border-radius:6px;padding:1px 7px;font-size:15px;font-weight:700">${s.contractType.toUpperCase()}</span>`:''}</div>
         <div style="font-size:17px;color:var(--muted);margin-top:3px">${esc(s.phone)||'No phone on record'}</div>
         ${s.dateJoined?`<div style="font-size:16px;color:var(--muted)">Joined: <strong style="color:var(--text)">${fmtDate(s.dateJoined)}</strong></div>`:''}
+        ${s.dateOfBirth?`<div style="font-size:16px;color:var(--muted)">DOB: <strong style="color:var(--text)">${fmtDate(s.dateOfBirth)}</strong></div>`:''}
         ${s.employeeId&&isAdmin()?`<div style="font-size:16px;color:var(--muted)">ID: <strong style="color:var(--blue)">${esc(s.employeeId)}</strong></div>`:''}
         ${s.statusDate&&s.status!=='active'?`<div style="font-size:16px;color:var(--amber)">${s.status==='resigned'?'Resigned':'Left'}: ${fmtDate(s.statusDate)}${s.statusReason?` — ${esc(s.statusReason)}`:''}</div>`:''}
       </div>
@@ -9011,6 +9286,7 @@ function _openEditStaffDetails(id){
     <div class="fw"><div class="fl">Pay Type</div><select class="fi" id="esd-paytype" onchange="_toggleSalaryField('esd')"><option value="rate"${(s.payType||'rate')==='rate'?' selected':''}>TASK / RATE-BASED (per bag, hour, day, etc.)</option><option value="salary"${s.payType==='salary'?' selected':''}>FIXED MONTHLY SALARY</option></select></div>
     <div class="fw" id="esd-salary-wrap" style="display:${s.payType==='salary'?'block':'none'}"><div class="fl">Monthly Salary (K)</div><input class="fi" type="number" min="0" step="0.01" id="esd-salary" value="${Number(s.monthlySalary||0)||''}" placeholder="E.G. 3500"/></div>
     <div class="fw"><div class="fl">Phone</div><input class="fi" id="esd-phone" value="${esc(s.phone||'')}" placeholder="0977 000 000" inputmode="tel" style="text-transform:none"/></div>
+    <div class="fw"><div class="fl">Date of Birth</div><input class="fi" type="date" id="esd-dob" value="${esc(s.dateOfBirth||'')}" max="${today()}"/></div>
     <div class="fw"><div class="fl">Employee ID / NRC Number</div><input class="fi" id="esd-empid" value="${esc(s.employeeId||'')}" placeholder="E.G. NRC 123456/10/1" style="text-transform:none"/></div>
     <div class="fw"><div class="fl">Emergency Contact Name</div><input class="fi" id="esd-ecname" value="${esc(s.emergencyContactName||'')}" placeholder="E.G. MARY BANDA"/></div>
     <div class="fw"><div class="fl">Emergency Contact Phone</div><input class="fi" id="esd-ecphone" value="${esc(s.emergencyContactPhone||'')}" placeholder="0977 000 000" inputmode="tel" style="text-transform:none"/></div>
@@ -9028,11 +9304,12 @@ function saveEditStaffDetails(id){
   const monthlySalary=payType==='salary'?Math.max(0,Number(document.getElementById('esd-salary')?.value)||0):0;
   if(payType==='salary'&&monthlySalary<=0){alert('Enter a monthly salary amount.');return;}
   const phone=(document.getElementById('esd-phone').value||'').trim();
+  const dateOfBirth=document.getElementById('esd-dob')?.value||'';
   const employeeId=(document.getElementById('esd-empid').value||'').trim();
   const emergencyContactName=uc(document.getElementById('esd-ecname').value);
   const emergencyContactPhone=(document.getElementById('esd-ecphone').value||'').trim();
   const notes=uc(document.getElementById('esd-notes').value);
-  updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,name,role,contractType,payType,monthlySalary,phone,employeeId,emergencyContactName,emergencyContactPhone,notes}:s)}));
+  updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,name,role,contractType,payType,monthlySalary,phone,dateOfBirth,employeeId,emergencyContactName,emergencyContactPhone,notes}:s)}));
   closeModal();
   showToast('✅ Staff details updated.');
 }
@@ -10801,7 +11078,8 @@ async function changePw(){
   if(np.length < 8){msg.innerHTML='<div class="err-box">Password must be at least 8 characters.</div>';return;}
   const target=document.getElementById('pw-target').value;
   const hashed = await hashPassword(np);
-  updateData(d=>({...d,users:d.users.map(u=>u.username===target?{...u,password:hashed}:u)}));
+  // See NOTE near doRecoveryAutomatic() — same Phase 1 gap.
+  updateData(d=>({...d,users:d.users.map(u=>u.username===target?{...u,password:hashed,authMigrated:false}:u)}));
   msg.innerHTML='<div class="ok-msg">✅ Password updated!</div>';
   document.getElementById('pw-new').value='';document.getElementById('pw-conf').value='';
 }
@@ -10896,7 +11174,20 @@ async function _confirmAddUser(){
     if(addBtn){ addBtn.disabled=false; addBtn.textContent='✅ Add User'; }
   }
 
-  updateData(d=>({...d,users:[...(d.users||[]),{username,password:hashed,role}]}));
+  // Phase 1 — provision a real Firebase Auth account alongside the legacy
+  // hash. Non-fatal on failure: doLogin() silently migrates this account on
+  // its first sign-in if this didn't go through.
+  let _newUserAuth = {};
+  if (isFbConfigured()) {
+    try {
+      const created = await fbAuthSignUp(_authEmailFor(username), pass);
+      _newUserAuth = { uid: created.uid, authMigrated: true };
+      // Phase 3 — sub-user gets access to the SAME depot as the admin who added them.
+      await _grantAuthorizedUid(depotKey(), created.uid);
+    } catch(ae) { console.warn('Firebase Auth signup failed for sub-user (will migrate on first login):', ae.message); }
+  }
+
+  updateData(d=>({...d,users:[...(d.users||[]),{username,password:hashed,role,..._newUserAuth}]}));
   closeModal();
   showToast('✅ User "'+username+'" added.');
 }
@@ -12994,8 +13285,8 @@ function exportCSV_StaffEarnings(){
   _csvDownload(rows,_csvFilename('Staff_Earnings'));
 }
 function exportCSV_StaffRoster(){
-  const rows=[_csvRow(['Name','Role','Phone','Status','Contract Type','Emergency Contact','Emergency Phone','Date of Hire'])];
-  DATA.staff.forEach(s=>rows.push(_csvRow([s.name,s.role||'',s.phone||'',s.status||'active',s.contractType||'',s.emergencyContactName||'',s.emergencyContactPhone||'',s.dateJoined||''])));
+  const rows=[_csvRow(['Name','Role','Phone','Status','Contract Type','Emergency Contact','Emergency Phone','Date of Hire','Date of Birth'])];
+  DATA.staff.forEach(s=>rows.push(_csvRow([s.name,s.role||'',s.phone||'',s.status||'active',s.contractType||'',s.emergencyContactName||'',s.emergencyContactPhone||'',s.dateJoined||'',s.dateOfBirth||''])));
   _csvDownload(rows,_csvFilename('Staff_Roster'));
 }
 
