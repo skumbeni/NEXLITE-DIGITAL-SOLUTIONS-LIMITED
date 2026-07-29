@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pool — Cooperative Produce Aggregation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --parchment:#F6F1E4;
+    --card:#FFFEFB;
+    --ink:#2B2418;
+    --ink-soft:#6B6152;
+    --gold:#A6743C;
+    --gold-deep:#7E5729;
+    --crop-green:#4A5D3A;
+    --crop-green-soft:#E4E9DB;
+    --brick:#8B3A3A;
+    --brick-soft:#F3E1E1;
+    --line:#E4DCC8;
+    --radius:14px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    font-family:'Inter',sans-serif;
+    background:#DCD3BC;
+    color:var(--ink);
+    display:flex;
+    justify-content:center;
+    min-height:100vh;
+    padding:24px 12px;
+  }
+  .phone{
+    width:390px;
+    max-width:100%;
+    background:var(--parchment);
+    border-radius:32px;
+    box-shadow:0 20px 60px rgba(43,36,24,0.35);
+    overflow:hidden;
+    display:flex;
+    flex-direction:column;
+    height:820px;
+    position:relative;
+    border:8px solid #1c1810;
+  }
+  .statusbar{
+    height:24px;
+    background:transparent;
+  }
+  header.top{
+    padding:18px 20px 14px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    border-bottom:1px solid var(--line);
+  }
+  .brand{
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  .brand .mark{
+    width:30px;height:30px;
+    border-radius:8px;
+    background:var(--crop-green);
+    display:flex;align-items:center;justify-content:center;
+    color:#F6F1E4;font-family:'Fraunces',serif;font-weight:700;font-size:15px;
+  }
+  .brand .name{
+    font-family:'Fraunces',serif;
+    font-weight:600;
+    font-size:19px;
+    letter-spacing:-0.01em;
+  }
+  .coop-pill{
+    font-size:11px;
+    color:var(--ink-soft);
+    background:var(--card);
+    border:1px solid var(--line);
+    padding:5px 10px;
+    border-radius:999px;
+  }
+  main{
+    flex:1;
+    overflow-y:auto;
+    padding:18px 20px 90px;
+  }
+  main::-webkit-scrollbar{display:none;}
+  .screen{display:none;}
+  .screen.active{display:block;animation:fadeIn .25s ease;}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
+
+  .eyebrow{
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:0.08em;
+    color:var(--gold-deep);
+    font-weight:600;
+    margin-bottom:4px;
+  }
+  h1.page-title{
+    font-family:'Fraunces',serif;
+    font-weight:600;
+    font-size:26px;
+    margin-bottom:18px;
+    letter-spacing:-0.01em;
+  }
+
+  /* Silo fill signature element */
+  .silo-card{
+    background:var(--crop-green);
+    border-radius:var(--radius);
+    padding:20px;
+    color:#F6F1E4;
+    margin-bottom:16px;
+    position:relative;
+    overflow:hidden;
+  }
+  .silo-card .season-label{
+    font-size:12px;
+    opacity:0.75;
+    text-transform:uppercase;
+    letter-spacing:0.07em;
+    margin-bottom:2px;
+  }
+  .silo-card .crop-name{
+    font-family:'Fraunces',serif;
+    font-size:22px;
+    font-weight:600;
+    margin-bottom:16px;
+  }
+  .silo-track{
+    height:14px;
+    background:rgba(246,241,228,0.18);
+    border-radius:999px;
+    overflow:hidden;
+    margin-bottom:8px;
+  }
+  .silo-fill{
+    height:100%;
+    background:linear-gradient(90deg,#C99A4E,#EBC677);
+    border-radius:999px;
+    transition:width 1s cubic-bezier(.22,1,.36,1);
+  }
+  .silo-stats{
+    display:flex;
+    justify-content:space-between;
+    font-size:12.5px;
+    opacity:0.9;
+  }
+  .silo-stats strong{font-weight:600;}
+
+  .stat-row{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:10px;
+    margin-bottom:18px;
+  }
+  .stat-box{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:var(--radius);
+    padding:14px;
+  }
+  .stat-box .num{
+    font-family:'Fraunces',serif;
+    font-size:22px;
+    font-weight:600;
+  }
+  .stat-box .label{
+    font-size:11.5px;
+    color:var(--ink-soft);
+    margin-top:2px;
+  }
+
+  .btn-row{display:flex;gap:10px;margin-bottom:22px;}
+  .btn{
+    flex:1;
+    padding:13px;
+    border-radius:12px;
+    border:none;
+    font-family:'Inter',sans-serif;
+    font-weight:600;
+    font-size:13.5px;
+    cursor:pointer;
+    text-align:center;
+  }
+  .btn-primary{background:var(--gold-deep);color:#F6F1E4;}
+  .btn-secondary{background:var(--card);color:var(--ink);border:1px solid var(--line);}
+
+  .section-label{
+    font-size:12px;
+    font-weight:600;
+    color:var(--ink-soft);
+    text-transform:uppercase;
+    letter-spacing:0.06em;
+    margin:20px 0 10px;
+  }
+
+  .list-item{
+    background:var(--card);
+    border:1px solid var(--line);
+    border-radius:12px;
+    padding:13px 14px;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:9px;
+  }
+  .list-item .li-name{font-weight:600;font-size:14.5px;}
+  .list-item .li-sub{font-size:12px;color:var(--ink-soft);margin-top:2px;}
+  .li-right{text-align:right;}
+  .li-amount{font-family:'Fraunces',serif;font-weight:600;font-size:15px;}
+  .grade-badge{
+    display:inline-block;
+    font-size:10.5px;
+    font-weight:700;
+    padding:2px 7px;
+    border-radius:999px;
+    margin-top:4px;
+  }
+  .grade-A{background:var(--crop-green-soft);color:var(--crop-green);}
+  .grade-B{background:#F0E6C8;color:var(--gold-deep);}
+  .grade-C{background:var(--brick-soft);color:var(--brick);}
+
+  .status-tag{
+    font-size:10.5px;
+    font-weight:700;
+    padding:3px 9px;
+    border-radius:999px;
+    text-transform:uppercase;
+    letter-spacing:0.03em;
+  }
+  .tag-open{background:var(--crop-green-soft);color:var(--crop-green);}
+  .tag-closed{background:#EFE9D8;color:var(--ink-soft);}
+  .tag-sold{background:#F0E6C8;color:var(--gold-deep);}
+  .tag-paid{background:var(--crop-green-soft);color:var(--crop-green);}
+  .tag-due{background:var(--brick-soft);color:var(--brick);}
+
+  /* Bottom nav */
+  nav.bottom{
+    position:absolute;
+    bottom:0;left:0;right:0;
+    background:var(--card);
+    border-top:1px solid var(--line);
+    display:flex;
+    padding:10px 6px 16px;
+  }
+  nav.bottom button{
+    flex:1;
+    background:none;
+    border:none;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    gap:4px;
+    font-family:'Inter',sans-serif;
+    font-size:10.5px;
+    color:var(--ink-soft);
+    cursor:pointer;
+    padding:4px;
+  }
+  nav.bottom button svg{width:20px;height:20px;stroke:var(--ink-soft);fill:none;stroke-width:1.8;}
+  nav.bottom button.active{color:var(--gold-deep);}
+  nav.bottom button.active svg{stroke:var(--gold-deep);}
+
+  /* Form / modal */
+  .modal-overlay{
+    position:absolute;
+    inset:0;
+    background:rgba(43,36,24,0.45);
+    display:none;
+    align-items:flex-end;
+    z-index:20;
+  }
+  .modal-overlay.active{display:flex;}
+  .modal{
+    background:var(--parchment);
+    width:100%;
+    border-radius:22px 22px 0 0;
+    padding:22px 20px 26px;
+    max-height:85%;
+    overflow-y:auto;
+  }
+  .modal h2{
+    font-family:'Fraunces',serif;
+    font-size:20px;
+    font-weight:600;
+    margin-bottom:16px;
+  }
+  .field{margin-bottom:14px;}
+  .field label{
+    display:block;
+    font-size:12px;
+    font-weight:600;
+    color:var(--ink-soft);
+    margin-bottom:6px;
+  }
+  .field select, .field input{
+    width:100%;
+    padding:11px 12px;
+    border-radius:10px;
+    border:1px solid var(--line);
+    background:var(--card);
+    font-family:'Inter',sans-serif;
+    font-size:14px;
+    color:var(--ink);
+  }
+  .grade-toggle{
+    display:flex;
+    gap:8px;
+    margin-top:4px;
+  }
+  .grade-opt{
+    flex:1;
+    text-align:center;
+    padding:9px;
+    border-radius:9px;
+    border:1px solid var(--line);
+    background:var(--card);
+    font-size:13px;
+    font-weight:600;
+    cursor:pointer;
+  }
+  .grade-opt.selected{background:var(--crop-green);color:#F6F1E4;border-color:var(--crop-green);}
+  .modal-close{
+    text-align:center;
+    font-size:12.5px;
+    color:var(--ink-soft);
+    margin-top:6px;
+    cursor:pointer;
+    text-decoration:underline;
+  }
+
+  .empty-state{
+    text-align:center;
+    padding:40px 20px;
+    color:var(--ink-soft);
+  }
+  .empty-state .icon{font-size:30px;margin-bottom:10px;}
+  .empty-state p{font-size:13px;line-height:1.5;}
+</style>
+</head>
+<body>
+
+<div class="phone">
+  <div class="statusbar"></div>
+
+  <header class="top">
+    <div class="brand">
+      <div class="mark">P</div>
+      <div class="name">Pool</div>
+    </div>
+    <div class="coop-pill">Chikandwe Coop</div>
+  </header>
+
+  <main>
+
+    <!-- DASHBOARD -->
+    <section class="screen active" id="dashboard">
+      <div class="eyebrow">Good morning</div>
+      <h1 class="page-title">This season's pool</h1>
+
+      <div class="silo-card">
+        <div class="season-label">2026 Rain Season</div>
+        <div class="crop-name">Soya Beans</div>
+        <div class="silo-track"><div class="silo-fill" style="width:68%"></div></div>
+        <div class="silo-stats">
+          <span><strong>4,080 kg</strong> pooled</span>
+          <span>target 6,000 kg</span>
+        </div>
+      </div>
+
+      <div class="stat-row">
+        <div class="stat-box">
+          <div class="num">37</div>
+          <div class="label">Members contributing</div>
+        </div>
+        <div class="stat-box">
+          <div class="num">K0</div>
+          <div class="label">Outstanding payouts</div>
+        </div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="openModal('addContribution')">+ Add contribution</button>
+        <button class="btn btn-secondary" onclick="showScreen('seasons')">Record sale</button>
+      </div>
+
+      <div class="section-label">Recent contributions</div>
+      <div class="list-item">
+        <div>
+          <div class="li-name">Beatrice Mwansa</div>
+          <div class="li-sub">Delivered 26 Jul</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">120 kg</div>
+          <span class="grade-badge grade-A">Grade A</span>
+        </div>
+      </div>
+      <div class="list-item">
+        <div>
+          <div class="li-name">Justin Banda</div>
+          <div class="li-sub">Delivered 25 Jul</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">85 kg</div>
+          <span class="grade-badge grade-B">Grade B</span>
+        </div>
+      </div>
+      <div class="list-item">
+        <div>
+          <div class="li-name">Esther Phiri</div>
+          <div class="li-sub">Delivered 24 Jul</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">200 kg</div>
+          <span class="grade-badge grade-A">Grade A</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- MEMBERS -->
+    <section class="screen" id="members">
+      <div class="eyebrow">37 registered</div>
+      <h1 class="page-title">Members</h1>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="openModal('addMember')">+ Add member</button>
+      </div>
+
+      <div class="list-item">
+        <div>
+          <div class="li-name">Beatrice Mwansa</div>
+          <div class="li-sub">Kalonga village · 0977 214 xxx</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">340 kg</div>
+          <div class="li-sub">total pooled</div>
+        </div>
+      </div>
+      <div class="list-item">
+        <div>
+          <div class="li-name">Justin Banda</div>
+          <div class="li-sub">Chikandwe centre · 0966 502 xxx</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">265 kg</div>
+          <div class="li-sub">total pooled</div>
+        </div>
+      </div>
+      <div class="list-item">
+        <div>
+          <div class="li-name">Esther Phiri</div>
+          <div class="li-sub">Kalonga village · 0955 881 xxx</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">510 kg</div>
+          <div class="li-sub">total pooled</div>
+        </div>
+      </div>
+      <div class="list-item">
+        <div>
+          <div class="li-name">Moses Tembo</div>
+          <div class="li-sub">Chikandwe centre · 0977 340 xxx</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">190 kg</div>
+          <div class="li-sub">total pooled</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SEASONS -->
+    <section class="screen" id="seasons">
+      <div class="eyebrow">Harvest cycles</div>
+      <h1 class="page-title">Seasons</h1>
+
+      <div class="list-item" onclick="openModal('recordSale')" style="cursor:pointer;">
+        <div>
+          <div class="li-name">Soya Beans — 2026 Rain</div>
+          <div class="li-sub">4,080 kg pooled · 37 members</div>
+        </div>
+        <span class="status-tag tag-open">Open</span>
+      </div>
+      <div class="list-item">
+        <div>
+          <div class="li-name">Maize — 2025/26</div>
+          <div class="li-sub">6,240 kg pooled · sold to Zamgold Millers</div>
+        </div>
+        <span class="status-tag tag-sold">Sold</span>
+      </div>
+      <div class="list-item">
+        <div>
+          <div class="li-name">Groundnuts — 2025 Dry</div>
+          <div class="li-sub">1,850 kg pooled · payouts complete</div>
+        </div>
+        <span class="status-tag tag-closed">Closed</span>
+      </div>
+    </section>
+
+    <!-- PAYOUTS -->
+    <section class="screen" id="payouts">
+      <div class="eyebrow">Maize — 2025/26 sale</div>
+      <h1 class="page-title">Payouts</h1>
+
+      <div class="stat-box" style="margin-bottom:18px;">
+        <div class="num">K18,720</div>
+        <div class="label">Total sale amount · K3.00/kg</div>
+      </div>
+
+      <div class="list-item">
+        <div>
+          <div class="li-name">Beatrice Mwansa</div>
+          <div class="li-sub">340 kg · 5.4% share</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">K1,020</div>
+          <span class="status-tag tag-paid">Paid</span>
+        </div>
+      </div>
+      <div class="list-item">
+        <div>
+          <div class="li-name">Justin Banda</div>
+          <div class="li-sub">265 kg · 4.2% share</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">K795</div>
+          <span class="status-tag tag-due">Due</span>
+        </div>
+      </div>
+      <div class="list-item">
+        <div>
+          <div class="li-name">Esther Phiri</div>
+          <div class="li-sub">510 kg · 8.2% share</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">K1,530</div>
+          <span class="status-tag tag-paid">Paid</span>
+        </div>
+      </div>
+      <div class="list-item">
+        <div>
+          <div class="li-name">Moses Tembo</div>
+          <div class="li-sub">190 kg · 3.0% share</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">K570</div>
+          <span class="status-tag tag-due">Due</span>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="bottom">
+    <button class="active" onclick="showScreen('dashboard', this)">
+      <svg viewBox="0 0 24 24"><path d="M3 11L12 4l9 7"/><path d="M5 10v10h14V10"/></svg>
+      Pool
+    </button>
+    <button onclick="showScreen('members', this)">
+      <svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3"/><path d="M2 20c0-4 3-6 7-6s7 2 7 6"/><circle cx="17" cy="9" r="2.4"/><path d="M16 14c3 0 6 1.6 6 6"/></svg>
+      Members
+    </button>
+    <button onclick="showScreen('seasons', this)">
+      <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18"/><path d="M8 2v4M16 2v4"/></svg>
+      Seasons
+    </button>
+    <button onclick="showScreen('payouts', this)">
+      <svg viewBox="0 0 24 24"><path d="M12 2v20M17 6.5c0-2-2-3.5-5-3.5s-5 1.5-5 3.5S9 9 12 9s5 1.5 5 3.5-2 3.5-5 3.5-5-1.5-5-3.5"/></svg>
+      Payouts
+    </button>
+  </nav>
+
+  <!-- MODAL: Add Contribution -->
+  <div class="modal-overlay" id="modal-addContribution">
+    <div class="modal">
+      <h2>Add contribution</h2>
+      <div class="field">
+        <label>Member</label>
+        <select><option>Beatrice Mwansa</option><option>Justin Banda</option><option>Esther Phiri</option><option>Moses Tembo</option></select>
+      </div>
+      <div class="field">
+        <label>Crop</label>
+        <select><option>Soya Beans</option><option>Maize</option><option>Groundnuts</option></select>
+      </div>
+      <div class="field">
+        <label>Quantity (kg)</label>
+        <input type="number" placeholder="e.g. 120">
+      </div>
+      <div class="field">
+        <label>Quality grade</label>
+        <div class="grade-toggle">
+          <div class="grade-opt selected">A</div>
+          <div class="grade-opt">B</div>
+          <div class="grade-opt">C</div>
+        </div>
+      </div>
+      <div class="field">
+        <label>Date delivered</label>
+        <input type="date" value="2026-07-28">
+      </div>
+      <button class="btn btn-primary" style="width:100%;" onclick="closeModal('addContribution')">Save contribution</button>
+      <div class="modal-close" onclick="closeModal('addContribution')">Cancel</div>
+    </div>
+  </div>
+
+  <!-- MODAL: Add Member -->
+  <div class="modal-overlay" id="modal-addMember">
+    <div class="modal">
+      <h2>Add member</h2>
+      <div class="field">
+        <label>Full name</label>
+        <input type="text" placeholder="e.g. Beatrice Mwansa">
+      </div>
+      <div class="field">
+        <label>Phone number</label>
+        <input type="text" placeholder="e.g. 0977 214 xxx">
+      </div>
+      <div class="field">
+        <label>Village / area</label>
+        <input type="text" placeholder="e.g. Kalonga village">
+      </div>
+      <button class="btn btn-primary" style="width:100%;" onclick="closeModal('addMember')">Save member</button>
+      <div class="modal-close" onclick="closeModal('addMember')">Cancel</div>
+    </div>
+  </div>
+
+  <!-- MODAL: Record Sale -->
+  <div class="modal-overlay" id="modal-recordSale">
+    <div class="modal">
+      <h2>Record sale</h2>
+      <div class="field">
+        <label>Season</label>
+        <select><option>Soya Beans — 2026 Rain (4,080 kg pooled)</option></select>
+      </div>
+      <div class="field">
+        <label>Buyer name</label>
+        <input type="text" placeholder="e.g. Zamgold Millers">
+      </div>
+      <div class="field">
+        <label>Quantity sold (kg)</label>
+        <input type="number" placeholder="4080">
+      </div>
+      <div class="field">
+        <label>Price per kg (K)</label>
+        <input type="number" placeholder="e.g. 3.00">
+      </div>
+      <button class="btn btn-primary" style="width:100%;" onclick="closeModal('recordSale')">Save sale &amp; generate payouts</button>
+      <div class="modal-close" onclick="closeModal('recordSale')">Cancel</div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  function showScreen(id, btn){
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+    document.querySelectorAll('nav.bottom button').forEach(b=>b.classList.remove('active'));
+    if(btn) btn.classList.add('active');
+  }
+  function openModal(name){
+    document.getElementById('modal-'+name).classList.add('active');
+  }
+  function closeModal(name){
+    document.getElementById('modal-'+name).classList.remove('active');
+  }
+  document.querySelectorAll('.grade-opt').forEach(opt=>{
+    opt.addEventListener('click', ()=>{
+      opt.parentElement.querySelectorAll('.grade-opt').forEach(o=>o.classList.remove('selected'));
+      opt.classList.add('selected');
+    });
+  });
+</script>
+
+</body>
+</html>
