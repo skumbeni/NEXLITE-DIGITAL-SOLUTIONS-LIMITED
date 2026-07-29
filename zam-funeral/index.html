@@ -782,6 +782,9 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script>
 (function(){
   const STORE_KEY = 'zamFuneralFund_v1';
@@ -800,7 +803,96 @@
       members:[], contributions:[], cases:[], subscriptionPayments:[]
     };
   }
-  function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(data)); renderAll(); }
+  function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(data)); renderAll(); fbPush(); }
+
+  /* ---------- Firebase (auth-gated sync, offline-cache) ---------- */
+  const firebaseConfig = {
+    apiKey: "AIzaSyBmf374bIU4H6ddd1kG3AudT_M03xMmFj0",
+    authDomain: "zam-funeral.firebaseapp.com",
+    databaseURL: "https://zam-funeral-default-rtdb.firebaseio.com",
+    projectId: "zam-funeral",
+    storageBucket: "zam-funeral.firebasestorage.app",
+    messagingSenderId: "648106298963",
+    appId: "1:648106298963:web:6bfe8ddff652d7b77ec0a6"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+  const auth = firebase.auth();
+  const fbRef = db.ref('fundData');
+  const TREASURER_EMAIL = 'treasurer@zam-funeral.app'; // fixed synthetic account; password = treasurer PIN
+
+  let fbReady = false;       // becomes true once the first remote snapshot arrives
+  let suppressEcho = false;  // true while we're writing our own change, to ignore the echo
+  let saveTimer = null;
+  let listenerAttached = false;
+
+  function fbPush(){
+    if(saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(()=>{
+      // never send the PIN to the cloud — Firebase Auth password is the real credential
+      const payload = JSON.parse(JSON.stringify(data));
+      if(payload.settings) delete payload.settings.treasurerPin;
+      suppressEcho = true;
+      fbRef.set(payload)
+        .catch(()=>{ toast('Offline or not signed in — saved on this device only.'); })
+        .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
+    }, 400); // debounce rapid successive saves
+  }
+
+  function attachFbListenerOnce(){
+    if(listenerAttached) return;
+    listenerAttached = true;
+    fbRef.on('value', (snap)=>{
+      const remote = snap.val();
+      if(suppressEcho) return; // this is the echo of our own write, ignore it
+      const localPin = (data && data.settings) ? data.settings.treasurerPin : '';
+      if(remote){
+        data = remote;
+        if(!data.settings) data.settings = {};
+        data.settings.treasurerPin = localPin || data.settings.treasurerPin || ''; // PIN stays local-only
+        if(!data.subscriptionPayments) data.subscriptionPayments = [];
+        localStorage.setItem(STORE_KEY, JSON.stringify(data));
+        if(fbReady) renderAll(); // don't double-render on the very first load
+      } else if(fbReady === false){
+        // nothing in Firebase yet (fresh project) — push up whatever we have locally
+        fbPush();
+      }
+      fbReady = true;
+    }, (err)=>{
+      toast('Sync error — working offline from last saved data.');
+    });
+  }
+
+  // Every visitor needs to be authenticated to read (rules require auth != null).
+  // Anonymous auth covers ordinary members / the public portal; treasurer PIN entry
+  // upgrades the session to the password account, which is the only one rules allow to write.
+  auth.onAuthStateChanged((user)=>{
+    if(!user){
+      auth.signInAnonymously().catch(()=>{ toast('Could not connect — working offline.'); });
+      return; // this will fire again once anonymous sign-in completes
+    }
+    attachFbListenerOnce();
+  });
+
+  // Sign in (or, first time, create) the single treasurer account, keeping its password
+  // in lockstep with the local PIN. Runs in the background; never blocks the UI.
+  async function ensureTreasurerAuth(pin){
+    if(!pin) return;
+    try{
+      await auth.signInWithEmailAndPassword(TREASURER_EMAIL, pin);
+    }catch(e){
+      if(e.code === 'auth/user-not-found'){
+        try{ await auth.createUserWithEmailAndPassword(TREASURER_EMAIL, pin); }
+        catch(e2){ /* ignore — will retry next unlock */ }
+      } else if(e.code === 'auth/wrong-password'){
+        // PIN was changed on this device; if we still hold a valid treasurer session, update it
+        const cur = auth.currentUser;
+        if(cur && !cur.isAnonymous){
+          try{ await cur.updatePassword(pin); }catch(e3){ /* ignore */ }
+        }
+      }
+    }
+  }
 
   function uid(){ return 'id' + Math.random().toString(36).slice(2,10) + Date.now().toString(36); }
   function fmtK(n){ n = Number(n)||0; return 'K' + n.toLocaleString('en-ZM',{minimumFractionDigits:2, maximumFractionDigits:2}); }
@@ -1369,7 +1461,9 @@
     data.settings.defaultPayoutBasis = settingsPayoutBasis;
     data.settings.defaultPayout = Number(document.getElementById('setDefaultPayout').value)||0;
     data.settings.defaultPayoutPercent = Number(document.getElementById('setDefaultPayoutPercent').value)||0;
-    data.settings.treasurerPin = document.getElementById('setTreasurerPin').value.trim();
+    const newPin = document.getElementById('setTreasurerPin').value.trim();
+    if(newPin !== data.settings.treasurerPin) ensureTreasurerAuth(newPin);
+    data.settings.treasurerPin = newPin;
     save();
     toast('Settings saved.');
   });
@@ -1483,6 +1577,7 @@
       openModal('pinModal');
     } else {
       enterMainApp();
+      toast('Set a Treasurer PIN in Settings to enable secure cloud sync.');
     }
   });
   document.getElementById('btnGateMember').addEventListener('click', enterMemberPortal);
@@ -1492,10 +1587,20 @@
   document.getElementById('btnPinSubmit').addEventListener('click', ()=>{
     const entered = document.getElementById('pinInput').value.trim();
     if(entered === data.settings.treasurerPin){
+      ensureTreasurerAuth(entered); // elevate to write-access session in the background
       closeModal('pinModal');
       enterMainApp();
     } else {
-      document.getElementById('pinError').style.display = 'block';
+      // Local PIN may not be cached yet on this device (new phone, cleared storage, etc.) —
+      // fall back to checking straight against the cloud treasurer account.
+      auth.signInWithEmailAndPassword(TREASURER_EMAIL, entered).then(()=>{
+        data.settings.treasurerPin = entered;
+        save();
+        closeModal('pinModal');
+        enterMainApp();
+      }).catch(()=>{
+        document.getElementById('pinError').style.display = 'block';
+      });
     }
   });
   document.getElementById('pinInput').addEventListener('keydown', (e)=>{
