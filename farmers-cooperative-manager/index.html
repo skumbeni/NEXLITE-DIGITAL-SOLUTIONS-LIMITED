@@ -6,6 +6,10 @@
 <title>Pool — Cooperative Produce Aggregation</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- Firebase (Realtime Database) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <style>
   :root{
     --parchment:#F6F1E4;
@@ -80,7 +84,14 @@
     border:1px solid var(--line);
     padding:5px 10px;
     border-radius:999px;
+    cursor:pointer;
   }
+  .coop-switch-item{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:12px 14px;border:1px solid var(--line);border-radius:12px;
+    margin-bottom:8px;cursor:pointer;background:var(--card);
+  }
+  .coop-switch-item.current{border-color:var(--ink-soft);font-weight:600;}
   main{
     flex:1;
     overflow-y:auto;
@@ -333,6 +344,34 @@
     text-decoration:underline;
   }
 
+  .price-grade-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;}
+  .price-grade-item{display:flex;flex-direction:column;gap:4px;}
+  .price-grade-item .pg-label{font-size:11px;font-weight:700;color:var(--gold-deep);}
+  .price-grade-item input{
+    width:100%;padding:9px 8px;border-radius:9px;border:1px solid var(--line);
+    background:var(--card);font-family:'Inter',sans-serif;font-size:13px;color:var(--ink);
+  }
+
+  .icon-btn{
+    background:none;border:none;padding:6px;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;border-radius:8px;
+  }
+  .icon-btn:active{background:var(--line);}
+
+  .offline-banner{
+    background:var(--brick-soft);
+    color:var(--brick);
+    font-size:11.5px;
+    font-weight:600;
+    padding:8px 20px;
+    text-align:center;
+  }
+
+  .login-overlay{z-index:30;align-items:center;}
+
+  .link-action{cursor:pointer;text-decoration:underline;}
+  .link-action.danger{color:var(--brick);}
+
   .empty-state{
     text-align:center;
     padding:40px 20px;
@@ -340,6 +379,157 @@
   }
   .empty-state .icon{font-size:30px;margin-bottom:10px;}
   .empty-state p{font-size:13px;line-height:1.5;}
+
+  /* ---------- App loading gate ---------- */
+  .loading-gate{
+    position:absolute;inset:0;z-index:40;
+    background:var(--parchment);
+    display:none;align-items:center;justify-content:center;
+    flex-direction:column;gap:10px;
+  }
+  .loading-gate.active{display:flex;}
+  .loading-gate .mark{
+    width:44px;height:44px;border-radius:12px;background:var(--crop-green);
+    display:flex;align-items:center;justify-content:center;
+    color:#F6F1E4;font-family:'Fraunces',serif;font-weight:700;font-size:21px;
+    animation:pulseMark 1.4s ease-in-out infinite;
+  }
+  @keyframes pulseMark{0%,100%{opacity:1;}50%{opacity:0.55;}}
+  .loading-gate .word{font-family:'Fraunces',serif;font-size:13px;color:var(--ink-soft);letter-spacing:0.04em;}
+  @media (prefers-reduced-motion: reduce){ .loading-gate .mark{animation:none;} }
+
+  /* ---------- Landing page (pre-login) ---------- */
+  .landing-overlay{
+    position:absolute;inset:0;z-index:25;
+    background:var(--parchment);
+    overflow-y:auto;
+    display:none;
+  }
+  .landing-overlay.active{display:block;}
+  .landing-overlay::-webkit-scrollbar{display:none;}
+
+  .landing-hero{
+    background:var(--crop-green);
+    color:#F6F1E4;
+    padding:38px 24px 34px;
+    position:relative;
+    overflow:hidden;
+  }
+  .landing-hero .grain-eyebrow{
+    font-size:11px;text-transform:uppercase;letter-spacing:0.1em;
+    opacity:0.8;font-weight:600;margin-bottom:14px;
+  }
+  .landing-hero h1{
+    font-family:'Fraunces',serif;font-weight:600;
+    font-size:32px;line-height:1.12;letter-spacing:-0.01em;
+    margin-bottom:14px;
+  }
+  .landing-hero .sub{
+    font-size:14.5px;line-height:1.55;opacity:0.92;
+    margin-bottom:26px;max-width:320px;
+  }
+  .hero-silo{
+    background:rgba(246,241,228,0.1);
+    border:1px solid rgba(246,241,228,0.18);
+    border-radius:16px;
+    padding:16px 16px 14px;
+    margin-bottom:26px;
+  }
+  .hero-silo .silo-track{height:12px;background:rgba(246,241,228,0.18);}
+  .hero-silo .silo-fill{width:0%;animation:fillHero 2.2s cubic-bezier(.22,1,.36,1) 0.3s forwards;}
+  @keyframes fillHero{ to{ width:83%; } }
+  @media (prefers-reduced-motion: reduce){ .hero-silo .silo-fill{animation:none;width:83%;} }
+  .hero-silo .silo-caption{font-size:11.5px;opacity:0.8;margin-top:8px;}
+
+  .landing-cta-row{display:flex;flex-direction:column;gap:10px;}
+  .btn-cream{
+    background:#F6F1E4;color:var(--gold-deep);
+    padding:14px;border-radius:12px;border:none;
+    font-family:'Inter',sans-serif;font-weight:700;font-size:14.5px;
+    cursor:pointer;text-align:center;
+  }
+  .btn-ghost-cream{
+    background:none;color:#F6F1E4;border:none;
+    font-size:13px;font-weight:600;text-decoration:underline;
+    cursor:pointer;text-align:center;padding:6px;opacity:0.9;
+  }
+
+  .landing-section{padding:34px 24px;border-bottom:1px solid var(--line);}
+  .landing-section:last-of-type{border-bottom:none;}
+  .landing-section .eyebrow{margin-bottom:10px;}
+  .landing-section h2{
+    font-family:'Fraunces',serif;font-weight:600;
+    font-size:22px;line-height:1.28;letter-spacing:-0.01em;
+    margin-bottom:14px;
+  }
+  .landing-section p{font-size:14px;line-height:1.65;color:var(--ink-soft);}
+  .landing-section p + p{margin-top:12px;}
+
+  .step-item{display:flex;gap:14px;margin-bottom:22px;}
+  .step-item:last-child{margin-bottom:0;}
+  .step-icon{
+    flex:none;width:38px;height:38px;border-radius:10px;
+    background:var(--crop-green-soft);
+    display:flex;align-items:center;justify-content:center;
+  }
+  .step-icon svg{width:19px;height:19px;stroke:var(--crop-green);fill:none;stroke-width:1.8;}
+  .step-body .step-title{font-weight:700;font-size:14.5px;margin-bottom:3px;}
+  .step-body .step-desc{font-size:13px;color:var(--ink-soft);line-height:1.55;}
+
+  .field-note-row{display:flex;gap:12px;margin-bottom:18px;align-items:flex-start;}
+  .field-note-row:last-child{margin-bottom:0;}
+  .field-note-row .dot{
+    flex:none;width:7px;height:7px;border-radius:50%;
+    background:var(--gold-deep);margin-top:6px;
+  }
+  .field-note-row div{font-size:13.5px;line-height:1.55;color:var(--ink-soft);}
+  .field-note-row strong{color:var(--ink);}
+
+  .pull-quote{
+    background:var(--card);border:1px solid var(--line);border-radius:16px;
+    padding:20px;position:relative;
+  }
+  .pull-quote .mark-quote{
+    font-family:'Fraunces',serif;font-size:38px;color:var(--gold);
+    line-height:0.6;margin-bottom:8px;display:block;
+  }
+  .pull-quote p{font-family:'Fraunces',serif;font-style:italic;font-size:16px;
+    line-height:1.5;color:var(--ink);margin-bottom:12px;}
+  .pull-quote .attribution{font-size:12px;color:var(--ink-soft);font-weight:600;}
+
+  .math-example{
+    background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:16px;margin-top:14px;
+  }
+  .math-example .math-total{
+    display:flex;justify-content:space-between;align-items:baseline;
+    padding-bottom:12px;margin-bottom:12px;border-bottom:1px solid var(--line);
+  }
+  .math-example .math-total .m-label{font-size:12px;color:var(--ink-soft);}
+  .math-example .math-total .m-value{font-family:'Fraunces',serif;font-weight:600;font-size:19px;}
+  .math-row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;}
+  .math-row + .math-row{border-top:1px solid var(--line);}
+  .math-row .m-name{font-weight:600;font-size:13.5px;}
+  .math-row .m-detail{font-size:11.5px;color:var(--ink-soft);margin-top:1px;}
+  .math-row .m-amount{font-family:'Fraunces',serif;font-weight:600;font-size:14.5px;}
+
+  .faq-item{margin-bottom:20px;}
+  .faq-item:last-child{margin-bottom:0;}
+  .faq-item .q{font-weight:700;font-size:14px;margin-bottom:5px;}
+  .faq-item .a{font-size:13px;color:var(--ink-soft);line-height:1.6;}
+
+  .landing-close{
+    background:var(--gold-deep);color:#F6F1E4;
+    padding:38px 24px 44px;text-align:center;
+  }
+  .landing-close h2{
+    font-family:'Fraunces',serif;font-weight:600;font-size:24px;
+    margin-bottom:10px;line-height:1.2;
+  }
+  .landing-close p{font-size:13.5px;opacity:0.9;margin-bottom:22px;line-height:1.5;}
+  .landing-close .btn-cream{width:100%;margin-bottom:12px;}
+  .landing-close .btn-ghost-cream{margin-bottom:14px;}
+  .landing-close .fine-print{font-size:11.5px;opacity:0.8;}
 </style>
 </head>
 <body>
@@ -352,8 +542,14 @@
       <div class="mark">P</div>
       <div class="name">Pool</div>
     </div>
-    <div class="coop-pill">Chikandwe Coop</div>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <div class="coop-pill" id="coop-pill" onclick="onCoopPillClick()" title="Tap to switch coop">Loading…</div>
+      <button class="icon-btn" onclick="doLogout()" title="Log out">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="var(--ink-soft)" stroke-width="1.8" fill="none"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+      </button>
+    </div>
   </header>
+  <div class="offline-banner" id="offline-banner" style="display:none;">You're offline — new entries will sync once you're back online.</div>
 
   <main>
 
@@ -362,23 +558,15 @@
       <div class="eyebrow">Good morning</div>
       <h1 class="page-title">This season's pool</h1>
 
-      <div class="silo-card">
-        <div class="season-label">2026 Rain Season</div>
-        <div class="crop-name">Soya Beans</div>
-        <div class="silo-track"><div class="silo-fill" style="width:68%"></div></div>
-        <div class="silo-stats">
-          <span><strong>4,080 kg</strong> pooled</span>
-          <span>target 6,000 kg</span>
-        </div>
-      </div>
+      <div id="dashboard-silo"></div>
 
       <div class="stat-row">
         <div class="stat-box">
-          <div class="num">37</div>
+          <div class="num" id="stat-member-count">–</div>
           <div class="label">Members contributing</div>
         </div>
         <div class="stat-box">
-          <div class="num">K0</div>
+          <div class="num" id="stat-outstanding">–</div>
           <div class="label">Outstanding payouts</div>
         </div>
       </div>
@@ -389,87 +577,36 @@
       </div>
 
       <div class="section-label">Recent contributions</div>
-      <div class="list-item">
-        <div>
-          <div class="li-name">Beatrice Mwansa</div>
-          <div class="li-sub">Delivered 26 Jul</div>
-        </div>
-        <div class="li-right">
-          <div class="li-amount">120 kg</div>
-          <span class="grade-badge grade-A">Grade A</span>
-        </div>
-      </div>
-      <div class="list-item">
-        <div>
-          <div class="li-name">Justin Banda</div>
-          <div class="li-sub">Delivered 25 Jul</div>
-        </div>
-        <div class="li-right">
-          <div class="li-amount">85 kg</div>
-          <span class="grade-badge grade-B">Grade B</span>
-        </div>
-      </div>
-      <div class="list-item">
-        <div>
-          <div class="li-name">Esther Phiri</div>
-          <div class="li-sub">Delivered 24 Jul</div>
-        </div>
-        <div class="li-right">
-          <div class="li-amount">200 kg</div>
-          <span class="grade-badge grade-A">Grade A</span>
-        </div>
-      </div>
+      <div id="dashboard-recent"><div class="empty-state"><div class="icon">🌾</div><p>Loading…</p></div></div>
     </section>
 
     <!-- MEMBERS -->
     <section class="screen" id="members">
-      <div class="eyebrow">37 registered</div>
+      <div class="eyebrow" id="members-count">– registered</div>
       <h1 class="page-title">Members</h1>
 
       <div class="btn-row">
         <button class="btn btn-primary" onclick="openModal('addMember')">+ Add member</button>
       </div>
 
-      <div class="list-item">
-        <div>
-          <div class="li-name">Beatrice Mwansa</div>
-          <div class="li-sub">Kalonga village · 0977 214 xxx</div>
-        </div>
-        <div class="li-right">
-          <div class="li-amount">340 kg</div>
-          <div class="li-sub">total pooled</div>
-        </div>
+      <div class="field" style="margin-bottom:14px;">
+        <input type="text" id="input-member-search" placeholder="Search by name or village" oninput="renderMembers()">
       </div>
-      <div class="list-item">
-        <div>
-          <div class="li-name">Justin Banda</div>
-          <div class="li-sub">Chikandwe centre · 0966 502 xxx</div>
-        </div>
-        <div class="li-right">
-          <div class="li-amount">265 kg</div>
-          <div class="li-sub">total pooled</div>
-        </div>
+
+      <div id="members-list"><div class="empty-state"><div class="icon">👥</div><p>Loading…</p></div></div>
+    </section>
+
+    <!-- MEMBER DETAIL -->
+    <section class="screen" id="member-detail">
+      <div class="modal-close" style="text-align:left;margin-bottom:14px;" onclick="showScreen('members', document.querySelectorAll('nav.bottom button')[1])">&larr; Back to members</div>
+      <h1 class="page-title" id="member-detail-name" style="margin-bottom:4px;">Member</h1>
+      <div class="eyebrow" id="member-detail-sub" style="text-transform:none;letter-spacing:normal;margin-bottom:16px;"></div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="openEditMember()">Edit member</button>
+        <button class="btn btn-secondary" style="color:var(--brick);" onclick="deleteMember()">Delete</button>
       </div>
-      <div class="list-item">
-        <div>
-          <div class="li-name">Esther Phiri</div>
-          <div class="li-sub">Kalonga village · 0955 881 xxx</div>
-        </div>
-        <div class="li-right">
-          <div class="li-amount">510 kg</div>
-          <div class="li-sub">total pooled</div>
-        </div>
-      </div>
-      <div class="list-item">
-        <div>
-          <div class="li-name">Moses Tembo</div>
-          <div class="li-sub">Chikandwe centre · 0977 340 xxx</div>
-        </div>
-        <div class="li-right">
-          <div class="li-amount">190 kg</div>
-          <div class="li-sub">total pooled</div>
-        </div>
-      </div>
+      <div class="section-label">Contribution history</div>
+      <div id="member-detail-history"></div>
     </section>
 
     <!-- SEASONS -->
@@ -477,79 +614,32 @@
       <div class="eyebrow">Harvest cycles</div>
       <h1 class="page-title">Seasons</h1>
 
-      <div class="list-item" onclick="openModal('recordSale')" style="cursor:pointer;">
-        <div>
-          <div class="li-name">Soya Beans — 2026 Rain</div>
-          <div class="li-sub">4,080 kg pooled · 37 members</div>
-        </div>
-        <span class="status-tag tag-open">Open</span>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="openModal('addSeason')">+ New season</button>
       </div>
-      <div class="list-item">
-        <div>
-          <div class="li-name">Maize — 2025/26</div>
-          <div class="li-sub">6,240 kg pooled · sold to Zamgold Millers</div>
-        </div>
-        <span class="status-tag tag-sold">Sold</span>
+
+      <div class="field" style="margin-bottom:14px;">
+        <input type="text" id="input-season-search" placeholder="Search by crop or label" oninput="renderSeasons()">
       </div>
-      <div class="list-item">
-        <div>
-          <div class="li-name">Groundnuts — 2025 Dry</div>
-          <div class="li-sub">1,850 kg pooled · payouts complete</div>
-        </div>
-        <span class="status-tag tag-closed">Closed</span>
-      </div>
+
+      <div id="seasons-list"><div class="empty-state"><div class="icon">📦</div><p>Loading…</p></div></div>
     </section>
 
     <!-- PAYOUTS -->
     <section class="screen" id="payouts">
-      <div class="eyebrow">Maize — 2025/26 sale</div>
+      <div class="eyebrow" id="payouts-season-label">Select a sold season</div>
       <h1 class="page-title">Payouts</h1>
 
-      <div class="stat-box" style="margin-bottom:18px;">
-        <div class="num">K18,720</div>
-        <div class="label">Total sale amount · K3.00/kg</div>
+      <div id="payouts-summary"></div>
+      <div class="field" style="margin-bottom:10px;">
+        <input type="text" id="input-payout-search" placeholder="Search by member name" oninput="renderPayouts()">
       </div>
-
-      <div class="list-item">
-        <div>
-          <div class="li-name">Beatrice Mwansa</div>
-          <div class="li-sub">340 kg · 5.4% share</div>
-        </div>
-        <div class="li-right">
-          <div class="li-amount">K1,020</div>
-          <span class="status-tag tag-paid">Paid</span>
-        </div>
+      <div class="grade-toggle" id="payout-status-filter" style="margin-bottom:14px;">
+        <div class="grade-opt selected" data-status="all" onclick="setPayoutFilter(this)">All</div>
+        <div class="grade-opt" data-status="due" onclick="setPayoutFilter(this)">Due</div>
+        <div class="grade-opt" data-status="paid" onclick="setPayoutFilter(this)">Paid</div>
       </div>
-      <div class="list-item">
-        <div>
-          <div class="li-name">Justin Banda</div>
-          <div class="li-sub">265 kg · 4.2% share</div>
-        </div>
-        <div class="li-right">
-          <div class="li-amount">K795</div>
-          <span class="status-tag tag-due">Due</span>
-        </div>
-      </div>
-      <div class="list-item">
-        <div>
-          <div class="li-name">Esther Phiri</div>
-          <div class="li-sub">510 kg · 8.2% share</div>
-        </div>
-        <div class="li-right">
-          <div class="li-amount">K1,530</div>
-          <span class="status-tag tag-paid">Paid</span>
-        </div>
-      </div>
-      <div class="list-item">
-        <div>
-          <div class="li-name">Moses Tembo</div>
-          <div class="li-sub">190 kg · 3.0% share</div>
-        </div>
-        <div class="li-right">
-          <div class="li-amount">K570</div>
-          <span class="status-tag tag-due">Due</span>
-        </div>
-      </div>
+      <div id="payouts-list"><div class="empty-state"><div class="icon">💰</div><p>No sold seasons yet. Record a sale from the Seasons tab to generate payouts.</p></div></div>
     </section>
 
   </main>
@@ -579,29 +669,30 @@
       <h2>Add contribution</h2>
       <div class="field">
         <label>Member</label>
-        <select><option>Beatrice Mwansa</option><option>Justin Banda</option><option>Esther Phiri</option><option>Moses Tembo</option></select>
+        <select id="input-contrib-member"></select>
       </div>
       <div class="field">
-        <label>Crop</label>
-        <select><option>Soya Beans</option><option>Maize</option><option>Groundnuts</option></select>
+        <label>Season</label>
+        <select id="input-contrib-season"></select>
       </div>
       <div class="field">
         <label>Quantity (kg)</label>
-        <input type="number" placeholder="e.g. 120">
+        <input type="number" id="input-contrib-kg" placeholder="e.g. 120" min="0.01" step="0.01" inputmode="decimal">
       </div>
       <div class="field">
         <label>Quality grade</label>
-        <div class="grade-toggle">
-          <div class="grade-opt selected">A</div>
-          <div class="grade-opt">B</div>
-          <div class="grade-opt">C</div>
+        <div class="grade-toggle" id="input-contrib-grade">
+          <div class="grade-opt selected" data-grade="A">A</div>
+          <div class="grade-opt" data-grade="B">B</div>
+          <div class="grade-opt" data-grade="C">C</div>
         </div>
       </div>
       <div class="field">
         <label>Date delivered</label>
-        <input type="date" value="2026-07-28">
+        <input type="date" id="input-contrib-date">
       </div>
-      <button class="btn btn-primary" style="width:100%;" onclick="closeModal('addContribution')">Save contribution</button>
+      <div class="field-error" id="input-contrib-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary" style="width:100%;" id="btn-save-contribution" onclick="saveContribution()">Save contribution</button>
       <div class="modal-close" onclick="closeModal('addContribution')">Cancel</div>
     </div>
   </div>
@@ -612,17 +703,18 @@
       <h2>Add member</h2>
       <div class="field">
         <label>Full name</label>
-        <input type="text" placeholder="e.g. Beatrice Mwansa">
+        <input type="text" id="input-member-name" placeholder="e.g. Beatrice Mwansa">
       </div>
       <div class="field">
         <label>Phone number</label>
-        <input type="text" placeholder="e.g. 0977 214 xxx">
+        <input type="tel" id="input-member-phone" placeholder="e.g. 0977 214 xxx" inputmode="tel">
       </div>
       <div class="field">
         <label>Village / area</label>
-        <input type="text" placeholder="e.g. Kalonga village">
+        <input type="text" id="input-member-village" placeholder="e.g. Kalonga village">
       </div>
-      <button class="btn btn-primary" style="width:100%;" onclick="closeModal('addMember')">Save member</button>
+      <div class="field-error" id="input-member-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary" style="width:100%;" id="btn-save-member" onclick="saveMember()">Save member</button>
       <div class="modal-close" onclick="closeModal('addMember')">Cancel</div>
     </div>
   </div>
@@ -633,39 +725,660 @@
       <h2>Record sale</h2>
       <div class="field">
         <label>Season</label>
-        <select><option>Soya Beans — 2026 Rain (4,080 kg pooled)</option></select>
+        <select id="input-sale-season"></select>
       </div>
       <div class="field">
         <label>Buyer name</label>
-        <input type="text" placeholder="e.g. Zamgold Millers">
+        <input type="text" id="input-sale-buyer" placeholder="e.g. Zamgold Millers">
       </div>
       <div class="field">
-        <label>Quantity sold (kg)</label>
-        <input type="number" placeholder="4080">
+        <label>Pricing</label>
+        <div class="grade-toggle" id="input-sale-mode">
+          <div class="grade-opt selected" data-mode="flat">Flat price</div>
+          <div class="grade-opt" data-mode="byGrade">Per grade</div>
+        </div>
       </div>
-      <div class="field">
-        <label>Price per kg (K)</label>
-        <input type="number" placeholder="e.g. 3.00">
+      <div id="sale-flat-fields">
+        <div class="field">
+          <label>Quantity sold (kg)</label>
+          <input type="number" id="input-sale-qty" placeholder="4080" min="0.01" step="0.01">
+        </div>
+        <div class="field">
+          <label>Price per kg (K)</label>
+          <input type="number" id="input-sale-price" placeholder="e.g. 3.00" min="0.01" step="0.01">
+        </div>
       </div>
-      <button class="btn btn-primary" style="width:100%;" onclick="closeModal('recordSale')">Save sale &amp; generate payouts</button>
+      <div id="sale-grade-fields" style="display:none;">
+        <div class="field">
+          <label>Price per kg by grade (K)</label>
+          <div class="price-grade-row">
+            <div class="price-grade-item">
+              <span class="pg-label">Grade A</span>
+              <input type="number" id="input-sale-price-A" placeholder="3.50" min="0" step="0.01">
+            </div>
+            <div class="price-grade-item">
+              <span class="pg-label">Grade B</span>
+              <input type="number" id="input-sale-price-B" placeholder="3.00" min="0" step="0.01">
+            </div>
+            <div class="price-grade-item">
+              <span class="pg-label">Grade C</span>
+              <input type="number" id="input-sale-price-C" placeholder="2.50" min="0" step="0.01">
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="field-error" id="input-sale-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary" style="width:100%;" onclick="reviewSale()">Review sale &amp; payouts</button>
       <div class="modal-close" onclick="closeModal('recordSale')">Cancel</div>
+    </div>
+  </div>
+
+  <!-- MODAL: Confirm Sale (final, destructive step) -->
+  <div class="modal-overlay" id="modal-confirmSale">
+    <div class="modal">
+      <h2>Confirm sale &amp; payouts</h2>
+      <div id="confirm-sale-warning" style="display:none;background:#fdf1ec;border:1px solid var(--brick);color:var(--brick);border-radius:12px;padding:10px 12px;font-size:12.5px;margin-bottom:14px;"></div>
+      <div id="confirm-sale-summary"></div>
+      <div class="field-error" id="input-confirm-sale-error" style="display:none;color:var(--brick);font-size:12px;margin:10px 0;"></div>
+      <button class="btn btn-primary" style="width:100%;" onclick="confirmSaleFinal()">Confirm &amp; finalize — can't be undone</button>
+      <div class="modal-close" onclick="closeModal('confirmSale')">Back, let me check the numbers</div>
+    </div>
+  </div>
+
+  <!-- MODAL: Add Season -->
+  <div class="modal-overlay" id="modal-addSeason">
+    <div class="modal">
+      <h2 id="addSeason-title">New season</h2>
+      <div class="field">
+        <label>Crop</label>
+        <input type="text" id="input-season-crop" placeholder="e.g. Soya Beans">
+      </div>
+      <div class="field">
+        <label>Label</label>
+        <input type="text" id="input-season-label" placeholder="e.g. 2026 Rain">
+      </div>
+      <div class="field">
+        <label>Target (kg)</label>
+        <input type="number" id="input-season-target" placeholder="e.g. 6000" min="1" step="1">
+      </div>
+      <div class="field-error" id="input-season-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary" style="width:100%;" id="btn-save-season" onclick="saveSeason()">Save season</button>
+      <div class="btn-row" id="season-delete-row" style="display:none;margin-top:8px;">
+        <button class="btn btn-secondary" style="color:var(--brick);width:100%;" onclick="deleteSeason()">Delete season</button>
+      </div>
+      <div class="modal-close" onclick="closeModal('addSeason')">Cancel</div>
+    </div>
+  </div>
+  <!-- MODAL: Switch coop (super-admins only) -->
+  <div class="modal-overlay" id="modal-switchCoop">
+    <div class="modal">
+      <h2>Switch coop</h2>
+      <div id="coop-switch-list"><div class="empty-state"><p>Loading coops…</p></div></div>
+      <div class="modal-close" onclick="closeModal('switchCoop')">Cancel</div>
+    </div>
+  </div>
+
+  <!-- APP LOADING GATE (shown until Firebase resolves auth state, so returning members never see the landing page flash) -->
+  <div class="loading-gate" id="app-loading">
+    <div class="mark">P</div>
+    <div class="word">Pool</div>
+  </div>
+
+  <!-- LANDING PAGE (first thing anyone sees who isn't already signed in) -->
+  <div class="landing-overlay active" id="landing-screen">
+
+    <div class="landing-hero">
+      <div class="grain-eyebrow">For Zambia's farmer cooperatives</div>
+      <h1>One harvest.<br>Pooled. Paid out<br>to the ngwee.</h1>
+      <div class="sub">Pool turns dozens of small deliveries into one strong sale — and tracks every member's exact share, so nobody ever has to wonder if they got their fair cut.</div>
+
+      <div class="hero-silo">
+        <div class="silo-track"><div class="silo-fill"></div></div>
+        <div class="silo-caption">This is what a season looks like while it's filling — every bag, from every member, adding to one number everyone can see.</div>
+      </div>
+
+      <div class="landing-cta-row">
+        <button class="btn-cream" onclick="goToLogin()">Sign in to your coop</button>
+        <button class="btn-ghost-cream" onclick="goToCreateCoop()">New cooperative? Set one up →</button>
+        <button class="btn-ghost-cream" onclick="document.getElementById('landing-how').scrollIntoView({behavior:'smooth'})">See how it works ↓</button>
+      </div>
+    </div>
+
+    <div class="landing-section">
+      <div class="eyebrow">Sold alone</div>
+      <h2>One sack doesn't set the price. It just takes whatever it's offered.</h2>
+      <p>A farmer walks to the roadside with what one season gave them — a few bags, maybe a good year, maybe not. A buyer names a number. There's no room to argue it: down the road, the next farmer will take it if you don't.</p>
+      <p>This happens the same way in the next village, and the one after that. Everyone selling alone, everyone taking whatever price shows up that day. The real cost isn't just a lower price — it's going through it by yourself.</p>
+      <p>And even where cooperatives already exist and already sell together, the harder problem is usually what comes after the sale: whose word do you trust for how many kilos you actually brought in back in March? Paper records get lost, memories get fuzzy, and the person keeping the books is doing it by hand on top of everything else they farm.</p>
+    </div>
+
+    <div class="landing-section">
+      <div class="eyebrow">Together</div>
+      <h2>Thirty-seven small deliveries become one truckload — and one truckload can ask for a fair price.</h2>
+      <p>Pool is built around a simple idea your cooperative already believes in: what one member can't negotiate alone, thirty-seven members can. Every delivery gets logged as it happens. The season's shared total grows in the open, where every member can watch it fill. When it's time to sell, the coop sells once, as one lot — and the price that gets negotiated is one everyone shares in.</p>
+      <p>Then Pool does the part that used to cause the most arguments: splitting the money back out. Not by guesswork, not by who asked first — by exactly what each person put in, calculated down to the ngwee.</p>
+    </div>
+
+    <div class="landing-section" id="landing-how">
+      <div class="eyebrow">The process</div>
+      <h2>What happens between a delivery and a payout</h2>
+
+      <div class="step-item">
+        <div class="step-icon"><svg viewBox="0 0 24 24"><path d="M4 8l8-5 8 5v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8z"/><path d="M9 21V12h6v9"/></svg></div>
+        <div class="step-body">
+          <div class="step-title">Deliver &amp; record</div>
+          <div class="step-desc">Every delivery is written down the day it happens — whose it was, how many kilos, what grade. No end-of-season memory required.</div>
+        </div>
+      </div>
+
+      <div class="step-item">
+        <div class="step-icon"><svg viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 21V11M12 21V7M16 21V13"/></svg></div>
+        <div class="step-body">
+          <div class="step-title">Watch the silo fill</div>
+          <div class="step-desc">The season's pooled total grows where every member can see it — not a private ledger, a shared one.</div>
+        </div>
+      </div>
+
+      <div class="step-item">
+        <div class="step-icon"><svg viewBox="0 0 24 24"><path d="M12 2v20M17 6.5c0-2-2-3.5-5-3.5s-5 1.5-5 3.5S9 9 12 9s5 1.5 5 3.5-2 3.5-5 3.5-5-1.5-5-3.5"/></svg></div>
+        <div class="step-body">
+          <div class="step-title">Sell once, pay out exactly</div>
+          <div class="step-desc">One sale, split by each person's true share — no rounding drift, no disputes about who's owed what.</div>
+        </div>
+      </div>
+
+      <div class="math-example">
+        <div class="math-total">
+          <div class="m-label">Season sale · 1,000 kg sold at K3.00/kg</div>
+          <div class="m-value">K3,000.00</div>
+        </div>
+        <div class="math-row">
+          <div>
+            <div class="m-name">Beatrice M.</div>
+            <div class="m-detail">500 kg delivered · 50% of the pool</div>
+          </div>
+          <div class="m-amount">K1,500.00</div>
+        </div>
+        <div class="math-row">
+          <div>
+            <div class="m-name">Joseph K.</div>
+            <div class="m-detail">300 kg delivered · 30% of the pool</div>
+          </div>
+          <div class="m-amount">K900.00</div>
+        </div>
+        <div class="math-row">
+          <div>
+            <div class="m-name">Agnes T.</div>
+            <div class="m-detail">200 kg delivered · 20% of the pool</div>
+          </div>
+          <div class="m-amount">K600.00</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="landing-section">
+      <div class="eyebrow">Made for the field</div>
+      <h2>Built for how the work actually happens</h2>
+      <div class="field-note-row">
+        <div class="dot"></div>
+        <div><strong>Works without signal.</strong> Log a delivery in the field where there's no network — it syncs the moment there's a connection again.</div>
+      </div>
+      <div class="field-note-row">
+        <div class="dot"></div>
+        <div><strong>Nothing is locked away.</strong> Every member's full delivery history is there to check, any time — not just a running total.</div>
+      </div>
+      <div class="field-note-row">
+        <div class="dot"></div>
+        <div><strong>Corrections stay possible.</strong> A wrong weight or a typo can still be fixed, right up until a season is sold.</div>
+      </div>
+      <div class="field-note-row">
+        <div class="dot"></div>
+        <div><strong>Grades are priced openly.</strong> When a coop sells by grade, every member can see exactly what Grade A, B, and C fetched — not just the total.</div>
+      </div>
+      <div class="field-note-row">
+        <div class="dot"></div>
+        <div><strong>Your coop's numbers stay your coop's.</strong> Members only ever see their own cooperative's members, seasons, and payouts.</div>
+      </div>
+    </div>
+
+    <div class="landing-section">
+      <div class="pull-quote">
+        <span class="mark-quote">"</span>
+        <p>Once the fill bar passed the target line, people started walking over just to look at it. That was the moment the pooling stopped being a promise and started being a number we could all see.</p>
+        <div class="attribution">— a grower, Chikandwe Coop</div>
+      </div>
+    </div>
+
+    <div class="landing-section">
+      <div class="eyebrow">Before you sign in</div>
+      <h2>Questions every member asks first</h2>
+
+      <div class="faq-item">
+        <div class="q">What if I miss a delivery day, or forget to log one?</div>
+        <div class="a">Nothing is lost — a delivery just isn't counted until it's recorded. Log it as soon as you can, even the next day; it'll still count toward that season as long as the season is still open.</div>
+      </div>
+      <div class="faq-item">
+        <div class="q">Can I check my own numbers without asking anyone?</div>
+        <div class="a">Yes. Every member can open their own history and see every delivery they've ever made — the date, the weight, the grade — not just a single running total.</div>
+      </div>
+      <div class="faq-item">
+        <div class="q">What happens if two people try to finalize a sale at the same time?</div>
+        <div class="a">Only the first one goes through. The second is stopped automatically and told the season's already been sold, so a season can never be paid out twice.</div>
+      </div>
+      <div class="faq-item">
+        <div class="q">Do I need airtime or data to use Pool in the field?</div>
+        <div class="a">No — entries save on the phone first and sync once there's a connection. A banner lets you know when you're working offline.</div>
+      </div>
+      <div class="faq-item">
+        <div class="q">Who can start a season or record a sale?</div>
+        <div class="a">That's set by your cooperative when your account is created — ask your Pool administrator what your account can do.</div>
+      </div>
+    </div>
+
+    <div class="landing-close">
+      <h2>Bring your harvest to the pool.</h2>
+      <p>Sign in with the account your cooperative set up for you, and see this season's silo fill in real time.</p>
+      <button class="btn-cream" onclick="goToLogin()">Sign in to your coop</button>
+      <button class="btn-ghost-cream" onclick="goToCreateCoop()">Starting a new cooperative? Set one up →</button>
+      <div class="fine-print">Already a member? Ask your cooperative's administrator to add your account.</div>
+    </div>
+
+  </div>
+
+  <!-- LOGIN -->
+  <div class="modal-overlay login-overlay" id="login-screen">
+    <div class="modal" style="border-radius:22px;">
+      <h2>Sign in to Pool</h2>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="input-login-email" placeholder="you@coop.zm" autocomplete="username">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="input-login-password" placeholder="••••••••" autocomplete="current-password">
+      </div>
+      <div class="field-error" id="input-login-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary" style="width:100%;" onclick="doLogin()">Sign in</button>
+      <div class="modal-close" onclick="goToCreateCoop()">New coop? Set one up</div>
+      <div class="modal-close" onclick="backToLanding()">&larr; Back</div>
+    </div>
+  </div>
+
+  <!-- CREATE COOP (self-serve first-admin setup — see the "SELF-SERVE COOP CREATION" note below) -->
+  <div class="modal-overlay login-overlay" id="create-coop-screen">
+    <div class="modal" style="border-radius:22px;">
+      <h2>Set up your coop</h2>
+      <div class="field">
+        <label>Cooperative name</label>
+        <input type="text" id="input-create-coopname" placeholder="e.g. Chikandwe Coop">
+      </div>
+      <div class="field">
+        <label>Your full name</label>
+        <input type="text" id="input-create-name" placeholder="e.g. Beatrice Mwansa">
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="input-create-email" placeholder="you@coop.zm" autocomplete="username">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="input-create-password" placeholder="At least 6 characters" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label>Confirm password</label>
+        <input type="password" id="input-create-confirm" placeholder="••••••••" autocomplete="new-password">
+      </div>
+      <div class="field-error" id="input-create-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary" style="width:100%;" id="btn-create-coop" onclick="createCoop()">Create coop &amp; sign in</button>
+      <div class="modal-close" onclick="goToLogin()">Already have an account? Sign in</div>
+      <div class="modal-close" onclick="backToLanding()">&larr; Back</div>
     </div>
   </div>
 
 </div>
 
 <script>
+  /* ---------- Firebase setup ---------- */
+  // TODO: replace with your project's config (Firebase console > Project settings)
+  const firebaseConfig = {
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_PROJECT.firebaseapp.com",
+    databaseURL: "https://YOUR_PROJECT-default-rtdb.firebaseio.com",
+    projectId: "YOUR_PROJECT",
+    storageBucket: "YOUR_PROJECT.appspot.com",
+    messagingSenderId: "YOUR_SENDER_ID",
+    appId: "YOUR_APP_ID"
+  };
+  firebase.initializeApp(firebaseConfig);
+  let db;
+  try {
+    db = firebase.database();
+  } catch(e){
+    console.error('Firebase database init failed — check firebaseConfig above.', e);
+  }
+
+  /* ---------- Coop resolution (multi-coop / per-user) ----------
+     Expected RTDB shape:
+       users/{uid}         -> { coopId: "chikandwe", coopName: "Chikandwe Coop", role: "admin" }
+                               (role "superadmin" may omit coopId and instead pick from coopDirectory)
+       coopDirectory/{id}  -> "Coop Display Name"   (only needed for superadmin coop-switching)
+       coops/{coopId}/...  -> members / seasons / contributions / payouts (unchanged)
+
+     Suggested RTDB security rules (adjust to taste):
+       "users": {
+         "$uid": {
+           ".read": "auth.uid === $uid",
+           // A signed-in user may create their OWN profile once (self-serve coop setup below
+           // relies on this), but never edit it afterwards — !data.exists() means this only
+           // matches the very first write, so nobody can later grant themselves 'superadmin'
+           // or move themselves into a different coop by writing over their own node again.
+           ".write": "auth.uid === $uid && !data.exists()"
+         }
+       },
+       "coopDirectory": {
+         ".read": "auth != null",
+         "$coopId": {
+           // Anyone signed in can register a brand-new coop id, but can't rename or hijack
+           // one that already exists — same !data.exists() guard as above.
+           ".write": "auth != null && !data.exists()"
+         }
+       },
+       "coops": {
+         "$coopId": {
+           ".read": "root.child('users').child(auth.uid).child('coopId').val() === $coopId || root.child('users').child(auth.uid).child('role').val() === 'superadmin'",
+           ".write": "root.child('users').child(auth.uid).child('coopId').val() === $coopId || root.child('users').child(auth.uid).child('role').val() === 'superadmin'"
+         }
+       }
+     NOTE ON THE SPARK PLAN: Cloud Functions require the Blaze (pay-as-you-go) plan to deploy,
+     even at zero cost, so finalizing a sale below uses a client-side RTDB *transaction* on
+     seasons/{id}/status instead of a server-side function. RTDB transactions are still race-safe
+     (the server retries/serializes them so only one caller can flip 'open' -> 'sold'), but unlike
+     a Cloud Function, nothing stops a modified client from writing directly, bypassing the app's
+     logic entirely, if your security rules allow it. This is a reasonable trade-off for a small
+     coop app; if you ever move to Blaze, functions/index.js (kept alongside this file) has the
+     server-enforced version ready to deploy — swap confirmSaleFinal() back to calling it.
+
+     NOTE ON SELF-SERVE COOP CREATION: createCoop() below (used by the "Set up your coop"
+     screen) calls firebase.auth().createUserWithEmailAndPassword() and then writes
+     coopDirectory/{id} + users/{uid} in a single multi-path update(). There's no Cloud
+     Function on the Spark plan to make those two steps atomic, so if the network drops
+     between them, you can end up with an Auth user that has no matching coop profile —
+     resolveCoopForUser() already handles that case (it alerts the person and signs them
+     back out) but the orphaned Auth user itself has to be deleted from the Firebase
+     console manually if that happens, since nothing else will clean it up automatically.
+  */
+  let COOP_ID = null;
+  let COOP_NAME = '';
+  let IS_SUPERADMIN = false;
+  let coopRef = null, membersRef = null, seasonsRef = null, contributionsRef = null, payoutsRef = null;
+
+  /* ---------- Local cache (kept in sync by Firebase listeners) ---------- */
+  let members = {};       // memberId -> {name, phone, village, totalKg}
+  let seasons = {};       // seasonId -> {crop, label, targetKg, pooledKg, status, buyer, pricePerKg, saleAmount}
+  let contributions = {}; // contribId -> {memberId, seasonId, kg, grade, date, ts}
+  let payouts = {};       // seasonId -> { memberId -> {amount, sharePercent, status, paidTs} }
+  let currentMemberId = null; // member currently open on the Member Detail screen
+
+  const fmtK = n => 'K' + Number(n || 0).toLocaleString('en-ZM', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  const fmtKg = n => Number(n || 0).toLocaleString('en-ZM') + ' kg';
+  const fmtDate = iso => { if(!iso) return ''; const d = new Date(iso); return d.toLocaleDateString('en-GB', {day:'2-digit', month:'short'}); };
+  const fmtTs = ts => { if(!ts) return ''; return new Date(ts).toLocaleDateString('en-GB', {day:'2-digit', month:'short'}); };
+
+  /* ---------- Attach / detach per-coop listeners ---------- */
+  function attachCoopListeners(coopId){
+    detachCoopListeners(); // safety: never double-attach if switching coops
+    COOP_ID = coopId;
+    coopRef = db.ref('coops/' + COOP_ID);
+    membersRef = coopRef.child('members');
+    seasonsRef = coopRef.child('seasons');
+    contributionsRef = coopRef.child('contributions');
+    payoutsRef = coopRef.child('payouts');
+
+    membersRef.on('value', membersHandler);
+    seasonsRef.on('value', seasonsHandler);
+    contributionsRef.on('value', contributionsHandler);
+    payoutsRef.on('value', payoutsHandler);
+
+    localStorage.setItem('pool_last_coop', COOP_ID);
+  }
+  function detachCoopListeners(){
+    if(membersRef) membersRef.off('value', membersHandler);
+    if(seasonsRef) seasonsRef.off('value', seasonsHandler);
+    if(contributionsRef) contributionsRef.off('value', contributionsHandler);
+    if(payoutsRef) payoutsRef.off('value', payoutsHandler);
+    coopRef = membersRef = seasonsRef = contributionsRef = payoutsRef = null;
+    // Clear local cache + UI so a coop switch (or logout) never leaks the previous coop's data
+    members = {}; seasons = {}; contributions = {}; payouts = {};
+    currentMemberId = null;
+    renderMembers(); renderDashboard(); renderSeasons();
+    if(document.getElementById('payouts').classList.contains('active')) renderPayouts();
+  }
+  const membersHandler = snap => { members = snap.val() || {}; renderMembers(); renderDashboard(); populateContributionMemberOptions(); refreshMemberDetailIfActive(); };
+  const seasonsHandler = snap => { seasons = snap.val() || {}; renderSeasons(); renderDashboard(); populateSeasonOptions(); refreshMemberDetailIfActive(); };
+  const contributionsHandler = snap => { contributions = snap.val() || {}; renderDashboard(); refreshMemberDetailIfActive(); };
+  const payoutsHandler = snap => { payouts = snap.val() || {}; renderDashboard(); if(document.getElementById('payouts').classList.contains('active')) renderPayouts(); };
+
+  /* ---------- Landing page navigation ---------- */
+  function goToLogin(){
+    document.getElementById('landing-screen').classList.remove('active');
+    document.getElementById('create-coop-screen').classList.remove('active');
+    document.getElementById('login-screen').classList.add('active');
+  }
+  function goToCreateCoop(){
+    document.getElementById('landing-screen').classList.remove('active');
+    document.getElementById('login-screen').classList.remove('active');
+    document.getElementById('input-create-coopname').value = '';
+    document.getElementById('input-create-name').value = '';
+    document.getElementById('input-create-email').value = '';
+    document.getElementById('input-create-password').value = '';
+    document.getElementById('input-create-confirm').value = '';
+    document.getElementById('input-create-error').style.display = 'none';
+    document.getElementById('create-coop-screen').classList.add('active');
+  }
+  function backToLanding(){
+    document.getElementById('login-screen').classList.remove('active');
+    document.getElementById('create-coop-screen').classList.remove('active');
+    document.getElementById('landing-screen').classList.add('active');
+  }
+
+  /* ---------- Self-serve coop creation (first admin account) ----------
+     See the "SELF-SERVE COOP CREATION" note above firebaseConfig for the security-rule
+     assumptions and the atomicity trade-off this relies on. */
+  function slugifyCoopName(name){
+    const base = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    return base || 'coop';
+  }
+  function generateAvailableCoopId(coopName){
+    const base = slugifyCoopName(coopName);
+    function tryId(candidate, attemptsLeft){
+      return db.ref('coopDirectory/' + candidate).once('value').then(snap => {
+        if(!snap.exists()) return candidate;
+        if(attemptsLeft <= 0) throw new Error('Could not find an available coop ID — try a slightly different coop name.');
+        return tryId(base + '-' + Math.random().toString(36).slice(2, 6), attemptsLeft - 1);
+      });
+    }
+    return tryId(base, 5);
+  }
+
+  function createCoop(){
+    const coopName = document.getElementById('input-create-coopname').value.trim();
+    const adminName = document.getElementById('input-create-name').value.trim();
+    const email = document.getElementById('input-create-email').value.trim();
+    const password = document.getElementById('input-create-password').value;
+    const confirmPassword = document.getElementById('input-create-confirm').value;
+    const err = document.getElementById('input-create-error');
+    err.style.display = 'none';
+
+    if(!coopName){ err.textContent = "Enter your cooperative's name."; err.style.display = 'block'; return; }
+    if(!adminName){ err.textContent = 'Enter your full name.'; err.style.display = 'block'; return; }
+    if(!email || !password){ err.textContent = 'Enter an email and password.'; err.style.display = 'block'; return; }
+    if(password.length < 6){ err.textContent = 'Password must be at least 6 characters.'; err.style.display = 'block'; return; }
+    if(password !== confirmPassword){ err.textContent = "Passwords don't match."; err.style.display = 'block'; return; }
+
+    const btn = document.getElementById('btn-create-coop');
+    btn.disabled = true;
+    btn.textContent = 'Setting up…';
+
+    generateAvailableCoopId(coopName)
+      .then(coopId => firebase.auth().createUserWithEmailAndPassword(email, password).then(cred => {
+        const updates = {};
+        updates['coopDirectory/' + coopId] = coopName;
+        updates['users/' + cred.user.uid] = { coopId, coopName, role: 'admin', adminName };
+        return db.ref().update(updates);
+        // onAuthStateChanged fires from here and loads the new coop automatically —
+        // nothing else to do on success.
+      }))
+      .catch(e => {
+        err.textContent = 'Could not set up your coop: ' + e.message;
+        err.style.display = 'block';
+      })
+      .finally(() => {
+        btn.disabled = false;
+        btn.textContent = 'Create coop & sign in';
+      });
+  }
+
+  /* ---------- Auth ----------
+     The landing page is the default first paint (see its markup above), so visitors
+     never wait on anything. If Firebase confirms an existing signed-in session, we
+     swap straight to the app; if not (or if the config/network fails for any reason),
+     the landing page just stays put — there's nothing to fall back to. */
+  try {
+    firebase.auth().onAuthStateChanged(user => {
+      document.getElementById('app-loading').classList.remove('active');
+      if(!user){
+        detachCoopListeners();
+        document.getElementById('coop-pill').textContent = '';
+        return;
+      }
+      document.getElementById('landing-screen').classList.remove('active');
+      document.getElementById('login-screen').classList.remove('active');
+      document.getElementById('create-coop-screen').classList.remove('active');
+      resolveCoopForUser(user);
+    });
+  } catch(e){
+    console.error('Firebase auth init failed — check firebaseConfig above.', e);
+  }
+
+  function resolveCoopForUser(user){
+    const pill = document.getElementById('coop-pill');
+    pill.textContent = 'Loading…';
+    db.ref('users/' + user.uid).once('value')
+      .then(snap => {
+        const profile = snap.val();
+        if(!profile){
+          alert('Your account is signed in but is not linked to a coop yet. Ask your Pool administrator to set this up, then sign in again.');
+          firebase.auth().signOut();
+          return;
+        }
+        IS_SUPERADMIN = profile.role === 'superadmin';
+        pill.title = IS_SUPERADMIN ? 'Tap to switch coop' : 'Contact your Pool administrator to change your coop';
+        if(profile.coopId){
+          COOP_NAME = profile.coopName || profile.coopId;
+          pill.textContent = COOP_NAME;
+          attachCoopListeners(profile.coopId);
+        } else if(IS_SUPERADMIN){
+          // Superadmin with no default coop yet — try last-used coop, else prompt them to pick one
+          const lastCoop = localStorage.getItem('pool_last_coop');
+          if(lastCoop){
+            db.ref('coopDirectory/' + lastCoop).once('value').then(nameSnap => {
+              COOP_NAME = nameSnap.val() || lastCoop;
+              pill.textContent = COOP_NAME;
+              attachCoopListeners(lastCoop);
+            });
+          } else {
+            pill.textContent = 'Choose a coop';
+            openModal('switchCoop');
+          }
+        } else {
+          alert('Your account has no coop assigned. Ask your Pool administrator to link your account to a coop.');
+          firebase.auth().signOut();
+        }
+      })
+      .catch(e => {
+        alert('Could not load your account details: ' + e.message);
+        firebase.auth().signOut();
+      });
+  }
+
+  function onCoopPillClick(){
+    if(!IS_SUPERADMIN) return; // regular users belong to exactly one coop
+    document.getElementById('coop-switch-list').innerHTML = '<div class="empty-state"><p>Loading coops…</p></div>';
+    openModal('switchCoop');
+    db.ref('coopDirectory').once('value').then(snap => {
+      const dir = snap.val() || {};
+      const ids = Object.keys(dir);
+      const list = document.getElementById('coop-switch-list');
+      if(!ids.length){ list.innerHTML = '<div class="empty-state"><p>No coops found in the directory yet.</p></div>'; return; }
+      list.innerHTML = ids.map(id => `
+        <div class="coop-switch-item ${id === COOP_ID ? 'current' : ''}" onclick="chooseCoop('${id}', ${JSON.stringify(dir[id])})">
+          <span>${escapeHtml(dir[id])}</span>
+          ${id === COOP_ID ? '<span>✓</span>' : ''}
+        </div>`).join('');
+    }).catch(e => {
+      document.getElementById('coop-switch-list').innerHTML = '<div class="empty-state"><p>Could not load coops: '+escapeHtml(e.message)+'</p></div>';
+    });
+  }
+  function chooseCoop(id, name){
+    COOP_NAME = name;
+    document.getElementById('coop-pill').textContent = name;
+    attachCoopListeners(id);
+    closeModal('switchCoop');
+    showScreen('dashboard');
+  }
+
+  function doLogin(){
+    const email = document.getElementById('input-login-email').value.trim();
+    const password = document.getElementById('input-login-password').value;
+    const err = document.getElementById('input-login-error');
+    err.style.display = 'none';
+    if(!email || !password){ err.textContent = 'Enter your email and password.'; err.style.display = 'block'; return; }
+    firebase.auth().signInWithEmailAndPassword(email, password)
+      .catch(e => { err.textContent = 'Sign-in failed: ' + e.message; err.style.display = 'block'; });
+  }
+  function doLogout(){
+    if(confirm('Log out of Pool?')) firebase.auth().signOut();
+  }
+
+  /* ---------- Connection / sync indicator ---------- */
+  db.ref('.info/connected').on('value', snap => {
+    document.getElementById('offline-banner').style.display = snap.val() === true ? 'none' : 'block';
+  });
+
+  /* ---------- Navigation (unchanged) ---------- */
   function showScreen(id, btn){
     document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
     document.getElementById(id).classList.add('active');
     document.querySelectorAll('nav.bottom button').forEach(b=>b.classList.remove('active'));
     if(btn) btn.classList.add('active');
+    if(id === 'payouts') renderPayouts();
   }
   function openModal(name){
+    if(name === 'addContribution') prefillContributionForm();
+    if(name === 'recordSale') prefillSaleForm();
+    if(name === 'addMember'){
+      document.querySelector('#modal-addMember h2').textContent = 'Add member';
+      document.getElementById('btn-save-member').textContent = 'Save member';
+      delete document.getElementById('modal-addMember').dataset.editingId;
+      document.getElementById('input-member-name').value = '';
+      document.getElementById('input-member-phone').value = '';
+      document.getElementById('input-member-village').value = '';
+    }
+    if(name === 'addSeason'){
+      document.getElementById('addSeason-title').textContent = 'New season';
+      document.getElementById('btn-save-season').textContent = 'Save season';
+      document.getElementById('season-delete-row').style.display = 'none';
+      delete document.getElementById('modal-addSeason').dataset.editingId;
+      document.getElementById('input-season-crop').value = '';
+      document.getElementById('input-season-label').value = '';
+      document.getElementById('input-season-target').value = '';
+    }
     document.getElementById('modal-'+name).classList.add('active');
   }
   function closeModal(name){
     document.getElementById('modal-'+name).classList.remove('active');
+    const err = document.getElementById('input-'+{addContribution:'contrib',addMember:'member',recordSale:'sale',addSeason:'season',confirmSale:'confirm-sale'}[name]+'-error');
+    if(err){ err.style.display = 'none'; err.textContent = ''; }
   }
   document.querySelectorAll('.grade-opt').forEach(opt=>{
     opt.addEventListener('click', ()=>{
@@ -673,6 +1386,783 @@
       opt.classList.add('selected');
     });
   });
+  document.querySelectorAll('#input-sale-mode .grade-opt').forEach(opt=>{
+    opt.addEventListener('click', ()=>{
+      const mode = opt.dataset.mode;
+      document.getElementById('sale-flat-fields').style.display = mode === 'flat' ? '' : 'none';
+      document.getElementById('sale-grade-fields').style.display = mode === 'byGrade' ? '' : 'none';
+    });
+  });
+
+  /* ---------- Live listeners ----------
+     Actual .on('value', ...) attachment now happens in attachCoopListeners(),
+     once we know which coop the signed-in user belongs to. */
+  function refreshMemberDetailIfActive(){
+    if(document.getElementById('member-detail').classList.contains('active')) renderMemberDetail();
+  }
+
+  /* ---------- Rendering: Dashboard ---------- */
+  function getOpenSeason(){
+    const entries = Object.entries(seasons).filter(([id,s]) => s.status === 'open');
+    return entries.length ? {id: entries[0][0], ...entries[0][1]} : null;
+  }
+
+  function renderDashboard(){
+    const silo = document.getElementById('dashboard-silo');
+    const open = getOpenSeason();
+    if(!open){
+      silo.innerHTML = '<div class="empty-state"><div class="icon">🌾</div><p>No open season yet. Start one from the Seasons tab.</p></div>';
+    } else {
+      const pct = open.targetKg ? Math.min(100, Math.round((open.pooledKg || 0) / open.targetKg * 100)) : 0;
+      silo.innerHTML = `
+        <div class="silo-card">
+          <div class="season-label">${escapeHtml(open.label || '')}</div>
+          <div class="crop-name">${escapeHtml(open.crop || '')}</div>
+          <div class="silo-track"><div class="silo-fill" style="width:${pct}%"></div></div>
+          <div class="silo-stats">
+            <span><strong>${fmtKg(open.pooledKg)}</strong> pooled</span>
+            <span>target ${fmtKg(open.targetKg)}</span>
+          </div>
+        </div>`;
+    }
+
+    document.getElementById('stat-member-count').textContent = Object.keys(members).length;
+
+    let outstanding = 0;
+    Object.values(payouts).forEach(seasonPayouts => {
+      Object.values(seasonPayouts).forEach(p => { if(p.status !== 'paid') outstanding += Number(p.amount || 0); });
+    });
+    document.getElementById('stat-outstanding').textContent = fmtK(outstanding);
+
+    const recentEl = document.getElementById('dashboard-recent');
+    const recent = Object.values(contributions).sort((a,b) => (b.ts||0) - (a.ts||0)).slice(0, 5);
+    if(!recent.length){
+      recentEl.innerHTML = '<div class="empty-state"><div class="icon">🌾</div><p>No contributions logged yet.</p></div>';
+    } else {
+      recentEl.innerHTML = recent.map(c => {
+        const m = members[c.memberId];
+        return `<div class="list-item">
+          <div>
+            <div class="li-name">${escapeHtml(m ? m.name : 'Unknown member')}</div>
+            <div class="li-sub">Delivered ${fmtDate(c.date)}</div>
+          </div>
+          <div class="li-right">
+            <div class="li-amount">${fmtKg(c.kg)}</div>
+            <span class="grade-badge grade-${c.grade}">Grade ${c.grade}</span>
+          </div>
+        </div>`;
+      }).join('');
+    }
+  }
+
+  /* ---------- Rendering: Members ---------- */
+  function renderMembers(){
+    document.getElementById('members-count').textContent = Object.keys(members).length + ' registered';
+    const list = document.getElementById('members-list');
+    const searchEl = document.getElementById('input-member-search');
+    const term = (searchEl ? searchEl.value : '').trim().toLowerCase();
+
+    if(!Object.keys(members).length){
+      list.innerHTML = '<div class="empty-state"><div class="icon">👥</div><p>No members yet. Add your first member above.</p></div>';
+      return;
+    }
+
+    let entries = Object.entries(members);
+    if(term){
+      entries = entries.filter(([id, m]) =>
+        (m.name || '').toLowerCase().includes(term) || (m.village || '').toLowerCase().includes(term));
+    }
+    if(!entries.length){
+      list.innerHTML = '<div class="empty-state"><div class="icon">🔍</div><p>No members match your search.</p></div>';
+      return;
+    }
+
+    list.innerHTML = entries.map(([id, m]) => `
+      <div class="list-item" onclick="showMemberDetail('${id}')" style="cursor:pointer;">
+        <div>
+          <div class="li-name">${escapeHtml(m.name)}</div>
+          <div class="li-sub">${escapeHtml(m.village || '')}${m.village && m.phone ? ' · ' : ''}${escapeHtml(m.phone || '')}</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">${fmtKg(m.totalKg)}</div>
+          <div class="li-sub">total pooled</div>
+        </div>
+      </div>`).join('');
+  }
+
+  /* ---------- Rendering: Member Detail ---------- */
+  function showMemberDetail(memberId){
+    currentMemberId = memberId;
+    renderMemberDetail();
+    showScreen('member-detail');
+  }
+  function renderMemberDetail(){
+    const m = members[currentMemberId];
+    if(!m){ showScreen('members', document.querySelectorAll('nav.bottom button')[1]); return; }
+
+    document.getElementById('member-detail-name').textContent = m.name;
+    document.getElementById('member-detail-sub').textContent =
+      [m.village, m.phone].filter(Boolean).join(' · ') || 'No contact details on file';
+
+    const historyEl = document.getElementById('member-detail-history');
+    const rows = Object.entries(contributions)
+      .filter(([id, c]) => c.memberId === currentMemberId)
+      .sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
+
+    if(!rows.length){
+      historyEl.innerHTML = '<div class="empty-state"><div class="icon">🌾</div><p>No contributions from this member yet.</p></div>';
+      return;
+    }
+
+    historyEl.innerHTML = rows.map(([id, c]) => {
+      const s = seasons[c.seasonId];
+      const seasonLabel = s ? `${escapeHtml(s.crop)} — ${escapeHtml(s.label)}` : 'Unknown season';
+      const locked = !s || s.status !== 'open';
+      return `<div class="list-item">
+        <div>
+          <div class="li-name">${seasonLabel}</div>
+          <div class="li-sub">Delivered ${fmtDate(c.date)} · <span class="grade-badge grade-${c.grade}">Grade ${c.grade}</span></div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">${fmtKg(c.kg)}</div>
+          <div class="li-sub">${locked
+            ? 'locked · season sold'
+            : `<span class="link-action" onclick="openEditContribution('${id}')">Edit</span> · <span class="link-action danger" onclick="deleteContribution('${id}')">Delete</span>`}</div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  function openEditMember(){
+    const m = members[currentMemberId];
+    if(!m) return;
+    document.querySelector('#modal-addMember h2').textContent = 'Edit member';
+    document.getElementById('btn-save-member').textContent = 'Save changes';
+    document.getElementById('input-member-name').value = m.name || '';
+    document.getElementById('input-member-phone').value = m.phone || '';
+    document.getElementById('input-member-village').value = m.village || '';
+    document.getElementById('modal-addMember').dataset.editingId = currentMemberId;
+    document.getElementById('modal-addMember').classList.add('active');
+  }
+
+  function deleteMember(){
+    const m = members[currentMemberId];
+    if(!m) return;
+    if(m.totalKg > 0){
+      alert(`${m.name} has recorded contributions (${fmtKg(m.totalKg)} total). Remove or reassign those contributions first before deleting the member.`);
+      return;
+    }
+    if(!confirm(`Delete ${m.name}? This can't be undone.`)) return;
+    membersRef.child(currentMemberId).remove()
+      .then(() => showScreen('members', document.querySelectorAll('nav.bottom button')[1]))
+      .catch(e => alert('Could not delete: ' + e.message));
+  }
+
+  /* ---------- Rendering: Seasons ---------- */
+  const statusTag = s => s === 'open' ? 'tag-open' : s === 'sold' ? 'tag-sold' : 'tag-closed';
+  const statusLabel = s => s.charAt(0).toUpperCase() + s.slice(1);
+
+  function renderSeasons(){
+    const list = document.getElementById('seasons-list');
+    const searchEl = document.getElementById('input-season-search');
+    const term = (searchEl ? searchEl.value : '').trim().toLowerCase();
+    let entries = Object.entries(seasons);
+
+    if(!entries.length){
+      list.innerHTML = '<div class="empty-state"><div class="icon">📦</div><p>No seasons yet. Start one above.</p></div>';
+      return;
+    }
+    if(term){
+      entries = entries.filter(([id, s]) =>
+        (s.crop || '').toLowerCase().includes(term) || (s.label || '').toLowerCase().includes(term));
+    }
+    if(!entries.length){
+      list.innerHTML = '<div class="empty-state"><div class="icon">🔍</div><p>No seasons match your search.</p></div>';
+      return;
+    }
+    // Most recent first
+    entries.sort((a, b) => (b[1].createdTs || 0) - (a[1].createdTs || 0));
+
+    list.innerHTML = entries.map(([id, s]) => {
+      const memberCount = new Set(Object.values(contributions).filter(c => c.seasonId === id).map(c => c.memberId)).size;
+      const sub = s.status === 'sold'
+        ? `${fmtKg(s.pooledKg)} pooled · sold to ${escapeHtml(s.buyer || 'buyer')}`
+        : s.status === 'closed'
+          ? `${fmtKg(s.pooledKg)} pooled · payouts complete`
+          : `${fmtKg(s.pooledKg)} pooled · ${memberCount} members`;
+      const clickable = s.status === 'open';
+      // Only open seasons (no sale recorded yet) can be corrected or removed — once sold,
+      // the season underpins real payouts and must stay locked for the same reason a member
+      // with recorded contributions can't be deleted.
+      const canEdit = s.status === 'open';
+      const canDelete = s.status === 'open' && !(s.pooledKg > 0);
+      const actions = canEdit
+        ? `<div class="li-sub" style="margin-top:4px;">
+             <span class="link-action" onclick="event.stopPropagation(); openEditSeason('${id}')">Edit</span>
+             ${canDelete ? ` · <span class="link-action danger" onclick="event.stopPropagation(); deleteSeasonPrompt('${id}')">Delete</span>` : ''}
+           </div>`
+        : '';
+      return `<div class="list-item" ${clickable ? `onclick="openModal('recordSale')" style="cursor:pointer;"` : ''}>
+        <div>
+          <div class="li-name">${escapeHtml(s.crop)} — ${escapeHtml(s.label)}</div>
+          <div class="li-sub">${sub}</div>
+          ${actions}
+        </div>
+        <span class="status-tag ${statusTag(s.status)}">${statusLabel(s.status)}</span>
+      </div>`;
+    }).join('');
+  }
+
+  function openEditSeason(id){
+    const s = seasons[id];
+    if(!s) return;
+    document.getElementById('addSeason-title').textContent = 'Edit season';
+    document.getElementById('btn-save-season').textContent = 'Save changes';
+    document.getElementById('input-season-crop').value = s.crop || '';
+    document.getElementById('input-season-label').value = s.label || '';
+    document.getElementById('input-season-target').value = s.targetKg || '';
+    document.getElementById('season-delete-row').style.display = (s.pooledKg > 0) ? 'none' : 'block';
+    document.getElementById('modal-addSeason').dataset.editingId = id;
+    document.getElementById('modal-addSeason').classList.add('active');
+  }
+
+  function deleteSeasonPrompt(id){
+    const s = seasons[id];
+    if(!s) return;
+    if(s.pooledKg > 0){
+      alert(`${s.crop} — ${s.label} has recorded contributions. Remove those contributions first before deleting the season.`);
+      return;
+    }
+    if(!confirm(`Delete ${s.crop} — ${s.label}? This can't be undone.`)) return;
+    seasonsRef.child(id).remove().catch(e => alert('Could not delete: ' + e.message));
+  }
+  function deleteSeason(){
+    const id = document.getElementById('modal-addSeason').dataset.editingId;
+    if(!id) return;
+    deleteSeasonPrompt(id);
+    closeModal('addSeason');
+  }
+
+  /* ---------- Rendering: Payouts ---------- */
+  let payoutFilterStatus = 'all';
+  function setPayoutFilter(el){
+    payoutFilterStatus = el.dataset.status;
+    document.querySelectorAll('#payout-status-filter .grade-opt').forEach(o => o.classList.remove('selected'));
+    el.classList.add('selected');
+    renderPayouts();
+  }
+
+  function renderPayouts(){
+    const soldSeasons = Object.entries(seasons).filter(([id,s]) => s.status === 'sold' || s.status === 'closed');
+    const summary = document.getElementById('payouts-summary');
+    const list = document.getElementById('payouts-list');
+    const label = document.getElementById('payouts-season-label');
+
+    if(!soldSeasons.length){
+      label.textContent = 'Select a sold season';
+      summary.innerHTML = '';
+      list.innerHTML = '<div class="empty-state"><div class="icon">💰</div><p>No sold seasons yet. Record a sale from the Seasons tab to generate payouts.</p></div>';
+      return;
+    }
+
+    // Most recently sold season
+    const [seasonId, season] = soldSeasons.sort((a,b) => (b[1].soldTs||0) - (a[1].soldTs||0))[0];
+    label.textContent = `${season.crop} — ${season.label} sale`;
+    const priceLabel = (season.pricingMode === 'byGrade' && season.priceByGrade)
+      ? `Grade A ${fmtK(season.priceByGrade.A||0)} · B ${fmtK(season.priceByGrade.B||0)} · C ${fmtK(season.priceByGrade.C||0)} per kg`
+      : `${fmtK(season.pricePerKg)}/kg`;
+    summary.innerHTML = `<div class="stat-box" style="margin-bottom:18px;">
+      <div class="num">${fmtK(season.saleAmount)}</div>
+      <div class="label">Total sale amount · ${priceLabel}</div>
+    </div>`;
+
+    const seasonPayouts = payouts[seasonId] || {};
+    let entries = Object.entries(seasonPayouts);
+    if(!entries.length){
+      list.innerHTML = '<div class="empty-state"><div class="icon">💰</div><p>Payouts are being generated…</p></div>';
+      return;
+    }
+
+    const searchEl = document.getElementById('input-payout-search');
+    const term = (searchEl ? searchEl.value : '').trim().toLowerCase();
+    if(term){
+      entries = entries.filter(([memberId, p]) => {
+        const m = members[memberId];
+        return m && (m.name || '').toLowerCase().includes(term);
+      });
+    }
+    if(payoutFilterStatus !== 'all'){
+      entries = entries.filter(([memberId, p]) => (p.status || 'due') === payoutFilterStatus);
+    }
+    if(!entries.length){
+      list.innerHTML = '<div class="empty-state"><div class="icon">🔍</div><p>No payouts match your search/filter.</p></div>';
+      return;
+    }
+
+    // Largest payout first, easiest to spot who's still owed the most
+    entries.sort((a, b) => b[1].amount - a[1].amount);
+
+    list.innerHTML = entries.map(([memberId, p]) => {
+      const m = members[memberId];
+      const paidNote = p.status === 'paid' && p.paidTs ? ` · paid ${fmtTs(p.paidTs)}` : '';
+      return `<div class="list-item" onclick="togglePayoutStatus('${seasonId}','${memberId}')" style="cursor:pointer;" title="Tap to mark ${p.status === 'paid' ? 'due' : 'paid'}">
+        <div>
+          <div class="li-name">${escapeHtml(m ? m.name : 'Unknown member')}</div>
+          <div class="li-sub">${fmtKg(p.kg)} · ${p.sharePercent.toFixed(1)}% share${paidNote}</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">${fmtK(p.amount)}</div>
+          <span class="status-tag ${p.status === 'paid' ? 'tag-paid' : 'tag-due'}">${p.status === 'paid' ? 'Paid' : 'Due'}</span>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+
+  function togglePayoutStatus(seasonId, memberId){
+    const current = (payouts[seasonId] && payouts[seasonId][memberId] && payouts[seasonId][memberId].status) || 'due';
+    const newStatus = current === 'paid' ? 'due' : 'paid';
+    const updates = {};
+    updates['payouts/' + seasonId + '/' + memberId + '/status'] = newStatus;
+    updates['payouts/' + seasonId + '/' + memberId + '/paidTs'] = newStatus === 'paid' ? Date.now() : null;
+    coopRef.update(updates);
+  }
+
+  /* ---------- Form: Add / Edit Member ---------- */
+  function saveMember(){
+    const modal = document.getElementById('modal-addMember');
+    const editingId = modal.dataset.editingId;
+    const name = document.getElementById('input-member-name').value.trim();
+    const phone = document.getElementById('input-member-phone').value.trim();
+    const village = document.getElementById('input-member-village').value.trim();
+    const err = document.getElementById('input-member-error');
+    err.style.display = 'none';
+
+    if(!name){ err.textContent = 'Full name is required.'; err.style.display = 'block'; return; }
+    if(phone && !/^(\+260|0)[0-9]{9}$/.test(phone.replace(/\s+/g, ''))){
+      err.textContent = 'Enter a valid Zambian phone number, e.g. 0977123456.';
+      err.style.display = 'block';
+      return;
+    }
+
+    if(editingId){
+      membersRef.child(editingId).update({ name, phone, village })
+        .then(() => closeModal('addMember'))
+        .catch(e => { err.textContent = 'Could not save: ' + e.message; err.style.display = 'block'; });
+    } else {
+      membersRef.push({ name, phone, village, totalKg: 0 })
+        .then(() => closeModal('addMember'))
+        .catch(e => { err.textContent = 'Could not save: ' + e.message; err.style.display = 'block'; });
+    }
+  }
+
+  /* ---------- Form: Add / Edit Season ---------- */
+  function saveSeason(){
+    const modal = document.getElementById('modal-addSeason');
+    const editingId = modal.dataset.editingId;
+    const crop = document.getElementById('input-season-crop').value.trim();
+    const label = document.getElementById('input-season-label').value.trim();
+    const targetKg = Number(document.getElementById('input-season-target').value);
+    const err = document.getElementById('input-season-error');
+    err.style.display = 'none';
+    if(!crop || !label){ err.textContent = 'Crop and label are required.'; err.style.display = 'block'; return; }
+    if(!targetKg || targetKg <= 0){ err.textContent = 'Enter a target above 0 kg.'; err.style.display = 'block'; return; }
+
+    if(editingId){
+      const existing = seasons[editingId];
+      if(!existing){ err.textContent = 'This season no longer exists.'; err.style.display = 'block'; return; }
+      if(existing.status !== 'open'){ err.textContent = 'Only open seasons can be edited.'; err.style.display = 'block'; return; }
+      seasonsRef.child(editingId).update({ crop, label, targetKg })
+        .then(() => closeModal('addSeason'))
+        .catch(e => { err.textContent = 'Could not save: ' + e.message; err.style.display = 'block'; });
+    } else {
+      seasonsRef.push({ crop, label, targetKg, pooledKg: 0, status: 'open', createdTs: Date.now() })
+        .then(() => {
+          document.getElementById('input-season-crop').value = '';
+          document.getElementById('input-season-label').value = '';
+          document.getElementById('input-season-target').value = '';
+          closeModal('addSeason');
+        })
+        .catch(e => { err.textContent = 'Could not save: ' + e.message; err.style.display = 'block'; });
+    }
+  }
+
+  /* ---------- Form: Add Contribution ---------- */
+  function populateContributionMemberOptions(){
+    const sel = document.getElementById('input-contrib-member');
+    const current = sel.value;
+    sel.innerHTML = Object.entries(members).map(([id,m]) => `<option value="${id}">${escapeHtml(m.name)}</option>`).join('');
+    if(current) sel.value = current;
+  }
+  function populateSeasonOptions(){
+    const openSeasons = Object.entries(seasons).filter(([id,s]) => s.status === 'open');
+    const contribSel = document.getElementById('input-contrib-season');
+    const saleSel = document.getElementById('input-sale-season');
+    const contribCurrent = contribSel.value, saleCurrent = saleSel.value;
+    const opts = openSeasons.map(([id,s]) => `<option value="${id}">${escapeHtml(s.crop)} — ${escapeHtml(s.label)}</option>`).join('');
+    contribSel.innerHTML = opts;
+    saleSel.innerHTML = openSeasons.map(([id,s]) => `<option value="${id}">${escapeHtml(s.crop)} — ${escapeHtml(s.label)} (${fmtKg(s.pooledKg)} pooled)</option>`).join('');
+    if(contribCurrent) contribSel.value = contribCurrent;
+    if(saleCurrent) saleSel.value = saleCurrent;
+  }
+  function prefillContributionForm(){
+    document.querySelector('#modal-addContribution h2').textContent = 'Add contribution';
+    document.getElementById('btn-save-contribution').textContent = 'Save contribution';
+    delete document.getElementById('modal-addContribution').dataset.editingId;
+    populateContributionMemberOptions();
+    populateSeasonOptions();
+    document.getElementById('input-contrib-date').value = new Date().toISOString().slice(0,10);
+    document.getElementById('input-contrib-kg').value = '';
+    document.querySelectorAll('#input-contrib-grade .grade-opt').forEach((o,i) => o.classList.toggle('selected', i===0));
+  }
+  function prefillSaleForm(){
+    populateSeasonOptions();
+    document.getElementById('input-sale-buyer').value = '';
+    document.getElementById('input-sale-qty').value = '';
+    document.getElementById('input-sale-price').value = '';
+    document.getElementById('input-sale-price-A').value = '';
+    document.getElementById('input-sale-price-B').value = '';
+    document.getElementById('input-sale-price-C').value = '';
+    document.querySelectorAll('#input-sale-mode .grade-opt').forEach((o,i) => o.classList.toggle('selected', i===0));
+    document.getElementById('sale-flat-fields').style.display = '';
+    document.getElementById('sale-grade-fields').style.display = 'none';
+  }
+
+  function openEditContribution(contribId){
+    const c = contributions[contribId];
+    if(!c) return;
+    const season = seasons[c.seasonId];
+    if(!season || season.status !== 'open'){
+      alert("This contribution's season has already been sold, so it's locked to keep the recorded payouts accurate.");
+      return;
+    }
+    populateContributionMemberOptions();
+    populateSeasonOptions();
+    document.querySelector('#modal-addContribution h2').textContent = 'Edit contribution';
+    document.getElementById('btn-save-contribution').textContent = 'Save changes';
+    document.getElementById('input-contrib-member').value = c.memberId;
+    document.getElementById('input-contrib-season').value = c.seasonId;
+    document.getElementById('input-contrib-kg').value = c.kg;
+    document.querySelectorAll('#input-contrib-grade .grade-opt').forEach(o => o.classList.toggle('selected', o.dataset.grade === c.grade));
+    document.getElementById('input-contrib-date').value = c.date;
+    document.getElementById('modal-addContribution').dataset.editingId = contribId;
+    document.getElementById('modal-addContribution').classList.add('active');
+  }
+
+  function deleteContribution(contribId){
+    const c = contributions[contribId];
+    if(!c) return;
+    const season = seasons[c.seasonId];
+    if(season && season.status !== 'open'){
+      alert("This contribution's season has already been sold, so it can't be deleted.");
+      return;
+    }
+    if(!confirm('Delete this contribution? This will reduce the member\'s and season\'s totals.')) return;
+
+    const updates = {};
+    updates['contributions/' + contribId] = null;
+    updates['members/' + c.memberId + '/totalKg'] = Math.max(0, (members[c.memberId]?.totalKg || 0) - Number(c.kg));
+    updates['seasons/' + c.seasonId + '/pooledKg'] = Math.max(0, (seasons[c.seasonId]?.pooledKg || 0) - Number(c.kg));
+
+    coopRef.update(updates).catch(e => alert('Could not delete: ' + e.message));
+  }
+
+  function saveContribution(){
+    const modal = document.getElementById('modal-addContribution');
+    const editingId = modal.dataset.editingId;
+    const memberId = document.getElementById('input-contrib-member').value;
+    const seasonId = document.getElementById('input-contrib-season').value;
+    const kg = Number(document.getElementById('input-contrib-kg').value);
+    const grade = document.querySelector('#input-contrib-grade .grade-opt.selected').dataset.grade;
+    const date = document.getElementById('input-contrib-date').value;
+    const err = document.getElementById('input-contrib-error');
+    err.style.display = 'none';
+
+    if(!memberId){ err.textContent = 'Add a member first.'; err.style.display = 'block'; return; }
+    if(!seasonId){ err.textContent = 'Start an open season first.'; err.style.display = 'block'; return; }
+    if(!kg || kg <= 0){ err.textContent = 'Enter a quantity above 0 kg.'; err.style.display = 'block'; return; }
+    if(!date){ err.textContent = 'Select a delivery date.'; err.style.display = 'block'; return; }
+
+    const updates = {};
+
+    if(editingId){
+      const old = contributions[editingId];
+      if(!old){ err.textContent = 'This contribution no longer exists.'; err.style.display = 'block'; return; }
+      const oldSeason = seasons[old.seasonId];
+      if(oldSeason && oldSeason.status !== 'open'){ err.textContent = "This contribution's season is locked."; err.style.display = 'block'; return; }
+
+      updates['contributions/' + editingId] = { memberId, seasonId, kg, grade, date, ts: old.ts || Date.now() };
+
+      if(old.memberId === memberId){
+        updates['members/' + memberId + '/totalKg'] = (members[memberId]?.totalKg || 0) - Number(old.kg) + kg;
+      } else {
+        updates['members/' + old.memberId + '/totalKg'] = Math.max(0, (members[old.memberId]?.totalKg || 0) - Number(old.kg));
+        updates['members/' + memberId + '/totalKg'] = (members[memberId]?.totalKg || 0) + kg;
+      }
+      if(old.seasonId === seasonId){
+        updates['seasons/' + seasonId + '/pooledKg'] = (seasons[seasonId]?.pooledKg || 0) - Number(old.kg) + kg;
+      } else {
+        updates['seasons/' + old.seasonId + '/pooledKg'] = Math.max(0, (seasons[old.seasonId]?.pooledKg || 0) - Number(old.kg));
+        updates['seasons/' + seasonId + '/pooledKg'] = (seasons[seasonId]?.pooledKg || 0) + kg;
+      }
+    } else {
+      const newContribKey = contributionsRef.push().key;
+      updates['contributions/' + newContribKey] = { memberId, seasonId, kg, grade, date, ts: Date.now() };
+      updates['members/' + memberId + '/totalKg'] = (members[memberId]?.totalKg || 0) + kg;
+      updates['seasons/' + seasonId + '/pooledKg'] = (seasons[seasonId]?.pooledKg || 0) + kg;
+    }
+
+    coopRef.update(updates)
+      .then(() => closeModal('addContribution'))
+      .catch(e => { err.textContent = 'Could not save: ' + e.message; err.style.display = 'block'; });
+  }
+
+  /* ---------- Payout calculation ---------- */
+  // Splits saleAmount across members strictly by each member's share of kg contributed
+  // this season. Uses ngwee (cents) internally with a largest-remainder allocation so
+  // individual payouts always sum EXACTLY to the sale amount (no rounding drift).
+  function computePayouts(saleAmount, totalsByMember){
+    const totalKg = Object.values(totalsByMember).reduce((a,b) => a + b, 0);
+    const saleAmountNgwee = Math.round(saleAmount * 100);
+    if(!totalKg) return {};
+
+    const rows = Object.entries(totalsByMember).map(([memberId, kg]) => {
+      const exactNgwee = (kg / totalKg) * saleAmountNgwee;
+      return { memberId, kg, sharePercent: (kg / totalKg) * 100, floor: Math.floor(exactNgwee), remainder: exactNgwee - Math.floor(exactNgwee) };
+    });
+
+    let allocated = rows.reduce((sum, r) => sum + r.floor, 0);
+    let leftoverNgwee = saleAmountNgwee - allocated;
+    // Hand out the last few ngwee (rounding remainder) to whoever was closest to rounding up,
+    // so payouts sum to exactly the sale amount instead of being off by a few ngwee.
+    rows.sort((a, b) => b.remainder - a.remainder);
+    for(let i = 0; i < rows.length && leftoverNgwee > 0; i++){ rows[i].floor += 1; leftoverNgwee--; }
+
+    const result = {};
+    rows.forEach(r => {
+      result[r.memberId] = { kg: r.kg, sharePercent: r.sharePercent, amount: r.floor / 100, status: 'due' };
+    });
+    return result;
+  }
+
+  // Splits the sale by each contribution's own grade price: every delivery's kg is
+  // valued at that grade's K/kg, then rolled up per member. Each contribution is rounded
+  // to the nearest ngwee individually, so the per-member amounts always sum exactly to
+  // the total sale amount (also the sum of those same rounded contributions).
+  function computePayoutsByGrade(priceByGrade, seasonContribs){
+    const memberAgg = {};
+    let saleAmountNgwee = 0;
+    seasonContribs.forEach(c => {
+      const price = Number(priceByGrade[c.grade]) || 0;
+      const amtNgwee = Math.round(Number(c.kg) * price * 100);
+      saleAmountNgwee += amtNgwee;
+      if(!memberAgg[c.memberId]) memberAgg[c.memberId] = { kg: 0, amountNgwee: 0 };
+      memberAgg[c.memberId].kg += Number(c.kg);
+      memberAgg[c.memberId].amountNgwee += amtNgwee;
+    });
+    const totalKg = Object.values(memberAgg).reduce((a, m) => a + m.kg, 0);
+    const payoutMap = {};
+    Object.entries(memberAgg).forEach(([memberId, m]) => {
+      payoutMap[memberId] = {
+        kg: m.kg,
+        sharePercent: totalKg ? (m.kg / totalKg) * 100 : 0,
+        amount: m.amountNgwee / 100,
+        status: 'due'
+      };
+    });
+    return { payoutMap, saleAmount: saleAmountNgwee / 100 };
+  }
+
+  /* ---------- Form: Record Sale (also generates payouts) ---------- */
+  let pendingSale = null; // holds computed sale/payout data between reviewSale() and confirmSaleFinal()
+
+  function reviewSale(){
+    const seasonId = document.getElementById('input-sale-season').value;
+    const buyer = document.getElementById('input-sale-buyer').value.trim();
+    const mode = document.querySelector('#input-sale-mode .grade-opt.selected').dataset.mode;
+    const err = document.getElementById('input-sale-error');
+    err.style.display = 'none';
+
+    if(!seasonId){ err.textContent = 'Choose a season to sell.'; err.style.display = 'block'; return; }
+    if(!buyer){ err.textContent = 'Buyer name is required.'; err.style.display = 'block'; return; }
+
+    const season = seasons[seasonId];
+    const seasonContribs = Object.values(contributions).filter(c => c.seasonId === seasonId);
+    if(!seasonContribs.length){ err.textContent = 'This season has no contributions to pay out yet.'; err.style.display = 'block'; return; }
+
+    const updates = {};
+    let payoutMap, saleAmount;
+    let mismatchWarning = '';
+    let pricingPayload; // sent to the finalizeSale Cloud Function; server recomputes payouts itself
+
+    if(mode === 'flat'){
+      const qty = Number(document.getElementById('input-sale-qty').value);
+      const price = Number(document.getElementById('input-sale-price').value);
+      if(!qty || qty <= 0){ err.textContent = 'Enter a quantity sold above 0 kg.'; err.style.display = 'block'; return; }
+      if(!price || price <= 0){ err.textContent = 'Enter a price per kg above 0.'; err.style.display = 'block'; return; }
+
+      if(season.pooledKg && Math.abs(qty - season.pooledKg) > 0.01){
+        mismatchWarning = `Quantity sold (${fmtKg(qty)}) doesn't match total pooled (${fmtKg(season.pooledKg)}). ` +
+          `Payouts will still be split by each member's share of what they actually contributed.`;
+      }
+
+      saleAmount = qty * price;
+      const totalsByMember = {};
+      seasonContribs.forEach(c => { totalsByMember[c.memberId] = (totalsByMember[c.memberId] || 0) + Number(c.kg); });
+      payoutMap = computePayouts(saleAmount, totalsByMember);
+      pricingPayload = { mode: 'flat', price };
+
+    } else {
+      const priceByGrade = {
+        A: Number(document.getElementById('input-sale-price-A').value) || 0,
+        B: Number(document.getElementById('input-sale-price-B').value) || 0,
+        C: Number(document.getElementById('input-sale-price-C').value) || 0
+      };
+
+      const gradesPresent = [...new Set(seasonContribs.map(c => c.grade))];
+      const missingPrice = gradesPresent.filter(g => !(priceByGrade[g] > 0));
+      if(missingPrice.length){
+        err.textContent = `Set a price above 0 for grade${missingPrice.length > 1 ? 's' : ''} ${missingPrice.join(', ')} — there are contributions in that grade.`;
+        err.style.display = 'block';
+        return;
+      }
+
+      const computed = computePayoutsByGrade(priceByGrade, seasonContribs);
+      payoutMap = computed.payoutMap;
+      saleAmount = computed.saleAmount;
+      pricingPayload = { mode: 'byGrade', priceByGrade };
+    }
+
+    pendingSale = { seasonId, season, buyer, saleAmount, payoutMap, pricingPayload };
+    renderConfirmSale(mismatchWarning);
+    openModal('confirmSale');
+  }
+
+  function renderConfirmSale(mismatchWarning){
+    const { season, buyer, saleAmount, payoutMap } = pendingSale;
+    const warningEl = document.getElementById('confirm-sale-warning');
+    if(mismatchWarning){
+      warningEl.textContent = mismatchWarning;
+      warningEl.style.display = 'block';
+    } else {
+      warningEl.style.display = 'none';
+    }
+
+    const rows = Object.entries(payoutMap)
+      .sort((a, b) => b[1].amount - a[1].amount)
+      .map(([memberId, p]) => {
+        const m = members[memberId];
+        return `<div class="list-item">
+          <div>
+            <div class="li-name">${escapeHtml(m ? m.name : 'Unknown member')}</div>
+            <div class="li-sub">${fmtKg(p.kg)} · ${p.sharePercent.toFixed(1)}% share</div>
+          </div>
+          <div class="li-amount">${fmtK(p.amount)}</div>
+        </div>`;
+      }).join('');
+    const numMembers = Object.keys(payoutMap).length;
+
+    document.getElementById('confirm-sale-summary').innerHTML = `
+      <div class="stat-box" style="margin-bottom:14px;">
+        <div class="num">${fmtK(saleAmount)}</div>
+        <div class="label">${escapeHtml(season.crop)} — ${escapeHtml(season.label)} · sold to ${escapeHtml(buyer)}</div>
+      </div>
+      <div class="section-label">Payouts for ${numMembers} member${numMembers === 1 ? '' : 's'}</div>
+      <div style="max-height:260px;overflow-y:auto;margin-bottom:6px;">${rows}</div>
+      <div class="field-error" style="display:block;color:var(--brick);font-size:12px;margin-top:6px;">
+        This finalizes the season and generates payouts — it can't be undone from within the app.
+      </div>`;
+  }
+
+  function confirmSaleFinal(){
+    if(!pendingSale) return;
+    const { seasonId, buyer, pricingPayload } = pendingSale;
+    const err = document.getElementById('input-confirm-sale-error');
+    const btn = document.querySelector('#modal-confirmSale .btn-primary');
+    err.style.display = 'none';
+    btn.disabled = true;
+    btn.textContent = 'Finalizing…';
+
+    // No Cloud Functions on the Spark plan, so the race guard lives here instead: an RTDB
+    // *transaction* on seasons/{id}/status. Two admins could tap "Confirm" on the same open
+    // season from different phones at nearly the same time; a plain coopRef.update() has no way
+    // to stop both from succeeding. A transaction only lets the FIRST caller flip 'open' -> 'sold'
+    // — the second caller's transaction sees status already changed and aborts cleanly below.
+    // (This guards the season-status race specifically. It's enforced client-side, so it's not as
+    // airtight as a server check — see the note above firebaseConfig if you ever move to Blaze.)
+    const seasonRef = seasonsRef.child(seasonId);
+    seasonRef.child('status').transaction(current => {
+      if(current !== 'open') return; // abort — someone already finalized this season
+      return 'sold';
+    }).then(result => {
+      if(!result.committed || result.snapshot.val() !== 'sold'){
+        err.textContent = 'This season was already finalized (maybe by someone else, just now). Refreshing…';
+        err.style.display = 'block';
+        setTimeout(() => { closeModal('confirmSale'); closeModal('recordSale'); }, 1800);
+        return;
+      }
+
+      // We now hold the season. Re-read the freshest contributions before computing payouts,
+      // in case something changed between opening the review screen and tapping Confirm.
+      return contributionsRef.once('value').then(snap => {
+        const liveContribs = Object.values(snap.val() || {}).filter(c => c.seasonId === seasonId);
+        if(!liveContribs.length){
+          return seasonRef.child('status').set('open').then(() => {
+            err.textContent = 'This season has no contributions left to pay out. Nothing was finalized.';
+            err.style.display = 'block';
+          });
+        }
+
+        let payoutMap, saleAmount;
+        const updates = {};
+        if(pricingPayload.mode === 'flat'){
+          const totalsByMember = {};
+          liveContribs.forEach(c => { totalsByMember[c.memberId] = (totalsByMember[c.memberId] || 0) + Number(c.kg); });
+          const totalKg = Object.values(totalsByMember).reduce((a,b) => a+b, 0);
+          saleAmount = totalKg * pricingPayload.price;
+          payoutMap = computePayouts(saleAmount, totalsByMember);
+          updates['seasons/' + seasonId + '/pricingMode'] = 'flat';
+          updates['seasons/' + seasonId + '/pricePerKg'] = pricingPayload.price;
+          updates['seasons/' + seasonId + '/priceByGrade'] = null;
+        } else {
+          const computed = computePayoutsByGrade(pricingPayload.priceByGrade, liveContribs);
+          payoutMap = computed.payoutMap;
+          saleAmount = computed.saleAmount;
+          updates['seasons/' + seasonId + '/pricingMode'] = 'byGrade';
+          updates['seasons/' + seasonId + '/priceByGrade'] = pricingPayload.priceByGrade;
+          updates['seasons/' + seasonId + '/pricePerKg'] = null;
+        }
+
+        updates['seasons/' + seasonId + '/buyer'] = buyer;
+        updates['seasons/' + seasonId + '/saleAmount'] = saleAmount;
+        updates['seasons/' + seasonId + '/soldTs'] = Date.now();
+        Object.entries(payoutMap).forEach(([memberId, p]) => { updates['payouts/' + seasonId + '/' + memberId] = p; });
+
+        return coopRef.update(updates)
+          .then(() => {
+            pendingSale = null;
+            closeModal('confirmSale');
+            closeModal('recordSale');
+            showScreen('payouts', document.querySelectorAll('nav.bottom button')[3]);
+          })
+          .catch(e => {
+            // Writing the rest failed after we'd already claimed the season — release the claim
+            // so it isn't left stuck as 'sold' with no buyer/payouts, and let them retry.
+            return seasonRef.child('status').set('open').then(() => {
+              err.textContent = 'Could not save payouts, so the season was reopened. Please try again: ' + e.message;
+              err.style.display = 'block';
+            });
+          });
+      });
+    }).catch(e => {
+      err.textContent = 'Could not finalize sale: ' + e.message;
+      err.style.display = 'block';
+    }).finally(() => { btn.disabled = false; btn.textContent = "Confirm & finalize — can't be undone"; });
+  }
+
+  function escapeHtml(str){
+    return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
 </script>
 
 </body>
