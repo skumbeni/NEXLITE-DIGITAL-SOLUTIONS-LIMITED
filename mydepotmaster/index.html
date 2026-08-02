@@ -4933,6 +4933,37 @@ async function doLogin(){
           } else {
             // Same depot — normal version-gated restore is fine
             await fbRestoreData();
+            // Fix: the usernames/ index just confirmed this exact username
+            // belongs to this depot server-side, but the version-gated restore
+            // above can skip pulling fresh data if this device's local _syncTs
+            // looks newer (e.g. this device made unrelated local edits after
+            // another device added/updated this user and pushed to the cloud).
+            // That leaves a sub-user permanently unable to log in on this
+            // device even with the correct password. Since the server just
+            // told us authoritatively that this username exists here, force
+            // one unconditional re-fetch/merge if it's still missing locally —
+            // mirrors forceCloudRestore's merge logic so no local-only users
+            // already on this device are lost.
+            const _stillMissing = !(DATA.users||[]).some(x=>(x.username||'').toLowerCase()===u);
+            if (_stillMissing) {
+              try {
+                const val2 = await fbGet('depots/' + _loginTargetInstallId + '/data');
+                if (val2 && val2._v && (val2.users||[]).some(x=>(x.username||'').toLowerCase()===u)) {
+                  const localTrialStart2 = DATA.trialStart || 0;
+                  const localUsers2 = Array.isArray(DATA.users) ? DATA.users : [];
+                  DATA = Object.assign(JSON.parse(JSON.stringify(DEFAULT)), val2);
+                  const cloudUsernames2 = new Set((DATA.users||[]).map(x=>(x.username||'').toLowerCase()));
+                  const localOnly2 = localUsers2.filter(x=>(x.username||'') && !cloudUsernames2.has((x.username||'').toLowerCase()));
+                  if (localOnly2.length > 0) DATA.users = [...(DATA.users||[]), ...localOnly2];
+                  if (localTrialStart2 > 0 && (!DATA.trialStart || localTrialStart2 < DATA.trialStart)) DATA.trialStart = localTrialStart2;
+                  DATA._syncTs = val2._syncTs || Date.now();
+                  DATA._lastFbSync = Date.now();
+                  if (DATA.installId) _persistInstallId(DATA.installId);
+                  sv(DATA);
+                  console.warn('doLogin: forced unconditional restore — username was confirmed server-side but missing after normal version-gated restore.');
+                }
+              } catch(e) { console.warn('Forced fallback restore failed:', e); }
+            }
           }
         } else {
           // Username not in index — fall back to any locally persisted installId
