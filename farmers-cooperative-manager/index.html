@@ -570,7 +570,7 @@
 
     <!-- DASHBOARD -->
     <section class="screen active" id="dashboard">
-      <div class="eyebrow">Good morning</div>
+      <div class="eyebrow">Good morning<span id="dashboard-greeting-name"></span></div>
       <h1 class="page-title">This season's pool</h1>
       <div class="readonly-badge">Read-only — you can view your coop but not make changes</div>
 
@@ -684,6 +684,7 @@
 
       <div class="section-label">Account</div>
       <div class="btn-row">
+        <button class="btn btn-secondary" onclick="openChangePasswordModal()">Change password</button>
         <button class="btn btn-secondary" style="color:var(--brick);" onclick="doLogout()">Log out</button>
       </div>
     </section>
@@ -789,6 +790,28 @@
       <div class="field-error" id="input-member-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
       <button class="btn btn-primary" style="width:100%;" id="btn-save-member" onclick="saveMember()">Save member</button>
       <div class="modal-close" onclick="closeModal('addMember')">Cancel</div>
+    </div>
+  </div>
+
+  <!-- MODAL: Change Password -->
+  <div class="modal-overlay" id="modal-changePassword">
+    <div class="modal">
+      <h2>Change password</h2>
+      <div class="field">
+        <label>Current password</label>
+        <input type="password" id="input-current-password" placeholder="Current password" autocomplete="current-password">
+      </div>
+      <div class="field">
+        <label>New password</label>
+        <input type="password" id="input-new-password" placeholder="At least 6 characters" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label>Confirm new password</label>
+        <input type="password" id="input-confirm-password" placeholder="Retype new password" autocomplete="new-password">
+      </div>
+      <div class="field-error" id="input-change-password-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary" style="width:100%;" id="btn-save-password" onclick="saveNewPassword()">Save new password</button>
+      <div class="modal-close" onclick="closeChangePasswordModal()">Cancel</div>
     </div>
   </div>
 
@@ -1242,7 +1265,15 @@
       const total = Object.values(byMember).reduce((sum, p) => sum + (p.amount || 0), 0);
       const paid = Object.values(byMember).filter(p => p.status === 'paid').length;
       const all = Object.keys(byMember).length;
-      return `- ${s ? s.crop + ' ' + s.label : seasonId}: ${fmtK(total)} total, ${paid}/${all} members paid`;
+      const seasonLabel = s ? s.crop + ' ' + s.label : seasonId;
+      const memberLines = Object.entries(byMember)
+        .sort((a, b) => (b[1].amount || 0) - (a[1].amount || 0))
+        .map(([memberId, p]) => {
+          const name = (members[memberId] && members[memberId].name) || 'Unknown member';
+          const pct = (p.sharePercent || 0).toFixed(1);
+          return `    - ${name}: ${fmtK(p.amount)} (${pct}% share, ${p.status === 'paid' ? 'paid' : 'due'})`;
+        }).join('\n');
+      return `- ${seasonLabel}: ${fmtK(total)} total, ${paid}/${all} members paid\n${memberLines}`;
     }).join('\n') || 'No payouts yet.';
     return `Cooperative snapshot:\n- Members: ${memberCount}\n- Contributions recorded: ${contribCount}\n\nSeasons:\n${seasonList}\n\nPayouts:\n${payoutSummary}`;
   }
@@ -1344,8 +1375,15 @@
   }
   const accountRolesHandler = snap => {
     accountRoles = snap.val() || {};
+    updateMyNameDisplay();
     if(document.getElementById('settings').classList.contains('active')) renderSettings();
   };
+  function updateMyNameDisplay(){
+    const myUid = firebase.auth().currentUser && firebase.auth().currentUser.uid;
+    const myAcct = myUid && accountRoles[myUid];
+    const greetingEl = document.getElementById('dashboard-greeting-name');
+    if(greetingEl) greetingEl.textContent = (myAcct && myAcct.name) ? ', ' + myAcct.name : '';
+  }
   const membersHandler = snap => {
     members = snap.val() || {};
     renderMembers(); renderDashboard(); populateContributionMemberOptions(); refreshMemberDetailIfActive();
@@ -1589,6 +1627,8 @@
         IS_SUPERADMIN = false; IS_MEMBER = false; MY_MEMBER_ID = null; MEMBER_AUTO_OPEN_PENDING = false;
         document.body.classList.remove('member-view');
         document.getElementById('coop-pill').textContent = '';
+        const greetingEl = document.getElementById('dashboard-greeting-name');
+        if(greetingEl) greetingEl.textContent = '';
         const inviteCode = new URLSearchParams(window.location.search).get('invite');
         if(inviteCode) goToJoin(inviteCode);
         return;
@@ -1718,7 +1758,10 @@
             <div class="li-name">${escapeHtml(acct.name || 'Unknown')}${isSelf ? ' (you)' : ''}</div>
             <div class="li-sub">${roleLabel}</div>
           </div>
-          ${isSelf ? '' : `<button class="btn btn-secondary" style="flex:none;padding:8px 12px;font-size:12px;" onclick="setAccountRole('${uid}','${toggleRole}')">${toggleLabel}</button>`}
+          ${isSelf ? '' : `<div style="display:flex;gap:6px;flex:none;">
+            <button class="btn btn-secondary" style="flex:none;padding:8px 12px;font-size:12px;" onclick="setAccountRole('${uid}','${toggleRole}')">${toggleLabel}</button>
+            <button class="btn btn-secondary" style="flex:none;padding:8px 12px;font-size:12px;color:var(--brick);" onclick="removeAccount('${uid}')">Remove</button>
+          </div>`}
         </div>`;
       }).join('');
   }
@@ -1733,6 +1776,65 @@
     updates['coops/' + COOP_ID + '/accountRoles/' + uid + '/role'] = newRole;
     updates['users/' + uid + '/role'] = newRole;
     db.ref().update(updates).catch(e => alert('Could not update role: ' + e.message));
+  }
+
+  function removeAccount(uid){
+    if(blockIfMember()) return;
+    const acct = accountRoles[uid];
+    if(!acct) return;
+    const linkedMember = acct.memberId ? ' Their contribution history and member record will stay in the coop — only sign-in access is removed.' : '';
+    if(!confirm(`Remove ${acct.name || 'this account'}'s access to Pool? They won't be able to sign in unless invited again.${linkedMember}`)) return;
+    const updates = {};
+    updates['coops/' + COOP_ID + '/accountRoles/' + uid] = null;
+    updates['users/' + uid] = null;
+    db.ref().update(updates).catch(e => alert('Could not remove account: ' + e.message));
+  }
+
+  /* ---------- Account: change password ---------- */
+  function openChangePasswordModal(){
+    document.getElementById('input-current-password').value = '';
+    document.getElementById('input-new-password').value = '';
+    document.getElementById('input-confirm-password').value = '';
+    document.getElementById('input-change-password-error').style.display = 'none';
+    document.getElementById('modal-changePassword').classList.add('active');
+  }
+  function closeChangePasswordModal(){
+    document.getElementById('modal-changePassword').classList.remove('active');
+  }
+  function saveNewPassword(){
+    const current = document.getElementById('input-current-password').value;
+    const next = document.getElementById('input-new-password').value;
+    const confirmPw = document.getElementById('input-confirm-password').value;
+    const err = document.getElementById('input-change-password-error');
+    const showErr = msg => { err.textContent = msg; err.style.display = 'block'; };
+    err.style.display = 'none';
+
+    if(!current || !next || !confirmPw){ showErr('Fill in all three fields.'); return; }
+    if(next.length < 6){ showErr('New password must be at least 6 characters.'); return; }
+    if(next !== confirmPw){ showErr("New passwords don't match."); return; }
+
+    const user = firebase.auth().currentUser;
+    if(!user){ showErr('You are signed out — please log in again.'); return; }
+
+    const btn = document.getElementById('btn-save-password');
+    btn.disabled = true; btn.textContent = 'Saving…';
+
+    const cred = firebase.auth.EmailAuthProvider.credential(user.email, current);
+    user.reauthenticateWithCredential(cred)
+      .then(() => user.updatePassword(next))
+      .then(() => {
+        btn.disabled = false; btn.textContent = 'Save new password';
+        closeChangePasswordModal();
+        alert('Your password has been changed.');
+      })
+      .catch(e => {
+        btn.disabled = false; btn.textContent = 'Save new password';
+        const msg = e.code === 'auth/wrong-password' ? 'Current password is incorrect.'
+          : e.code === 'auth/weak-password' ? 'New password is too weak.'
+          : e.code === 'auth/too-many-requests' ? 'Too many attempts — try again later.'
+          : e.message;
+        showErr(msg);
+      });
   }
 
   /* ---------- Connection / sync indicator ---------- */
@@ -1951,8 +2053,16 @@
       alert(`${m.name} has recorded contributions (${fmtKg(m.totalKg)} total). Remove or reassign those contributions first before deleting the member.`);
       return;
     }
-    if(!confirm(`Delete ${m.name}? This can't be undone.`)) return;
-    membersRef.child(currentMemberId).remove()
+    const linkedUid = Object.entries(accountRoles).find(([uid, acct]) => acct.memberId === currentMemberId);
+    const linkedWarning = linkedUid ? ` This member also has a linked sign-in account — it will be removed too, and they won't be able to log in again unless re-invited.` : '';
+    if(!confirm(`Delete ${m.name}? This can't be undone.${linkedWarning}`)) return;
+    const updates = {};
+    updates['coops/' + COOP_ID + '/members/' + currentMemberId] = null;
+    if(linkedUid){
+      updates['coops/' + COOP_ID + '/accountRoles/' + linkedUid[0]] = null;
+      updates['users/' + linkedUid[0]] = null;
+    }
+    db.ref().update(updates)
       .then(() => showScreen('members', document.querySelectorAll('nav.bottom button')[1]))
       .catch(e => alert('Could not delete: ' + e.message));
   }
