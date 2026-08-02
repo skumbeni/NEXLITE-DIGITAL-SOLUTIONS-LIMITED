@@ -663,6 +663,31 @@
       <div id="payouts-list"><div class="empty-state"><div class="icon">💰</div><p>No sold seasons yet. Record a sale from the Seasons tab to generate payouts.</p></div></div>
     </section>
 
+    <!-- SETTINGS -->
+    <section class="screen" id="settings">
+      <div class="eyebrow">Preferences</div>
+      <h1 class="page-title">Settings</h1>
+
+      <div class="section-label">Your cooperative</div>
+      <div class="stat-box" style="margin-bottom:18px;">
+        <div class="num" id="settings-coop-name">–</div>
+        <div class="label" id="settings-your-role">–</div>
+      </div>
+
+      <div class="admin-only">
+        <div class="section-label">Accounts &amp; roles</div>
+        <p style="font-size:12.5px;color:var(--ink-soft);margin-bottom:12px;">
+          Everyone here can sign in to this Pool. Admins can add/edit records; members have read-only access.
+        </p>
+        <div id="settings-accounts-list"><div class="empty-state"><div class="icon">🔑</div><p>Loading…</p></div></div>
+      </div>
+
+      <div class="section-label">Account</div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" style="color:var(--brick);" onclick="doLogout()">Log out</button>
+      </div>
+    </section>
+
   </main>
 
   <nav class="bottom">
@@ -681,6 +706,10 @@
     <button onclick="showScreen('payouts', this)">
       <svg viewBox="0 0 24 24"><path d="M12 2v20M17 6.5c0-2-2-3.5-5-3.5s-5 1.5-5 3.5S9 9 12 9s5 1.5 5 3.5-2 3.5-5 3.5-5-1.5-5-3.5"/></svg>
       Payouts
+    </button>
+    <button onclick="showScreen('settings', this)">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
     </button>
   </nav>
 
@@ -1162,7 +1191,7 @@
      above). In Google Cloud Console > Credentials, restrict it to "API restrictions:
      Generative Language API" and, ideally, an HTTP referrer restriction matching
      the domain this app is hosted on, so it can't be lifted and reused elsewhere. */
-  const GEMINI_API_KEY = "PASTE_YOUR_AIzaSy_OR_AQ...__KEY_HERE";
+  const GEMINI_API_KEY = "AQ.Ab8RN6I0wO8Xg8RnQlcaO5ogFpJcfl3WSzRvs9tpEr4P750bIQ";
   const GEMINI_MODEL = "gemini-3.5-flash"; // check aistudio.google.com/models if this is retired later
 
   async function askGemini(promptText, systemInstruction){
@@ -1265,13 +1294,14 @@
     }
     return false;
   }
-  let coopRef = null, membersRef = null, seasonsRef = null, contributionsRef = null, payoutsRef = null;
+  let coopRef = null, membersRef = null, seasonsRef = null, contributionsRef = null, payoutsRef = null, accountRolesRef = null;
 
   /* ---------- Local cache (kept in sync by Firebase listeners) ---------- */
   let members = {};       // memberId -> {name, phone, village, totalKg}
   let seasons = {};       // seasonId -> {crop, label, targetKg, pooledKg, status, buyer, pricePerKg, saleAmount}
   let contributions = {}; // contribId -> {memberId, seasonId, kg, grade, date, ts}
   let payouts = {};       // seasonId -> { memberId -> {amount, sharePercent, status, paidTs} }
+  let accountRoles = {};  // uid -> {role: 'admin'|'member', name, memberId?} — who can sign in to this coop
   let currentMemberId = null; // member currently open on the Member Detail screen
 
   const fmtK = n => 'K' + Number(n || 0).toLocaleString('en-ZM', {minimumFractionDigits: 2, maximumFractionDigits: 2});
@@ -1288,11 +1318,13 @@
     seasonsRef = coopRef.child('seasons');
     contributionsRef = coopRef.child('contributions');
     payoutsRef = coopRef.child('payouts');
+    accountRolesRef = coopRef.child('accountRoles');
 
     membersRef.on('value', membersHandler);
     seasonsRef.on('value', seasonsHandler);
     contributionsRef.on('value', contributionsHandler);
     payoutsRef.on('value', payoutsHandler);
+    accountRolesRef.on('value', accountRolesHandler);
 
     localStorage.setItem('pool_last_coop', COOP_ID);
   }
@@ -1301,13 +1333,19 @@
     if(seasonsRef) seasonsRef.off('value', seasonsHandler);
     if(contributionsRef) contributionsRef.off('value', contributionsHandler);
     if(payoutsRef) payoutsRef.off('value', payoutsHandler);
-    coopRef = membersRef = seasonsRef = contributionsRef = payoutsRef = null;
+    if(accountRolesRef) accountRolesRef.off('value', accountRolesHandler);
+    coopRef = membersRef = seasonsRef = contributionsRef = payoutsRef = accountRolesRef = null;
     // Clear local cache + UI so a coop switch (or logout) never leaks the previous coop's data
-    members = {}; seasons = {}; contributions = {}; payouts = {};
+    members = {}; seasons = {}; contributions = {}; payouts = {}; accountRoles = {};
     currentMemberId = null;
     renderMembers(); renderDashboard(); renderSeasons();
     if(document.getElementById('payouts').classList.contains('active')) renderPayouts();
+    if(document.getElementById('settings').classList.contains('active')) renderSettings();
   }
+  const accountRolesHandler = snap => {
+    accountRoles = snap.val() || {};
+    if(document.getElementById('settings').classList.contains('active')) renderSettings();
+  };
   const membersHandler = snap => {
     members = snap.val() || {};
     renderMembers(); renderDashboard(); populateContributionMemberOptions(); refreshMemberDetailIfActive();
@@ -1404,6 +1442,7 @@
         const updates = {};
         updates['coopDirectory/' + coopId] = { name: coopName, createdBy: cred.user.uid };
         updates['users/' + cred.user.uid] = { coopId, coopName, role: 'admin', adminName };
+        updates['coops/' + coopId + '/accountRoles/' + cred.user.uid] = { role: 'admin', name: adminName };
         return db.ref().update(updates).then(() => {
           // Write confirmed — now finish what resolveCoopForUser would normally do.
           IS_SUPERADMIN = false;
@@ -1464,11 +1503,16 @@
           throw new Error('This invite code is invalid or has already been used — ask your administrator for a new one.');
         }
         return firebase.auth().createUserWithEmailAndPassword(email, password).then(cred =>
-          db.ref('coopDirectory/' + invite.coopId).once('value').then(dirSnap => {
+          Promise.all([
+            db.ref('coopDirectory/' + invite.coopId).once('value'),
+            db.ref('coops/' + invite.coopId + '/members/' + invite.memberId).once('value')
+          ]).then(([dirSnap, memberSnap]) => {
             const coopName = (dirSnap.val() && dirSnap.val().name) || invite.coopId;
+            const memberName = (memberSnap.val() && memberSnap.val().name) || 'Member';
             const updates = {};
             updates['users/' + cred.user.uid] = { coopId: invite.coopId, coopName, role: 'member', memberId: invite.memberId };
             updates['coops/' + invite.coopId + '/members/' + invite.memberId + '/uid'] = cred.user.uid;
+            updates['coops/' + invite.coopId + '/accountRoles/' + cred.user.uid] = { role: 'member', name: memberName, memberId: invite.memberId };
             updates['inviteCodes/' + code] = null;
             return db.ref().update(updates).then(() => {
               IS_SUPERADMIN = false;
@@ -1648,6 +1692,49 @@
     if(confirm('Log out of Pool?')) firebase.auth().signOut();
   }
 
+  /* ---------- Settings: coop info + accounts & roles (admin-only) ---------- */
+  function renderSettings(){
+    document.getElementById('settings-coop-name').textContent = COOP_NAME || '–';
+    const myUid = firebase.auth().currentUser && firebase.auth().currentUser.uid;
+    const myRole = IS_SUPERADMIN ? 'Superadmin' : (IS_MEMBER ? 'Member (read-only)' : 'Admin');
+    document.getElementById('settings-your-role').textContent = 'Your role: ' + myRole;
+
+    if(IS_MEMBER) return; // accounts list is admin-only; markup is already hidden via .admin-only
+    const list = document.getElementById('settings-accounts-list');
+    const entries = Object.entries(accountRoles);
+    if(!entries.length){
+      list.innerHTML = '<div class="empty-state"><p>No linked accounts yet — invite a member from their Member Detail screen.</p></div>';
+      return;
+    }
+    list.innerHTML = entries
+      .sort((a, b) => (a[1].name || '').localeCompare(b[1].name || ''))
+      .map(([uid, acct]) => {
+        const isSelf = uid === myUid;
+        const roleLabel = acct.role === 'admin' ? 'Admin' : 'Member';
+        const toggleLabel = acct.role === 'admin' ? 'Make member' : 'Make admin';
+        const toggleRole = acct.role === 'admin' ? 'member' : 'admin';
+        return `<div class="list-item">
+          <div>
+            <div class="li-name">${escapeHtml(acct.name || 'Unknown')}${isSelf ? ' (you)' : ''}</div>
+            <div class="li-sub">${roleLabel}</div>
+          </div>
+          ${isSelf ? '' : `<button class="btn btn-secondary" style="flex:none;padding:8px 12px;font-size:12px;" onclick="setAccountRole('${uid}','${toggleRole}')">${toggleLabel}</button>`}
+        </div>`;
+      }).join('');
+  }
+
+  function setAccountRole(uid, newRole){
+    if(blockIfMember()) return;
+    const acct = accountRoles[uid];
+    if(!acct) return;
+    const verb = newRole === 'admin' ? 'give this account admin access (can add/edit/delete records)' : 'switch this account to read-only member access';
+    if(!confirm(`${acct.name || 'This account'}: ${verb}?`)) return;
+    const updates = {};
+    updates['coops/' + COOP_ID + '/accountRoles/' + uid + '/role'] = newRole;
+    updates['users/' + uid + '/role'] = newRole;
+    db.ref().update(updates).catch(e => alert('Could not update role: ' + e.message));
+  }
+
   /* ---------- Connection / sync indicator ---------- */
   db.ref('.info/connected').on('value', snap => {
     document.getElementById('offline-banner').style.display = snap.val() === true ? 'none' : 'block';
@@ -1660,6 +1747,7 @@
     document.querySelectorAll('nav.bottom button').forEach(b=>b.classList.remove('active'));
     if(btn) btn.classList.add('active');
     if(id === 'payouts') renderPayouts();
+    if(id === 'settings') renderSettings();
   }
   function openModal(name){
     if(['addContribution','addMember','addSeason','recordSale'].includes(name) && blockIfMember()) return;
