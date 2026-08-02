@@ -25,6 +25,25 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v74 (2026-08-03)
+//
+// v74 changes (2026-08-03) — stale-shell fix + login hardening:
+//   - Navigate fetch now uses { cache: 'no-store' } instead of a plain
+//     fetch(). "Network-first" only helps if the request actually reaches
+//     the network — a plain fetch() still honors normal HTTP caching, so a
+//     host sending cache-control headers on index.html could hand back a
+//     stale response even though the SW "tried the network first". This
+//     was likely why login fixes shipped in index.html weren't reaching
+//     devices on redeploy without a manual cache clear.
+//   - index.html: fbAuthSignIn/fbAuthSignUp now wrapped in the same
+//     10s-timeout pattern as fbGet/fbSet, so a stalled Firebase Auth SDK
+//     call can no longer hang doLogin() on "Verifying…" forever.
+//   - index.html: doLogin() same-depot restore path now forces one
+//     unconditional cloud re-fetch/merge if the usernames/ index confirms
+//     an account belongs to this depot but it's still missing locally
+//     after the normal version-gated restore — fixes sub-user accounts
+//     that silently could never log in on a given device.
+//
 // Current version: v73 (2026-08-02)
 //
 // v73 changes (2026-08-02) — rate-change security, Depot Assistant (Gemini), OT fix:
@@ -577,7 +596,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'mdm-v73';   // ← bump this whenever you deploy a new version
+const CACHE     = 'mdm-v74';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
@@ -680,9 +699,14 @@ self.addEventListener('fetch', e => {
 
   // Navigation requests (loading the app shell) — network-first
   // Strips _mv before storing so both stamped and unstamped URLs hit the same entry.
+  // { cache: 'no-store' } bypasses the browser's own HTTP cache for this fetch —
+  // network-first here only matters if the fetch actually reaches the network
+  // instead of being satisfied by an HTTP-cached response the host may have
+  // sent cache-control headers for. Without this, a deploy can update the
+  // server's file but returning visitors keep getting the old HTML anyway.
   if (req.mode === 'navigate') {
     e.respondWith(
-      fetch(req)
+      fetch(req, { cache: 'no-store' })
         .then(r => {
           if (r && r.ok) {
             caches.open(CACHE).then(ca => ca.put(cacheKey(req), r.clone()));
