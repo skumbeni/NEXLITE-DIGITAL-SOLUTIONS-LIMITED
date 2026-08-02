@@ -86,6 +86,21 @@
     border-radius:999px;
     cursor:pointer;
   }
+  /* Member-role accounts get a read-only view — admin controls are hidden outright
+     rather than just disabled, since the security rules already block the writes;
+     this just keeps the UI honest about what will and won't work. */
+  body.member-view .admin-only{ display:none !important; }
+  .readonly-badge{
+    display:none;
+    font-size:11px;
+    color:var(--ink-soft);
+    background:var(--card);
+    border:1px solid var(--line);
+    padding:5px 10px;
+    border-radius:999px;
+    margin-bottom:14px;
+  }
+  body.member-view .readonly-badge{ display:inline-block; }
   .coop-switch-item{
     display:flex;align-items:center;justify-content:space-between;
     padding:12px 14px;border:1px solid var(--line);border-radius:12px;
@@ -557,6 +572,7 @@
     <section class="screen active" id="dashboard">
       <div class="eyebrow">Good morning</div>
       <h1 class="page-title">This season's pool</h1>
+      <div class="readonly-badge">Read-only — you can view your coop but not make changes</div>
 
       <div id="dashboard-silo"></div>
 
@@ -572,8 +588,8 @@
       </div>
 
       <div class="btn-row">
-        <button class="btn btn-primary" onclick="openModal('addContribution')">+ Add contribution</button>
-        <button class="btn btn-secondary" onclick="showScreen('seasons')">Record sale</button>
+        <button class="btn btn-primary admin-only" onclick="openModal('addContribution')">+ Add contribution</button>
+        <button class="btn btn-secondary admin-only" onclick="showScreen('seasons')">Record sale</button>
       </div>
 
       <div class="section-label">Recent contributions</div>
@@ -585,7 +601,8 @@
       <div class="eyebrow" id="members-count">– registered</div>
       <h1 class="page-title">Members</h1>
 
-      <div class="btn-row">
+      <div class="readonly-badge">Read-only — you can view your coop but not make changes</div>
+      <div class="btn-row admin-only">
         <button class="btn btn-primary" onclick="openModal('addMember')">+ Add member</button>
       </div>
 
@@ -601,9 +618,12 @@
       <div class="modal-close" style="text-align:left;margin-bottom:14px;" onclick="showScreen('members', document.querySelectorAll('nav.bottom button')[1])">&larr; Back to members</div>
       <h1 class="page-title" id="member-detail-name" style="margin-bottom:4px;">Member</h1>
       <div class="eyebrow" id="member-detail-sub" style="text-transform:none;letter-spacing:normal;margin-bottom:16px;"></div>
-      <div class="btn-row">
+      <div class="btn-row admin-only">
         <button class="btn btn-secondary" onclick="openEditMember()">Edit member</button>
         <button class="btn btn-secondary" style="color:var(--brick);" onclick="deleteMember()">Delete</button>
+      </div>
+      <div class="btn-row admin-only" id="member-detail-invite-row">
+        <button class="btn btn-secondary" onclick="inviteMember()">Invite to app</button>
       </div>
       <div class="section-label">Contribution history</div>
       <div id="member-detail-history"></div>
@@ -613,8 +633,9 @@
     <section class="screen" id="seasons">
       <div class="eyebrow">Harvest cycles</div>
       <h1 class="page-title">Seasons</h1>
+      <div class="readonly-badge">Read-only — you can view your coop but not make changes</div>
 
-      <div class="btn-row">
+      <div class="btn-row admin-only">
         <button class="btn btn-primary" onclick="openModal('addSeason')">+ New season</button>
       </div>
 
@@ -742,6 +763,53 @@
     </div>
   </div>
 
+  <!-- MODAL: Invite Member -->
+  <div class="modal-overlay" id="modal-inviteMember">
+    <div class="modal">
+      <h2 id="inviteMember-title">Invite to Pool</h2>
+      <div id="inviteMember-body">
+        <p style="font-size:13px;color:var(--ink-soft);margin-bottom:14px;">
+          Share this link with <span id="inviteMember-name"></span> so they can sign in on their own phone and see their own contributions and payouts. It works once, for this member only.
+        </p>
+        <div class="field">
+          <label>Join link</label>
+          <input type="text" id="input-invite-link" readonly onclick="this.select()">
+        </div>
+        <button class="btn btn-primary" style="width:100%;" onclick="copyInviteLink()">Copy link</button>
+      </div>
+      <div class="field-error" id="input-invite-error" style="display:none;color:var(--brick);font-size:12px;margin-top:10px;"></div>
+      <div class="modal-close" onclick="closeModal('inviteMember')">Close</div>
+    </div>
+  </div>
+
+  <!-- MODAL: Join coop (self-serve member signup via invite link) -->
+  <div class="modal-overlay login-overlay" id="join-screen">
+    <div class="modal" style="border-radius:22px;">
+      <h2>Join your coop</h2>
+      <p style="font-size:13px;color:var(--ink-soft);margin-bottom:14px;" id="join-intro">Enter the invite code your Pool administrator shared with you.</p>
+      <div class="field">
+        <label>Invite code</label>
+        <input type="text" id="input-join-code" placeholder="e.g. a1b2c3d4" autocapitalize="none" autocorrect="off">
+      </div>
+      <div class="field">
+        <label>Email</label>
+        <input type="email" id="input-join-email" placeholder="you@example.com" autocomplete="username">
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input type="password" id="input-join-password" placeholder="At least 6 characters" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label>Confirm password</label>
+        <input type="password" id="input-join-confirm" placeholder="••••••••" autocomplete="new-password">
+      </div>
+      <div class="field-error" id="input-join-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary" style="width:100%;" id="btn-join-coop" onclick="joinCoop()">Join coop &amp; sign in</button>
+      <div class="modal-close" onclick="goToLogin()">Already have an account? Sign in</div>
+      <div class="modal-close" onclick="backToLanding()">&larr; Back</div>
+    </div>
+  </div>
+
   <!-- MODAL: Record Sale -->
   <div class="modal-overlay" id="modal-recordSale">
     <div class="modal">
@@ -863,6 +931,7 @@
       <div class="landing-cta-row">
         <button class="btn-cream" onclick="goToLogin()">Sign in to your coop</button>
         <button class="btn-ghost-cream" onclick="goToCreateCoop()">New cooperative? Set one up →</button>
+        <button class="btn-ghost-cream" onclick="goToJoin()">Have an invite code from your coop? Join →</button>
         <button class="btn-ghost-cream" onclick="document.getElementById('landing-how').scrollIntoView({behavior:'smooth'})">See how it works ↓</button>
       </div>
     </div>
@@ -1003,7 +1072,7 @@
       <p>Sign in with the account your cooperative set up for you, and see this season's silo fill in real time.</p>
       <button class="btn-cream" onclick="goToLogin()">Sign in to your coop</button>
       <button class="btn-ghost-cream" onclick="goToCreateCoop()">Starting a new cooperative? Set one up →</button>
-      <div class="fine-print">Already a member? Ask your cooperative's administrator to add your account.</div>
+      <div class="fine-print">Already a member? Ask your cooperative's administrator for an invite link, or <span class="link-action" onclick="goToJoin()">join with a code</span>.</div>
     </div>
 
   </div>
@@ -1083,21 +1152,30 @@
   /* ---------- Gemini (free-tier Developer API) ----------
      Get a key at https://aistudio.google.com/apikey — this is separate from the
      Firebase config above and does NOT require enabling Blaze/billing.
+     As of mid-2026 Google AI Studio issues two key shapes: legacy "Standard"
+     keys starting "AIzaSy", and the newer "Auth" keys starting "AQ." — both
+     are real, valid keys (AQ. is NOT an OAuth token, despite looking like one).
+     Auth keys are now the default and Standard keys stop working in Sept 2026,
+     so this app calls the newer Interactions API endpoint below, which is the
+     one Google recommends and the one auth keys work reliably against.
      IMPORTANT: this key is visible in the page source (same as the Firebase apiKey
      above). In Google Cloud Console > Credentials, restrict it to "API restrictions:
      Generative Language API" and, ideally, an HTTP referrer restriction matching
      the domain this app is hosted on, so it can't be lifted and reused elsewhere. */
-  const GEMINI_API_KEY = "AQ.Ab8RN6IM64G3NymgMwQdgz2x3193zRO2ONGY91mKK9wm6wAhFQ";
-  const GEMINI_MODEL = "gemini-2.5-flash"; // check aistudio.google.com/models if this is retired later
+  const GEMINI_API_KEY = "PASTE_YOUR_AIzaSy_OR_AQ...__KEY_HERE";
+  const GEMINI_MODEL = "gemini-3.5-flash"; // check aistudio.google.com/models if this is retired later
 
   async function askGemini(promptText, systemInstruction){
-    if(!GEMINI_API_KEY || GEMINI_API_KEY === "YOUR_GEMINI_API_KEY"){
+    if(!GEMINI_API_KEY || GEMINI_API_KEY.startsWith("PASTE_YOUR_")){
       throw new Error('Add your Gemini API key (GEMINI_API_KEY) near the top of the script first.');
     }
-    const body = { contents: [{ role: 'user', parts: [{ text: promptText }] }] };
-    if(systemInstruction) body.system_instruction = { parts: [{ text: systemInstruction }] };
+    if(!GEMINI_API_KEY.startsWith("AIzaSy") && !GEMINI_API_KEY.startsWith("AQ.")){
+      throw new Error('GEMINI_API_KEY doesn\'t look like a real API key (real keys start with "AIzaSy" or "AQ.") — get one at aistudio.google.com/apikey.');
+    }
+    const body = { model: GEMINI_MODEL, input: promptText };
+    if(systemInstruction) body.system_instruction = systemInstruction;
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      'https://generativelanguage.googleapis.com/v1beta/interactions',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
@@ -1109,7 +1187,12 @@
       throw new Error(`Gemini request failed (${res.status}): ${errText.slice(0,200)}`);
     }
     const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+    const text = (data?.steps || [])
+      .filter(s => s.type === 'model_output')
+      .flatMap(s => s.content || [])
+      .filter(c => c.type === 'text')
+      .map(c => c.text || '')
+      .join('');
     if(!text) throw new Error('Gemini returned no text — it may have blocked the response.');
     return text;
   }
@@ -1169,6 +1252,19 @@
   let COOP_ID = null;
   let COOP_NAME = '';
   let IS_SUPERADMIN = false;
+  let IS_MEMBER = false;       // true once a member-role account is resolved — gates the app to read-only
+  let MY_MEMBER_ID = null;     // the member record this signed-in member account is linked to
+  let MEMBER_AUTO_OPEN_PENDING = false; // set once at sign-in; consumed by membersHandler the
+                                          // first time member data streams in, to land on "their" record
+  let ONBOARDING_IN_PROGRESS = false; // true while createCoop() or joinCoop() is writing new account data —
+                                       // stops onAuthStateChanged from racing in and signing the new account out
+  function blockIfMember(){
+    if(IS_MEMBER){
+      alert('Your account has read-only access. Ask your Pool administrator to make this change.');
+      return true;
+    }
+    return false;
+  }
   let coopRef = null, membersRef = null, seasonsRef = null, contributionsRef = null, payoutsRef = null;
 
   /* ---------- Local cache (kept in sync by Firebase listeners) ---------- */
@@ -1212,7 +1308,14 @@
     renderMembers(); renderDashboard(); renderSeasons();
     if(document.getElementById('payouts').classList.contains('active')) renderPayouts();
   }
-  const membersHandler = snap => { members = snap.val() || {}; renderMembers(); renderDashboard(); populateContributionMemberOptions(); refreshMemberDetailIfActive(); };
+  const membersHandler = snap => {
+    members = snap.val() || {};
+    renderMembers(); renderDashboard(); populateContributionMemberOptions(); refreshMemberDetailIfActive();
+    if(MEMBER_AUTO_OPEN_PENDING && members[MY_MEMBER_ID]){
+      MEMBER_AUTO_OPEN_PENDING = false;
+      showMemberDetail(MY_MEMBER_ID);
+    }
+  };
   const seasonsHandler = snap => { seasons = snap.val() || {}; renderSeasons(); renderDashboard(); populateSeasonOptions(); refreshMemberDetailIfActive(); };
   const contributionsHandler = snap => { contributions = snap.val() || {}; renderDashboard(); refreshMemberDetailIfActive(); };
   const payoutsHandler = snap => { payouts = snap.val() || {}; renderDashboard(); if(document.getElementById('payouts').classList.contains('active')) renderPayouts(); };
@@ -1221,11 +1324,13 @@
   function goToLogin(){
     document.getElementById('landing-screen').classList.remove('active');
     document.getElementById('create-coop-screen').classList.remove('active');
+    document.getElementById('join-screen').classList.remove('active');
     document.getElementById('login-screen').classList.add('active');
   }
   function goToCreateCoop(){
     document.getElementById('landing-screen').classList.remove('active');
     document.getElementById('login-screen').classList.remove('active');
+    document.getElementById('join-screen').classList.remove('active');
     document.getElementById('input-create-coopname').value = '';
     document.getElementById('input-create-name').value = '';
     document.getElementById('input-create-email').value = '';
@@ -1234,9 +1339,21 @@
     document.getElementById('input-create-error').style.display = 'none';
     document.getElementById('create-coop-screen').classList.add('active');
   }
+  function goToJoin(prefillCode){
+    document.getElementById('landing-screen').classList.remove('active');
+    document.getElementById('login-screen').classList.remove('active');
+    document.getElementById('create-coop-screen').classList.remove('active');
+    document.getElementById('input-join-code').value = prefillCode || '';
+    document.getElementById('input-join-email').value = '';
+    document.getElementById('input-join-password').value = '';
+    document.getElementById('input-join-confirm').value = '';
+    document.getElementById('input-join-error').style.display = 'none';
+    document.getElementById('join-screen').classList.add('active');
+  }
   function backToLanding(){
     document.getElementById('login-screen').classList.remove('active');
     document.getElementById('create-coop-screen').classList.remove('active');
+    document.getElementById('join-screen').classList.remove('active');
     document.getElementById('landing-screen').classList.add('active');
   }
 
@@ -1277,15 +1394,29 @@
     const btn = document.getElementById('btn-create-coop');
     btn.disabled = true;
     btn.textContent = 'Setting up…';
+    ONBOARDING_IN_PROGRESS = true; // onAuthStateChanged will see this and skip its own resolve —
+                           // otherwise it fires the instant createUserWithEmailAndPassword
+                           // succeeds, reads users/{uid} before our update() below has
+                           // landed, finds nothing, and signs the brand-new account back out.
 
     generateAvailableCoopId(coopName)
       .then(coopId => firebase.auth().createUserWithEmailAndPassword(email, password).then(cred => {
         const updates = {};
         updates['coopDirectory/' + coopId] = { name: coopName, createdBy: cred.user.uid };
         updates['users/' + cred.user.uid] = { coopId, coopName, role: 'admin', adminName };
-        return db.ref().update(updates);
-        // onAuthStateChanged fires from here and loads the new coop automatically —
-        // nothing else to do on success.
+        return db.ref().update(updates).then(() => {
+          // Write confirmed — now finish what resolveCoopForUser would normally do.
+          IS_SUPERADMIN = false;
+          IS_MEMBER = false;
+          MY_MEMBER_ID = null;
+          COOP_NAME = coopName;
+          document.getElementById('coop-pill').textContent = COOP_NAME;
+          document.getElementById('coop-pill').title = 'Contact your Pool administrator to change your coop';
+          document.getElementById('landing-screen').classList.remove('active');
+          document.getElementById('create-coop-screen').classList.remove('active');
+          attachCoopListeners(coopId);
+          showScreen('dashboard');
+        });
       }))
       .catch(e => {
         err.textContent = 'Could not set up your coop: ' + e.message;
@@ -1294,7 +1425,111 @@
       .finally(() => {
         btn.disabled = false;
         btn.textContent = 'Create coop & sign in';
+        ONBOARDING_IN_PROGRESS = false;
       });
+  }
+
+  /* ---------- Self-serve member signup (via invite link/code) ----------
+     Mirrors createCoop()'s atomicity trade-off: the account is created first, then a single
+     multi-path update() links users/{uid}, marks the member record claimed, and consumes the
+     invite code. See firebase-rtdb-rules.json for how the rules validate this atomically. */
+  function generateInviteCode(){
+    const bytes = new Uint8Array(12);
+    (window.crypto || window.msCrypto).getRandomValues(bytes);
+    return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  function joinCoop(){
+    const code = document.getElementById('input-join-code').value.trim();
+    const email = document.getElementById('input-join-email').value.trim();
+    const password = document.getElementById('input-join-password').value;
+    const confirmPassword = document.getElementById('input-join-confirm').value;
+    const err = document.getElementById('input-join-error');
+    err.style.display = 'none';
+
+    if(!code){ err.textContent = 'Enter your invite code.'; err.style.display = 'block'; return; }
+    if(!email || !password){ err.textContent = 'Enter an email and password.'; err.style.display = 'block'; return; }
+    if(password.length < 6){ err.textContent = 'Password must be at least 6 characters.'; err.style.display = 'block'; return; }
+    if(password !== confirmPassword){ err.textContent = "Passwords don't match."; err.style.display = 'block'; return; }
+
+    const btn = document.getElementById('btn-join-coop');
+    btn.disabled = true;
+    btn.textContent = 'Joining…';
+    ONBOARDING_IN_PROGRESS = true;
+
+    db.ref('inviteCodes/' + code).once('value')
+      .then(snap => {
+        const invite = snap.val();
+        if(!invite || !invite.coopId || !invite.memberId){
+          throw new Error('This invite code is invalid or has already been used — ask your administrator for a new one.');
+        }
+        return firebase.auth().createUserWithEmailAndPassword(email, password).then(cred =>
+          db.ref('coopDirectory/' + invite.coopId).once('value').then(dirSnap => {
+            const coopName = (dirSnap.val() && dirSnap.val().name) || invite.coopId;
+            const updates = {};
+            updates['users/' + cred.user.uid] = { coopId: invite.coopId, coopName, role: 'member', memberId: invite.memberId };
+            updates['coops/' + invite.coopId + '/members/' + invite.memberId + '/uid'] = cred.user.uid;
+            updates['inviteCodes/' + code] = null;
+            return db.ref().update(updates).then(() => {
+              IS_SUPERADMIN = false;
+              IS_MEMBER = true;
+              MY_MEMBER_ID = invite.memberId;
+              COOP_NAME = coopName;
+              document.body.classList.add('member-view');
+              document.getElementById('coop-pill').textContent = COOP_NAME;
+              document.getElementById('coop-pill').title = 'Contact your Pool administrator to change your coop';
+              document.getElementById('landing-screen').classList.remove('active');
+              document.getElementById('join-screen').classList.remove('active');
+              attachCoopListeners(invite.coopId);
+              MEMBER_AUTO_OPEN_PENDING = true; // membersHandler opens their own record once data streams in
+              showScreen('dashboard');
+            });
+          })
+        );
+      })
+      .catch(e => {
+        err.textContent = 'Could not join: ' + e.message;
+        err.style.display = 'block';
+      })
+      .finally(() => {
+        btn.disabled = false;
+        btn.textContent = 'Join coop & sign in';
+        ONBOARDING_IN_PROGRESS = false;
+      });
+  }
+
+  /* ---------- Admin: invite an existing member to sign in on their own device ---------- */
+  function inviteMember(){
+    if(blockIfMember()) return;
+    const m = members[currentMemberId];
+    if(!m) return;
+    const err = document.getElementById('input-invite-error');
+    err.style.display = 'none';
+    document.getElementById('inviteMember-name').textContent = m.name;
+    document.getElementById('input-invite-link').value = 'Generating…';
+    openModal('inviteMember');
+
+    const code = generateInviteCode();
+    db.ref('inviteCodes/' + code).set({ coopId: COOP_ID, memberId: currentMemberId })
+      .then(() => {
+        const link = window.location.origin + window.location.pathname + '?invite=' + code;
+        document.getElementById('input-invite-link').value = link;
+      })
+      .catch(e => {
+        err.textContent = 'Could not create invite: ' + e.message;
+        err.style.display = 'block';
+        document.getElementById('input-invite-link').value = '';
+      });
+  }
+  function copyInviteLink(){
+    const input = document.getElementById('input-invite-link');
+    input.select();
+    input.setSelectionRange(0, 99999);
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(input.value).catch(() => {});
+    } else {
+      try { document.execCommand('copy'); } catch(e) {}
+    }
   }
 
   /* ---------- Auth ----------
@@ -1307,12 +1542,18 @@
       document.getElementById('app-loading').classList.remove('active');
       if(!user){
         detachCoopListeners();
+        IS_SUPERADMIN = false; IS_MEMBER = false; MY_MEMBER_ID = null; MEMBER_AUTO_OPEN_PENDING = false;
+        document.body.classList.remove('member-view');
         document.getElementById('coop-pill').textContent = '';
+        const inviteCode = new URLSearchParams(window.location.search).get('invite');
+        if(inviteCode) goToJoin(inviteCode);
         return;
       }
+      if(ONBOARDING_IN_PROGRESS) return; // createCoop()/joinCoop() will finish loading the coop itself once its write lands
       document.getElementById('landing-screen').classList.remove('active');
       document.getElementById('login-screen').classList.remove('active');
       document.getElementById('create-coop-screen').classList.remove('active');
+      document.getElementById('join-screen').classList.remove('active');
       resolveCoopForUser(user);
     });
   } catch(e){
@@ -1331,11 +1572,19 @@
           return;
         }
         IS_SUPERADMIN = profile.role === 'superadmin';
+        IS_MEMBER = profile.role === 'member';
+        MY_MEMBER_ID = profile.memberId || null;
+        document.body.classList.toggle('member-view', IS_MEMBER);
         pill.title = IS_SUPERADMIN ? 'Tap to switch coop' : 'Contact your Pool administrator to change your coop';
         if(profile.coopId){
           COOP_NAME = profile.coopName || profile.coopId;
           pill.textContent = COOP_NAME;
           attachCoopListeners(profile.coopId);
+          if(IS_MEMBER && MY_MEMBER_ID){
+            // Members data hasn't streamed in yet at this point — membersHandler
+            // opens the detail screen itself the first time it sees this flag set.
+            MEMBER_AUTO_OPEN_PENDING = true;
+          }
         } else if(IS_SUPERADMIN){
           // Superadmin with no default coop yet — try last-used coop, else prompt them to pick one
           const lastCoop = localStorage.getItem('pool_last_coop');
@@ -1413,6 +1662,7 @@
     if(id === 'payouts') renderPayouts();
   }
   function openModal(name){
+    if(['addContribution','addMember','addSeason','recordSale'].includes(name) && blockIfMember()) return;
     if(name === 'addContribution') prefillContributionForm();
     if(name === 'recordSale') prefillSaleForm();
     if(name === 'addMember'){
@@ -1586,13 +1836,14 @@
           <div class="li-amount">${fmtKg(c.kg)}</div>
           <div class="li-sub">${locked
             ? 'locked · season sold'
-            : `<span class="link-action" onclick="openEditContribution('${id}')">Edit</span> · <span class="link-action danger" onclick="deleteContribution('${id}')">Delete</span>`}</div>
+            : IS_MEMBER ? '' : `<span class="link-action" onclick="openEditContribution('${id}')">Edit</span> · <span class="link-action danger" onclick="deleteContribution('${id}')">Delete</span>`}</div>
         </div>
       </div>`;
     }).join('');
   }
 
   function openEditMember(){
+    if(blockIfMember()) return;
     const m = members[currentMemberId];
     if(!m) return;
     document.querySelector('#modal-addMember h2').textContent = 'Edit member';
@@ -1605,6 +1856,7 @@
   }
 
   function deleteMember(){
+    if(blockIfMember()) return;
     const m = members[currentMemberId];
     if(!m) return;
     if(m.totalKg > 0){
@@ -1649,12 +1901,12 @@
         : s.status === 'closed'
           ? `${fmtKg(s.pooledKg)} pooled · payouts complete`
           : `${fmtKg(s.pooledKg)} pooled · ${memberCount} members`;
-      const clickable = s.status === 'open';
+      const clickable = s.status === 'open' && !IS_MEMBER;
       // Only open seasons (no sale recorded yet) can be corrected or removed — once sold,
       // the season underpins real payouts and must stay locked for the same reason a member
       // with recorded contributions can't be deleted.
-      const canEdit = s.status === 'open';
-      const canDelete = s.status === 'open' && !(s.pooledKg > 0);
+      const canEdit = s.status === 'open' && !IS_MEMBER;
+      const canDelete = s.status === 'open' && !(s.pooledKg > 0) && !IS_MEMBER;
       const actions = canEdit
         ? `<div class="li-sub" style="margin-top:4px;">
              <span class="link-action" onclick="event.stopPropagation(); openEditSeason('${id}')">Edit</span>
@@ -1673,6 +1925,7 @@
   }
 
   function openEditSeason(id){
+    if(blockIfMember()) return;
     const s = seasons[id];
     if(!s) return;
     document.getElementById('addSeason-title').textContent = 'Edit season';
@@ -1686,6 +1939,7 @@
   }
 
   function deleteSeasonPrompt(id){
+    if(blockIfMember()) return;
     const s = seasons[id];
     if(!s) return;
     if(s.pooledKg > 0){
@@ -1779,6 +2033,7 @@
 
 
   function togglePayoutStatus(seasonId, memberId){
+    if(blockIfMember()) return;
     const current = (payouts[seasonId] && payouts[seasonId][memberId] && payouts[seasonId][memberId].status) || 'due';
     const newStatus = current === 'paid' ? 'due' : 'paid';
     const updates = {};
