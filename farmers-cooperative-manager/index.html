@@ -663,6 +663,29 @@
     </button>
   </nav>
 
+  <!-- Floating assistant button -->
+  <button id="fab-assistant" onclick="openAssistant()" aria-label="Ask assistant"
+    style="position:fixed;right:18px;bottom:76px;width:52px;height:52px;border-radius:50%;
+           background:var(--gold-deep);color:#fff;border:none;box-shadow:0 4px 12px rgba(0,0,0,.25);
+           font-size:22px;z-index:40;">💬</button>
+
+  <!-- MODAL: Assistant (chat + auto-summarize) -->
+  <div class="modal-overlay" id="modal-assistant">
+    <div class="modal">
+      <h2>Coop assistant</h2>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <button type="button" onclick="summarizeCoop()" style="flex:1;padding:8px;border-radius:10px;border:1px solid var(--line);background:var(--crop-green-soft);">Summarize records</button>
+      </div>
+      <div id="assistant-log" style="max-height:280px;overflow-y:auto;margin-bottom:10px;font-size:14px;"></div>
+      <div id="assistant-loading" style="display:none;color:var(--ink-soft);margin-bottom:8px;">Thinking…</div>
+      <div class="field">
+        <textarea id="assistant-input" rows="2" placeholder="Ask about members, seasons, payouts…" style="width:100%;"></textarea>
+      </div>
+      <button type="button" onclick="sendAssistantMessage()" style="width:100%;padding:10px;border-radius:10px;border:none;background:var(--gold-deep);color:#fff;margin-top:6px;">Send</button>
+      <div class="modal-close" onclick="closeModal('assistant')">Close</div>
+    </div>
+  </div>
+
   <!-- MODAL: Add Contribution -->
   <div class="modal-overlay" id="modal-addContribution">
     <div class="modal">
@@ -1039,15 +1062,15 @@
 
 <script>
   /* ---------- Firebase setup ---------- */
-  // TODO: replace with your project's config (Firebase console > Project settings)
   const firebaseConfig = {
-    apiKey: "YOUR_API_KEY",
-    authDomain: "YOUR_PROJECT.firebaseapp.com",
-    databaseURL: "https://YOUR_PROJECT-default-rtdb.firebaseio.com",
-    projectId: "YOUR_PROJECT",
-    storageBucket: "YOUR_PROJECT.appspot.com",
-    messagingSenderId: "YOUR_SENDER_ID",
-    appId: "YOUR_APP_ID"
+    apiKey: "AIzaSyDKDmJJDveDR6LKyB2-N1Cpz_RGMbo9ehg",
+    authDomain: "farmers-cooperative-manager.firebaseapp.com",
+    databaseURL: "https://farmers-cooperative-manager-default-rtdb.firebaseio.com",
+    projectId: "farmers-cooperative-manager",
+    storageBucket: "farmers-cooperative-manager.firebasestorage.app",
+    messagingSenderId: "629344013557",
+    appId: "1:629344013557:web:fe988a19d7b71de27309bc",
+    measurementId: "G-XSEMNRRD4C"
   };
   firebase.initializeApp(firebaseConfig);
   let db;
@@ -1057,38 +1080,74 @@
     console.error('Firebase database init failed — check firebaseConfig above.', e);
   }
 
+  /* ---------- Gemini (free-tier Developer API) ----------
+     Get a key at https://aistudio.google.com/apikey — this is separate from the
+     Firebase config above and does NOT require enabling Blaze/billing.
+     IMPORTANT: this key is visible in the page source (same as the Firebase apiKey
+     above). In Google Cloud Console > Credentials, restrict it to "API restrictions:
+     Generative Language API" and, ideally, an HTTP referrer restriction matching
+     the domain this app is hosted on, so it can't be lifted and reused elsewhere. */
+  const GEMINI_API_KEY = "AQ.Ab8RN6IM64G3NymgMwQdgz2x3193zRO2ONGY91mKK9wm6wAhFQ";
+  const GEMINI_MODEL = "gemini-2.5-flash"; // check aistudio.google.com/models if this is retired later
+
+  async function askGemini(promptText, systemInstruction){
+    if(!GEMINI_API_KEY || GEMINI_API_KEY === "YOUR_GEMINI_API_KEY"){
+      throw new Error('Add your Gemini API key (GEMINI_API_KEY) near the top of the script first.');
+    }
+    const body = { contents: [{ role: 'user', parts: [{ text: promptText }] }] };
+    if(systemInstruction) body.system_instruction = { parts: [{ text: systemInstruction }] };
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': GEMINI_API_KEY },
+        body: JSON.stringify(body)
+      }
+    );
+    if(!res.ok){
+      const errText = await res.text().catch(()=> '');
+      throw new Error(`Gemini request failed (${res.status}): ${errText.slice(0,200)}`);
+    }
+    const data = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.map(p => p.text || '').join('') || '';
+    if(!text) throw new Error('Gemini returned no text — it may have blocked the response.');
+    return text;
+  }
+
+  /* Builds a compact, privacy-conscious snapshot of the current coop's data for
+     the assistant to reason over. Keeps it to summary stats + short lists rather
+     than dumping every raw record, to keep prompts small and members' personal
+     data (phone numbers) out of what gets sent to the API. */
+  function buildCoopContext(){
+    const memberCount = Object.keys(members).length;
+    const seasonList = Object.values(seasons).map(s =>
+      `- ${s.crop || 'Unknown crop'} (${s.label || ''}): status=${s.status || 'open'}, pooled=${fmtKg(s.pooledKg)}` +
+      (s.status === 'sold' ? `, sold to ${s.buyer || 'buyer'} at ${fmtK(s.pricePerKg)}/kg, total ${fmtK(s.saleAmount)}` : '')
+    ).join('\n') || 'No seasons yet.';
+    const contribCount = Object.keys(contributions).length;
+    const payoutSummary = Object.entries(payouts).map(([seasonId, byMember]) => {
+      const s = seasons[seasonId];
+      const total = Object.values(byMember).reduce((sum, p) => sum + (p.amount || 0), 0);
+      const paid = Object.values(byMember).filter(p => p.status === 'paid').length;
+      const all = Object.keys(byMember).length;
+      return `- ${s ? s.crop + ' ' + s.label : seasonId}: ${fmtK(total)} total, ${paid}/${all} members paid`;
+    }).join('\n') || 'No payouts yet.';
+    return `Cooperative snapshot:\n- Members: ${memberCount}\n- Contributions recorded: ${contribCount}\n\nSeasons:\n${seasonList}\n\nPayouts:\n${payoutSummary}`;
+  }
+
   /* ---------- Coop resolution (multi-coop / per-user) ----------
      Expected RTDB shape:
        users/{uid}         -> { coopId: "chikandwe", coopName: "Chikandwe Coop", role: "admin" }
-                               (role "superadmin" may omit coopId and instead pick from coopDirectory)
-       coopDirectory/{id}  -> "Coop Display Name"   (only needed for superadmin coop-switching)
+                               (role "superadmin" may omit coopId and instead pick from coopDirectory;
+                               superadmin can only be set by hand in the console — self-serve
+                               signup is only ever allowed to create role: "admin")
+       coopDirectory/{id}  -> { name: "Coop Display Name", createdBy: uid }
+                               (createdBy is what lets the security rules verify a coopId claim is
+                               genuine, instead of just checking whether the id string is free)
        coops/{coopId}/...  -> members / seasons / contributions / payouts (unchanged)
 
-     Suggested RTDB security rules (adjust to taste):
-       "users": {
-         "$uid": {
-           ".read": "auth.uid === $uid",
-           // A signed-in user may create their OWN profile once (self-serve coop setup below
-           // relies on this), but never edit it afterwards — !data.exists() means this only
-           // matches the very first write, so nobody can later grant themselves 'superadmin'
-           // or move themselves into a different coop by writing over their own node again.
-           ".write": "auth.uid === $uid && !data.exists()"
-         }
-       },
-       "coopDirectory": {
-         ".read": "auth != null",
-         "$coopId": {
-           // Anyone signed in can register a brand-new coop id, but can't rename or hijack
-           // one that already exists — same !data.exists() guard as above.
-           ".write": "auth != null && !data.exists()"
-         }
-       },
-       "coops": {
-         "$coopId": {
-           ".read": "root.child('users').child(auth.uid).child('coopId').val() === $coopId || root.child('users').child(auth.uid).child('role').val() === 'superadmin'",
-           ".write": "root.child('users').child(auth.uid).child('coopId').val() === $coopId || root.child('users').child(auth.uid).child('role').val() === 'superadmin'"
-         }
-       }
+     See the bottom of this file / the accompanying README for the full hardened RTDB
+     security rules JSON to paste into Firebase Console > Realtime Database > Rules.
      NOTE ON THE SPARK PLAN: Cloud Functions require the Blaze (pay-as-you-go) plan to deploy,
      even at zero cost, so finalizing a sale below uses a client-side RTDB *transaction* on
      seasons/{id}/status instead of a server-side function. RTDB transactions are still race-safe
@@ -1222,7 +1281,7 @@
     generateAvailableCoopId(coopName)
       .then(coopId => firebase.auth().createUserWithEmailAndPassword(email, password).then(cred => {
         const updates = {};
-        updates['coopDirectory/' + coopId] = coopName;
+        updates['coopDirectory/' + coopId] = { name: coopName, createdBy: cred.user.uid };
         updates['users/' + cred.user.uid] = { coopId, coopName, role: 'admin', adminName };
         return db.ref().update(updates);
         // onAuthStateChanged fires from here and loads the new coop automatically —
@@ -1282,7 +1341,7 @@
           const lastCoop = localStorage.getItem('pool_last_coop');
           if(lastCoop){
             db.ref('coopDirectory/' + lastCoop).once('value').then(nameSnap => {
-              COOP_NAME = nameSnap.val() || lastCoop;
+              COOP_NAME = (nameSnap.val() && nameSnap.val().name) || lastCoop;
               pill.textContent = COOP_NAME;
               attachCoopListeners(lastCoop);
             });
@@ -1311,8 +1370,8 @@
       const list = document.getElementById('coop-switch-list');
       if(!ids.length){ list.innerHTML = '<div class="empty-state"><p>No coops found in the directory yet.</p></div>'; return; }
       list.innerHTML = ids.map(id => `
-        <div class="coop-switch-item ${id === COOP_ID ? 'current' : ''}" onclick="chooseCoop('${id}', ${JSON.stringify(dir[id])})">
-          <span>${escapeHtml(dir[id])}</span>
+        <div class="coop-switch-item ${id === COOP_ID ? 'current' : ''}" onclick="chooseCoop('${id}', ${JSON.stringify(dir[id].name || id)})">
+          <span>${escapeHtml(dir[id].name || id)}</span>
           ${id === COOP_ID ? '<span>✓</span>' : ''}
         </div>`).join('');
     }).catch(e => {
@@ -2162,6 +2221,57 @@
 
   function escapeHtml(str){
     return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  /* ---------- Coop assistant (Gemini) ---------- */
+  function openAssistant(){
+    document.getElementById('modal-assistant').classList.add('active');
+  }
+  function appendAssistantMessage(role, text){
+    const log = document.getElementById('assistant-log');
+    const bubble = document.createElement('div');
+    bubble.style.margin = '6px 0';
+    bubble.style.padding = '8px 10px';
+    bubble.style.borderRadius = '10px';
+    bubble.style.background = role === 'user' ? 'var(--crop-green-soft)' : 'var(--card)';
+    bubble.style.border = '1px solid var(--line)';
+    bubble.innerHTML = `<strong>${role === 'user' ? 'You' : 'Assistant'}:</strong> ${escapeHtml(text)}`;
+    log.appendChild(bubble);
+    log.scrollTop = log.scrollHeight;
+  }
+  async function sendAssistantMessage(){
+    const input = document.getElementById('assistant-input');
+    const question = input.value.trim();
+    if(!question) return;
+    appendAssistantMessage('user', question);
+    input.value = '';
+    document.getElementById('assistant-loading').style.display = 'block';
+    try {
+      const system = "You are a helpful assistant for a Zambian farmers' cooperative pooling app. " +
+        "Answer only using the cooperative snapshot given below plus the member's question. " +
+        "Be concise and use ZMW (K) for money. If the answer isn't in the data, say so.\n\n" + buildCoopContext();
+      const answer = await askGemini(question, system);
+      appendAssistantMessage('assistant', answer);
+    } catch(e){
+      appendAssistantMessage('assistant', 'Could not get a response: ' + e.message);
+    } finally {
+      document.getElementById('assistant-loading').style.display = 'none';
+    }
+  }
+  async function summarizeCoop(){
+    document.getElementById('modal-assistant').classList.add('active');
+    document.getElementById('assistant-loading').style.display = 'block';
+    try {
+      const system = "You are summarizing records for a Zambian farmers' cooperative pooling app. " +
+        "Write a short, plain-language summary (4-6 sentences) a coop leader could read aloud at a meeting: " +
+        "overall activity, which seasons are open vs sold, and payout progress. Use ZMW (K) for money.";
+      const summary = await askGemini(buildCoopContext(), system);
+      appendAssistantMessage('assistant', summary);
+    } catch(e){
+      appendAssistantMessage('assistant', 'Could not summarize: ' + e.message);
+    } finally {
+      document.getElementById('assistant-loading').style.display = 'none';
+    }
   }
 </script>
 
