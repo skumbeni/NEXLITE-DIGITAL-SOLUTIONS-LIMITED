@@ -18,11 +18,14 @@
 <!-- protection for script injection. To harden: extract JS to a separate     -->
 <!-- file and switch to a nonce-based CSP. Until then, all other XSS vectors  -->
 <!-- (esc(), input validation) are the primary defence.                       -->
-<!-- NOTE (Depot Copilot): once you deploy depot-copilot-worker.js, replace
-     https://YOUR-WORKER-SUBDOMAIN.workers.dev below with your real worker
-     URL, matching COPILOT_ENDPOINT further down in this file — otherwise
-     the browser's CSP will silently block the fetch. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' blob: https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.gstatic.com/; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; connect-src https://*.firebaseio.com https://firebaseinstallations.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://firebaseappcheck.googleapis.com https://fonts.googleapis.com https://fonts.gstatic.com https://www.google.com/recaptcha/ https://recaptcha.google.com https://YOUR-WORKER-SUBDOMAIN.workers.dev; img-src 'self' data: blob: https:; worker-src 'self' blob:; manifest-src 'self' blob:; frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com; frame-ancestors 'none';">
+<!-- NOTE (Depot Assistant / Gemini): the app calls Google's Gemini API
+     directly from the browser using GEMINI_API_KEY, set further down in
+     this file (search for "DEPOT ASSISTANT"). This is the simplest setup,
+     but it means anyone who views this page's source can read and reuse
+     that key against your Google Cloud quota. Restrict the key in Google
+     AI Studio / Cloud Console (HTTP referrer restriction to your app's
+     domain, and a daily quota cap) to limit the damage if it leaks. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' blob: https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.gstatic.com/; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; connect-src https://*.firebaseio.com https://firebaseinstallations.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://firebaseappcheck.googleapis.com https://fonts.googleapis.com https://fonts.gstatic.com https://www.google.com/recaptcha/ https://recaptcha.google.com https://generativelanguage.googleapis.com; img-src 'self' data: blob: https:; worker-src 'self' blob:; manifest-src 'self' blob:; frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com; frame-ancestors 'none';">
 <!-- ──────────────────────────────────────────────────────────────────────── -->
 <!-- OpenGraph / Social sharing -->
 <meta property="og:title" content="My Depot Master"/>
@@ -1175,7 +1178,7 @@ body.readonly-mode.trial-mode .content{padding-top:44px;}
 <button id="gsearch-fab" onclick="openGlobalSearch()" title="Search">🔍</button>
 
 <!-- Depot Copilot FAB -->
-<button id="copilot-fab" onclick="openCopilot()" title="Depot Copilot">🤖</button>
+<button id="copilot-fab" onclick="openCopilot()" title="Depot Assistant">🤖</button>
 
 <!-- Global Search Overlay -->
 <div id="gsearch-overlay" onclick="if(event.target===this)closeGlobalSearch()">
@@ -2405,7 +2408,7 @@ const TIER_FEATURES = {
     'setup_checklist',           // First-run onboarding checklist
     'custom_branding',           // Custom logo & accent colour on staff ID cards
     'daily_sales',               // Daily Sales tab (close-out, receipt printing, sales history)
-    'ai_copilot',                // Depot Copilot — AI chat + reconciliation (Pro only)
+    'ai_copilot',                // Depot Assistant (Gemini) — AI chat + reconciliation (Pro only)
   ],
 
   // ── MULTISITE ────────────────────────────────────────────────────────────
@@ -3187,7 +3190,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'mdm-v72';
+const SW_VERSION  = 'mdm-v73';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -3203,7 +3206,7 @@ const SW_VERSION  = 'mdm-v72';
   }
 
   // Step 2: Check if the URL already has our version stamp
-  const VER = 'mdm-v72';
+  const VER = 'mdm-v73';
   const url = new URL(location.href);
   const currentVer = url.searchParams.get('_mv');
 
@@ -8674,7 +8677,7 @@ function openClockOutForm(logId){
       <div class="fw"><div class="fl">Time Out</div><input class="fi" type="time" id="co-time-out" value="${nowTime()}" oninput="calcCoGross()"/></div>
     </div>
     <div id="co-hours-hint" style="margin-bottom:8px"></div>
-    <div class="fw" id="co-ot-wrap" style="display:none"><div class="fl">⚡ Overtime Multiplier <span style="color:var(--amber)">(OT detected)</span></div><select class="fi" id="co-ot-mult" onchange="calcCoGross()"><option value="1">× 1.0 — No extra OT pay</option><option value="1.25">× 1.25 — Time &amp; quarter</option><option value="1.5" selected>× 1.5 — Time &amp; a half</option><option value="2">× 2.0 — Double time</option></select></div>
+    <div class="fw" id="co-ot-wrap" style="display:none"><div class="fl">⚡ Overtime Multiplier <span style="color:var(--amber)">(OT detected)</span></div><select class="fi" id="co-ot-mult" onchange="calcCoGross()"><option value="1" selected>× 1.0 — No extra OT pay</option><option value="1.25">× 1.25 — Time &amp; quarter</option><option value="1.5">× 1.5 — Time &amp; a half</option><option value="2">× 2.0 — Double time</option></select></div>
     <div class="fw"><div class="fl">Task</div><select class="fi" id="co-task" onchange="calcCoGross()">${taskOpts}</select></div>
     <div class="fw"><div class="fl" id="co-qty-label">${qtyLbl}</div><input class="fi" type="number" id="co-qty" value="0" placeholder="0" inputmode="decimal" step="0.01" oninput="calcCoGross()"/></div>
     <div id="co-gross-hint"></div>
@@ -8716,7 +8719,12 @@ function calcCoGross(){
     const [ih,im]=inV.split(':').map(Number);const[oh,om]=outV.split(':').map(Number);
     let mins=(oh*60+om)-(ih*60+im);if(mins<0)mins+=1440;
     const stdHrs=Number((DATA.depotInfo||{}).standardShiftHours||8);
-    if(otWrap)otWrap.style.display=mins/60>stdHrs?'':'none';
+    const otNow=mins/60>stdHrs;
+    if(otWrap)otWrap.style.display=otNow?'':'none';
+    if(!otNow){const sel=document.getElementById('co-ot-mult');if(sel)sel.value='1';}
+  } else {
+    if(otWrap)otWrap.style.display='none';
+    const sel=document.getElementById('co-ot-mult');if(sel)sel.value='1';
   }
   const otMult=Number(document.getElementById('co-ot-mult')?.value||1);
   if(qty&&hint){
@@ -8825,7 +8833,7 @@ function openLogForm(){
         <div class="fw"><div class="fl">Time Out</div><input class="fi" type="time" id="lf-out" oninput="calcGross()"/></div>
       </div>
       <div id="lf-hours-hint" style="margin-bottom:8px"></div>
-      <div class="fw" id="lf-ot-wrap" style="display:none"><div class="fl">⚡ Overtime Multiplier <span style="color:var(--amber)">(OT detected)</span></div><select class="fi" id="lf-ot-mult" onchange="calcGross()"><option value="1">× 1.0 — No extra OT pay</option><option value="1.25">× 1.25 — Time &amp; quarter</option><option value="1.5" selected>× 1.5 — Time &amp; a half</option><option value="2">× 2.0 — Double time</option></select></div>
+      <div class="fw" id="lf-ot-wrap" style="display:none"><div class="fl">⚡ Overtime Multiplier <span style="color:var(--amber)">(OT detected)</span></div><select class="fi" id="lf-ot-mult" onchange="calcGross()"><option value="1" selected>× 1.0 — No extra OT pay</option><option value="1.25">× 1.25 — Time &amp; quarter</option><option value="1.5">× 1.5 — Time &amp; a half</option><option value="2">× 2.0 — Double time</option></select></div>
     </div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="lf-date" value="${today()}"/></div>
     <div class="fw" id="lf-note-wrap" style="display:none"><div class="fl">Note (optional)</div><input class="fi" id="lf-absence-note" placeholder="E.G. FAMILY EMERGENCY"/></div>
@@ -8891,9 +8899,11 @@ function _calcHoursHint(inId,outId,hintId){
     const ot=mins/60>stdHrs;
     hintEl.innerHTML=`<div class="${ot?'warn':'hint'}" style="margin-bottom:8px">⏱ Hours worked: <strong>${hrs} hrs</strong>${ot?` &nbsp;⚠️ Overtime (>${stdHrs}h standard shift)`:''}`;
     if(otWrap)otWrap.style.display=ot?'':'none';
+    if(!ot){const sel=document.getElementById('lf-ot-mult');if(sel)sel.value='1';}
   } else {
     hintEl.innerHTML='';
     if(otWrap)otWrap.style.display='none';
+    const sel=document.getElementById('lf-ot-mult');if(sel)sel.value='1';
   }
 }
 function calcGross(){
@@ -11041,28 +11051,34 @@ function removeTask(ri,ti){
 function saveTaskRate(ri,ti,val){
   if(!requireAdmin('manage rates'))return;
   const rate=Math.max(0,Number(val)||0);
-  const roles=JSON.parse(JSON.stringify(DATA.staffRoles||[]));
-  if(roles[ri]&&roles[ri].tasks&&roles[ri].tasks[ti])roles[ri].tasks[ti].rate=rate;
-  DATA=Object.assign({},DATA,{staffRoles:roles});
-  DATA._v=(DATA._v||0)+1;
-  sv(DATA);
-  scheduleFbSync();
+  requireAdminPassword('change this pay rate', ()=>{
+    const roles=JSON.parse(JSON.stringify(DATA.staffRoles||[]));
+    if(roles[ri]&&roles[ri].tasks&&roles[ri].tasks[ti])roles[ri].tasks[ti].rate=rate;
+    DATA=Object.assign({},DATA,{staffRoles:roles});
+    DATA._v=(DATA._v||0)+1;
+    sv(DATA);
+    scheduleFbSync();
+    refreshRolesEditor();
+  });
 }
 function saveTaskRateUnit(ri,ti,unit){
   if(!requireAdmin('manage rates'))return;
-  const roles=JSON.parse(JSON.stringify(DATA.staffRoles||[]));
-  if(roles[ri]&&roles[ri].tasks&&roles[ri].tasks[ti]){
-    roles[ri].tasks[ti].rateUnit=unit;
-    if(unit!=='custom')delete roles[ri].tasks[ti].customUnit;
-  }
-  DATA=Object.assign({},DATA,{staffRoles:roles});
-  DATA._v=(DATA._v||0)+1;
-  sv(DATA);
-  scheduleFbSync();
-  refreshRolesEditor();
+  requireAdminPassword('change this rate unit', ()=>{
+    const roles=JSON.parse(JSON.stringify(DATA.staffRoles||[]));
+    if(roles[ri]&&roles[ri].tasks&&roles[ri].tasks[ti]){
+      roles[ri].tasks[ti].rateUnit=unit;
+      if(unit!=='custom')delete roles[ri].tasks[ti].customUnit;
+    }
+    DATA=Object.assign({},DATA,{staffRoles:roles});
+    DATA._v=(DATA._v||0)+1;
+    sv(DATA);
+    scheduleFbSync();
+    refreshRolesEditor();
+  });
 }
 function saveTaskCustomUnit(ri,ti,val){
   if(!requireAdmin('manage rates'))return;
+  requireAdminPassword('change this custom unit', ()=>{
   const roles=JSON.parse(JSON.stringify(DATA.staffRoles||[]));
   if(roles[ri]&&roles[ri].tasks&&roles[ri].tasks[ti])
     roles[ri].tasks[ti].customUnit=(val||'').toUpperCase().trim()||'UNIT';
@@ -11070,6 +11086,8 @@ function saveTaskCustomUnit(ri,ti,val){
   DATA._v=(DATA._v||0)+1;
   sv(DATA);
   scheduleFbSync();
+  refreshRolesEditor();
+  });
 }
 async function changePw(){
   if(!USER){alert('⛔ Not logged in.');return;}
@@ -14582,28 +14600,40 @@ document.addEventListener('click', ()=>{ if(_tipVisible) hideTip(0); });
 // ══ END TAB CLOUD SYNC ════════════════════════════════════
 
 // ══════════════════════════════════════════════════════════
-// DEPOT COPILOT — AI chat + reconciliation (Pro tier feature)
+// DEPOT ASSISTANT — Gemini-powered AI chat + reconciliation (Pro tier feature)
 //
 // ARCHITECTURE:
-//   This app never talks to the Anthropic API directly — the API key
-//   must not live in client code that anyone can view-source. Instead
-//   this calls a small serverless proxy (Cloudflare Worker) which holds
-//   the key as a secret, forwards the request to Claude, and returns
-//   just the text. See depot-copilot-worker.js for that proxy's code.
+//   This calls Google's Gemini API directly from the browser — no backend
+//   proxy. That's the simplest setup, but it means GEMINI_API_KEY below is
+//   visible to anyone who views this page's source, and they can spend
+//   your free-tier quota (or run up a bill if you later enable billing on
+//   that Google Cloud project). To limit the damage:
+//     1. Create the key in Google AI Studio (https://aistudio.google.com/apikey).
+//     2. In Google Cloud Console, restrict the key to HTTP referrers
+//        matching the domain(s) this app is actually served from.
+//     3. Keep billing OFF on that project so a leaked key can only burn
+//        free-tier quota, not real money.
+//     4. Rotate the key immediately if you ever suspect it has leaked.
 //
 // SETUP:
-//   1. Deploy depot-copilot-worker.js to Cloudflare Workers (free tier
-//      is enough to start).
-//   2. Set COPILOT_ENDPOINT below to your worker's URL.
-//   3. Add your worker's URL origin to the CSP connect-src meta tag
-//      at the top of this file, or requests will be blocked.
+//   1. Get a free key at https://aistudio.google.com/apikey (no card needed).
+//   2. Set GEMINI_API_KEY below to that key.
+//   3. generativelanguage.googleapis.com is already allow-listed in the
+//      CSP connect-src meta tag at the top of this file.
 // ══════════════════════════════════════════════════════════
 
-const COPILOT_ENDPOINT = 'https://YOUR-WORKER-SUBDOMAIN.workers.dev/copilot'; // ← set after deploying the worker
+// As of mid-2026, Google AI Studio issues "Auth" keys (prefix "AQ.") instead
+// of the older "Standard" keys (prefix "AIzaSy"). Auth keys are the default
+// now and are the ones this app is built for — they call the Interactions
+// API endpoint below via the x-goog-api-key header. (Standard AIzaSy keys
+// stop working in Sept 2026 regardless.)
+const GEMINI_API_KEY = 'YOUR-GEMINI-API-KEY'; // ← set after creating a key at aistudio.google.com/apikey
+const GEMINI_MODEL = 'gemini-3.5-flash'; // check aistudio.google.com/models if this is retired later
+const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 
-// Soft client-side usage guard. The worker should also enforce a hard
-// per-depot daily cap server-side — this is just to stop obvious runaway
-// use (e.g. a stuck loop) and give the user a friendly message first.
+// Soft client-side usage guard. Gemini's own free-tier daily cap is the
+// real backstop — this just stops obvious runaway use (e.g. a stuck loop)
+// and gives the user a friendly message first.
 const COPILOT_DAILY_SOFT_CAP = 40;
 function _copilotUsageKey(){ const d=new Date(); return 'mdm_copilot_usage_'+d.toISOString().slice(0,10); }
 function _copilotUsageToday(){ return parseInt(localStorage.getItem(_copilotUsageKey())||'0',10); }
@@ -14612,22 +14642,17 @@ function _copilotBumpUsage(){ localStorage.setItem(_copilotUsageKey(), String(_c
 let _copilotHistory = []; // [{role:'user'|'assistant', content:'...'}]
 let _copilotBusy = false;
 
-// ── Build a condensed, cost-aware snapshot of the depot's data ──────────────
-// Sends SUMMARIES, not raw arrays, to keep token usage (and therefore cost)
-// small. Expand carefully — every field added here costs money on every call.
+// ── Build a full snapshot of the depot's data for the assistant ────────────
+// Full information access: sends the whole operational dataset (not just
+// summaries/counts), so the assistant can actually check specifics rather
+// than working off pre-aggregated numbers. The only things withheld are
+// login credentials (password hashes) and the recovery PIN — those never
+// leave the device, regardless of what else this function sends.
+// NOTE: this costs more tokens per call than a capped snapshot. If you
+// notice slow responses or want to trim cost, this is the place to do it.
 function buildCopilotContext(daysBack){
   daysBack = daysBack || 7;
-  const cutoff = Date.now() - daysBack*24*60*60*1000;
-  const staffActive = (DATA.staff||[]).filter(s=>!s.status||s.status==='active');
 
-  const recentReceived = (DATA.generalInventory||[]).filter(x=>new Date(x.date||x.createdAt||0).getTime() >= cutoff);
-  const recentIssued    = (DATA.generalIssued||[]).filter(x=>new Date(x.date||x.createdAt||0).getTime() >= cutoff);
-
-  // NOTE: MDM computes running stock balances inline (receive − issue) at each
-  // display site rather than through one shared function. Wire this up to
-  // whatever that calculation is (see the balance logic around the General/
-  // Inventory report tab) so low-stock detection actually reflects reality —
-  // right now this returns an empty list rather than a wrong one.
   const lowStock = (DATA.inventoryItems||[])
     .map(x=>typeof x==='string'?{name:x,minStock:0}:x)
     .filter(it=>{
@@ -14636,38 +14661,58 @@ function buildCopilotContext(daysBack){
     })
     .map(it=>({ item: _invItemName(it), minStock: it.minStock }));
 
-  const commoditySummary = (DATA.commodities||[]).map(c=>({ id:c.id, name:c.name, unit:c.unit }));
-
-  const recentClockLogs = (DATA.clockLogs||DATA.attendance||[])
-    .filter(x=>new Date(x.date||x.time||0).getTime() >= cutoff)
-    .slice(-100); // hard cap regardless of date range
+  // Strip login credentials from staff/user records before they ever reach
+  // the prompt — everything else about the depot is fair game.
+  const staffSafe = (DATA.staff||[]).map(({password, ...rest})=>rest);
+  const usersSafe = (DATA.users||[]).map(({password, ...rest})=>rest);
 
   return {
     depotName: (DATA.depotInfo||{}).name || 'Unnamed depot',
     currency: DATA.currency || 'ZMW',
     generatedAt: new Date().toISOString(),
-    rangeDays: daysBack,
-    staffCount: staffActive.length,
-    commodities: commoditySummary,
+    focusRangeDaysHint: daysBack, // suggested recency focus — full data below either way
     lowStockItems: lowStock,
-    recentReceivedCount: recentReceived.length,
-    recentIssuedCount: recentIssued.length,
-    recentReceived: recentReceived.slice(-50),   // capped — see note above
-    recentIssued: recentIssued.slice(-50),
-    recentClockLogs
+    staff: staffSafe,
+    users: usersSafe,
+    staffRoles: DATA.staffRoles||[],
+    staffPayments: DATA.staffPayments||[],
+    staffWarnings: DATA.staffWarnings||[],
+    staffLogs: DATA.staffLogs||[],
+    leaveLog: DATA.leaveLog||[],
+    attendance: DATA.attendance||DATA.clockLogs||[],
+    commodities: DATA.commodities||[],
+    commodityReceived: DATA.commodityReceived||{},
+    commodityIssued: DATA.commodityIssued||{},
+    commodityStockCounts: DATA.commodityStockCounts||{},
+    maizeReceived: DATA.maizeReceived||[],
+    maizeIssued: DATA.maizeIssued||[],
+    maizeStockCounts: DATA.maizeStockCounts||[],
+    generalInventory: DATA.generalInventory||[],
+    generalIssued: DATA.generalIssued||[],
+    generalStockCounts: DATA.generalStockCounts||[],
+    inventoryItems: DATA.inventoryItems||[],
+    inventoryPrices: DATA.inventoryPrices||{},
+    transportLog: DATA.transportLog||[],
+    dailyCloseOuts: DATA.dailyCloseOuts||[],
+    budgets: DATA.budgets||{},
+    books: DATA.books||{},
+    contacts: DATA.contacts||[],
+    auditLog: DATA.auditLog||[],
+    deductionReasons: DATA.deductionReasons||[],
+    tier: DATA.tier||'free'
   };
 }
 
 // ── Modal UI ────────────────────────────────────────────────────────────────
 function openCopilot(){
   if(!hasFeature('ai_copilot')){ showUpgradePrompt('ai_copilot'); return; }
-  if(COPILOT_ENDPOINT.includes('YOUR-WORKER-SUBDOMAIN')){
-    showToast('⚠️ Depot Copilot backend not configured yet.');
+  if(GEMINI_API_KEY==='YOUR-GEMINI-API-KEY'){
+    showToast('⚠️ Depot Assistant needs a Gemini API key — see the code comments.');
     return;
   }
   openModal(`
-    <div class="ctitle">🤖 Depot Copilot</div>
-    <div id="cop-log">${_copilotHistory.length? _renderCopilotLog() : '<div class="cop-msg sys">Ask about stock, staff, or run an end-of-day reconciliation.</div>'}</div>
+    <div class="ctitle">✨ Depot Assistant</div>
+    <div id="cop-log">${_copilotHistory.length? _renderCopilotLog() : '<div class="cop-msg sys">Ask about stock, staff, or run an end-of-day reconciliation. Powered by Gemini.</div>'}</div>
     <div class="cop-quick">
       <button onclick="askCopilot('Any low stock items I should reorder?')">Low stock check</button>
       <button onclick="askCopilot('Summarize today\\'s activity')">Today's summary</button>
@@ -14692,28 +14737,56 @@ function _copilotAppend(role, content){
   if(log){ log.innerHTML = _renderCopilotLog(); log.scrollTop = log.scrollHeight; }
 }
 
-// ── Core call to the proxy ───────────────────────────────────────────────────
+// ── System prompts per mode ──────────────────────────────────────────────
+function _copilotSystemPrompt(mode){
+  if(mode==='reconciliation'){
+    return 'You are Depot Assistant, an operations analyst for a Zambian commodity '+
+      'depot management app called My Depot Master. You are given the full current '+
+      'JSON data for this depot — staff, commodities, stock movements, clock logs, '+
+      'transport, and finances. Run an end-of-day reconciliation: check received vs '+
+      'issued quantities for obvious mismatches, flag anything unusual (missing '+
+      'clock-outs, negative or suspicious balances, low stock), and double-check '+
+      'your own arithmetic before answering. Be concise and use plain language, '+
+      'not code. If the data is insufficient to conclude something, say so '+
+      'rather than guessing.';
+  }
+  return 'You are Depot Assistant, a helpful assistant embedded in a Zambian '+
+    'commodity depot management app called My Depot Master. You are given the '+
+    'full current JSON data for this depot — staff, commodities, stock '+
+    'movements, clock logs, transport, and finances. Answer the user\'s '+
+    'question using only that data. Be concise and use plain language, not '+
+    'code. If the data doesn\'t contain what\'s needed to answer, say so '+
+    'rather than guessing.';
+}
+
+// ── Core call to Gemini ──────────────────────────────────────────────────
 async function _callCopilot(mode, userText, context){
-  if(!navigator.onLine){ showToast('❌ Depot Copilot needs an internet connection'); return null; }
-  if(_copilotUsageToday() >= COPILOT_DAILY_SOFT_CAP){ showToast('⚠️ Daily Copilot limit reached — resets tomorrow'); return null; }
-  const acToken = await _getAppCheckToken(); // reuse existing App Check flow to prove this is the real app
-  const res = await _fetchWithTimeout(COPILOT_ENDPOINT, {
+  if(!navigator.onLine){ showToast('❌ Depot Assistant needs an internet connection'); return null; }
+  if(_copilotUsageToday() >= COPILOT_DAILY_SOFT_CAP){ showToast('⚠️ Daily Assistant limit reached — resets tomorrow'); return null; }
+  const promptText = (userText?('Question: '+userText+'\n\n'):'Run the reconciliation described above.\n\n')
+    + 'Depot data (JSON):\n' + JSON.stringify(context);
+  const res = await _fetchWithTimeout(GEMINI_ENDPOINT, {
     method: 'POST',
-    headers: { 'Content-Type':'application/json', ...(acToken?{'X-Firebase-AppCheck':acToken}:{}) },
+    headers: { 'Content-Type':'application/json', 'x-goog-api-key': GEMINI_API_KEY },
     body: JSON.stringify({
-      mode,                         // 'chat' | 'reconciliation'
-      depotId: depotKey(),
-      tier: currentTier(),
-      question: userText || '',
-      context
+      model: GEMINI_MODEL,
+      input: promptText,
+      system_instruction: _copilotSystemPrompt(mode)
     })
-  }, mode==='reconciliation' ? 45000 : 20000); // reconciliation runs longer — Fable 5 on the backend
+  }, mode==='reconciliation' ? 45000 : 20000);
   if(!res.ok){
     const body = await res.text().catch(()=>'');
     throw new Error('HTTP '+res.status+(body?': '+body.slice(0,150):''));
   }
+  const data = await res.json();
   _copilotBumpUsage();
-  return res.json(); // { reply: '...' }
+  const reply = (data?.steps||[])
+    .filter(s=>s.type==='model_output')
+    .flatMap(s=>s.content||[])
+    .filter(c=>c.type==='text')
+    .map(c=>c.text||'')
+    .join('');
+  return { reply: reply || '(no response)' };
 }
 
 async function askCopilot(question){
@@ -14737,9 +14810,8 @@ async function askCopilot(question){
   }
 }
 
-// Heavier job — deliberately routed to Fable 5 server-side because it reasons
-// over weeks of movements + shift logs at once and needs to self-check its
-// own arithmetic rather than one-shot it.
+// Heavier job — reasons over 30 days of movements + shift logs at once and
+// is asked to self-check its own arithmetic rather than one-shot it.
 async function runReconciliation(){
   if(_copilotBusy) return;
   _copilotBusy = true;
@@ -14759,7 +14831,7 @@ async function runReconciliation(){
   }
 }
 
-// Show/hide the Copilot FAB the same way the search FAB is toggled, and
+// Show/hide the Assistant FAB the same way the search FAB is toggled, and
 // respect the Pro-tier gate so Free/Growth users don't see a dead button.
 function _copilotFabSync(){
   const fab = document.getElementById('copilot-fab');
@@ -14767,7 +14839,7 @@ function _copilotFabSync(){
   fab.style.display = hasFeature('ai_copilot') ? 'flex' : 'none';
 }
 
-// ══ END DEPOT COPILOT ════════════════════════════════════
+// ══ END DEPOT ASSISTANT ════════════════════════════════════
 
 // ══ END CSV EXPORT ════════════════════════════════════════
 </script>

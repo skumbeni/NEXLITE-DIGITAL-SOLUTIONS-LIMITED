@@ -25,7 +25,32 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v72 (2026-07-28)
+// Current version: v73 (2026-08-02)
+//
+// v73 changes (2026-08-02) — rate-change security, Depot Assistant (Gemini), OT fix:
+//   - Security: changing a staff task's pay rate, rate unit, or custom unit
+//     in Roles & Rates now requires the admin password confirmation modal
+//     (requireAdminPassword), not just admin role — matching every other
+//     destructive/sensitive admin action in the app.
+//   - Depot Copilot replaced with Depot Assistant, powered by Gemini instead
+//     of the Cloudflare Worker + Anthropic proxy. Calls Google's Gemini API
+//     directly from the browser via the Interactions API (generativelanguage.
+//     googleapis.com/v1beta/interactions) using a client-side GEMINI_API_KEY.
+//     Now has full data access (staff, commodities, stock movements,
+//     payments, attendance, transport, budgets, audit log) rather than a
+//     capped/summarized snapshot — excluding password hashes and the
+//     recovery PIN, which never leave the device. CSP connect-src updated
+//     to allow generativelanguage.googleapis.com; the old worker-subdomain
+//     placeholder origin removed.
+//   - Fix: Overtime multiplier dropdown (Log Task and Complete Shift forms)
+//     defaulted to "× 1.5 — Time & a half" selected in the HTML, so gross
+//     pay was multiplied by 1.5 even when the OT section was hidden and no
+//     actual overtime had been detected from time in/out (e.g. both fields
+//     left blank). Default changed to "× 1.0 — No extra OT pay", and the
+//     dropdown now explicitly resets to 1 whenever the calculated hours no
+//     longer exceed the depot's Standard Shift Hours setting.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
 //
 // v72 changes (2026-07-28) — signup ordering fix for Phase 4 readiness:
 //   - Reordered admin signup: Firebase Auth account creation + Phase 3's
@@ -552,7 +577,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'mdm-v72';   // ← bump this whenever you deploy a new version
+const CACHE     = 'mdm-v73';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
