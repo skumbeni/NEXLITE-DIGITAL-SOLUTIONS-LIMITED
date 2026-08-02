@@ -1784,6 +1784,25 @@ function _fetchWithTimeout(url, opts, ms) {
 }
 const _FB_TIMEOUT_MS = 10000; // 10s — generous for slow mobile connections, still bounded
 
+// Same purpose as _fetchWithTimeout, but for SDK calls (like Firebase Auth's
+// signInWithEmailAndPassword) that take a plain Promise and no AbortSignal.
+// Without this, a stalled connection can leave the SDK call neither
+// resolving nor rejecting, hanging doLogin() on "Verifying…" forever —
+// unlike fbGet/fbSet, which were already bounded via _fetchWithTimeout.
+function _withTimeout(promise, ms, timeoutCode) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => {
+      const e = new Error('TIMEOUT');
+      e.code = timeoutCode || 'TIMEOUT';
+      reject(e);
+    }, ms);
+    promise.then(
+      v => { clearTimeout(t); resolve(v); },
+      e => { clearTimeout(t); reject(e); }
+    );
+  });
+}
+
 // ── FIREBASE AUTH — Phase 1 (dual-path login migration) + Phase 2 (authenticated requests) ──
 // Real Firebase Authentication accounts, layered alongside the existing
 // username/password-hash system already stored in depots/{id}/data.users.
@@ -1836,11 +1855,15 @@ async function fbAuthSignUp(email, password) {
   await window._fbAuthSdkReady;
   try {
     _ensureFbAuthApp();
-    const cred = await firebase.auth().createUserWithEmailAndPassword(email, password);
-    return { uid: cred.user.uid, idToken: await cred.user.getIdToken() };
+    const cred = await _withTimeout(
+      firebase.auth().createUserWithEmailAndPassword(email, password),
+      _FB_TIMEOUT_MS,
+      'AUTH_TIMEOUT'
+    );
+    return { uid: cred.user.uid, idToken: await _withTimeout(cred.user.getIdToken(), _FB_TIMEOUT_MS, 'AUTH_TIMEOUT') };
   } catch (e) {
     const err = new Error(_sdkAuthErrCode(e.code) || e.message || 'auth-error');
-    err.code = _sdkAuthErrCode(e.code);
+    err.code = e.code === 'AUTH_TIMEOUT' ? 'AUTH_TIMEOUT' : (_sdkAuthErrCode(e.code) || '');
     throw err;
   }
 }
@@ -1855,11 +1878,15 @@ async function fbAuthSignIn(email, password) {
   await window._fbAuthSdkReady;
   try {
     _ensureFbAuthApp();
-    const cred = await firebase.auth().signInWithEmailAndPassword(email, password);
-    return { uid: cred.user.uid, idToken: await cred.user.getIdToken() };
+    const cred = await _withTimeout(
+      firebase.auth().signInWithEmailAndPassword(email, password),
+      _FB_TIMEOUT_MS,
+      'AUTH_TIMEOUT'
+    );
+    return { uid: cred.user.uid, idToken: await _withTimeout(cred.user.getIdToken(), _FB_TIMEOUT_MS, 'AUTH_TIMEOUT') };
   } catch (e) {
     const err = new Error(_sdkAuthErrCode(e.code) || e.message || 'auth-error');
-    err.code = _sdkAuthErrCode(e.code);
+    err.code = e.code === 'AUTH_TIMEOUT' ? 'AUTH_TIMEOUT' : (_sdkAuthErrCode(e.code) || '');
     throw err;
   }
 }
