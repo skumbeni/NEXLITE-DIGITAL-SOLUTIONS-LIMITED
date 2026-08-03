@@ -1868,6 +1868,41 @@ async function fbAuthSignUp(email, password) {
   }
 }
 
+// Creates a new Firebase Auth account WITHOUT switching the primary
+// firebase.auth() session over to it. createUserWithEmailAndPassword()
+// on the default app signs the caller in as the newly-created user, which
+// is exactly what a first-time signup/migration wants — but it's wrong
+// when an already-authenticated admin is provisioning a SUB-user: it would
+// silently kick the admin's session out, and it also breaks the
+// authorizedUids grant that follows (that write needs the ADMIN's uid,
+// not the brand-new sub-user's, to satisfy the security rules once the
+// depot already has authorizedUids entries — see doAddUser()).
+// Runs the signup against a throwaway secondary Firebase app instance so
+// the primary session is never touched, then tears the throwaway app down.
+// The new account itself is left signed-out; the sub-user authenticates
+// normally later through doLogin()'s existing Firebase Auth sign-in path.
+let _fbAuthIsolatedCounter = 0;
+async function fbAuthSignUpIsolated(email, password) {
+  await window._fbAuthSdkReady;
+  const appName = '_isolated_' + (_fbAuthIsolatedCounter++) + '_' + Date.now();
+  let isolatedApp;
+  try {
+    isolatedApp = firebase.initializeApp(FB_CONFIG, appName);
+    const cred = await _withTimeout(
+      isolatedApp.auth().createUserWithEmailAndPassword(email, password),
+      _FB_TIMEOUT_MS,
+      'AUTH_TIMEOUT'
+    );
+    return { uid: cred.user.uid };
+  } catch (e) {
+    const err = new Error(_sdkAuthErrCode(e.code) || e.message || 'auth-error');
+    err.code = e.code === 'AUTH_TIMEOUT' ? 'AUTH_TIMEOUT' : (_sdkAuthErrCode(e.code) || '');
+    throw err;
+  } finally {
+    if (isolatedApp) { try { await isolatedApp.delete(); } catch(_) {} }
+  }
+}
+
 // Signs in against an existing Firebase Auth account. Throws with
 // e.code === 'EMAIL_NOT_FOUND' (account never migrated) or
 // e.code === 'INVALID_PASSWORD' (wrong password, or a stale Auth password
@@ -4954,6 +4989,34 @@ async function doLogin(){
                     : '⛔ Too many failed attempts. Try again in 60 seconds.')
                     + `<div style="font-size:12px;color:var(--muted);margin-top:6px">TEMP DEBUG: failed at cloud auth-record check · authFailCode=${_authFailCode||'none'} · targetDepot=${_loginTargetInstallId}</div>`;
                   return;
+                }
+                // Early Phase 1 migration bootstrap. We just verified the
+                // legacy password against the publicly-readable auth
+                // snapshot — that's the ONLY credential check this account
+                // can pass on a device that has never seen it locally
+                // before (userObj isn't loaded yet, so the later
+                // "userObj && !userObj.authMigrated" migration branch can
+                // never fire here). Without provisioning the Auth account
+                // and granting authorizedUids right now, the depot 'data'
+                // read a few lines down would 401 forever — this account
+                // owns the depot (or is a legitimate member of it) but has
+                // no way to prove that server-side until it's authorized,
+                // and it can't get authorized without reading data it
+                // isn't authorized to read yet. This breaks that deadlock
+                // for first-time logins on a new device, for owners and
+                // sub-users alike.
+                if (isFbConfigured() && navigator.onLine) {
+                  try {
+                    const created = await fbAuthSignUp(_authEmailFor(u), p);
+                    _authResult = created; // treat exactly like a normal Auth-confirmed sign-in below
+                    await _grantAuthorizedUid(_loginTargetInstallId, created.uid);
+                  } catch(migErr) {
+                    // EMAIL_EXISTS: an Auth account already exists (e.g. a
+                    // prior signup partially completed) — leave it alone,
+                    // the existing account's own authorizedUids state
+                    // (if any) is what applies; nothing to bootstrap here.
+                    console.warn('Early Auth migration bootstrap did not complete:', migErr && migErr.code || migErr);
+                  }
                 }
               }
             } catch(e) { console.warn('Auth record lookup failed:', e); _flagRestoreErr(e, 'authRecord'); }
@@ -11302,12 +11365,17 @@ async function _confirmAddUser(){
   }
 
   // Phase 1 — provision a real Firebase Auth account alongside the legacy
-  // hash. Non-fatal on failure: doLogin() silently migrates this account on
+  // hash. Uses the isolated-app helper (not fbAuthSignUp) so this doesn't
+  // swap the admin's active firebase.auth() session over to the brand-new
+  // sub-user — the _grantAuthorizedUid call right after needs the ADMIN's
+  // uid to still be current, since the depot already has authorizedUids
+  // entries by this point and only an already-authorized uid may add a new
+  // one. Non-fatal on failure: doLogin() silently migrates this account on
   // its first sign-in if this didn't go through.
   let _newUserAuth = {};
   if (isFbConfigured()) {
     try {
-      const created = await fbAuthSignUp(_authEmailFor(username), pass);
+      const created = await fbAuthSignUpIsolated(_authEmailFor(username), pass);
       _newUserAuth = { uid: created.uid, authMigrated: true };
       // Phase 3 — sub-user gets access to the SAME depot as the admin who added them.
       await _grantAuthorizedUid(depotKey(), created.uid);
