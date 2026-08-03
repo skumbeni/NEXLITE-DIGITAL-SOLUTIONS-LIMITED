@@ -3252,7 +3252,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'mdm-v74';
+const SW_VERSION  = 'mdm-v75';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -3268,7 +3268,7 @@ const SW_VERSION  = 'mdm-v74';
   }
 
   // Step 2: Check if the URL already has our version stamp
-  const VER = 'mdm-v74';
+  const VER = 'mdm-v75';
   const url = new URL(location.href);
   const currentVer = url.searchParams.get('_mv');
 
@@ -14833,7 +14833,7 @@ document.addEventListener('click', ()=>{ if(_tipVisible) hideTip(0); });
 // Get a key from Google AI Studio (aistudio.google.com/apikey) and paste it
 // below. This calls the standard generateContent REST endpoint via the
 // x-goog-api-key header.
-const GEMINI_API_KEY = 'AQ.Ab8RN6IpAZ_hG2cnVwEDR3PnSZG1f_i7XtMoJmG_EqXEDKRjXQ';
+const GEMINI_API_KEY = 'YOUR-GEMINI-API-KEY';
 const GEMINI_MODEL = 'gemini-3.5-flash'; // check aistudio.google.com/models if this is retired later
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 
@@ -15061,22 +15061,21 @@ async function _callCopilot(mode, userText, context){
   if(mode!=='reconciliation') bodyObj.tools = [CLOCK_IN_TOOL];
   const reqBody = JSON.stringify(bodyObj);
   const timeoutMs = 45000; // generous fixed timeout for both chat and reconciliation
-  let res = await _fetchWithTimeout(GEMINI_ENDPOINT, {
+  // Sending the key as a ?key= query param rather than the x-goog-api-key
+  // header — confirmed this works reliably with this exact AQ.-format key
+  // in other apps on this account, while the header approach was hitting a
+  // 401 here specifically.
+  let res = await _fetchWithTimeout(GEMINI_ENDPOINT + '?key=' + encodeURIComponent(GEMINI_API_KEY), {
     method: 'POST',
-    headers: { 'Content-Type':'application/json', 'x-goog-api-key': GEMINI_API_KEY },
+    headers: { 'Content-Type':'application/json' },
     body: reqBody
   }, timeoutMs);
-  // Known issue (as of mid-2026): some "AQ."-format AI Studio keys get
-  // rejected via the x-goog-api-key header (401 "Expected OAuth 2 access
-  // token..."). This is an acknowledged backend bug on Google's side, not
-  // something wrong in this code — see the Interactions API docs and the
-  // Google AI Developers Forum thread on ACCESS_TOKEN_TYPE_UNSUPPORTED.
-  // As a best-effort workaround, retry once with the key as a query param
-  // before giving up.
+  // Fallback: if the query param somehow gets rejected too, try the header
+  // once before giving up — belt and suspenders.
   if(res.status === 401){
-    res = await _fetchWithTimeout(GEMINI_ENDPOINT + '?key=' + encodeURIComponent(GEMINI_API_KEY), {
+    res = await _fetchWithTimeout(GEMINI_ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type':'application/json' },
+      headers: { 'Content-Type':'application/json', 'x-goog-api-key': GEMINI_API_KEY },
       body: reqBody
     }, timeoutMs);
   }

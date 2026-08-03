@@ -25,7 +25,35 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v74 (2026-08-03)
+// Current version: v75 (2026-08-03)
+//
+// v75 changes (2026-08-03) — Depot Assistant auth fix + action support:
+//   - Fix: Gemini Interactions API calls were sending GEMINI_API_KEY via the
+//     x-goog-api-key header, which was intermittently rejected (401
+//     "Expected OAuth 2 access token...") with this account's AQ.-format
+//     key — while the same key worked fine via a ?key= query param in
+//     another app on this same account. Switched to sending the key as a
+//     query param as the primary method, with the header kept only as a
+//     one-time fallback if that somehow 401s too.
+//   - Fix: chat/reconciliation requests could abort with a raw
+//     "signal is aborted without reason" browser message on slower mobile
+//     connections. Timeout raised to a flat 45s for both modes, and abort
+//     errors now show a clear "Request timed out — check your connection
+//     and try again" message instead.
+//   - Regular chat questions now send a trimmed context (most recent ~150
+//     entries per log-style array — staff logs, warnings, payments, leave,
+//     attendance, movements, transport, close-outs, audit log) instead of
+//     the full dataset, for faster responses over mobile data.
+//     Reconciliation still gets the complete, untrimmed dataset.
+//   - New: Depot Assistant can propose clocking a staff member in via a
+//     clock_in_staff tool call, but only ever as a Confirm/Cancel action in
+//     the chat — nothing is written until the user taps Confirm. Reuses the
+//     same stampEntry()/logAuditEvent()/updateData() path as the manual
+//     Clock In form, so pending-approval workflow and the audit trail
+//     behave identically; audit entries are tagged "via Depot Assistant".
+//     Reconciliation mode has no tool access — read-only analysis only.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
 //
 // v74 changes (2026-08-03) — stale-shell fix + login hardening:
 //   - Navigate fetch now uses { cache: 'no-store' } instead of a plain
@@ -596,7 +624,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'mdm-v74';   // ← bump this whenever you deploy a new version
+const CACHE     = 'mdm-v75';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
