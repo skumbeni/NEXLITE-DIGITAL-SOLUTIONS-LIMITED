@@ -4894,6 +4894,18 @@ async function doLogin(){
     // a connectivity failure as a wrong password — see the _restoreNetworkIssue
     // check near the invalid-login branch.
     let _restoreNetworkIssue = false;
+    // Specifically an auth/permission denial (HTTP 401/403) from a security
+    // rule — distinct from a transient network failure, because retrying
+    // will never succeed here; the account needs to be manually granted
+    // access (see doLogin's authorizedUids bootstrap notes).
+    let _restorePermissionDenied = false;
+    let _lastRestoreErr = ''; // raw error text, surfaced in debug line below
+    const _flagRestoreErr = (e, step) => {
+      _restoreNetworkIssue = true;
+      const msg = (e && e.message) || String(e);
+      _lastRestoreErr = (step ? step + ': ' : '') + msg.slice(0, 100);
+      if (msg.startsWith('HTTP 401') || msg.startsWith('HTTP 403')) _restorePermissionDenied = true;
+    };
     if (navigator.onLine && isFbConfigured()) {
       btn.textContent = '🔐 Verifying…';
       try {
@@ -4915,7 +4927,7 @@ async function doLogin(){
           if (usernameRecord && usernameRecord.installId) {
             _loginTargetInstallId = usernameRecord.installId;
           }
-        } catch(e) { console.warn('Username index lookup failed:', e); _restoreNetworkIssue = true; }
+        } catch(e) { console.warn('Username index lookup failed:', e); _flagRestoreErr(e, 'usernameIndex'); }
 
         if (_loginTargetInstallId) {
           // Step 2: verify against the lightweight credentials record BEFORE
@@ -4944,7 +4956,7 @@ async function doLogin(){
                   return;
                 }
               }
-            } catch(e) { console.warn('Auth record lookup failed:', e); _restoreNetworkIssue = true; }
+            } catch(e) { console.warn('Auth record lookup failed:', e); _flagRestoreErr(e, 'authRecord'); }
           }
 
           btn.textContent = '☁ Restoring data…';
@@ -5007,7 +5019,7 @@ async function doLogin(){
               } catch(e) {
                 console.warn('Forced fallback restore failed:', e);
                 btn.textContent = '☁ Restoring data… (fallback failed: ' + (e.message||'error').slice(0,40) + ')';
-                _restoreNetworkIssue = true;
+                _flagRestoreErr(e, 'fallbackData');
                 await new Promise(r=>setTimeout(r, 1500)); // let the message be visible before continuing
               }
             }
@@ -5016,7 +5028,7 @@ async function doLogin(){
           // Username not in index — fall back to any locally persisted installId
           await fbRestoreData();
         }
-      } catch(e) { console.warn('Pre-login restore failed:', e); _restoreNetworkIssue = true; }
+      } catch(e) { console.warn('Pre-login restore failed:', e); _flagRestoreErr(e, 'outer'); }
       btn.disabled = true; btn.textContent = '🔐 Signing in…';
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -5075,8 +5087,13 @@ async function doLogin(){
       // tell the person their credentials are bad when the real cause is
       // connectivity; let them retry once the connection is stable.
       if (!userObj && _restoreNetworkIssue) {
-        err.innerHTML = '📶 Could not reach the server to verify your account. Check your connection and try again — this was not counted as a failed attempt.'
-          + `<div style="font-size:12px;color:var(--muted);margin-top:6px">TEMP DEBUG: userFoundLocally=false · authFailCode=${_authFailCode||'none'} · localUserCount=${DATA.users.length} · targetDepot=${_loginTargetInstallId||'n/a'} · localDepot=${DATA.installId||'n/a'} · networkIssue=true</div>`;
+        if (_restorePermissionDenied) {
+          err.innerHTML = '🔒 Your account exists but isn\'t authorized to sync on this device yet. This needs to be fixed by an admin — please contact support rather than retrying.'
+            + `<div style="font-size:12px;color:var(--muted);margin-top:6px">TEMP DEBUG: userFoundLocally=false · authFailCode=${_authFailCode||'none'} · localUserCount=${DATA.users.length} · targetDepot=${_loginTargetInstallId||'n/a'} · localDepot=${DATA.installId||'n/a'} · permissionDenied=true · lastErr=${_lastRestoreErr||'none'}</div>`;
+        } else {
+          err.innerHTML = '📶 Could not reach the server to verify your account. Check your connection and try again — this was not counted as a failed attempt.'
+            + `<div style="font-size:12px;color:var(--muted);margin-top:6px">TEMP DEBUG: userFoundLocally=false · authFailCode=${_authFailCode||'none'} · localUserCount=${DATA.users.length} · targetDepot=${_loginTargetInstallId||'n/a'} · localDepot=${DATA.installId||'n/a'} · networkIssue=true · lastErr=${_lastRestoreErr||'none'}</div>`;
+        }
         return;
       }
       const _s = await _bfFail();
