@@ -4889,6 +4889,11 @@ async function doLogin(){
     // a login can never be blocked by the migration itself.
     let _authResult = null;
     let _authFailCode = null;
+    // Set whenever a restore-path fetch throws (network blip, timeout, etc.)
+    // rather than cleanly returning "no match". Used below to avoid treating
+    // a connectivity failure as a wrong password — see the _restoreNetworkIssue
+    // check near the invalid-login branch.
+    let _restoreNetworkIssue = false;
     if (navigator.onLine && isFbConfigured()) {
       btn.textContent = '🔐 Verifying…';
       try {
@@ -4896,6 +4901,12 @@ async function doLogin(){
       } catch(authErr) {
         _authFailCode = authErr && authErr.code;
         console.warn('Firebase Auth sign-in did not confirm (falling back to legacy check):', _authFailCode || authErr);
+        // INVALID_PASSWORD/EMAIL_NOT_FOUND/EMAIL_EXISTS are genuine credential
+        // outcomes from _sdkAuthErrCode(); anything else (timeouts, offline,
+        // raw SDK network codes) means we simply couldn't reach the server.
+        if (_authFailCode && !['INVALID_PASSWORD','EMAIL_NOT_FOUND','EMAIL_EXISTS'].includes(_authFailCode)) {
+          _restoreNetworkIssue = true;
+        }
       }
       try {
         // Step 1: resolve installId for the typed username via the global index
@@ -4904,7 +4915,7 @@ async function doLogin(){
           if (usernameRecord && usernameRecord.installId) {
             _loginTargetInstallId = usernameRecord.installId;
           }
-        } catch(e) { console.warn('Username index lookup failed:', e); }
+        } catch(e) { console.warn('Username index lookup failed:', e); _restoreNetworkIssue = true; }
 
         if (_loginTargetInstallId) {
           // Step 2: verify against the lightweight credentials record BEFORE
@@ -4930,9 +4941,10 @@ async function doLogin(){
                     ? `❌ Invalid username or password. ${_rem} attempt${_rem!==1?'s':''} left before 60-second lockout.`
                     : '⛔ Too many failed attempts. Try again in 60 seconds.')
                     + `<div style="font-size:12px;color:var(--muted);margin-top:6px">TEMP DEBUG: failed at cloud auth-record check · authFailCode=${_authFailCode||'none'} · targetDepot=${_loginTargetInstallId}</div>`;
+                  return;
                 }
               }
-            } catch(e) { console.warn('Auth record lookup failed:', e); }
+            } catch(e) { console.warn('Auth record lookup failed:', e); _restoreNetworkIssue = true; }
           }
 
           btn.textContent = '☁ Restoring data…';
@@ -4995,6 +5007,7 @@ async function doLogin(){
               } catch(e) {
                 console.warn('Forced fallback restore failed:', e);
                 btn.textContent = '☁ Restoring data… (fallback failed: ' + (e.message||'error').slice(0,40) + ')';
+                _restoreNetworkIssue = true;
                 await new Promise(r=>setTimeout(r, 1500)); // let the message be visible before continuing
               }
             }
@@ -5003,7 +5016,7 @@ async function doLogin(){
           // Username not in index — fall back to any locally persisted installId
           await fbRestoreData();
         }
-      } catch(e) { console.warn('Pre-login restore failed:', e); }
+      } catch(e) { console.warn('Pre-login restore failed:', e); _restoreNetworkIssue = true; }
       btn.disabled = true; btn.textContent = '🔐 Signing in…';
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -5054,9 +5067,20 @@ async function doLogin(){
     btn.disabled=false; btn.textContent='🔒 Sign In';
 
     if(!valid){
+      err.style.display='block';
+      // If nothing was confirmed locally AND a restore-path fetch actually
+      // errored (rather than cleanly confirming this user doesn't belong
+      // here), we can't tell whether the password is really wrong — the
+      // cloud check just never completed. Don't burn a lockout attempt or
+      // tell the person their credentials are bad when the real cause is
+      // connectivity; let them retry once the connection is stable.
+      if (!userObj && _restoreNetworkIssue) {
+        err.innerHTML = '📶 Could not reach the server to verify your account. Check your connection and try again — this was not counted as a failed attempt.'
+          + `<div style="font-size:12px;color:var(--muted);margin-top:6px">TEMP DEBUG: userFoundLocally=false · authFailCode=${_authFailCode||'none'} · localUserCount=${DATA.users.length} · targetDepot=${_loginTargetInstallId||'n/a'} · localDepot=${DATA.installId||'n/a'} · networkIssue=true</div>`;
+        return;
+      }
       const _s = await _bfFail();
       const _rem = _BF_MAX - (_s.attempts || 0);
-      err.style.display='block';
       if (!DATA.users || DATA.users.length === 0) {
         err.innerHTML = '❌ No account data found on this device. Make sure you are online and try again — the app will restore your data automatically.';
       } else {
