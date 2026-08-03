@@ -14833,9 +14833,9 @@ document.addEventListener('click', ()=>{ if(_tipVisible) hideTip(0); });
 // Get a key from Google AI Studio (aistudio.google.com/apikey) and paste it
 // below. This calls the standard generateContent REST endpoint via the
 // x-goog-api-key header.
-const GEMINI_API_KEY = 'AQ.Ab8RN6LNDmweU7kT6QAkfXZq6ooSTUAdlXstpnBpWm3SqRWPZw';
+const GEMINI_API_KEY = 'YOUR-GEMINI-API-KEY';
 const GEMINI_MODEL = 'gemini-3.5-flash'; // check aistudio.google.com/models if this is retired later
-const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent';
+const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 
 // Soft client-side usage guard. Gemini's own free-tier daily cap is the
 // real backstop — this just stops obvious runaway use (e.g. a stuck loop)
@@ -14854,10 +14854,17 @@ let _copilotBusy = false;
 // than working off pre-aggregated numbers. The only things withheld are
 // login credentials (password hashes) and the recovery PIN — those never
 // leave the device, regardless of what else this function sends.
-// NOTE: this costs more tokens per call than a capped snapshot. If you
-// notice slow responses or want to trim cost, this is the place to do it.
-function buildCopilotContext(daysBack){
+// For regular chat questions (full=false), the biggest log-style arrays are
+// capped to their most recent entries — this keeps everyday questions fast
+// over mobile data. Reconciliation (full=true) still gets everything, since
+// it's specifically meant to check across a longer window.
+function buildCopilotContext(daysBack, full){
   daysBack = daysBack || 7;
+  const CHAT_LOG_CAP = 150; // recent entries kept per log-style array when full=false
+
+  const cap = (arr) => (full || !Array.isArray(arr) || arr.length<=CHAT_LOG_CAP)
+    ? (arr||[])
+    : arr.slice(-CHAT_LOG_CAP);
 
   const lowStock = (DATA.inventoryItems||[])
     .map(x=>typeof x==='string'?{name:x,minStock:0}:x)
@@ -14876,34 +14883,35 @@ function buildCopilotContext(daysBack){
     depotName: (DATA.depotInfo||{}).name || 'Unnamed depot',
     currency: DATA.currency || 'ZMW',
     generatedAt: new Date().toISOString(),
-    focusRangeDaysHint: daysBack, // suggested recency focus — full data below either way
+    focusRangeDaysHint: daysBack, // suggested recency focus
+    dataTruncatedToRecent: !full, // tells the model logs may be a recent-only subset
     lowStockItems: lowStock,
     staff: staffSafe,
     users: usersSafe,
     staffRoles: DATA.staffRoles||[],
-    staffPayments: DATA.staffPayments||[],
-    staffWarnings: DATA.staffWarnings||[],
-    staffLogs: DATA.staffLogs||[],
-    leaveLog: DATA.leaveLog||[],
-    attendance: DATA.attendance||DATA.clockLogs||[],
+    staffPayments: cap(DATA.staffPayments),
+    staffWarnings: cap(DATA.staffWarnings),
+    staffLogs: cap(DATA.staffLogs),
+    leaveLog: cap(DATA.leaveLog),
+    attendance: cap(DATA.attendance||DATA.clockLogs),
     commodities: DATA.commodities||[],
     commodityReceived: DATA.commodityReceived||{},
     commodityIssued: DATA.commodityIssued||{},
     commodityStockCounts: DATA.commodityStockCounts||{},
-    maizeReceived: DATA.maizeReceived||[],
-    maizeIssued: DATA.maizeIssued||[],
-    maizeStockCounts: DATA.maizeStockCounts||[],
+    maizeReceived: cap(DATA.maizeReceived),
+    maizeIssued: cap(DATA.maizeIssued),
+    maizeStockCounts: cap(DATA.maizeStockCounts),
     generalInventory: DATA.generalInventory||[],
-    generalIssued: DATA.generalIssued||[],
-    generalStockCounts: DATA.generalStockCounts||[],
+    generalIssued: cap(DATA.generalIssued),
+    generalStockCounts: cap(DATA.generalStockCounts),
     inventoryItems: DATA.inventoryItems||[],
     inventoryPrices: DATA.inventoryPrices||{},
-    transportLog: DATA.transportLog||[],
-    dailyCloseOuts: DATA.dailyCloseOuts||[],
+    transportLog: cap(DATA.transportLog),
+    dailyCloseOuts: cap(DATA.dailyCloseOuts),
     budgets: DATA.budgets||{},
     books: DATA.books||{},
     contacts: DATA.contacts||[],
-    auditLog: DATA.auditLog||[],
+    auditLog: cap(DATA.auditLog),
     deductionReasons: DATA.deductionReasons||[],
     tier: DATA.tier||'free'
   };
@@ -14918,7 +14926,7 @@ function openCopilot(){
   }
   openModal(`
     <div class="ctitle">✨ Depot Assistant</div>
-    <div id="cop-log">${_copilotHistory.length? _renderCopilotLog() : '<div class="cop-msg sys">Ask about stock, staff, or run an end-of-day reconciliation. Powered by Gemini.</div>'}</div>
+    <div id="cop-log">${_copilotHistory.length? _renderCopilotLog() : '<div class="cop-msg sys">Ask about stock, staff, or run an end-of-day reconciliation — or ask it to clock a staff member in (you\'ll confirm before anything is saved). Powered by Gemini.</div>'}</div>
     <div class="cop-quick">
       <button onclick="askCopilot('Any low stock items I should reorder?')">Low stock check</button>
       <button onclick="askCopilot('Summarize today\\'s activity')">Today's summary</button>
@@ -14934,7 +14942,18 @@ function openCopilot(){
 }
 
 function _renderCopilotLog(){
-  return _copilotHistory.map(m=>`<div class="cop-msg ${m.role==='user'?'user':'bot'}">${esc(m.content)}</div>`).join('');
+  return _copilotHistory.map(m=>{
+    if(m.type==='action'){
+      return `<div class="cop-msg bot cop-action">
+        <div>${esc(m.content)}</div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn bg" style="width:auto;padding:4px 14px" onclick="confirmCopilotAction('${m.actionId}')">✅ Confirm</button>
+          <button class="btn bo" style="width:auto;padding:4px 14px" onclick="cancelCopilotAction('${m.actionId}')">✕ Cancel</button>
+        </div>
+      </div>`;
+    }
+    return `<div class="cop-msg ${m.role==='user'?'user':'bot'}">${esc(m.content)}</div>`;
+  }).join('');
 }
 
 function _copilotAppend(role, content){
@@ -14962,29 +14981,98 @@ function _copilotSystemPrompt(mode){
     'movements, clock logs, transport, and finances. Answer the user\'s '+
     'question using only that data. Be concise and use plain language, not '+
     'code. If the data doesn\'t contain what\'s needed to answer, say so '+
-    'rather than guessing.';
+    'rather than guessing. You may also clock a staff member in for a shift '+
+    'using the clock_in_staff tool, but only when the user has clearly asked '+
+    'for that and named a specific staff member — never call it speculatively, '+
+    'and ask a clarifying question in plain text if the name is missing or '+
+    'ambiguous rather than guessing.';
 }
 
-// ── Core call to Gemini ──────────────────────────────────────────────────
+// ── Actions the Assistant is allowed to take (tool/function calling) ──────
+// Every action below only ever *proposes* a change — nothing is written
+// until the user taps Confirm in the chat UI. See confirmCopilotAction().
+const CLOCK_IN_TOOL = {
+  type: 'function',
+  name: 'clock_in_staff',
+  description: 'Clock in an active staff member for a work shift starting now. '+
+    'Only call this when the user has clearly asked to clock someone in and '+
+    'named that staff member. Never guess a name — if it\'s ambiguous or '+
+    'missing, ask the user to clarify in plain text instead of calling this.',
+  parameters: {
+    type: 'object',
+    properties: {
+      staffName: { type: 'string', description: 'The staff member\'s name, as close as possible to how it appears in the roster.' },
+      task: { type: 'string', description: 'Optional task name for their role. Leave blank if the user didn\'t specify one.' }
+    },
+    required: ['staffName']
+  }
+};
+
+// Case-insensitive lookup among active staff — exact match preferred,
+// falls back to substring match so "John" can find "John Banda".
+function _findActiveStaffByName(name){
+  const q = (name||'').trim().toLowerCase();
+  if(!q) return [];
+  const active = (DATA.staff||[]).filter(s=>!s.status||s.status==='active');
+  const exact = active.filter(s=>(s.name||'').toLowerCase()===q);
+  if(exact.length) return exact;
+  return active.filter(s=>(s.name||'').toLowerCase().includes(q));
+}
+
+// Headless equivalent of saveClockIn() — no DOM reads, callable from the
+// Assistant's confirmed action. Reuses the same guards (read-only mode,
+// duplicate open-shift check) and the same stampEntry()/logAuditEvent()
+// path as the manual Clock In form, so approval workflow and audit trail
+// behave identically regardless of who initiated it.
+function _aiClockIn(staffId, requestedTask){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode — ask an administrator to clock in staff.' };
+  const s = DATA.staff.find(x=>String(x.id)===String(staffId));
+  if(!s) return { ok:false, msg:'Could not find that staff member anymore — they may have been removed.' };
+  const existing = _openShiftFor(staffId);
+  if(existing) return { ok:false, msg:`${s.name} already has an open shift (clocked in ${existing.date}, ${existing.timeIn||'—'}). Clock them out first.` };
+  const role = s.role;
+  const tasks = tasksForRole(role);
+  const task = (requestedTask && tasks.some(t=>t.name===requestedTask)) ? requestedTask : (tasks[0]?.name || '');
+  const date = today();
+  const timeIn = nowTime();
+  const timeInTs = Date.now();
+  const payload = stampEntry({id:uid(),staffId,date,role,task,timeIn,timeInTs,status:'open',
+    bags:0,qty:0,earnings:0,deduction:0,deductionReason:'',timeOut:'',
+    time:nowTime(),entryType:'work'});
+  updateData(d=>({...d,staffLogs:[...d.staffLogs,payload]}));
+  logAuditEvent('CREATE','Work Log (Clock In)',`Staff ID:${staffId} · Task:${task} · TimeIn:${timeIn} · via Depot Assistant`);
+  return { ok:true, msg:`Clocked in ${s.name} (${role}) at ${timeIn}${task?' for '+task:''}.` };
+}
+
+
 async function _callCopilot(mode, userText, context){
   if(!navigator.onLine){ showToast('❌ Depot Assistant needs an internet connection'); return null; }
   if(_copilotUsageToday() >= COPILOT_DAILY_SOFT_CAP){ showToast('⚠️ Daily Assistant limit reached — resets tomorrow'); return null; }
   const promptText = (userText?('Question: '+userText+'\n\n'):'Run the reconciliation described above.\n\n')
     + 'Depot data (JSON):\n' + JSON.stringify(context);
-  const reqBody = JSON.stringify({
-    contents: [ { role:'user', parts: [ { text: promptText } ] } ],
-    systemInstruction: { parts: [ { text: _copilotSystemPrompt(mode) } ] }
-  });
-  const timeoutMs = mode==='reconciliation' ? 45000 : 20000;
+  // Actions (tool calling) are only offered in normal chat mode — the
+  // reconciliation job is read-only analysis and shouldn't be able to
+  // trigger writes.
+  const bodyObj = {
+    model: GEMINI_MODEL,
+    input: promptText,
+    system_instruction: _copilotSystemPrompt(mode)
+  };
+  if(mode!=='reconciliation') bodyObj.tools = [CLOCK_IN_TOOL];
+  const reqBody = JSON.stringify(bodyObj);
+  const timeoutMs = 45000; // generous fixed timeout for both chat and reconciliation
   let res = await _fetchWithTimeout(GEMINI_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type':'application/json', 'x-goog-api-key': GEMINI_API_KEY },
     body: reqBody
   }, timeoutMs);
-  // Known issue (mid-2026): some "AQ."-format AI Studio keys get rejected
-  // when sent via the x-goog-api-key header (401 "Expected OAuth 2 access
-  // token..."), but work when passed as a ?key= query param instead. If the
-  // header attempt 401s, retry once with the query param before giving up.
+  // Known issue (as of mid-2026): some "AQ."-format AI Studio keys get
+  // rejected via the x-goog-api-key header (401 "Expected OAuth 2 access
+  // token..."). This is an acknowledged backend bug on Google's side, not
+  // something wrong in this code — see the Interactions API docs and the
+  // Google AI Developers Forum thread on ACCESS_TOKEN_TYPE_UNSUPPORTED.
+  // As a best-effort workaround, retry once with the key as a query param
+  // before giving up.
   if(res.status === 401){
     res = await _fetchWithTimeout(GEMINI_ENDPOINT + '?key=' + encodeURIComponent(GEMINI_API_KEY), {
       method: 'POST',
@@ -14998,11 +15086,17 @@ async function _callCopilot(mode, userText, context){
   }
   const data = await res.json();
   _copilotBumpUsage();
-  const reply = ((data?.candidates||[])[0]?.content?.parts||[])
-    .filter(p=>typeof p.text==='string')
-    .map(p=>p.text)
+  const steps = data?.steps||[];
+  const reply = steps
+    .filter(s=>s.type==='model_output')
+    .flatMap(s=>s.content||[])
+    .filter(c=>c.type==='text')
+    .map(c=>c.text||'')
     .join('');
-  return { reply: reply || '(no response)' };
+  const functionCalls = steps
+    .filter(s=>s.type==='function_call')
+    .map(s=>({ name:s.name, arguments:s.arguments||{}, id:s.id }));
+  return { reply: reply || '', functionCalls };
 }
 
 async function askCopilot(question){
@@ -15012,18 +15106,87 @@ async function askCopilot(question){
   _copilotAppend('user', question);
   _copilotAppend('assistant', '…thinking');
   try {
-    const context = buildCopilotContext(7);
+    const context = buildCopilotContext(7, false);
     const data = await _callCopilot('chat', question, context);
     _copilotHistory.pop(); // remove the "…thinking" placeholder
-    if(data) _copilotAppend('assistant', data.reply || '(no response)');
-    else _copilotHistory.pop();
+    if(data){
+      const call = (data.functionCalls||[]).find(c=>c.name==='clock_in_staff');
+      if(call){
+        _handleClockInCall(call);
+      } else {
+        _copilotAppend('assistant', data.reply || '(no response)');
+      }
+    } else _copilotHistory.pop();
   } catch(e){
     _copilotHistory.pop();
-    _copilotAppend('assistant', '❌ '+(e.message||'Something went wrong'));
+    const msg = (e && e.name === 'AbortError')
+      ? 'Request timed out — check your connection and try again'
+      : (e.message||'Something went wrong');
+    _copilotAppend('assistant', '❌ '+msg);
   } finally {
     _copilotBusy = false;
     const log = document.getElementById('cop-log'); if(log){ log.innerHTML=_renderCopilotLog(); log.scrollTop=log.scrollHeight; }
   }
+}
+
+// Resolves the name Gemini gave us against the real roster and either shows
+// a Confirm/Cancel action (exactly one match, no open shift) or a plain
+// clarifying message (no match / multiple matches) — never writes directly.
+function _handleClockInCall(call){
+  const staffName = (call.arguments||{}).staffName || '';
+  const task = (call.arguments||{}).task || '';
+  const matches = _findActiveStaffByName(staffName);
+  if(matches.length===0){
+    _copilotAppend('assistant', `I couldn't find an active staff member matching "${staffName}" — could you check the spelling or pick from the roster?`);
+    return;
+  }
+  if(matches.length>1){
+    const names = matches.map(s=>s.name).join(', ');
+    _copilotAppend('assistant', `A few staff match "${staffName}": ${names}. Which one did you mean?`);
+    return;
+  }
+  const s = matches[0];
+  const existing = _openShiftFor(s.id);
+  if(existing){
+    _copilotAppend('assistant', `${s.name} already has an open shift (clocked in ${existing.date}, ${existing.timeIn||'—'}) — clock them out first.`);
+    return;
+  }
+  _copilotAppendAction(
+    `Clock in ${s.name} (${s.role}) now${task?' for "'+task+'"':''}?`,
+    { type:'clock_in', staffId:s.id, task }
+  );
+}
+
+// Adds an actionable message the user must explicitly Confirm or Cancel —
+// nothing in DATA changes until they tap Confirm.
+function _copilotAppendAction(description, action){
+  const actionId = 'act_'+Date.now()+'_'+Math.floor(Math.random()*1000);
+  _copilotHistory.push({ role:'assistant', type:'action', content:description, actionId, action });
+  const log = document.getElementById('cop-log');
+  if(log){ log.innerHTML=_renderCopilotLog(); log.scrollTop=log.scrollHeight; }
+}
+
+function confirmCopilotAction(actionId){
+  const idx = _copilotHistory.findIndex(m=>m.actionId===actionId);
+  if(idx===-1) return;
+  const action = _copilotHistory[idx].action || {};
+  let result;
+  if(action.type==='clock_in'){
+    result = _aiClockIn(action.staffId, action.task);
+  } else {
+    result = { ok:false, msg:'Unknown action — nothing was done.' };
+  }
+  _copilotHistory[idx] = { role:'assistant', type:'text', content:(result.ok?'✅ ':'❌ ')+result.msg };
+  const log = document.getElementById('cop-log');
+  if(log){ log.innerHTML=_renderCopilotLog(); log.scrollTop=log.scrollHeight; }
+}
+
+function cancelCopilotAction(actionId){
+  const idx = _copilotHistory.findIndex(m=>m.actionId===actionId);
+  if(idx===-1) return;
+  _copilotHistory[idx] = { role:'assistant', type:'text', content:'Cancelled — no changes made.' };
+  const log = document.getElementById('cop-log');
+  if(log){ log.innerHTML=_renderCopilotLog(); log.scrollTop=log.scrollHeight; }
 }
 
 // Heavier job — reasons over 30 days of movements + shift logs at once and
@@ -15034,13 +15197,16 @@ async function runReconciliation(){
   _copilotAppend('user', 'Run end-of-day reconciliation');
   _copilotAppend('assistant', '…running full reconciliation, this can take up to a minute');
   try {
-    const context = buildCopilotContext(30); // wider window for a real reconciliation
+    const context = buildCopilotContext(30, true); // wider window + full data for a real reconciliation
     const data = await _callCopilot('reconciliation', '', context);
     _copilotHistory.pop();
     if(data) _copilotAppend('assistant', data.reply || '(no response)');
   } catch(e){
     _copilotHistory.pop();
-    _copilotAppend('assistant', '❌ '+(e.message||'Reconciliation failed'));
+    const msg = (e && e.name === 'AbortError')
+      ? 'Reconciliation timed out — check your connection and try again'
+      : (e.message||'Reconciliation failed');
+    _copilotAppend('assistant', '❌ '+msg);
   } finally {
     _copilotBusy = false;
     const log = document.getElementById('cop-log'); if(log){ log.innerHTML=_renderCopilotLog(); log.scrollTop=log.scrollHeight; }
