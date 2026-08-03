@@ -14830,14 +14830,12 @@ document.addEventListener('click', ()=>{ if(_tipVisible) hideTip(0); });
 //      CSP connect-src meta tag at the top of this file.
 // ══════════════════════════════════════════════════════════
 
-// As of mid-2026, Google AI Studio issues "Auth" keys (prefix "AQ.") instead
-// of the older "Standard" keys (prefix "AIzaSy"). Auth keys are the default
-// now and are the ones this app is built for — they call the Interactions
-// API endpoint below via the x-goog-api-key header. (Standard AIzaSy keys
-// stop working in Sept 2026 regardless.)
-const GEMINI_API_KEY = 'AQ.Ab8RN6Lc8F99MmnirRx_99Q5djChntq9QaSs20WPYgL08sC13w';
+// Get a key from Google AI Studio (aistudio.google.com/apikey) and paste it
+// below. This calls the standard generateContent REST endpoint via the
+// x-goog-api-key header.
+const GEMINI_API_KEY = 'YOUR-GEMINI-API-KEY';
 const GEMINI_MODEL = 'gemini-3.5-flash'; // check aistudio.google.com/models if this is retired later
-const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent';
 
 // Soft client-side usage guard. Gemini's own free-tier daily cap is the
 // real backstop — this just stops obvious runaway use (e.g. a stuck loop)
@@ -14977,9 +14975,8 @@ async function _callCopilot(mode, userText, context){
     method: 'POST',
     headers: { 'Content-Type':'application/json', 'x-goog-api-key': GEMINI_API_KEY },
     body: JSON.stringify({
-      model: GEMINI_MODEL,
-      input: promptText,
-      system_instruction: _copilotSystemPrompt(mode)
+      contents: [ { role:'user', parts: [ { text: promptText } ] } ],
+      systemInstruction: { parts: [ { text: _copilotSystemPrompt(mode) } ] }
     })
   }, mode==='reconciliation' ? 45000 : 20000);
   if(!res.ok){
@@ -14988,11 +14985,9 @@ async function _callCopilot(mode, userText, context){
   }
   const data = await res.json();
   _copilotBumpUsage();
-  const reply = (data?.steps||[])
-    .filter(s=>s.type==='model_output')
-    .flatMap(s=>s.content||[])
-    .filter(c=>c.type==='text')
-    .map(c=>c.text||'')
+  const reply = ((data?.candidates||[])[0]?.content?.parts||[])
+    .filter(p=>typeof p.text==='string')
+    .map(p=>p.text)
     .join('');
   return { reply: reply || '(no response)' };
 }
