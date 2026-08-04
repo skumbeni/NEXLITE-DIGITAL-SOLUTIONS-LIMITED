@@ -499,8 +499,9 @@
     <div class="modal-body">
       <div class="field"><label>Email</label><input type="email" id="loginEmailInput" placeholder="Enter email" autocomplete="username"></div>
       <div class="field"><label>Password</label><input type="password" id="loginPasswordInput" placeholder="Enter password" autocomplete="current-password"></div>
-      <div class="field"><label>Invite Code <span style="font-weight:400; color:var(--ink-dim);">(only for a new treasurer account, not the chairman)</span></label><input type="text" id="loginInviteCode" placeholder="e.g. 7F3K9Q" style="text-transform:uppercase;"></div>
+      <div class="field"><label>Invite Code <span style="font-weight:400; color:var(--ink-dim);">(only if a chairman invited you as an additional treasurer)</span></label><input type="text" id="loginInviteCode" placeholder="e.g. 7F3K9Q" style="text-transform:uppercase;"></div>
       <div class="helper" id="loginError" style="color:var(--rose); display:none;">Incorrect email or password.</div>
+      <div class="helper" style="text-align:center;">First time setting up this fund? <a href="#" id="linkCreateAccount">Create your fund account</a></div>
       <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--ink-dim); cursor:pointer; margin:0;">
         <input type="checkbox" id="loginStaySignedIn" style="width:auto;"> Stay logged in on this device
       </label>
@@ -508,6 +509,27 @@
     <div class="modal-foot">
       <button class="btn secondary" data-close="loginModal">Cancel</button>
       <button class="btn" id="btnLoginSubmit">Continue</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Fund Account Modal -->
+<div class="overlay" id="createAccountModal">
+  <div class="modal" style="max-width:380px;">
+    <div class="modal-head"><h3>Set Up Your Fund</h3><button class="close-x" data-close="createAccountModal">&times;</button></div>
+    <div class="modal-body">
+      <div class="field"><label>Organisation / Fund Name</label><input type="text" id="createOrgName" placeholder="e.g. Nexlite Staff Funeral Fund"></div>
+      <div class="field"><label>Fund MTN Mobile Money Number</label><input type="text" id="createFundNumber" placeholder="e.g. 0966 000 000"></div>
+      <div class="field" style="border-top:1px solid var(--line); padding-top:14px;"><label>Chairman / Your Name</label><input type="text" id="createChairName" placeholder="e.g. Mr. Mwansa"></div>
+      <div class="field"><label>Your Email</label><input type="email" id="createChairEmail" placeholder="Enter email" autocomplete="username"></div>
+      <div class="field"><label>Choose a Password</label><input type="password" id="createChairPassword" placeholder="At least 6 characters" autocomplete="new-password"></div>
+      <div class="field"><label>Confirm Password</label><input type="password" id="createChairPasswordConfirm" placeholder="Re-enter password" autocomplete="new-password"></div>
+      <div class="helper" id="createAccountError" style="color:var(--rose); display:none;"></div>
+      <div class="helper" style="text-align:center;">Already set up? <a href="#" id="linkBackToLogin">Log in instead</a></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" data-close="createAccountModal">Cancel</button>
+      <button class="btn" id="btnCreateAccountSubmit">Create Fund Account</button>
     </div>
   </div>
 </div>
@@ -858,7 +880,7 @@
           <div class="field" style="border-top:1px solid var(--line); padding-top:14px;">
             <label>Chairman Login Email</label>
             <input type="text" id="setTreasurerEmail" readonly>
-            <div class="helper">Set the first time the chairman logs in. Only this exact email can register the founding treasurer account — everyone else needs an invite code (below).</div>
+            <div class="helper">Set when the fund account was created. Everyone else needs an invite code to get their own login (below).</div>
           </div>
           <div>
             <button class="btn" id="btnSaveSettings">Save Settings</button>
@@ -1154,10 +1176,6 @@
   const db = firebase.database();
   const auth = firebase.auth();
   const fbRef = db.ref('fundData');
-  // The only email allowed to register a new treasurer/chairman account. Must match
-  // the Firebase Realtime Database rules' write condition exactly, or sign-up will
-  // succeed in Auth but every save will silently fail against the rules.
-  const TREASURER_EMAIL = 'treasurer@zam-funeral.app';
 
   let fbReady = false;       // becomes true once the first remote snapshot arrives
   let suppressEcho = false;  // true while we're writing our own change, to ignore the echo
@@ -1188,13 +1206,21 @@
   }
 
   // Targeted writes for a brand-new treasurer redeeming an invite code. This user has no
-  // general fundData write access yet (they're not the chair and not yet in treasurerAccess),
-  // so — like the member PIN write above — this bypasses fbPush()/the root .set() and relies on
-  // narrow rules scoped to exactly these two leaves.
+  // general fundData write access yet (they're not yet in treasurerAccess), so — like the
+  // member PIN write above — this bypasses fbPush()/the root .set() and relies on narrow
+  // rules scoped to exactly these two leaves.
   function fbRedeemTreasurerInvite(uid, entry, code){
     suppressEcho = true;
     return fbRef.child('settings/treasurerAccess/'+uid).set(entry)
       .then(()=> fbRef.child('settings/treasurerInvites/'+code).remove())
+      .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
+  }
+
+  // Targeted write for the very first-ever account on a fresh fund (no invite needed —
+  // the rules allow this only while treasurerAccess is still completely empty).
+  function fbBootstrapChairman(uid, entry){
+    suppressEcho = true;
+    return fbRef.child('settings/treasurerAccess/'+uid).set(entry)
       .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
   }
 
@@ -1239,21 +1265,16 @@
   });
 
   // Try to sign in with the given email/password; if no account exists yet for that email,
-  // create one (first-time setup for this fund's treasurer). Returns a promise that resolves
-  // on success and rejects with the Firebase error otherwise (e.g. wrong password).
+  // create one — but only if a valid, unredeemed invite code is supplied (the founding
+  // chairman account is created separately, via createChairmanAccount()). Returns a promise
+  // that resolves on success and rejects with the Firebase error otherwise.
   function treasurerSignInOrCreate(email, password, inviteCode){
     return auth.signInWithEmailAndPassword(email, password).catch((err)=>{
       if(err.code === 'auth/user-not-found'){
-        // The chairman's designated email may always register. Anyone else needs a valid,
-        // unredeemed invite code the chairman generated for them in Settings — that's what
-        // actually unlocks write access (see fbRedeemTreasurerInvite), not this check alone.
-        if(email.toLowerCase() === TREASURER_EMAIL){
-          return auth.createUserWithEmailAndPassword(email, password);
-        }
         const code = (inviteCode||'').trim().toUpperCase();
         const invite = code && data.settings.treasurerInvites ? data.settings.treasurerInvites[code] : null;
         if(!invite){
-          return Promise.reject({ code: 'auth/not-chairman' });
+          return Promise.reject({ code: 'auth/invite-required' });
         }
         return auth.createUserWithEmailAndPassword(email, password).then((cred)=>{
           const entry = { email: email.toLowerCase(), memberId: invite.memberId||null, name: invite.name||'', inviteCode: code, grantedAt: new Date().toISOString().slice(0,10) };
@@ -1266,6 +1287,24 @@
         });
       }
       throw err;
+    });
+  }
+
+  // Founding setup for a brand-new fund: creates the first Auth account and grants it
+  // treasurer access via the one-time "bootstrap" rule (only usable while treasurerAccess
+  // is still completely empty — see the Firebase rules). Then saves the fund's basic
+  // settings, which only succeeds now that this account has write access.
+  function createChairmanAccount(details){
+    return auth.createUserWithEmailAndPassword(details.email, details.password).then((cred)=>{
+      const entry = { email: details.email.toLowerCase(), memberId: null, name: details.chairName||'', grantedAt: new Date().toISOString().slice(0,10), bootstrap: true };
+      return fbBootstrapChairman(cred.user.uid, entry).then(()=>{
+        data.settings.treasurerAccess[cred.user.uid] = entry;
+        data.settings.orgName = details.orgName;
+        data.settings.fundNumber = details.fundNumber;
+        data.settings.treasurerEmail = details.email;
+        save();
+        return cred;
+      });
     });
   }
 
@@ -2037,6 +2076,7 @@
   function handleGateTreasurer(){
     document.getElementById('loginEmailInput').value = data.settings.treasurerEmail || '';
     document.getElementById('loginPasswordInput').value = '';
+    document.getElementById('loginInviteCode').value = '';
     document.getElementById('loginStaySignedIn').checked = false;
     document.getElementById('loginError').style.display = 'none';
     openModal('loginModal');
@@ -2062,14 +2102,73 @@
     }).catch((err)=>{
       document.getElementById('loginError').textContent = err.code === 'auth/weak-password'
         ? 'Password must be at least 6 characters.'
-        : err.code === 'auth/not-chairman'
-          ? 'New treasurer accounts need a valid invite code from the chairman (Settings \u2192 Treasurer Access).'
+        : err.code === 'auth/invite-required'
+          ? 'New treasurer accounts need a valid invite code from the chairman (Settings \u2192 Treasurer Access). First time setting up this fund? Use "Create your fund account" below instead.'
           : 'Incorrect email or password.';
       document.getElementById('loginError').style.display = 'block';
     });
   });
   document.getElementById('loginPasswordInput').addEventListener('keydown', (e)=>{
     if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('btnLoginSubmit').click(); }
+  });
+  document.getElementById('linkCreateAccount').addEventListener('click', (e)=>{
+    e.preventDefault();
+    closeModal('loginModal');
+    document.getElementById('createOrgName').value = '';
+    document.getElementById('createFundNumber').value = '';
+    document.getElementById('createChairName').value = '';
+    document.getElementById('createChairEmail').value = '';
+    document.getElementById('createChairPassword').value = '';
+    document.getElementById('createChairPasswordConfirm').value = '';
+    document.getElementById('createAccountError').style.display = 'none';
+    openModal('createAccountModal');
+  });
+  document.getElementById('linkBackToLogin').addEventListener('click', (e)=>{
+    e.preventDefault();
+    closeModal('createAccountModal');
+    openModal('loginModal');
+  });
+  document.getElementById('btnCreateAccountSubmit').addEventListener('click', ()=>{
+    const errEl = document.getElementById('createAccountError');
+    errEl.style.display = 'none';
+    const existingChair = data.settings.treasurerAccess && Object.keys(data.settings.treasurerAccess).length > 0;
+    if(existingChair){
+      errEl.textContent = 'A chairman account already exists for this fund. Please log in instead, or ask them to invite you.';
+      errEl.style.display = 'block';
+      return;
+    }
+    const details = {
+      orgName: document.getElementById('createOrgName').value.trim(),
+      fundNumber: document.getElementById('createFundNumber').value.trim(),
+      chairName: document.getElementById('createChairName').value.trim(),
+      email: document.getElementById('createChairEmail').value.trim(),
+      password: document.getElementById('createChairPassword').value
+    };
+    const confirmPassword = document.getElementById('createChairPasswordConfirm').value;
+    if(!details.orgName || !details.email || !details.password){
+      errEl.textContent = 'Fund name, email and password are required.';
+      errEl.style.display = 'block';
+      return;
+    }
+    if(details.password !== confirmPassword){
+      errEl.textContent = 'Passwords do not match.';
+      errEl.style.display = 'block';
+      return;
+    }
+    createChairmanAccount(details).then(()=>{
+      closeModal('createAccountModal');
+      enterMainApp();
+      toast('Fund account created — welcome!');
+    }).catch((err)=>{
+      errEl.textContent = err.code === 'auth/email-already-in-use'
+        ? 'An account already exists for that email — try logging in instead.'
+        : err.code === 'auth/weak-password'
+          ? 'Password must be at least 6 characters.'
+          : err.code === 'PERMISSION_DENIED'
+            ? 'A chairman account already exists for this fund. Please log in instead.'
+            : 'Could not create the account. Check your connection and try again.';
+      errEl.style.display = 'block';
+    });
   });
 
   function memberSignIn(member, staySignedIn){
