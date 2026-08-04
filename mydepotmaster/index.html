@@ -18,14 +18,13 @@
 <!-- protection for script injection. To harden: extract JS to a separate     -->
 <!-- file and switch to a nonce-based CSP. Until then, all other XSS vectors  -->
 <!-- (esc(), input validation) are the primary defence.                       -->
-<!-- NOTE (Depot Assistant / Gemini): the app calls Google's Gemini API
-     directly from the browser using GEMINI_API_KEY, set further down in
-     this file (search for "DEPOT ASSISTANT"). This is the simplest setup,
-     but it means anyone who views this page's source can read and reuse
-     that key against your Google Cloud quota. Restrict the key in Google
-     AI Studio / Cloud Console (HTTP referrer restriction to your app's
-     domain, and a daily quota cap) to limit the damage if it leaks. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' blob: https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.gstatic.com/; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; connect-src https://*.firebaseio.com https://firebaseinstallations.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://firebaseappcheck.googleapis.com https://fonts.googleapis.com https://fonts.gstatic.com https://www.google.com/recaptcha/ https://recaptcha.google.com https://generativelanguage.googleapis.com; img-src 'self' data: blob: https:; worker-src 'self' blob:; manifest-src 'self' blob:; frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com; frame-ancestors 'none';">
+<!-- NOTE (Depot Assistant / Gemini): the app calls a Cloudflare Worker
+     (mdm-copilot-proxy.js, deployed separately) which holds the real
+     Gemini API key server-side and forwards requests to Google. See
+     COPILOT_PROXY_ENDPOINT further down in this file (search for
+     "DEPOT ASSISTANT"). Do not put the raw Gemini key back in this file —
+     it's public source and gets scraped/revoked within minutes. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' blob: https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.gstatic.com/; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; connect-src https://*.firebaseio.com https://firebaseinstallations.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://firebaseappcheck.googleapis.com https://fonts.googleapis.com https://fonts.gstatic.com https://www.google.com/recaptcha/ https://recaptcha.google.com https://mdm-copilot-proxy.chongogoodson0.workers.dev; img-src 'self' data: blob: https:; worker-src 'self' blob:; manifest-src 'self' blob:; frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com; frame-ancestors 'none';">
 <!-- ──────────────────────────────────────────────────────────────────────── -->
 <!-- OpenGraph / Social sharing -->
 <meta property="og:title" content="My Depot Master"/>
@@ -14821,31 +14820,26 @@ document.addEventListener('click', ()=>{ if(_tipVisible) hideTip(0); });
 // DEPOT ASSISTANT — Gemini-powered AI chat + reconciliation (Pro tier feature)
 //
 // ARCHITECTURE:
-//   This calls Google's Gemini API directly from the browser — no backend
-//   proxy. That's the simplest setup, but it means GEMINI_API_KEY below is
-//   visible to anyone who views this page's source, and they can spend
-//   your free-tier quota (or run up a bill if you later enable billing on
-//   that Google Cloud project). To limit the damage:
-//     1. Create the key in Google AI Studio (https://aistudio.google.com/apikey).
-//     2. In Google Cloud Console, restrict the key to HTTP referrers
-//        matching the domain(s) this app is actually served from.
-//     3. Keep billing OFF on that project so a leaked key can only burn
-//        free-tier quota, not real money.
-//     4. Rotate the key immediately if you ever suspect it has leaked.
+//   This calls a Cloudflare Worker (mdm-copilot-proxy.js, in the same repo
+//   as this file) which holds the real Gemini API key as a server-side
+//   secret and forwards requests to Google on our behalf. The key never
+//   appears in this file or anywhere else the browser can download it —
+//   this file used to hold the key directly, and it got scraped and
+//   revoked by Google's own leaked-secret scanner within minutes of being
+//   pushed to a public repo. Don't put the key back here.
 //
 // SETUP:
-//   1. Get a free key at https://aistudio.google.com/apikey (no card needed).
-//   2. Set GEMINI_API_KEY below to that key.
-//   3. generativelanguage.googleapis.com is already allow-listed in the
-//      CSP connect-src meta tag at the top of this file.
+//   1. Deploy mdm-copilot-proxy.js as a Cloudflare Worker — see the setup
+//      comment at the top of that file for step-by-step instructions.
+//   2. Set COPILOT_PROXY_ENDPOINT below to that worker's URL.
+//   3. Add the worker's domain (*.workers.dev, or your custom domain) to
+//      the CSP connect-src meta tag at the top of this file.
 // ══════════════════════════════════════════════════════════
 
-// Get a key from Google AI Studio (aistudio.google.com/apikey) and paste it
-// below. This calls the standard generateContent REST endpoint via the
-// x-goog-api-key header.
-const GEMINI_API_KEY = 'AQ.Ab8RN6K30pphiwXUOCaaiSqnya6mIB-2DDIT5ZBHo5jAyBBNxA';
+// URL of the Cloudflare Worker deployed from mdm-copilot-proxy.js.
+// Looks like: https://mdm-copilot-proxy.<your-subdomain>.workers.dev
+const COPILOT_PROXY_ENDPOINT = 'https://mdm-copilot-proxy.chongogoodson0.workers.dev';
 const GEMINI_MODEL = 'gemini-3.5-flash'; // check aistudio.google.com/models if this is retired later
-const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 
 // Soft client-side usage guard. Gemini's own free-tier daily cap is the
 // real backstop — this just stops obvious runaway use (e.g. a stuck loop)
@@ -14930,8 +14924,8 @@ function buildCopilotContext(daysBack, full){
 // ── Modal UI ────────────────────────────────────────────────────────────────
 function openCopilot(){
   if(!hasFeature('ai_copilot')){ showUpgradePrompt('ai_copilot'); return; }
-  if(GEMINI_API_KEY==='YOUR-GEMINI-API-KEY'){
-    showToast('⚠️ Depot Assistant needs a Gemini API key — see the code comments.');
+  if(COPILOT_PROXY_ENDPOINT.includes('YOUR-SUBDOMAIN')){
+    showToast('⚠️ Depot Assistant needs the Cloudflare Worker URL set — see the code comments.');
     return;
   }
   openModal(`
@@ -15071,14 +15065,11 @@ async function _callCopilot(mode, userText, context){
   if(mode!=='reconciliation') bodyObj.tools = [CLOCK_IN_TOOL];
   const reqBody = JSON.stringify(bodyObj);
   const timeoutMs = 45000; // generous fixed timeout for both chat and reconciliation
-  // Sending the key via the x-goog-api-key header — this is what Google's
-  // Interactions API docs show as of mid-2026. The old ?key= query-param
-  // approach was returning 401s for this key type (Gemini is moving from
-  // "Standard" keys, which the API is starting to reject outright, to
-  // "Auth" keys bound to a service account — see aistudio.google.com/apikey).
-  const res = await _fetchWithTimeout(GEMINI_ENDPOINT, {
+  // No API key here — the worker attaches it server-side. See the setup
+  // comment near COPILOT_PROXY_ENDPOINT above.
+  const res = await _fetchWithTimeout(COPILOT_PROXY_ENDPOINT, {
     method: 'POST',
-    headers: { 'Content-Type':'application/json', 'x-goog-api-key': GEMINI_API_KEY },
+    headers: { 'Content-Type':'application/json' },
     body: reqBody
   }, timeoutMs);
   if(!res.ok){
