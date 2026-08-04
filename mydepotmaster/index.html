@@ -14833,7 +14833,7 @@ document.addEventListener('click', ()=>{ if(_tipVisible) hideTip(0); });
 // Get a key from Google AI Studio (aistudio.google.com/apikey) and paste it
 // below. This calls the standard generateContent REST endpoint via the
 // x-goog-api-key header.
-const GEMINI_API_KEY = 'AQ.Ab8RN6IpAZ_hG2cnVwEDR3PnSZG1f_i7XtMoJmG_EqXEDKRjXQ';
+const GEMINI_API_KEY = 'AQ.Ab8RN6I0wO8Xg8RnQlcaO5ogFpJcfl3WSzRvs9tpEr4P750bIQ';
 const GEMINI_MODEL = 'gemini-3.5-flash'; // check aistudio.google.com/models if this is retired later
 const GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 
@@ -15061,24 +15061,16 @@ async function _callCopilot(mode, userText, context){
   if(mode!=='reconciliation') bodyObj.tools = [CLOCK_IN_TOOL];
   const reqBody = JSON.stringify(bodyObj);
   const timeoutMs = 45000; // generous fixed timeout for both chat and reconciliation
-  // Sending the key as a ?key= query param rather than the x-goog-api-key
-  // header — confirmed this works reliably with this exact AQ.-format key
-  // in other apps on this account, while the header approach was hitting a
-  // 401 here specifically.
-  let res = await _fetchWithTimeout(GEMINI_ENDPOINT + '?key=' + encodeURIComponent(GEMINI_API_KEY), {
+  // Sending the key via the x-goog-api-key header — this is what Google's
+  // Interactions API docs show as of mid-2026. The old ?key= query-param
+  // approach was returning 401s for this key type (Gemini is moving from
+  // "Standard" keys, which the API is starting to reject outright, to
+  // "Auth" keys bound to a service account — see aistudio.google.com/apikey).
+  const res = await _fetchWithTimeout(GEMINI_ENDPOINT, {
     method: 'POST',
-    headers: { 'Content-Type':'application/json' },
+    headers: { 'Content-Type':'application/json', 'x-goog-api-key': GEMINI_API_KEY },
     body: reqBody
   }, timeoutMs);
-  // Fallback: if the query param somehow gets rejected too, try the header
-  // once before giving up — belt and suspenders.
-  if(res.status === 401){
-    res = await _fetchWithTimeout(GEMINI_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json', 'x-goog-api-key': GEMINI_API_KEY },
-      body: reqBody
-    }, timeoutMs);
-  }
   if(!res.ok){
     const body = await res.text().catch(()=>'');
     throw new Error('HTTP '+res.status+(body?': '+body.slice(0,150):''));
