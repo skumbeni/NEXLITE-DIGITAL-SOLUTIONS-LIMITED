@@ -227,6 +227,13 @@
   .field label{ display:block; font-size:11.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--ink-dim); margin-bottom:6px;}
   .field input, .field select, .field textarea{ width:100%; }
   .field-row{ display:grid; grid-template-columns:1fr 1fr; gap:12px;}
+  .field-label-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;}
+  .field-label-row label{ margin-bottom:0;}
+  .field-edit-btn{ display:none; flex-shrink:0; font-size:11.5px; color:var(--gold); }
+  .field-edit-btn.show{ display:inline-flex; align-items:center; gap:4px;}
+  .field-edit-btn:hover{ color:var(--gold-bright); }
+  input.locked-field{ background:transparent; border-color:transparent; color:var(--ink-dim); cursor:default; padding-left:0;}
+  input.locked-field:focus{ border-color:transparent;}
   .modal-foot{ padding:16px 22px; border-top:1px solid var(--line); display:flex; justify-content:flex-end; gap:10px;}
   .close-x{ all:unset; cursor:pointer; color:var(--ink-dim); font-size:18px; line-height:1; padding:2px 6px;}
   .close-x:hover{ color:var(--ink); }
@@ -849,11 +856,17 @@
         <div class="panel-head"><h3>Fund Configuration</h3></div>
         <div style="padding:20px; display:flex; flex-direction:column; gap:16px; max-width:460px;">
           <div class="field">
-            <label>Organisation / Fund Name</label>
+            <div class="field-label-row">
+              <label>Organisation / Fund Name</label>
+              <button type="button" class="icon-btn field-edit-btn" id="editOrgName" title="Edit fund name">&#9998; Edit</button>
+            </div>
             <input type="text" id="setOrgName" placeholder="e.g. Nexlite Staff Funeral Fund">
           </div>
           <div class="field">
-            <label>Funds Account Number</label>
+            <div class="field-label-row">
+              <label>Funds Account Number</label>
+              <button type="button" class="icon-btn field-edit-btn" id="editFundNumber" title="Edit account number">&#9998; Edit</button>
+            </div>
             <input type="text" id="setFundNumber" placeholder="e.g. 0966 000 000">
             <div class="helper">The single account number all members send their contributions to. Shown to members so they know where to pay.</div>
           </div>
@@ -1900,9 +1913,38 @@
     }
   });
 
+  // Org name / fund number are plain values under settings/ — not used as a Firebase
+  // key or path anywhere, so editing them later never touches uid-linked data. They're
+  // still locked by default once set, purely so the chairman doesn't fat-finger a change
+  // to the account members are already paying into; the pencil unlocks for a deliberate edit.
+  function applyFieldLock(inputId, btnId){
+    const input = document.getElementById(inputId);
+    const btn = document.getElementById(btnId);
+    const hasValue = input.value.trim().length > 0;
+    input.readOnly = hasValue;
+    input.classList.toggle('locked-field', hasValue);
+    btn.classList.toggle('show', hasValue);
+  }
+  document.getElementById('editOrgName').addEventListener('click', ()=>{
+    const input = document.getElementById('setOrgName');
+    input.readOnly = false;
+    input.classList.remove('locked-field');
+    input.focus();
+    input.select();
+  });
+  document.getElementById('editFundNumber').addEventListener('click', ()=>{
+    const input = document.getElementById('setFundNumber');
+    input.readOnly = false;
+    input.classList.remove('locked-field');
+    input.focus();
+    input.select();
+  });
+
   function loadSettingsForm(){
     document.getElementById('setOrgName').value = data.settings.orgName || '';
     document.getElementById('setFundNumber').value = data.settings.fundNumber || '';
+    applyFieldLock('setOrgName', 'editOrgName');
+    applyFieldLock('setFundNumber', 'editFundNumber');
     document.getElementById('setDefaultRate').value = data.settings.defaultRate || 150;
     document.getElementById('setDefaultPayout').value = data.settings.defaultPayout || 5000;
     document.getElementById('setDefaultPayoutPercent').value = data.settings.defaultPayoutPercent || 0;
