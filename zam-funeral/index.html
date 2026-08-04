@@ -1195,6 +1195,16 @@
   let saveTimer = null;
   let listenerAttached = false;
 
+  // True only when this browser tab holds a real, authorised treasurer/chairman session —
+  // i.e. Firebase Auth has a non-anonymous user AND that uid is listed in treasurerAccess.
+  // A page reached via cached localStorage data (dashboard still visible) can still be
+  // anonymous underneath if the Auth session didn't persist (see "Stay logged in" on the
+  // login form) — that's the case that silently fails writes below.
+  function isAuthorizedTreasurer(){
+    const u = auth.currentUser;
+    return !!(u && !u.isAnonymous && data.settings.treasurerAccess && data.settings.treasurerAccess[u.uid]);
+  }
+
   function fbPush(){
     if(saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(()=>{
@@ -1202,7 +1212,18 @@
       const payload = JSON.parse(JSON.stringify(data));
       suppressEcho = true;
       fbRef.set(payload)
-        .catch(()=>{ toast('Offline or not signed in — saved on this device only.'); })
+        .catch((err)=>{
+          if(err && err.code === 'PERMISSION_DENIED'){
+            toast('Not signed in as Treasurer in this session — log in again to save changes online.');
+            if(document.getElementById('mainApp') && document.getElementById('mainApp').style.display !== 'none'){
+              openModal('loginModal');
+            }
+          } else if(typeof navigator !== 'undefined' && navigator.onLine === false){
+            toast('You\u2019re offline — saved on this device only.');
+          } else {
+            toast('Could not sync to the cloud — saved on this device only.');
+          }
+        })
         .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
     }, 400); // debounce rapid successive saves
   }
@@ -1896,6 +1917,11 @@
     btn.addEventListener('click', ()=> setSettingsPayoutBasisUI(btn.dataset.basis));
   });
   document.getElementById('btnSaveSettings').addEventListener('click', ()=>{
+    if(!isAuthorizedTreasurer()){
+      toast('Your Treasurer session has expired — log in again to save changes online.');
+      openModal('loginModal');
+      return;
+    }
     data.settings.orgName = document.getElementById('setOrgName').value.trim();
     data.settings.fundNumber = document.getElementById('setFundNumber').value.trim();
     data.settings.defaultRate = Number(document.getElementById('setDefaultRate').value)||0;
@@ -1925,20 +1951,20 @@
     input.classList.toggle('locked-field', hasValue);
     btn.classList.toggle('show', hasValue);
   }
-  document.getElementById('editOrgName').addEventListener('click', ()=>{
-    const input = document.getElementById('setOrgName');
+  function unlockSettingsField(inputId){
+    if(!isAuthorizedTreasurer()){
+      toast('Your Treasurer session has expired — log in again to edit fund settings.');
+      openModal('loginModal');
+      return;
+    }
+    const input = document.getElementById(inputId);
     input.readOnly = false;
     input.classList.remove('locked-field');
     input.focus();
     input.select();
-  });
-  document.getElementById('editFundNumber').addEventListener('click', ()=>{
-    const input = document.getElementById('setFundNumber');
-    input.readOnly = false;
-    input.classList.remove('locked-field');
-    input.focus();
-    input.select();
-  });
+  }
+  document.getElementById('editOrgName').addEventListener('click', ()=> unlockSettingsField('setOrgName'));
+  document.getElementById('editFundNumber').addEventListener('click', ()=> unlockSettingsField('setFundNumber'));
 
   function loadSettingsForm(){
     document.getElementById('setOrgName').value = data.settings.orgName || '';
