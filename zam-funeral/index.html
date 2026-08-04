@@ -499,6 +499,7 @@
     <div class="modal-body">
       <div class="field"><label>Email</label><input type="email" id="loginEmailInput" placeholder="Enter email" autocomplete="username"></div>
       <div class="field"><label>Password</label><input type="password" id="loginPasswordInput" placeholder="Enter password" autocomplete="current-password"></div>
+      <div class="field"><label>Invite Code <span style="font-weight:400; color:var(--ink-dim);">(only for a new treasurer account, not the chairman)</span></label><input type="text" id="loginInviteCode" placeholder="e.g. 7F3K9Q" style="text-transform:uppercase;"></div>
       <div class="helper" id="loginError" style="color:var(--rose); display:none;">Incorrect email or password.</div>
       <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--ink-dim); cursor:pointer; margin:0;">
         <input type="checkbox" id="loginStaySignedIn" style="width:auto;"> Stay logged in on this device
@@ -511,6 +512,48 @@
   </div>
 </div>
 
+<!-- Member Change PIN Modal -->
+<div class="overlay" id="changePinModal">
+  <div class="modal" style="max-width:340px;">
+    <div class="modal-head"><h3>Change Your PIN</h3><button class="close-x" data-close="changePinModal">&times;</button></div>
+    <div class="modal-body">
+      <div class="field"><label>Current PIN</label><input type="password" id="changePinCurrent" placeholder="Current PIN" maxlength="8" autocomplete="off"></div>
+      <div class="field"><label>New PIN</label><input type="password" id="changePinNew" placeholder="New PIN" maxlength="8" autocomplete="off"></div>
+      <div class="field"><label>Confirm New PIN</label><input type="password" id="changePinConfirm" placeholder="Confirm new PIN" maxlength="8" autocomplete="off"></div>
+      <div class="helper" id="changePinError" style="color:var(--rose); display:none;"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" data-close="changePinModal">Cancel</button>
+      <button class="btn" id="btnChangePinSubmit">Save New PIN</button>
+    </div>
+  </div>
+</div>
+
+<!-- Invite Treasurer Modal -->
+<div class="overlay" id="inviteTreasurerModal">
+  <div class="modal" style="max-width:380px;">
+    <div class="modal-head"><h3>Invite a Treasurer</h3><button class="close-x" data-close="inviteTreasurerModal">&times;</button></div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Which member?</label>
+        <select id="inviteTreasurerMember"><option value="">Select a member (optional)</option></select>
+      </div>
+      <div class="field">
+        <label>Name (if not a listed member)</label>
+        <input type="text" id="inviteTreasurerName" placeholder="e.g. Mrs. Banda">
+      </div>
+      <div id="inviteCodeResult" style="display:none; background:var(--panel-raised); border:1px solid var(--line); border-radius:8px; padding:14px; text-align:center;">
+        <div class="helper" style="margin-bottom:6px;">Share this code with them — they'll enter it the first time they log in:</div>
+        <div id="inviteCodeValue" style="font-size:22px; font-weight:700; letter-spacing:2px;"></div>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" data-close="inviteTreasurerModal">Close</button>
+      <button class="btn" id="btnGenerateInvite">Generate Code</button>
+    </div>
+  </div>
+</div>
+
 <!-- Member Portal -->
 <section id="memberPortal" style="display:none; max-width:760px; margin:0 auto; padding:40px 20px 60px;">
   <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
@@ -519,6 +562,7 @@
       <p class="helper" style="margin:0;">Enter your phone number and PIN to view your own contribution history.</p>
     </div>
     <div style="display:flex; gap:8px;">
+      <button class="btn secondary small" id="btnPortalChangePin" style="display:none;">Change PIN</button>
       <button class="btn secondary small" id="btnPortalLogout" style="display:none;">Log Out</button>
       <button class="btn secondary small" id="btnPortalBack">Switch View</button>
     </div>
@@ -812,12 +856,35 @@
             </div>
           </div>
           <div class="field" style="border-top:1px solid var(--line); padding-top:14px;">
-            <label>Treasurer / Manager Login Email</label>
+            <label>Chairman Login Email</label>
             <input type="text" id="setTreasurerEmail" readonly>
-            <div class="helper">Set the first time someone logs in as Treasurer / Manager from the home page. To change it, log out and log in with a different email — a new account is created automatically.</div>
+            <div class="helper">Set the first time the chairman logs in. Only this exact email can register the founding treasurer account — everyone else needs an invite code (below).</div>
           </div>
           <div>
             <button class="btn" id="btnSaveSettings">Save Settings</button>
+          </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Treasurer Access</h3></div>
+        <div style="padding:20px; display:flex; flex-direction:column; gap:16px;">
+          <span class="helper">Grant a member real login access to manage the fund like a treasurer. They'll sign in with their own email and password using a one-time invite code you share with them.</span>
+          <div>
+            <button class="btn" id="btnInviteTreasurer">Invite a Treasurer</button>
+          </div>
+          <div>
+            <h4 style="margin:0 0 8px; font-size:13px; color:var(--ink-dim);">Active Treasurers</h4>
+            <table>
+              <thead><tr><th>Name</th><th>Email</th><th>Granted</th><th></th></tr></thead>
+              <tbody id="treasurerAccessBody"><tr class="empty-row"><td colspan="4">Just the chairman so far.</td></tr></tbody>
+            </table>
+          </div>
+          <div>
+            <h4 style="margin:0 0 8px; font-size:13px; color:var(--ink-dim);">Pending Invites</h4>
+            <table>
+              <thead><tr><th>For</th><th>Code</th><th>Created</th><th></th></tr></thead>
+              <tbody id="treasurerInvitesBody"><tr class="empty-row"><td colspan="4">No pending invites.</td></tr></tbody>
+            </table>
           </div>
         </div>
       </div>
@@ -1055,6 +1122,7 @@
 (function(){
   const STORE_KEY = 'zamFuneralFund_v1';
   const MEMBER_SESSION_KEY = 'zamFuneralMemberSession_v1';
+  let currentPortalMember = null;
   const todayISO = () => new Date().toISOString().slice(0,10);
   const thisMonth = () => new Date().toISOString().slice(0,7);
 
@@ -1066,7 +1134,7 @@
       if(raw) return JSON.parse(raw);
     }catch(e){}
     return {
-      settings:{ orgName:'', fundNumber:'', defaultRate:150, defaultPayoutBasis:'fixed', defaultPayout:5000, defaultPayoutPercent:0, treasurerEmail:'' },
+      settings:{ orgName:'', fundNumber:'', defaultRate:150, defaultPayoutBasis:'fixed', defaultPayout:5000, defaultPayoutPercent:0, treasurerEmail:'', treasurerAccess:{}, treasurerInvites:{} },
       members:[], contributions:[], cases:[], subscriptionPayments:[]
     };
   }
@@ -1086,6 +1154,10 @@
   const db = firebase.database();
   const auth = firebase.auth();
   const fbRef = db.ref('fundData');
+  // The only email allowed to register a new treasurer/chairman account. Must match
+  // the Firebase Realtime Database rules' write condition exactly, or sign-up will
+  // succeed in Auth but every save will silently fail against the rules.
+  const TREASURER_EMAIL = 'treasurer@zam-funeral.app';
 
   let fbReady = false;       // becomes true once the first remote snapshot arrives
   let suppressEcho = false;  // true while we're writing our own change, to ignore the echo
@@ -1104,6 +1176,28 @@
     }, 400); // debounce rapid successive saves
   }
 
+  // Targeted write for member-initiated PIN changes: members are signed in anonymously and
+  // cannot write the whole fundData tree (that's treasurer-only per security rules), but the
+  // rules grant a narrow exception letting any authenticated session overwrite a single
+  // member's pin leaf directly. This bypasses fbPush()/the root .set() on purpose.
+  function fbPushMemberPin(memberId, newPin){
+    suppressEcho = true;
+    return fbRef.child('members/'+memberId+'/pin').set(newPin)
+      .catch((err)=>{ toast('PIN saved on this device, but could not sync online — try again when connected.'); throw err; })
+      .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
+  }
+
+  // Targeted writes for a brand-new treasurer redeeming an invite code. This user has no
+  // general fundData write access yet (they're not the chair and not yet in treasurerAccess),
+  // so — like the member PIN write above — this bypasses fbPush()/the root .set() and relies on
+  // narrow rules scoped to exactly these two leaves.
+  function fbRedeemTreasurerInvite(uid, entry, code){
+    suppressEcho = true;
+    return fbRef.child('settings/treasurerAccess/'+uid).set(entry)
+      .then(()=> fbRef.child('settings/treasurerInvites/'+code).remove())
+      .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
+  }
+
   function attachFbListenerOnce(){
     if(listenerAttached) return;
     listenerAttached = true;
@@ -1114,6 +1208,8 @@
         data = remote;
         if(!data.settings) data.settings = {};
         if(!data.subscriptionPayments) data.subscriptionPayments = [];
+        if(!data.settings.treasurerAccess) data.settings.treasurerAccess = {};
+        if(!data.settings.treasurerInvites) data.settings.treasurerInvites = {};
         localStorage.setItem(STORE_KEY, JSON.stringify(data));
         if(fbReady) renderAll(); // don't double-render on the very first load
       } else if(fbReady === false){
@@ -1145,13 +1241,39 @@
   // Try to sign in with the given email/password; if no account exists yet for that email,
   // create one (first-time setup for this fund's treasurer). Returns a promise that resolves
   // on success and rejects with the Firebase error otherwise (e.g. wrong password).
-  function treasurerSignInOrCreate(email, password){
+  function treasurerSignInOrCreate(email, password, inviteCode){
     return auth.signInWithEmailAndPassword(email, password).catch((err)=>{
       if(err.code === 'auth/user-not-found'){
-        return auth.createUserWithEmailAndPassword(email, password);
+        // The chairman's designated email may always register. Anyone else needs a valid,
+        // unredeemed invite code the chairman generated for them in Settings — that's what
+        // actually unlocks write access (see fbRedeemTreasurerInvite), not this check alone.
+        if(email.toLowerCase() === TREASURER_EMAIL){
+          return auth.createUserWithEmailAndPassword(email, password);
+        }
+        const code = (inviteCode||'').trim().toUpperCase();
+        const invite = code && data.settings.treasurerInvites ? data.settings.treasurerInvites[code] : null;
+        if(!invite){
+          return Promise.reject({ code: 'auth/not-chairman' });
+        }
+        return auth.createUserWithEmailAndPassword(email, password).then((cred)=>{
+          const entry = { email: email.toLowerCase(), memberId: invite.memberId||null, name: invite.name||'', inviteCode: code, grantedAt: new Date().toISOString().slice(0,10) };
+          return fbRedeemTreasurerInvite(cred.user.uid, entry, code).then(()=>{
+            data.settings.treasurerAccess[cred.user.uid] = entry;
+            delete data.settings.treasurerInvites[code];
+            localStorage.setItem(STORE_KEY, JSON.stringify(data));
+            return cred;
+          });
+        });
       }
       throw err;
     });
+  }
+
+  function inviteCode(){
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I to avoid confusion
+    let out = '';
+    for(let i=0;i<6;i++) out += chars[Math.floor(Math.random()*chars.length)];
+    return out;
   }
 
   function uid(){ return 'id' + Math.random().toString(36).slice(2,10) + Date.now().toString(36); }
@@ -1749,6 +1871,73 @@
     setSettingsPayoutBasisUI(data.settings.defaultPayoutBasis || 'fixed');
   }
 
+  function renderTreasurerAccess(){
+    const accessBody = document.getElementById('treasurerAccessBody');
+    const invitesBody = document.getElementById('treasurerInvitesBody');
+    if(!accessBody || !invitesBody) return; // section not present in an older cached page
+    const access = data.settings.treasurerAccess || {};
+    const uids = Object.keys(access);
+    accessBody.innerHTML = uids.length ? uids.map(uid => `
+      <tr>
+        <td>${escapeHtml(access[uid].name || '—')}</td>
+        <td>${escapeHtml(access[uid].email || '—')}</td>
+        <td>${fmtDate(access[uid].grantedAt)}</td>
+        <td><button class="icon-btn" data-revoke-uid="${uid}">Revoke</button></td>
+      </tr>
+    `).join('') : '<tr class="empty-row"><td colspan="4">Just the chairman so far.</td></tr>';
+
+    const invites = data.settings.treasurerInvites || {};
+    const codes = Object.keys(invites);
+    invitesBody.innerHTML = codes.length ? codes.map(code => `
+      <tr>
+        <td>${escapeHtml(invites[code].name || '—')}</td>
+        <td class="mono">${escapeHtml(code)}</td>
+        <td>${fmtDate(invites[code].createdAt)}</td>
+        <td><button class="icon-btn" data-cancel-invite="${code}">Cancel</button></td>
+      </tr>
+    `).join('') : '<tr class="empty-row"><td colspan="4">No pending invites.</td></tr>';
+
+    accessBody.querySelectorAll('[data-revoke-uid]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const uid = btn.getAttribute('data-revoke-uid');
+        const name = (access[uid] && access[uid].name) || 'this person';
+        if(!confirm(`Revoke treasurer access for ${name}? They'll immediately lose the ability to save changes.`)) return;
+        delete data.settings.treasurerAccess[uid];
+        save();
+        toast('Treasurer access revoked.');
+      });
+    });
+    invitesBody.querySelectorAll('[data-cancel-invite]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const code = btn.getAttribute('data-cancel-invite');
+        delete data.settings.treasurerInvites[code];
+        save();
+        toast('Invite cancelled.');
+      });
+    });
+  }
+
+  document.getElementById('btnInviteTreasurer').addEventListener('click', ()=>{
+    const sel = document.getElementById('inviteTreasurerMember');
+    sel.innerHTML = '<option value="">Select a member (optional)</option>' +
+      data.members.map(m => `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join('');
+    document.getElementById('inviteTreasurerName').value = '';
+    document.getElementById('inviteCodeResult').style.display = 'none';
+    openModal('inviteTreasurerModal');
+  });
+  document.getElementById('btnGenerateInvite').addEventListener('click', ()=>{
+    const memberId = document.getElementById('inviteTreasurerMember').value;
+    const member = data.members.find(m=> m.id === memberId);
+    const name = document.getElementById('inviteTreasurerName').value.trim() || (member ? member.name : '');
+    if(!name){ toast('Pick a member or enter a name first.'); return; }
+    const code = inviteCode();
+    if(!data.settings.treasurerInvites) data.settings.treasurerInvites = {};
+    data.settings.treasurerInvites[code] = { memberId: memberId || null, name, createdAt: new Date().toISOString().slice(0,10) };
+    save();
+    document.getElementById('inviteCodeValue').textContent = code;
+    document.getElementById('inviteCodeResult').style.display = 'block';
+  });
+
   function escapeHtml(str){
     return String(str||'').replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
   }
@@ -1761,6 +1950,7 @@
     renderCases();
     loadSettingsForm();
     renderSubscription();
+    renderTreasurerAccess();
   }
 
   /* ---------- Subscription ---------- */
@@ -1828,9 +2018,11 @@
     document.getElementById('portalLookupPanel').style.display = 'block';
     document.getElementById('portalLookupError').style.display = 'none';
     document.getElementById('btnPortalLogout').style.display = 'none';
+    document.getElementById('btnPortalChangePin').style.display = 'none';
     document.getElementById('portalPhoneInput').value = '';
     document.getElementById('portalPinInput').value = '';
     document.getElementById('portalStaySignedIn').checked = false;
+    currentPortalMember = null;
   }
   function showGate(){
     const wasTreasurer = document.getElementById('mainApp').style.display !== 'none';
@@ -1857,11 +2049,12 @@
   document.getElementById('btnLoginSubmit').addEventListener('click', ()=>{
     const email = document.getElementById('loginEmailInput').value.trim();
     const password = document.getElementById('loginPasswordInput').value;
+    const invite = document.getElementById('loginInviteCode').value.trim();
     const staySignedIn = document.getElementById('loginStaySignedIn').checked;
     document.getElementById('loginError').style.display = 'none';
     if(!email || !password){ toast('Enter both email and password.'); return; }
     const persistence = staySignedIn ? firebase.auth.Auth.Persistence.LOCAL : firebase.auth.Auth.Persistence.SESSION;
-    auth.setPersistence(persistence).then(()=> treasurerSignInOrCreate(email, password)).then(()=>{
+    auth.setPersistence(persistence).then(()=> treasurerSignInOrCreate(email, password, invite)).then(()=>{
       data.settings.treasurerEmail = email;
       save();
       closeModal('loginModal');
@@ -1869,7 +2062,9 @@
     }).catch((err)=>{
       document.getElementById('loginError').textContent = err.code === 'auth/weak-password'
         ? 'Password must be at least 6 characters.'
-        : 'Incorrect email or password.';
+        : err.code === 'auth/not-chairman'
+          ? 'New treasurer accounts need a valid invite code from the chairman (Settings \u2192 Treasurer Access).'
+          : 'Incorrect email or password.';
       document.getElementById('loginError').style.display = 'block';
     });
   });
@@ -1881,6 +2076,8 @@
     document.getElementById('portalLookupError').style.display = 'none';
     document.getElementById('portalLookupPanel').style.display = 'none';
     document.getElementById('btnPortalLogout').style.display = 'inline-flex';
+    document.getElementById('btnPortalChangePin').style.display = 'inline-flex';
+    currentPortalMember = member;
     if(staySignedIn){
       localStorage.setItem(MEMBER_SESSION_KEY, JSON.stringify({ memberId: member.id }));
     }
@@ -1908,6 +2105,39 @@
   document.getElementById('btnPortalLogout').addEventListener('click', ()=>{
     localStorage.removeItem(MEMBER_SESSION_KEY);
     showGate();
+  });
+
+  document.getElementById('btnPortalChangePin').addEventListener('click', ()=>{
+    if(!currentPortalMember) return;
+    document.getElementById('changePinCurrent').value = '';
+    document.getElementById('changePinNew').value = '';
+    document.getElementById('changePinConfirm').value = '';
+    document.getElementById('changePinError').style.display = 'none';
+    openModal('changePinModal');
+  });
+  document.getElementById('btnChangePinSubmit').addEventListener('click', ()=>{
+    const errEl = document.getElementById('changePinError');
+    errEl.style.display = 'none';
+    if(!currentPortalMember){ closeModal('changePinModal'); return; }
+    const current = document.getElementById('changePinCurrent').value.trim();
+    const next = document.getElementById('changePinNew').value.trim();
+    const confirm = document.getElementById('changePinConfirm').value.trim();
+    if(!current || !next || !confirm){ errEl.textContent = 'Please fill in all fields.'; errEl.style.display = 'block'; return; }
+    if(current !== (currentPortalMember.pin || '')){ errEl.textContent = 'Current PIN is incorrect.'; errEl.style.display = 'block'; return; }
+    if(next.length < 4){ errEl.textContent = 'New PIN must be at least 4 characters.'; errEl.style.display = 'block'; return; }
+    if(next !== confirm){ errEl.textContent = 'New PIN and confirmation do not match.'; errEl.style.display = 'block'; return; }
+    const member = data.members.find(m=> m.id === currentPortalMember.id);
+    if(!member){ errEl.textContent = 'Member record not found.'; errEl.style.display = 'block'; return; }
+    member.pin = next;
+    currentPortalMember = member;
+    localStorage.setItem(STORE_KEY, JSON.stringify(data));
+    closeModal('changePinModal');
+    fbPushMemberPin(member.id, next)
+      .then(()=> toast('Your PIN has been updated.'))
+      .catch(()=>{ /* toast already shown by fbPushMemberPin; local copy is still saved */ });
+  });
+  document.getElementById('changePinConfirm').addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('btnChangePinSubmit').click(); }
   });
 
   function resumeMemberSession(){
