@@ -15067,14 +15067,27 @@ async function _callCopilot(mode, userText, context){
   const timeoutMs = 45000; // generous fixed timeout for both chat and reconciliation
   // No API key here — the worker attaches it server-side. See the setup
   // comment near COPILOT_PROXY_ENDPOINT above.
-  const res = await _fetchWithTimeout(COPILOT_PROXY_ENDPOINT, {
+  const doFetch = ()=> _fetchWithTimeout(COPILOT_PROXY_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type':'application/json' },
     body: reqBody
   }, timeoutMs);
+  let res = await doFetch();
+  // Gemini occasionally returns transient overload errors (429/500/503).
+  // These usually clear within a couple of seconds, so retry once silently
+  // before surfacing anything to the user.
+  if(!res.ok && [429,500,503].includes(res.status)){
+    await new Promise(r=>setTimeout(r, 2000));
+    res = await doFetch();
+  }
   if(!res.ok){
     const body = await res.text().catch(()=>'');
-    throw new Error('HTTP '+res.status+(body?': '+body.slice(0,150):''));
+    let friendly = '';
+    try {
+      const parsed = JSON.parse(body);
+      friendly = parsed?.error?.message || parsed?.message || '';
+    } catch { /* not JSON, fall back to raw text below */ }
+    throw new Error(friendly || ('HTTP '+res.status+(body?': '+body.slice(0,150):'')));
   }
   const data = await res.json();
   _copilotBumpUsage();
