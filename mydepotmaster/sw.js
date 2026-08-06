@@ -25,7 +25,25 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v75 (2026-08-03)
+// Current version: v76 (2026-08-06)
+//
+// v76 changes (2026-08-06) — Depot Assistant proxy fix + graceful overload handling:
+//   - Fix: mdm-copilot-proxy Cloudflare Worker was serving stale "Hello
+//     World" stub code (never actually deployed with the real proxy logic),
+//     and the GEMINI_API_KEY secret had been lost during a Worker
+//     deployment-source change. Both root causes together were producing
+//     "Failed to fetch" and then HTTP 401 errors in Depot Assistant.
+//     Re-deployed the correct worker.js and re-added the secret directly
+//     in the Cloudflare dashboard — key itself was never exposed in
+//     index.html or chat.
+//   - New: _callCopilot now retries once automatically (after a 2s delay)
+//     on transient Gemini overload responses (429/500/503) before
+//     surfacing any error to the user — most "high demand" spikes now
+//     resolve silently.
+//   - New: when an error is shown, it now parses the JSON error body and
+//     displays the human-readable message field (e.g. "gemini-3.5-flash
+//     is currently experiencing high demand...") instead of raw, often
+//     truncated JSON.
 //
 // v75 changes (2026-08-03) — Depot Assistant auth fix + action support:
 //   - Fix: Gemini Interactions API calls were sending GEMINI_API_KEY via the
@@ -624,7 +642,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'mdm-v75';   // ← bump this whenever you deploy a new version
+const CACHE     = 'mdm-v76';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
