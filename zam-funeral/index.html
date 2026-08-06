@@ -541,6 +541,22 @@
   </div>
 </div>
 
+<!-- Complete Fund Details Modal (one-time prompt for accounts created before these fields existed) -->
+<div class="overlay" id="fundDetailsPromptModal">
+  <div class="modal" style="max-width:380px;">
+    <div class="modal-head"><h3>Complete Your Fund Details</h3></div>
+    <div class="modal-body">
+      <p class="helper">We need a couple of details for this fund before you continue. You'll only be asked once — after saving, these will be locked (with an edit option if you ever need to change them).</p>
+      <div class="field"><label>Organisation / Fund Name</label><input type="text" id="promptOrgName" placeholder="e.g. Nexlite Staff Funeral Fund"></div>
+      <div class="field"><label>Funds Account Number</label><input type="text" id="promptFundNumber" placeholder="e.g. 0966 000 000"></div>
+      <div class="helper" id="fundDetailsPromptError" style="color:var(--rose); display:none;"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" id="btnSaveFundDetailsPrompt">Save & Continue</button>
+    </div>
+  </div>
+</div>
+
 <!-- Member Change PIN Modal -->
 <div class="overlay" id="changePinModal">
   <div class="modal" style="max-width:340px;">
@@ -2116,7 +2132,42 @@
     document.getElementById('roleGate').classList.remove('show');
     document.getElementById('memberPortal').style.display = 'none';
     document.getElementById('mainApp').style.display = 'flex';
+    maybePromptFundDetails();
   }
+
+  // Accounts created before Org Name / Fund Number were captured at signup (or an
+  // existing chairman who skipped them) get asked once, right after they land in the
+  // main app as an authorised treasurer/chairman. Re-appears on future logins only if
+  // still unfilled — once saved, the fields lock automatically like any other settings edit.
+  let fundDetailsPromptOpen = false;
+  function maybePromptFundDetails(){
+    if(!isAuthorizedTreasurer()) return;
+    if(fundDetailsPromptOpen) return;
+    const hasOrgName = !!(data.settings.orgName && data.settings.orgName.trim());
+    const hasFundNumber = !!(data.settings.fundNumber && data.settings.fundNumber.trim());
+    if(hasOrgName && hasFundNumber) return;
+    fundDetailsPromptOpen = true;
+    document.getElementById('promptOrgName').value = data.settings.orgName || '';
+    document.getElementById('promptFundNumber').value = data.settings.fundNumber || '';
+    document.getElementById('fundDetailsPromptError').style.display = 'none';
+    openModal('fundDetailsPromptModal');
+  }
+  document.getElementById('btnSaveFundDetailsPrompt').addEventListener('click', ()=>{
+    const orgName = document.getElementById('promptOrgName').value.trim();
+    const fundNumber = document.getElementById('promptFundNumber').value.trim();
+    const errEl = document.getElementById('fundDetailsPromptError');
+    if(!orgName){
+      errEl.textContent = 'Organisation / Fund Name is required.';
+      errEl.style.display = 'block';
+      return;
+    }
+    data.settings.orgName = orgName;
+    data.settings.fundNumber = fundNumber;
+    save();
+    fundDetailsPromptOpen = false;
+    closeModal('fundDetailsPromptModal');
+    toast('Fund details saved.');
+  });
   function enterMemberPortal(){
     document.getElementById('roleGate').classList.remove('show');
     document.getElementById('mainApp').style.display = 'none';
