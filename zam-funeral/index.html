@@ -1310,7 +1310,7 @@
     // A non-anonymous user here means a "stay logged in" session was restored from a
     // previous visit — skip straight into the Treasurer / Manager side.
     if(!user.isAnonymous && document.getElementById('memberPortal').style.display === 'none'){
-      enterMainApp();
+      try{ enterMainApp(); }catch(e){ console.error('Auto-login enterMainApp failed:', e); }
     }
   });
 
@@ -2132,7 +2132,7 @@
     document.getElementById('roleGate').classList.remove('show');
     document.getElementById('memberPortal').style.display = 'none';
     document.getElementById('mainApp').style.display = 'flex';
-    maybePromptFundDetails();
+    try{ maybePromptFundDetails(); }catch(e){ console.error('maybePromptFundDetails failed:', e); }
   }
 
   // Accounts created before Org Name / Fund Number were captured at signup (or an
@@ -2214,10 +2214,16 @@
     if(!email || !password){ toast('Enter both email and password.'); return; }
     const persistence = staySignedIn ? firebase.auth.Auth.Persistence.LOCAL : firebase.auth.Auth.Persistence.SESSION;
     auth.setPersistence(persistence).then(()=> treasurerSignInOrCreate(email, password, invite)).then(()=>{
-      data.settings.treasurerEmail = email;
-      save();
+      // Close the modal first — login itself already succeeded at this point, so nothing
+      // after this line should be able to leave the box stuck open on screen.
       closeModal('loginModal');
-      enterMainApp();
+      try{
+        data.settings.treasurerEmail = email;
+        save();
+      }catch(e){ console.error('Post-login save failed:', e); }
+      try{
+        enterMainApp();
+      }catch(e){ console.error('Post-login enterMainApp failed:', e); }
     }).catch((err)=>{
       document.getElementById('loginError').textContent = err.code === 'auth/weak-password'
         ? 'Password must be at least 6 characters.'
