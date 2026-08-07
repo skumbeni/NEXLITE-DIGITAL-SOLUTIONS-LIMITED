@@ -25,6 +25,22 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v77 (2026-08-07)
+//
+// v77 changes (2026-08-07) — Install App button:
+//   - Settings → Help & Documentation now has an "Install on This Phone" card
+//     with a real Install App button, wired to the browser's beforeinstallprompt
+//     event (captured in index.html, replayed via .prompt() on tap). Previously
+//     the manifest/SW/icons were all in place for installability, but nothing
+//     in the UI ever triggered the actual install dialog — users had to
+//     discover their browser's own install icon/menu entry on their own.
+//   - Button auto-hides once already installed (display-mode: standalone/
+//     fullscreen, or iOS's navigator.standalone) or before the browser has
+//     signalled the app is installable, with a note explaining how to install
+//     manually as a fallback (e.g. iOS Safari, which never fires the event).
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v76 (2026-08-06)
 //
 // v76 changes (2026-08-06) — Depot Assistant proxy fix + graceful overload handling:
@@ -642,7 +658,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'mdm-v76';   // ← bump this whenever you deploy a new version
+const CACHE     = 'mdm-v77';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

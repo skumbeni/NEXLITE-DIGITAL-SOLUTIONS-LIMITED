@@ -3261,7 +3261,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'mdm-v76';
+const SW_VERSION  = 'mdm-v77';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -3370,6 +3370,70 @@ window.addEventListener('online', () => {
     }).catch(() => {});
   }
 });
+
+// ── PWA INSTALL PROMPT ───────────────────────────────────────────────────────
+// Chrome/Edge fire beforeinstallprompt only once the manifest + service worker
+// criteria are met. We stash the event and replay it via .prompt() whenever the
+// user taps an "Install App" button, instead of letting the browser's own mini
+// UI be the only way in. Settings → Help & Documentation renders the button;
+// isAppInstallable()/triggerAppInstall() are called from that onclick.
+let _deferredInstallPrompt = null;
+let _isAppInstalled = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+  || (window.matchMedia && window.matchMedia('(display-mode: fullscreen)').matches)
+  || window.navigator.standalone === true; // iOS Safari home-screen flag
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  _deferredInstallPrompt = e;
+  _refreshInstallButton();
+});
+
+window.addEventListener('appinstalled', () => {
+  _deferredInstallPrompt = null;
+  _isAppInstalled = true;
+  showToast('App installed ✓');
+  _refreshInstallButton();
+});
+
+function isAppInstallable() {
+  return !_isAppInstalled && !!_deferredInstallPrompt;
+}
+
+function _refreshInstallButton() {
+  const btn = document.getElementById('btn-install-app');
+  const note = document.getElementById('install-app-note');
+  if (!btn) return;
+  if (_isAppInstalled) {
+    btn.style.display = 'none';
+    if (note) note.textContent = 'This app is already installed on this device.';
+  } else if (_deferredInstallPrompt) {
+    btn.style.display = 'block';
+    if (note) note.textContent = "Add My Depot Master to your home screen so it opens like a normal app and works offline once loaded.";
+  } else {
+    btn.style.display = 'none';
+    if (note) note.textContent = "If your browser supports it, look for an install icon in the address bar, or use your browser menu → \"Add to Home screen\" / \"Install app\".";
+  }
+}
+
+async function triggerAppInstall() {
+  if (!_deferredInstallPrompt) {
+    showToast('Look for the install icon in your address bar, or use your browser menu.');
+    return;
+  }
+  try {
+    _deferredInstallPrompt.prompt();
+    const { outcome } = await _deferredInstallPrompt.userChoice;
+    if (outcome === 'accepted') {
+      showToast('Installing…');
+    }
+  } catch (e) {
+    // no-op — user dismissed, or browser revoked the prompt
+  } finally {
+    _deferredInstallPrompt = null;
+    _refreshInstallButton();
+  }
+}
+
 
 // ── OFFLINE WRITE QUEUE ──────────────────────────────────────────────────────
 // When offline, Firebase writes are queued and flushed automatically on reconnect.
@@ -5596,7 +5660,7 @@ function render(resetScroll=false){
     else if(TAB==='staff') c.innerHTML=renderStaff();
     else if(TAB==='books') c.innerHTML=renderBooks();
     else if(TAB==='contacts') c.innerHTML=renderContacts();
-    else if(TAB==='settings'){c.innerHTML=renderSettings();setTimeout(updateLastSyncDisplay,50);}
+    else if(TAB==='settings'){c.innerHTML=renderSettings();setTimeout(updateLastSyncDisplay,50);setTimeout(_refreshInstallButton,50);}
     _renderCache.key = cacheKey; // commit cache on success
     _renderAttempts = 0;         // reset error counter on clean render
     c.scrollTop = resetScroll ? 0 : prevScrollTop;
@@ -10406,6 +10470,18 @@ function _renderChangePasswordCard(){
 }
 
 // Settings helper — Help & Documentation. Same for every role.
+// Settings helper — Install App. Button visibility is driven by
+// isAppInstallable()/_refreshInstallButton() (see beforeinstallprompt listener),
+// since whether install is actually available can only be known at runtime.
+function _renderInstallAppCard(){
+  return `
+    <div class="sh">Install on This Phone</div>
+    <div class="card">
+      <div id="install-app-note" style="font-size:18px;color:var(--muted);line-height:1.7;margin-bottom:12px">Add My Depot Master to your home screen so it opens like a normal app and works offline once loaded.</div>
+      <button id="btn-install-app" class="btn ba" style="width:100%;display:none" onclick="triggerAppInstall()">⬇ Install App</button>
+    </div>`;
+}
+
 function _renderHelpDocsCard(){
   return `
     <div class="sh">Help & Documentation</div>
@@ -10531,6 +10607,7 @@ function _renderStaffSettings(){
     ${_renderBioSection()}
     ${_renderStaySignedInSection()}
     ${_renderChangePasswordCard()}
+    ${_renderInstallAppCard()}
     ${_renderHelpDocsCard()}
     ${_renderContactSupportCard()}
     ${_renderLegalCard()}
@@ -10863,6 +10940,7 @@ function _renderAdminSettings(){
       </div>
     </div>
 
+    ${_renderInstallAppCard()}
     <div class="sh">Help & Documentation</div>
     <div class="card">
       <button class="btn bo" style="width:100%;margin-bottom:10px" onclick="showFirstRunChecklist()">🚀 Setup Checklist — View Progress</button>
