@@ -8545,6 +8545,7 @@ function renderStaff(){
         ${USER.role==='admin'?`<button class="btn bo bsm" id="btn-add-staff">+ Add Staff</button>`:''}
         <button class="btn bg bsm" id="btn-clock-in">⏵ Clock In</button>
         <button class="btn bo bsm" id="btn-log-work">✏️ Manual</button>
+        <button class="btn bo bsm" id="btn-bulk-log">👥 Bulk Log</button>
         <button class="btn ba bsm" id="btn-pay-staff">💳 Pay</button>
         <button class="btn bo bsm" onclick="exportCurrentTabCSV()" title="Export current view as PDF">⬇️ PDF</button>
       </div>
@@ -9243,6 +9244,119 @@ function saveLog(){if(isReadOnly()){alert("🔒 This account is in read-only mod
   logAuditEvent('CREATE','Work Log',`Staff ID:${sid} · Task:${task} · Earnings:${earnings.toFixed(2)}`);
   closeModal();
 }
+
+// ══════════════════════════════════════════════════════════
+// BULK LOG WORK — log the same task/date/shift for a whole role at once
+// (e.g. "all the Loaders") in one pass, one bags/qty field per person,
+// instead of opening the Log Work form N times. Writes one completed
+// work-log entry per selected staff member via a single updateData() call.
+// ══════════════════════════════════════════════════════════
+function openBulkLogForm(){
+  if(DATA.staff.length===0){alert('Register staff members first.');return;}
+  if((DATA.staffRoles||[]).length===0){alert('No roles defined. Go to Staff > Roles & Rates to add roles first.');return;}
+  const activeStaff=DATA.staff.filter(s=>!s.status||s.status==='active');
+  if(activeStaff.length===0){alert('No active staff. Check roster for suspended/expelled staff.');return;}
+  const roles=allRoleNames();
+  const roleOpts=roles.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
+  openModal(`
+    <div class="mtitle">👥 Bulk Log Work ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Log the same task and time for every selected staff member in a role — enter each person's own quantity, then save all at once.</div>
+    <div class="fw"><div class="fl">Role</div><select class="fi" id="bl-role" onchange="_blRoleChange()">${roleOpts}</select></div>
+    <div class="fw"><div class="fl">Task</div><select class="fi" id="bl-task" onchange="_blSyncQtyLabel()"><option>—</option></select></div>
+    <div class="twobox">
+      <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="bl-date" value="${today()}"/></div>
+      <div class="fw"><div class="fl" id="bl-qty-label">Quantity (each)</div><input class="fi" type="number" id="bl-qty-all" placeholder="Same for everyone…" inputmode="decimal" step="0.01" oninput="_blApplyQtyAll()"/></div>
+    </div>
+    <div class="twobox">
+      <div class="fw"><div class="fl">Time In (optional)</div><input class="fi" type="time" id="bl-in"/></div>
+      <div class="fw"><div class="fl">Time Out (optional)</div><input class="fi" type="time" id="bl-out"/></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div class="fl" style="margin-bottom:0">Staff in this role</div>
+      <div style="display:flex;gap:10px">
+        <button type="button" onclick="_blSelectAll(true)" style="background:none;border:none;color:var(--green);font-size:14px;font-weight:700;cursor:pointer;padding:0">Select All</button>
+        <button type="button" onclick="_blSelectAll(false)" style="background:none;border:none;color:var(--muted);font-size:14px;font-weight:700;cursor:pointer;padding:0">Clear All</button>
+      </div>
+    </div>
+    <div id="bl-staff-rows" style="margin-bottom:12px"></div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkLog()">✓ Save All</button></div>`);
+  _blRoleChange();
+}
+
+function _blRoleChange(){
+  const role=document.getElementById('bl-role')?.value;
+  const taskEl=document.getElementById('bl-task');
+  if(taskEl){
+    const tasks=tasksForRole(role);
+    taskEl.innerHTML=tasks.length>0?tasks.map(t=>{
+      const u=t.rateUnit||'bag';const ul=u==='custom'?(t.customUnit||'unit'):u;
+      return`<option value="${esc(t.name)}">${esc(t.name)} — K${Number(t.rate||0).toFixed(2)}/${ul}</option>`;
+    }).join(''):'<option>No tasks defined</option>';
+  }
+  const staffInRole=DATA.staff.filter(s=>(!s.status||s.status==='active')&&s.role===role);
+  const rowsEl=document.getElementById('bl-staff-rows');
+  if(rowsEl){
+    rowsEl.innerHTML = staffInRole.length>0 ? staffInRole.map(s=>`
+      <div class="ded-line" style="display:grid;grid-template-columns:28px 1fr 100px;gap:8px;align-items:center;margin-bottom:8px">
+        <input type="checkbox" class="bl-row-check" data-staffid="${esc(s.id)}" checked style="width:18px;height:18px"/>
+        <div style="font-weight:600">${esc(s.name)}</div>
+        <input class="fi bl-row-qty" type="number" placeholder="0" inputmode="decimal" step="0.01" style="margin-bottom:0;padding:8px 10px;font-size:17px"/>
+      </div>`).join('') : '<div class="empty">No active staff in this role.</div>';
+  }
+  _blSyncQtyLabel();
+}
+function _blSyncQtyLabel(){
+  const role=document.getElementById('bl-role')?.value;
+  const task=document.getElementById('bl-task')?.value;
+  const lbl=document.getElementById('bl-qty-label');
+  if(lbl&&role&&task)lbl.textContent=qtyLabelForTask(role,task)+' (each)';
+}
+// Copies the shared "apply to all" quantity into every visible row's own
+// field — people can still hand-edit any individual row afterward.
+function _blApplyQtyAll(){
+  const v=document.getElementById('bl-qty-all')?.value||'';
+  document.querySelectorAll('#bl-staff-rows .bl-row-qty').forEach(el=>{el.value=v;});
+}
+function _blSelectAll(on){
+  document.querySelectorAll('#bl-staff-rows .bl-row-check').forEach(el=>{el.checked=on;});
+}
+
+function saveBulkLog(){
+  if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+  const role=document.getElementById('bl-role')?.value;
+  const task=document.getElementById('bl-task')?.value;
+  const date=document.getElementById('bl-date')?.value||today();
+  const timeIn=document.getElementById('bl-in')?.value||'';
+  const timeOut=document.getElementById('bl-out')?.value||'';
+  if(!role||!task||task==='No tasks defined'){alert('Select a role and task first.');return;}
+  const ru=taskRateUnit(role,task);
+  const rows=[...document.querySelectorAll('#bl-staff-rows .ded-line')];
+  const entries=[];
+  rows.forEach(row=>{
+    const check=row.querySelector('.bl-row-check');
+    const qtyEl=row.querySelector('.bl-row-qty');
+    if(!check?.checked)return;
+    const qty=Number(qtyEl?.value||0);
+    if(qty>0)entries.push({staffId:check.dataset.staffid,qty});
+  });
+  if(entries.length===0){alert('Select at least one staff member and enter a quantity greater than zero for each.');return;}
+  const totalQty=entries.reduce((a,e)=>a+e.qty,0);
+  const totalEarnings=entries.reduce((a,e)=>a+getEarnings(e.qty,role,task),0);
+  if(!confirm(`Confirm Bulk Log:\n${role} · ${task}\n${entries.length} staff · ${totalQty.toLocaleString()} ${ru}${totalQty!==1?'s':''} total\nTotal pay: K${totalEarnings.toFixed(2)}\nDate: ${fmtDate(date)}\n\nProceed?`))return;
+  const timeInTs=Date.now(), timeOutTs=Date.now();
+  const payloads=entries.map(e=>{
+    const earnings=getEarnings(e.qty,role,task);
+    const bagsVal=ru==='bag'?e.qty:0;
+    return stampEntry({id:uid(),staffId:e.staffId,role,task,bags:bagsVal,qty:e.qty,rateUnit:ru,earnings,
+      deduction:0,deductions:[],deductionReason:'',timeIn,timeOut,timeInTs,timeOutTs,status:'completed',
+      date,time:nowTime(),entryType:'work'});
+  });
+  updateData(d=>({...d,staffLogs:[...d.staffLogs,...payloads]}));
+  logAuditEvent('CREATE','Work Log (Bulk)',`Role:${role} · Task:${task} · Staff:${entries.length} · TotalQty:${totalQty} · Date:${date}`);
+  closeModal();
+  showToast(`✅ Logged ${task} for ${entries.length} staff`);
+}
+
 
 // ── RENDER PAYMENTS ──────────────────────────────────────────────────────────
 function renderPayments(){
@@ -12424,10 +12538,12 @@ function attachTabListeners(){
   const addStaff=document.getElementById('btn-add-staff');
   const clockIn=document.getElementById('btn-clock-in');
   const logWork=document.getElementById('btn-log-work');
+  const bulkLog=document.getElementById('btn-bulk-log');
   const payStaff=document.getElementById('btn-pay-staff');
   if(addStaff)addStaff.addEventListener('click',openStaffForm);
   if(clockIn)clockIn.addEventListener('click',openClockInForm);
   if(logWork)logWork.addEventListener('click',openLogForm);
+  if(bulkLog)bulkLog.addEventListener('click',openBulkLogForm);
   if(payStaff)payStaff.addEventListener('click',openPayForm);
   ['logs','roster','earnings','payments','leave','stafflist','rolesrates'].forEach(t=>{
     const el=document.getElementById('stab-'+t);
