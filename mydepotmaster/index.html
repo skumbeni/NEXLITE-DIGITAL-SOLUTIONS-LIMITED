@@ -327,6 +327,7 @@ select.fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.o
 .sp-on{background:rgba(0,214,143,.08);color:var(--green);border-color:rgba(0,214,143,.3);}
 .sp-sy{background:rgba(59,130,246,.08);color:var(--blue);border-color:rgba(59,130,246,.3);}
 .sp-of{background:rgba(245,158,11,.08);color:var(--amber);border-color:rgba(245,158,11,.3);}
+.sp-err{background:rgba(239,68,68,.08);color:#ef4444;border-color:rgba(239,68,68,.3);}
 .sp-qu{background:rgba(139,92,246,.08);color:var(--purple);border-color:rgba(139,92,246,.3);}
 .sp-er{background:rgba(239,68,68,.08);color:#f87171;border-color:rgba(239,68,68,.3);}
 
@@ -2107,6 +2108,10 @@ function doFbSync() { return _fbSerial(_doFbSyncImpl); }
 // Set on every failed sync attempt so the UI (forceFbSync) can show the
 // real reason instead of a generic message. Cleared on the next success.
 let _lastFbSyncError = null;
+// Consecutive auto-sync failure counter. Cleared on the next success.
+// Used to (a) turn the sync chip/pill red once failures persist, and
+// (b) toast a warning after repeated silent failures instead of never.
+let _fbSyncFailCount = 0;
 
 async function _doFbSyncImpl() {
   if (!isFbConfigured() || !navigator.onLine) return false;
@@ -2147,12 +2152,15 @@ async function _doFbSyncImpl() {
     DATA._syncTs = (savedData && savedData._syncTs) || now;
     DATA._lastFbSync = now;
     sv(DATA); // persist updated _lastFbSync to both localStorage and IDB
-    updPill();
     _lastFbSyncError = null;
+    _fbSyncFailCount = 0;
+    updPill();
     return true;
   } catch(e) {
     _lastFbSyncError = (e && (e.message || e.status || String(e))) || 'unknown error';
+    _fbSyncFailCount++;
     console.warn('[MDM] Data sync error:', e);
+    updPill();
     return false;
   }
 }
@@ -2291,6 +2299,11 @@ async function forceCloudRestore() {
 function updateLastSyncDisplay() {
   const el = document.getElementById('last-sync-time');
   if (!el) return;
+  if (_fbSyncFailCount >= 3) {
+    el.textContent = '⚠️ Sync failing — ' + (_lastFbSyncError || 'unknown error');
+    el.style.color = '#ef4444';
+    return;
+  }
   const lastSync = DATA._lastFbSync || 0;
   if (!lastSync) { el.textContent = 'Not yet synced'; el.style.color = 'var(--amber)'; return; }
   const d = new Date(lastSync);
@@ -4089,6 +4102,10 @@ function updPill(){
   if(!ONLINE){p.className='spill sp-of';p.textContent=_offlineQueue&&_offlineQueue.length?'📵 Offline ('+_offlineQueue.length+' queued)':'📵 Offline';return;}
   const lastSync=DATA._lastFbSync||0;
   const ageMs=lastSync?Date.now()-lastSync:Infinity;
+  // Fix: a broken auto-sync (App Check / auth / rules failure) previously
+  // looked identical to a healthy pill that just hadn't pushed recently.
+  // After 3+ consecutive failed attempts, surface it in red instead.
+  if(_fbSyncFailCount>=3){p.className='spill sp-err';p.title=_lastFbSyncError||'';p.textContent='⚠️ Sync failing';return;}
   if(ageMs<10*60*1000){p.className='spill sp-on';p.textContent='✅ Synced';}
   else{p.className='spill sp-sy';p.textContent='☁ Online';}
 }
@@ -12416,6 +12433,13 @@ function _syncStatusChip(){
     const lbl=qLen>0?`📵 Offline — ${qLen} change${qLen!==1?'s':''} queued`:'📵 Offline';
     return `<div style="display:inline-flex;align-items:center;gap:5px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.25);border-radius:20px;padding:3px 10px;font-size:15px;font-weight:700;color:var(--amber);margin-bottom:10px">${lbl}</div>`;
   }
+  // Fix: a broken auto-sync (App Check / auth / rules failure) previously
+  // looked identical to a healthy chip that just hadn't pushed recently —
+  // there was no "error" state at all. Surface it once failures persist.
+  if(_fbSyncFailCount>=3){
+    const errTxt=(_lastFbSyncError||'unknown error').slice(0,60);
+    return `<div style="display:inline-flex;align-items:center;gap:5px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:20px;padding:3px 10px;font-size:15px;font-weight:700;color:#ef4444;margin-bottom:10px">⚠️ Sync failing — ${esc(errTxt)}</div>`;
+  }
   const lastSync=DATA._lastFbSync||0;
   if(!lastSync){
     return `<div style="display:inline-flex;align-items:center;gap:5px;background:rgba(139,92,246,.08);border:1px solid rgba(139,92,246,.25);border-radius:20px;padding:3px 10px;font-size:15px;font-weight:700;color:var(--purple);margin-bottom:10px">☁ Not yet synced</div>`;
@@ -12904,7 +12928,23 @@ setTimeout(async ()=>{
 } // end of normal-boot else branch (recovery mode skips all of the above)
 
 // Periodic FB sync every 5 minutes while online
-setInterval(()=>{ if(location.hash!=='#recover' && ONLINE && USER) scheduleFbSync(); }, 5*60*1000);
+// Fix: this ran silently for days on a broken sync (App Check timeout, expired
+// auth token, rules rejection, etc). scheduleFbSync()'s error was only ever
+// surfaced when the user manually tapped "Upload to Cloud". Now, once 3
+// consecutive auto-sync attempts fail, warn once (not every 5 min forever —
+// re-arms on the next success or app reload) so a stuck sync doesn't go
+// unnoticed until the user happens to check Settings.
+let _fbSyncFailToastShown = false;
+setInterval(()=>{
+  if(location.hash!=='#recover' && ONLINE && USER) scheduleFbSync();
+  if(_fbSyncFailCount>=3 && !_fbSyncFailToastShown){
+    _fbSyncFailToastShown = true;
+    showToast('⚠️ Cloud sync has failed ' + _fbSyncFailCount + 'x: ' + (_lastFbSyncError||'unknown error'), 8000);
+  } else if(_fbSyncFailCount===0){
+    _fbSyncFailToastShown = false; // re-arm after a successful sync
+  }
+  updateLastSyncDisplay(); // keep the Settings label live if the tab is open
+}, 5*60*1000);
 
 // Periodic FB PULL every 60 seconds while online.
 // Fix: pushing local changes every 5 minutes was never enough on its own —
