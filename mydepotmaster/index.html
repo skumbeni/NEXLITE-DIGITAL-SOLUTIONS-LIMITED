@@ -3261,7 +3261,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'mdm-v77';
+const SW_VERSION  = 'mdm-v78';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -14922,7 +14922,7 @@ const GEMINI_MODEL = 'gemini-3.5-flash'; // check aistudio.google.com/models if 
 // Soft client-side usage guard. Gemini's own free-tier daily cap is the
 // real backstop — this just stops obvious runaway use (e.g. a stuck loop)
 // and gives the user a friendly message first.
-const COPILOT_DAILY_SOFT_CAP = 40;
+const COPILOT_DAILY_SOFT_CAP = 100;
 function _copilotUsageKey(){ const d=new Date(); return 'mdm_copilot_usage_'+d.toISOString().slice(0,10); }
 function _copilotUsageToday(){ return parseInt(localStorage.getItem(_copilotUsageKey())||'0',10); }
 function _copilotBumpUsage(){ localStorage.setItem(_copilotUsageKey(), String(_copilotUsageToday()+1)); }
@@ -15008,7 +15008,7 @@ function openCopilot(){
   }
   openModal(`
     <div class="ctitle">✨ Depot Assistant</div>
-    <div id="cop-log">${_copilotHistory.length? _renderCopilotLog() : '<div class="cop-msg sys">Ask about stock, staff, or run an end-of-day reconciliation — or ask it to clock a staff member in (you\'ll confirm before anything is saved). Powered by Gemini.</div>'}</div>
+    <div id="cop-log">${_copilotHistory.length? _renderCopilotLog() : '<div class="cop-msg sys">Ask about stock, staff, or run an end-of-day reconciliation — or ask it to do data entry: clock in/out, log work, log commodity received/issued, log transport, log an absence, or record a payment. E.g. "Log 12 bags of Loading for John Banda today" or "Received 50 bags of maize, batch B1". You\'ll always confirm before anything is saved. Powered by Gemini.</div>'}</div>
     <div class="cop-quick">
       <button onclick="askCopilot('Any low stock items I should reorder?')">Low stock check</button>
       <button onclick="askCopilot('Summarize today\\'s activity')">Today's summary</button>
@@ -15063,33 +15063,43 @@ function _copilotSystemPrompt(mode){
     'movements, clock logs, transport, and finances. Answer the user\'s '+
     'question using only that data. Be concise and use plain language, not '+
     'code. If the data doesn\'t contain what\'s needed to answer, say so '+
-    'rather than guessing. You may also clock a staff member in for a shift '+
-    'using the clock_in_staff tool, but only when the user has clearly asked '+
-    'for that and named a specific staff member — never call it speculatively, '+
-    'and ask a clarifying question in plain text if the name is missing or '+
-    'ambiguous rather than guessing.';
+    'rather than guessing.\n\n'+
+    'You may also perform data entry using the tools available to you — '+
+    'clocking staff in/out, logging completed work or absences, logging '+
+    'commodity received/issued, logging transport, and recording staff '+
+    'payments. Only call a tool when the user has clearly asked for that '+
+    'specific entry and given the details it needs (e.g. staff name, task '+
+    'and quantity for work; batch and quantity for commodity movements; '+
+    'vehicle and driver for transport; staff and amount for payments). '+
+    'Never call a tool speculatively or to fill in a value the user did not '+
+    'give you — if a required detail is missing or a name/batch/task is '+
+    'ambiguous, ask a clarifying question in plain text instead of '+
+    'guessing. Every tool call still requires the user to tap Confirm in '+
+    'the chat before anything is saved (and payments additionally require '+
+    'the admin password, same as the manual form), so proposing an action '+
+    'is safe, but the proposal itself must be accurate to what the user '+
+    'asked for.';
 }
 
 // ── Actions the Assistant is allowed to take (tool/function calling) ──────
-// Every action below only ever *proposes* a change — nothing is written
-// until the user taps Confirm in the chat UI. See confirmCopilotAction().
-const CLOCK_IN_TOOL = {
-  type: 'function',
-  name: 'clock_in_staff',
-  description: 'Clock in an active staff member for a work shift starting now. '+
-    'Only call this when the user has clearly asked to clock someone in and '+
-    'named that staff member. Never guess a name — if it\'s ambiguous or '+
-    'missing, ask the user to clarify in plain text instead of calling this.',
-  parameters: {
-    type: 'object',
-    properties: {
-      staffName: { type: 'string', description: 'The staff member\'s name, as close as possible to how it appears in the roster.' },
-      task: { type: 'string', description: 'Optional task name for their role. Leave blank if the user didn\'t specify one.' }
-    },
-    required: ['staffName']
-  }
-};
+// Each entry in AI_ACTIONS is one data-entry type the Assistant can propose:
+//   tool     — the function-calling schema sent to Gemini
+//   resolve(args) — pure lookup/validation against current DATA, no writes.
+//                   Returns { error: '...' } (shown as plain text) or
+//                   { description: '...', action: {...} } (shown as a
+//                   Confirm/Cancel card).
+//   execute(action) — the ONLY place that writes to DATA, and only ever
+//                   runs after the user taps Confirm. Returns { ok, msg }.
+// This mirrors the manual entry forms exactly (same stampEntry()/
+// logAuditEvent() calls) so audit trail, reports, and payroll can't tell
+// the difference between an Assistant entry and a manual one — every
+// Assistant entry is tagged "via Depot Assistant" in the audit log.
+const AI_ACTIONS = {};
+function _registerAIAction(name, tool, resolve, execute, sensitive){
+  AI_ACTIONS[name] = { tool, resolve, execute, sensitive: !!sensitive };
+}
 
+// ── Shared lookup helpers ───────────────────────────────────────────────
 // Case-insensitive lookup among active staff — exact match preferred,
 // falls back to substring match so "John" can find "John Banda".
 function _findActiveStaffByName(name){
@@ -15100,36 +15110,483 @@ function _findActiveStaffByName(name){
   if(exact.length) return exact;
   return active.filter(s=>(s.name||'').toLowerCase().includes(q));
 }
+// Case-insensitive task lookup within a role's defined tasks — exact match
+// preferred, falls back to substring so "load" can find "Loading".
+function _findTaskForRole(role, taskName){
+  const q = (taskName||'').trim().toLowerCase();
+  if(!q) return [];
+  const tasks = tasksForRole(role);
+  const exact = tasks.filter(t=>(t.name||'').toLowerCase()===q);
+  if(exact.length) return exact;
+  return tasks.filter(t=>(t.name||'').toLowerCase().includes(q));
+}
+// Case-insensitive commodity lookup by name (e.g. "maize", "soya"). If the
+// depot only has one commodity defined, an empty/unmatched name still
+// resolves to it — most depots only track one commodity, and asking "which
+// commodity?" every time would be annoying.
+function _findCommodityByName(name){
+  const coms = DATA.commodities||[];
+  const q = (name||'').trim().toLowerCase();
+  if(!q) return coms.length===1 ? coms : [];
+  const exact = coms.filter(c=>(c.name||'').toLowerCase()===q);
+  if(exact.length) return exact;
+  const partial = coms.filter(c=>(c.name||'').toLowerCase().includes(q));
+  return partial.length ? partial : (coms.length===1 ? coms : []);
+}
+// Case-insensitive batch lookup among a commodity's RECEIVED batches (for
+// issuing against an existing batch — exact match preferred).
+function _findReceivedBatch(cid, batchName){
+  const q = (batchName||'').trim().toLowerCase();
+  if(!q) return [];
+  const names = [...new Set(cRec(cid).map(r=>r.batchName))];
+  const exact = names.filter(n=>(n||'').toLowerCase()===q);
+  if(exact.length) return exact;
+  return names.filter(n=>(n||'').toLowerCase().includes(q));
+}
+const _YMD_RE = /^\d{4}-\d{2}-\d{2}$/;
+function _aiDate(d){ return (d && _YMD_RE.test(d)) ? d : today(); }
 
-// Headless equivalent of saveClockIn() — no DOM reads, callable from the
-// Assistant's confirmed action. Reuses the same guards (read-only mode,
-// duplicate open-shift check) and the same stampEntry()/logAuditEvent()
-// path as the manual Clock In form, so approval workflow and audit trail
-// behave identically regardless of who initiated it.
-function _aiClockIn(staffId, requestedTask){
+// ═══ 1. Clock in ═══════════════════════════════════════════════════════
+_registerAIAction('clock_in_staff', {
+  type: 'function',
+  name: 'clock_in_staff',
+  description: 'Clock in an active staff member for a work shift starting now. '+
+    'Only call this when the user has clearly asked to clock someone in and '+
+    'named that staff member. Never guess a name — if it\'s ambiguous or '+
+    'missing, ask the user to clarify in plain text instead of calling this.',
+  parameters: { type:'object', properties: {
+    staffName: { type:'string', description:'The staff member\'s name, as close as possible to how it appears in the roster.' },
+    task: { type:'string', description:'Optional task name for their role. Leave blank if the user didn\'t specify one.' }
+  }, required:['staffName'] }
+}, function resolveClockIn(args){
+  const matches = _findActiveStaffByName(args.staffName);
+  if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}" — could you check the spelling or pick from the roster?` };
+  if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
+  const s = matches[0];
+  const existing = _openShiftFor(s.id);
+  if(existing) return { error:`${s.name} already has an open shift (clocked in ${existing.date}, ${existing.timeIn||'—'}) — clock them out first.` };
+  const task = args.task || '';
+  return { description:`Clock in ${s.name} (${s.role}) now${task?' for "'+task+'"':''}?`, action:{ staffId:s.id, task } };
+}, function executeClockIn(action){
   if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode — ask an administrator to clock in staff.' };
-  const s = DATA.staff.find(x=>String(x.id)===String(staffId));
+  const s = DATA.staff.find(x=>String(x.id)===String(action.staffId));
   if(!s) return { ok:false, msg:'Could not find that staff member anymore — they may have been removed.' };
-  const existing = _openShiftFor(staffId);
+  const existing = _openShiftFor(action.staffId);
   if(existing) return { ok:false, msg:`${s.name} already has an open shift (clocked in ${existing.date}, ${existing.timeIn||'—'}). Clock them out first.` };
   const role = s.role;
   const tasks = tasksForRole(role);
-  const task = (requestedTask && tasks.some(t=>t.name===requestedTask)) ? requestedTask : (tasks[0]?.name || '');
-  const date = today();
-  const timeIn = nowTime();
-  const timeInTs = Date.now();
-  const payload = stampEntry({id:uid(),staffId,date,role,task,timeIn,timeInTs,status:'open',
-    bags:0,qty:0,earnings:0,deduction:0,deductionReason:'',timeOut:'',
-    time:nowTime(),entryType:'work'});
+  const task = (action.task && tasks.some(t=>t.name===action.task)) ? action.task : (tasks[0]?.name || '');
+  const timeIn = nowTime(), timeInTs = Date.now();
+  const payload = stampEntry({id:uid(),staffId:action.staffId,date:today(),role,task,timeIn,timeInTs,status:'open',
+    bags:0,qty:0,earnings:0,deduction:0,deductionReason:'',timeOut:'',time:nowTime(),entryType:'work'});
   updateData(d=>({...d,staffLogs:[...d.staffLogs,payload]}));
-  logAuditEvent('CREATE','Work Log (Clock In)',`Staff ID:${staffId} · Task:${task} · TimeIn:${timeIn} · via Depot Assistant`);
+  logAuditEvent('CREATE','Work Log (Clock In)',`Staff ID:${action.staffId} · Task:${task} · TimeIn:${timeIn} · via Depot Assistant`);
   return { ok:true, msg:`Clocked in ${s.name} (${role}) at ${timeIn}${task?' for '+task:''}.` };
+});
+
+// ═══ 2. Log completed work (staff not currently clocked in) ═══════════
+_registerAIAction('log_completed_work', {
+  type: 'function',
+  name: 'log_completed_work',
+  description: 'Log a completed work session for an active staff member — '+
+    'the same thing the "Log Work" form does (task, quantity, and the pay '+
+    'it earns). Only call this when the user has clearly asked to log work '+
+    'and given you the staff member, the task, and a quantity. Never guess '+
+    'any of those three — if the staff name is ambiguous, the task isn\'t '+
+    'one of that staff member\'s defined tasks, or no quantity was given, '+
+    'ask the user to clarify in plain text instead of calling this.',
+  parameters: { type:'object', properties: {
+    staffName: { type:'string', description:'The staff member\'s name, as close as possible to how it appears in the roster.' },
+    task: { type:'string', description:'The task name, as close as possible to one of that staff member\'s role\'s defined tasks (e.g. "Loading", "Offloading").' },
+    quantity: { type:'number', description:'The quantity for that task (bags, hours, trips, etc. depending on how the task is rated) — must come directly from what the user said.' },
+    date: { type:'string', description:'Date of the work in YYYY-MM-DD format. Leave blank to use today.' }
+  }, required:['staffName','task','quantity'] }
+}, function resolveLogWork(args){
+  const staffMatches = _findActiveStaffByName(args.staffName);
+  if(staffMatches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}" — could you check the spelling or pick from the roster?` };
+  if(staffMatches.length>1) return { error:`A few staff match "${args.staffName}": ${staffMatches.map(s=>s.name).join(', ')}. Which one did you mean?` };
+  const s = staffMatches[0];
+  const qty = Number(args.quantity||0);
+  if(!(qty>0)) return { error:`How much should I log for ${s.name}'s "${args.task}"? I need a quantity greater than zero.` };
+  const taskMatches = _findTaskForRole(s.role, args.task);
+  if(taskMatches.length===0){
+    const available = tasksForRole(s.role).map(t=>t.name).join(', ') || 'none defined';
+    return { error:`"${args.task}" isn't a defined task for ${s.name}'s role (${s.role}). Defined tasks: ${available}.` };
+  }
+  if(taskMatches.length>1) return { error:`A few tasks match "${args.task}" for ${s.role}: ${taskMatches.map(t=>t.name).join(', ')}. Which one did you mean?` };
+  const task = taskMatches[0];
+  const useDate = _aiDate(args.date);
+  const earnings = getEarnings(qty, s.role, task.name);
+  const ul = taskRateUnitLabel(s.role, task.name);
+  return {
+    description: `Log ${qty} ${ul}${qty!==1?'s':''} of "${task.name}" for ${s.name} on ${useDate} — K${earnings.toFixed(2)} earned. Save this?`,
+    action: { staffId:s.id, task:task.name, qty, date:useDate }
+  };
+}, function executeLogWork(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode — ask an administrator to log work.' };
+  const s = DATA.staff.find(x=>String(x.id)===String(action.staffId));
+  if(!s) return { ok:false, msg:'Could not find that staff member anymore — they may have been removed.' };
+  const role = s.role;
+  const task = tasksForRole(role).find(t=>t.name===action.task);
+  if(!task) return { ok:false, msg:`"${action.task}" isn't a defined task for ${s.name}'s role (${role}).` };
+  const qty = Number(action.qty||0);
+  if(!(qty>0)) return { ok:false, msg:'Quantity must be greater than zero.' };
+  const ru = taskRateUnit(role, task.name);
+  const earnings = getEarnings(qty, role, task.name);
+  const bagsVal = ru==='bag' ? qty : 0;
+  const useDate = _aiDate(action.date);
+  const nowTs = Date.now();
+  const payload = stampEntry({id:uid(),staffId:action.staffId,role,task:task.name,bags:bagsVal,qty,rateUnit:ru,
+    earnings,deduction:0,deductions:[],deductionReason:'',timeIn:'',timeOut:'',
+    timeInTs:nowTs,timeOutTs:nowTs,status:'completed',date:useDate,time:nowTime(),entryType:'work'});
+  updateData(d=>({...d,staffLogs:[...d.staffLogs,payload]}));
+  logAuditEvent('CREATE','Work Log',`Staff ID:${action.staffId} · Task:${task.name} · Earnings:${earnings.toFixed(2)} · via Depot Assistant`);
+  const ul = taskRateUnitLabel(role, task.name);
+  return { ok:true, msg:`Logged ${qty} ${ul}${qty!==1?'s':''} of "${task.name}" for ${s.name} on ${useDate} — K${earnings.toFixed(2)} earned.` };
+});
+
+// ═══ 3. Clock out (complete an open shift) ═════════════════════════════
+_registerAIAction('clock_out_staff', {
+  type: 'function',
+  name: 'clock_out_staff',
+  description: 'Complete a staff member\'s currently open shift (clock them '+
+    'out now). Only call this when the user has clearly asked to clock '+
+    'someone out and that person has an open shift. If they are salaried, '+
+    'quantity isn\'t needed; otherwise a quantity is required to compute '+
+    'pay — ask for it in plain text if missing rather than guessing.',
+  parameters: { type:'object', properties: {
+    staffName: { type:'string', description:'The staff member\'s name, as close as possible to how it appears in the roster.' },
+    quantity: { type:'number', description:'Quantity completed during the shift (bags, hours, trips, etc.). Required unless the staff member is salaried.' },
+    task: { type:'string', description:'Optional — override the task if different from what they clocked in with. Leave blank to keep the original task.' }
+  }, required:['staffName'] }
+}, function resolveClockOut(args){
+  const matches = _findActiveStaffByName(args.staffName);
+  if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
+  if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
+  const s = matches[0];
+  const openShift = _openShiftFor(s.id);
+  if(!openShift) return { error:`${s.name} doesn't have an open shift right now.` };
+  let taskName = openShift.task || '';
+  if(args.task){
+    const taskMatches = _findTaskForRole(s.role, args.task);
+    if(taskMatches.length===0) return { error:`"${args.task}" isn't a defined task for ${s.name}'s role (${s.role}).` };
+    if(taskMatches.length>1) return { error:`A few tasks match "${args.task}": ${taskMatches.map(t=>t.name).join(', ')}. Which one did you mean?` };
+    taskName = taskMatches[0].name;
+  }
+  const isSalaried = s.payType==='salary';
+  const qty = Number(args.quantity||0);
+  if(!isSalaried && !(qty>0)) return { error:`How much should I log for ${s.name}'s shift (task: ${taskName||'—'})? I need a quantity greater than zero.` };
+  const earnings = isSalaried ? 0 : getEarnings(qty, s.role, taskName);
+  const description = isSalaried
+    ? `Complete ${s.name}'s shift now — salaried, no per-task pay. Save this?`
+    : `Complete ${s.name}'s shift now — ${qty} ${taskRateUnitLabel(s.role,taskName)}${qty!==1?'s':''} of "${taskName}" — K${earnings.toFixed(2)} earned. Save this?`;
+  return { description, action:{ logId:openShift.id, task:taskName, qty } };
+}, function executeClockOut(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  const log = (DATA.staffLogs||[]).find(x=>String(x.id)===String(action.logId) && x.status==='open');
+  if(!log) return { ok:false, msg:'That open shift is no longer available — it may have already been clocked out.' };
+  const s = DATA.staff.find(x=>String(x.id)===String(log.staffId));
+  const role = log.role;
+  const task = action.task || log.task || '';
+  const isSalaried = s && s.payType==='salary';
+  const qty = Number(action.qty||0);
+  if(!isSalaried && !(qty>0)) return { ok:false, msg:'Quantity must be greater than zero.' };
+  const earnings = isSalaried ? 0 : getEarnings(qty, role, task);
+  const ru = taskRateUnit(role, task);
+  const bagsVal = ru==='bag' ? qty : 0;
+  const timeOut = nowTime(), timeOutTs = Date.now();
+  updateData(d=>({...d,staffLogs:d.staffLogs.map(l=>String(l.id)===String(action.logId)?{
+    ...l, role, task, bags:bagsVal, qty, rateUnit:ru, earnings,
+    deduction:0, deductions:[], deductionReason:'',
+    timeOut, timeOutTs, status:'completed'
+  }:l)}));
+  logAuditEvent('EDIT','Work Log (Clock Out)',`ID:${action.logId} · Task:${task} · TimeOut:${timeOut} · via Depot Assistant`);
+  return { ok:true, msg:`Clocked out ${s?s.name:'staff member'} at ${timeOut}${isSalaried?'':` — K${earnings.toFixed(2)} earned`}.` };
+});
+
+// ═══ 4. Log commodity received ═════════════════════════════════════════
+_registerAIAction('log_commodity_received', {
+  type: 'function',
+  name: 'log_commodity_received',
+  description: 'Log a commodity receiving entry (stock coming into the depot) — '+
+    'the same as the "Receive" form for a commodity like Maize. Only call '+
+    'this when the user has clearly asked to log a receipt and given a '+
+    'batch name and quantity. Never guess either.',
+  parameters: { type:'object', properties: {
+    commodityName: { type:'string', description:'Name of the commodity (e.g. "Maize"). Leave blank if the depot only tracks one commodity.' },
+    batchName: { type:'string', description:'The batch name/label for this receipt.' },
+    quantity: { type:'number', description:'Quantity received, in the commodity\'s unit.' },
+    unitPrice: { type:'number', description:'Optional purchase price per unit. Leave blank if not given.' },
+    date: { type:'string', description:'Date in YYYY-MM-DD format. Leave blank to use today.' }
+  }, required:['batchName','quantity'] }
+}, function resolveCommodityReceived(args){
+  const comMatches = _findCommodityByName(args.commodityName);
+  if(comMatches.length===0){
+    const names = (DATA.commodities||[]).map(c=>c.name).join(', ') || 'none defined yet';
+    return { error:`I couldn't tell which commodity — this depot tracks: ${names}. Which one?` };
+  }
+  if(comMatches.length>1) return { error:`A few commodities match: ${comMatches.map(c=>c.name).join(', ')}. Which one?` };
+  const com = comMatches[0];
+  const batch = (args.batchName||'').trim();
+  if(!batch) return { error:'What should I name this batch?' };
+  const qty = Number(args.quantity||0);
+  if(!(qty>0)) return { error:`How many ${com.unit} of ${com.name} were received?` };
+  const unitPrice = Number(args.unitPrice||0);
+  const useDate = _aiDate(args.date);
+  const totalCost = qty*unitPrice;
+  const description = `Log ${com.name} Received: batch "${batch.toUpperCase()}" · ${qty} ${com.unit}`+
+    (unitPrice>0?` × K${unitPrice.toFixed(2)} = K${totalCost.toFixed(2)}`:'')+` on ${useDate}. Save this?`;
+  return { description, action:{ cid:com.id, batch:batch.toUpperCase(), qty, unitPrice, date:useDate } };
+}, function executeCommodityReceived(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  const com = getCom(action.cid);
+  const existingRec = cRec(action.cid).find(r=>r.batchName===action.batch&&r.lotId);
+  const lotId = existingRec ? existingRec.lotId : ('LOT-'+uid().toUpperCase().slice(0,8));
+  const payload = stampEntry({id:uid(),batchName:action.batch,date:action.date,time:nowTime(),
+    received:action.qty,unitPrice:action.unitPrice,supplierId:'',supplierName:'',lotId});
+  updateData(d=>{ const cr={...(d.commodityReceived||{})}; cr[action.cid]=[...(cr[action.cid]||[]),payload]; return {...d,commodityReceived:cr}; });
+  logAuditEvent('CREATE',`${com.name} Received`,`Batch: ${action.batch} · Lot: ${lotId} · Qty: ${action.qty} · via Depot Assistant`);
+  return { ok:true, msg:`Logged ${action.qty} ${com.unit} of ${com.name} received, batch "${action.batch}".` };
+});
+
+// ═══ 5. Log commodity issued ═══════════════════════════════════════════
+_registerAIAction('log_commodity_issued', {
+  type: 'function',
+  name: 'log_commodity_issued',
+  description: 'Log a commodity issuing entry (stock going out of the depot) — '+
+    'the same as the "Issue" form for a commodity like Maize. Only call '+
+    'this when the user has clearly asked to log an issue and given a '+
+    'batch that has actually received stock, a transporter, and a quantity. '+
+    'Never guess any of those.',
+  parameters: { type:'object', properties: {
+    commodityName: { type:'string', description:'Name of the commodity. Leave blank if the depot only tracks one.' },
+    batchName: { type:'string', description:'Batch to issue from — must be a batch that has received stock.' },
+    transporterName: { type:'string', description:'Name of the transporter/truck.' },
+    quantity: { type:'number', description:'Quantity issued.' },
+    salePrice: { type:'number', description:'Optional sale price per unit.' },
+    date: { type:'string', description:'Date in YYYY-MM-DD format. Leave blank to use today.' }
+  }, required:['batchName','transporterName','quantity'] }
+}, function resolveCommodityIssued(args){
+  const comMatches = _findCommodityByName(args.commodityName);
+  if(comMatches.length===0){
+    const names = (DATA.commodities||[]).map(c=>c.name).join(', ') || 'none defined yet';
+    return { error:`I couldn't tell which commodity — this depot tracks: ${names}. Which one?` };
+  }
+  if(comMatches.length>1) return { error:`A few commodities match: ${comMatches.map(c=>c.name).join(', ')}. Which one?` };
+  const com = comMatches[0];
+  const batchMatches = _findReceivedBatch(com.id, args.batchName);
+  if(batchMatches.length===0){
+    const available = [...new Set(cRec(com.id).map(r=>r.batchName))].join(', ') || 'none received yet';
+    return { error:`I couldn't find a received batch matching "${args.batchName}" for ${com.name}. Batches on hand: ${available}.` };
+  }
+  if(batchMatches.length>1) return { error:`A few batches match "${args.batchName}": ${batchMatches.join(', ')}. Which one?` };
+  const batch = batchMatches[0];
+  const transporter = (args.transporterName||'').trim();
+  if(!transporter) return { error:'Who is the transporter for this issue?' };
+  const qty = Number(args.quantity||0);
+  if(!(qty>0)) return { error:`How many ${com.unit} of ${com.name} should I issue from batch "${batch}"?` };
+  const salePrice = Number(args.salePrice||0);
+  const useDate = _aiDate(args.date);
+  const totalRev = qty*salePrice;
+  const description = `Log ${com.name} Issued: batch "${batch}" · ${qty} ${com.unit}`+
+    (salePrice>0?` × K${salePrice.toFixed(2)} = K${totalRev.toFixed(2)}`:'')+
+    ` · Transporter: ${transporter.toUpperCase()} on ${useDate}. Save this?`;
+  return { description, action:{ cid:com.id, batch, transporter:transporter.toUpperCase(), qty, salePrice, date:useDate } };
+}, function executeCommodityIssued(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  const com = getCom(action.cid);
+  const sourceRec = cRec(action.cid).filter(r=>r.batchName===action.batch).sort((a,b)=>b.date.localeCompare(a.date))[0];
+  const payload = stampEntry({id:uid(),batchName:action.batch,date:action.date,time:nowTime(),
+    transporter:action.transporter,issued:action.qty,salePrice:action.salePrice,
+    sourceReceiveId:sourceRec?sourceRec.id:'',creditStatus:'paid',partialPaid:0});
+  updateData(d=>{ const ci={...(d.commodityIssued||{})}; ci[action.cid]=[...(ci[action.cid]||[]),payload]; return {...d,commodityIssued:ci}; });
+  logAuditEvent('CREATE',`${com.name} Issued`,`Batch: ${action.batch} · Qty: ${action.qty} · Transporter: ${action.transporter} · via Depot Assistant`);
+  return { ok:true, msg:`Logged ${action.qty} ${com.unit} of ${com.name} issued from batch "${action.batch}" to ${action.transporter}.` };
+});
+
+// ═══ 6. Log transport entry ════════════════════════════════════════════
+_registerAIAction('log_transport', {
+  type: 'function',
+  name: 'log_transport',
+  description: 'Log a transport/trip entry — the same as the "Log Transport" '+
+    'form (vehicle, driver, quantity moved). Only call this when the user '+
+    'has clearly asked to log transport and given a vehicle registration, '+
+    'driver name, and quantity. Never guess any of those.',
+  parameters: { type:'object', properties: {
+    commodityName: { type:'string', description:'Name of the commodity being moved. Leave blank if the depot only tracks one.' },
+    vehicleReg: { type:'string', description:'Vehicle registration.' },
+    driverName: { type:'string', description:'Driver\'s name.' },
+    batchName: { type:'string', description:'Optional batch name.' },
+    quantity: { type:'number', description:'Quantity loaded.' },
+    origin: { type:'string', description:'Optional origin location.' },
+    destination: { type:'string', description:'Optional destination location.' },
+    status: { type:'string', description:'One of "scheduled", "in-transit", or "completed". Leave blank to default to "in-transit".' }
+  }, required:['vehicleReg','driverName','quantity'] }
+}, function resolveTransport(args){
+  const comMatches = _findCommodityByName(args.commodityName);
+  if(comMatches.length===0){
+    const names = (DATA.commodities||[]).map(c=>c.name).join(', ') || 'none defined yet';
+    return { error:`I couldn't tell which commodity — this depot tracks: ${names}. Which one?` };
+  }
+  if(comMatches.length>1) return { error:`A few commodities match: ${comMatches.map(c=>c.name).join(', ')}. Which one?` };
+  const com = comMatches[0];
+  const vehicle = (args.vehicleReg||'').trim();
+  const driver = (args.driverName||'').trim();
+  if(!vehicle) return { error:'What\'s the vehicle registration?' };
+  if(!driver) return { error:'What\'s the driver\'s name?' };
+  const qty = Number(args.quantity||0);
+  if(!(qty>0)) return { error:`How many ${com.unit} were loaded?` };
+  const status = ['scheduled','in-transit','completed'].includes(args.status) ? args.status : 'in-transit';
+  const batch = (args.batchName||'').trim().toUpperCase();
+  const origin = (args.origin||'').trim().toUpperCase();
+  const destination = (args.destination||'').trim().toUpperCase();
+  const description = `Log Transport: ${vehicle.toUpperCase()} driven by ${driver.toUpperCase()} · ${qty} ${com.unit}`+
+    (batch?` · Batch: ${batch}`:'')+(origin||destination?` · Route: ${origin||'—'} → ${destination||'—'}`:'')+
+    `. Save this?`;
+  return { description, action:{ cid:com.id, vehicle:vehicle.toUpperCase(), driver:driver.toUpperCase(), batch, qty, origin, destination, status } };
+}, function executeTransport(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  const com = getCom(action.cid);
+  const payload = stampEntry({id:uid(),date:today(),time:nowTime(),vehicleReg:action.vehicle,driverName:action.driver,
+    commodity:action.cid,batchName:action.batch,qty:action.qty,unit:com.unit,
+    origin:action.origin,destination:action.destination,status:action.status,notes:''});
+  updateData(d=>({...d,transportLog:[...(d.transportLog||[]),payload]}));
+  logAuditEvent('CREATE','Transport Log',`Vehicle:${action.vehicle} · Driver:${action.driver} · Batch:${action.batch} · Qty:${action.qty} · via Depot Assistant`);
+  return { ok:true, msg:`Logged transport: ${action.vehicle} (${action.driver}) — ${action.qty} ${com.unit}.` };
+});
+
+// ═══ 7. Log staff absence / leave / sick day ═══════════════════════════
+_registerAIAction('log_staff_absence', {
+  type: 'function',
+  name: 'log_staff_absence',
+  description: 'Log a staff member as absent, on leave, or sick for a day — '+
+    'the same as the non-work entry types in the "Log Work" form. Only '+
+    'call this when the user has clearly asked to log an absence and named '+
+    'the staff member and which type it is.',
+  parameters: { type:'object', properties: {
+    staffName: { type:'string', description:'The staff member\'s name.' },
+    type: { type:'string', description:'One of "absent", "leave", or "sick".' },
+    date: { type:'string', description:'Date in YYYY-MM-DD format. Leave blank to use today.' },
+    note: { type:'string', description:'Optional note, e.g. reason.' }
+  }, required:['staffName','type'] }
+}, function resolveAbsence(args){
+  const matches = _findActiveStaffByName(args.staffName);
+  if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
+  if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
+  const s = matches[0];
+  const type = ['absent','leave','sick'].includes((args.type||'').toLowerCase()) ? args.type.toLowerCase() : null;
+  if(!type) return { error:`Should I log ${s.name} as "absent", "leave", or "sick"?` };
+  const useDate = _aiDate(args.date);
+  const note = (args.note||'').trim().toUpperCase();
+  const labels = { absent:'Absent (Unexcused)', leave:'On Leave', sick:'Sick Day' };
+  return { description:`Log ${s.name} as ${labels[type]} on ${useDate}${note?' — "'+note+'"':''}. Save this?`,
+    action:{ staffId:s.id, type, date:useDate, note } };
+}, function executeAbsence(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  const s = DATA.staff.find(x=>String(x.id)===String(action.staffId));
+  if(!s) return { ok:false, msg:'Could not find that staff member anymore — they may have been removed.' };
+  const logId = uid();
+  const payload = stampEntry({id:logId,staffId:action.staffId,date:action.date,entryType:action.type,
+    absenceNote:action.note,time:nowTime(),status:'completed',timeOutTs:Date.now()});
+  const leaveEntry = stampEntry({id:'lv_'+logId,staffId:action.staffId,type:action.type,date:action.date,
+    days:1,note:action.note,time:nowTime(),_fromLog:logId});
+  updateData(d=>({...d,staffLogs:[...d.staffLogs,payload],leaveLog:[...(d.leaveLog||[]),leaveEntry]}));
+  logAuditEvent('CREATE','Absence Log',`Staff ID:${action.staffId} · Type:${action.type} · Date:${action.date} · via Depot Assistant`);
+  return { ok:true, msg:`Logged ${s.name} as ${action.type} on ${action.date}.` };
+});
+
+// ═══ 8. Record staff payment (money-moving — extra admin password step) ═
+// Marked `sensitive`: unlike the other actions, tapping Confirm here does
+// NOT write immediately — confirmCopilotAction() additionally prompts for
+// the admin password first, exactly like the manual Payment form does,
+// before calling execute(). This keeps the same financial control in place
+// regardless of who initiated the entry.
+_registerAIAction('record_staff_payment', {
+  type: 'function',
+  name: 'record_staff_payment',
+  description: 'Record a payment made to a staff member — the same as the '+
+    '"Record Payment" form. Only call this when the user has clearly asked '+
+    'to log a payment and given the staff member and an amount. Never '+
+    'guess the amount.',
+  parameters: { type:'object', properties: {
+    staffName: { type:'string', description:'The staff member\'s name.' },
+    amount: { type:'number', description:'Amount paid.' },
+    date: { type:'string', description:'Date in YYYY-MM-DD format. Leave blank to use today.' },
+    notes: { type:'string', description:'Optional notes, e.g. "cash" or "mobile money".' }
+  }, required:['staffName','amount'] }
+}, function resolvePayment(args){
+  const matches = _findActiveStaffByName(args.staffName);
+  if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
+  if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
+  const s = matches[0];
+  const amount = Number(args.amount||0);
+  if(!(amount>0)) return { error:`How much was paid to ${s.name}?` };
+  const useDate = _aiDate(args.date);
+  const notes = (args.notes||'').trim().toUpperCase();
+  return {
+    description: `Record payment to ${s.name}: K${amount.toFixed(2)} on ${useDate}${notes?' — "'+notes+'"':''}. You'll be asked to confirm your admin password next. Save this?`,
+    action: { staffId:s.id, amount, date:useDate, notes }
+  };
+}, function executePayment(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  const s = DATA.staff.find(x=>String(x.id)===String(action.staffId));
+  if(!s) return { ok:false, msg:'Could not find that staff member anymore — they may have been removed.' };
+  const payload = stampEntry({id:uid(),staffId:action.staffId,date:action.date,amount:action.amount,notes:action.notes});
+  updateData(d=>({...d,staffPayments:[...(d.staffPayments||[]),payload]}));
+  logAuditEvent('CREATE','Staff Payment',`Staff ID:${action.staffId} · Amount:${action.amount} · Date:${action.date} · via Depot Assistant`);
+  return { ok:true, msg:`Recorded payment of K${action.amount.toFixed(2)} to ${s.name}.` };
+}, true);
+
+
+// ── Client-side rate limiter ────────────────────────────────────────────────
+// Google's free tier for gemini-3.5-flash allows only 5 requests/minute,
+// shared across every depot using this app (one API key behind the proxy
+// worker). We can't raise that ceiling from here — only enabling billing on
+// the Google Cloud project the key belongs to does that. What we CAN do is
+// stay safely under it so users get a clear "please wait" instead of a raw
+// quota error, and avoid making the shared quota problem worse by retrying
+// into it. Sliding 60s window, capped just under Google's limit.
+const COPILOT_RATE_LIMIT_MAX = 4;      // requests per rolling window (Google's cap is 5/min)
+const COPILOT_RATE_LIMIT_WINDOW_MS = 60000;
+let _copilotRequestTimestamps = [];
+
+function _copilotRateLimitWaitMs(){
+  const now = Date.now();
+  _copilotRequestTimestamps = _copilotRequestTimestamps.filter(t => now - t < COPILOT_RATE_LIMIT_WINDOW_MS);
+  if(_copilotRequestTimestamps.length < COPILOT_RATE_LIMIT_MAX) return 0;
+  const oldest = _copilotRequestTimestamps[0];
+  return Math.max(0, COPILOT_RATE_LIMIT_WINDOW_MS - (now - oldest));
 }
 
+function _copilotRecordRequest(){
+  _copilotRequestTimestamps.push(Date.now());
+}
+
+// Pulls Google's suggested wait time out of a 429 quota-exceeded error body,
+// e.g. error.details[].retryDelay = "56s". Falls back to null if not present.
+function _parseGoogleRetryDelaySeconds(body){
+  try{
+    const parsed = JSON.parse(body);
+    const details = parsed?.error?.details || [];
+    for(const d of details){
+      if(d.retryDelay){
+        const m = /^(\d+(?:\.\d+)?)s$/.exec(d.retryDelay);
+        if(m) return Math.ceil(parseFloat(m[1]));
+      }
+    }
+  }catch{ /* not JSON or no RetryInfo — caller falls back */ }
+  return null;
+}
 
 async function _callCopilot(mode, userText, context){
   if(!navigator.onLine){ showToast('❌ Depot Assistant needs an internet connection'); return null; }
   if(_copilotUsageToday() >= COPILOT_DAILY_SOFT_CAP){ showToast('⚠️ Daily Assistant limit reached — resets tomorrow'); return null; }
+  // Proactive throttle — stops us from firing straight into Google's shared
+  // 5/min free-tier cap in the first place.
+  const waitMs = _copilotRateLimitWaitMs();
+  if(waitMs > 0){
+    throw new Error(`Depot Assistant is getting a lot of use right now — please wait ${Math.ceil(waitMs/1000)}s and try again.`);
+  }
   const promptText = (userText?('Question: '+userText+'\n\n'):'Run the reconciliation described above.\n\n')
     + 'Depot data (JSON):\n' + JSON.stringify(context);
   // Actions (tool calling) are only offered in normal chat mode — the
@@ -15140,23 +15597,45 @@ async function _callCopilot(mode, userText, context){
     input: promptText,
     system_instruction: _copilotSystemPrompt(mode)
   };
-  if(mode!=='reconciliation') bodyObj.tools = [CLOCK_IN_TOOL];
+  if(mode!=='reconciliation') bodyObj.tools = Object.values(AI_ACTIONS).map(a=>a.tool);
   const reqBody = JSON.stringify(bodyObj);
   const timeoutMs = 45000; // generous fixed timeout for both chat and reconciliation
   // No API key here — the worker attaches it server-side. See the setup
   // comment near COPILOT_PROXY_ENDPOINT above.
-  const doFetch = ()=> _fetchWithTimeout(COPILOT_PROXY_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type':'application/json' },
-    body: reqBody
-  }, timeoutMs);
+  const doFetch = ()=> {
+    _copilotRecordRequest();
+    return _fetchWithTimeout(COPILOT_PROXY_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
+      body: reqBody
+    }, timeoutMs);
+  };
   let res = await doFetch();
-  // Gemini occasionally returns transient overload errors (429/500/503).
-  // These usually clear within a couple of seconds, so retry once silently
-  // before surfacing anything to the user.
-  if(!res.ok && [429,500,503].includes(res.status)){
+  // A 429 here is one of two very different things:
+  //  - Transient overload (Google's model is momentarily busy) — usually
+  //    clears within a couple of seconds, safe to retry once.
+  //  - Genuine quota exhaustion (RESOURCE_EXHAUSTED, "you exceeded your
+  //    quota") — this is a hard per-minute ceiling on the shared free-tier
+  //    key. Retrying immediately just wastes another slot of that same
+  //    quota and makes it worse for the next person. We detect this case
+  //    by body content and skip straight to a clear wait-and-try-again
+  //    message instead of silently retrying.
+  if(!res.ok && [500,503].includes(res.status)){
     await new Promise(r=>setTimeout(r, 2000));
     res = await doFetch();
+  } else if(!res.ok && res.status===429){
+    const peekBody = await res.text().catch(()=>'');
+    const isQuota = /quota|RESOURCE_EXHAUSTED/i.test(peekBody);
+    if(!isQuota){
+      // Genuinely transient 429 (rare) — one quick retry as before.
+      await new Promise(r=>setTimeout(r, 2000));
+      res = await doFetch();
+    } else {
+      const retrySecs = _parseGoogleRetryDelaySeconds(peekBody);
+      throw new Error(retrySecs
+        ? `Depot Assistant has hit its usage limit for the moment — please try again in about ${retrySecs}s.`
+        : `Depot Assistant has hit its usage limit for the moment — please try again in about a minute.`);
+    }
   }
   if(!res.ok){
     const body = await res.text().catch(()=>'');
@@ -15173,6 +15652,7 @@ async function _callCopilot(mode, userText, context){
   const reply = steps
     .filter(s=>s.type==='model_output')
     .flatMap(s=>s.content||[])
+
     .filter(c=>c.type==='text')
     .map(c=>c.text||'')
     .join('');
@@ -15193,9 +15673,9 @@ async function askCopilot(question){
     const data = await _callCopilot('chat', question, context);
     _copilotHistory.pop(); // remove the "…thinking" placeholder
     if(data){
-      const call = (data.functionCalls||[]).find(c=>c.name==='clock_in_staff');
-      if(call){
-        _handleClockInCall(call);
+      const call = (data.functionCalls||[])[0];
+      if(call && AI_ACTIONS[call.name]){
+        _handleAIActionCall(call.name, call.arguments||{});
       } else {
         _copilotAppend('assistant', data.reply || '(no response)');
       }
@@ -15212,32 +15692,19 @@ async function askCopilot(question){
   }
 }
 
-// Resolves the name Gemini gave us against the real roster and either shows
-// a Confirm/Cancel action (exactly one match, no open shift) or a plain
-// clarifying message (no match / multiple matches) — never writes directly.
-function _handleClockInCall(call){
-  const staffName = (call.arguments||{}).staffName || '';
-  const task = (call.arguments||{}).task || '';
-  const matches = _findActiveStaffByName(staffName);
-  if(matches.length===0){
-    _copilotAppend('assistant', `I couldn't find an active staff member matching "${staffName}" — could you check the spelling or pick from the roster?`);
+// Runs the matching AI_ACTIONS[name].resolve() against real data and either
+// shows a Confirm/Cancel action card (clean, unambiguous match) or a plain
+// clarifying message (error) — never writes directly. actionType is stashed
+// on the card so confirmCopilotAction() knows which action to execute.
+function _handleAIActionCall(name, args){
+  const def = AI_ACTIONS[name];
+  if(!def) return;
+  const res = def.resolve(args);
+  if(res.error){
+    _copilotAppend('assistant', res.error);
     return;
   }
-  if(matches.length>1){
-    const names = matches.map(s=>s.name).join(', ');
-    _copilotAppend('assistant', `A few staff match "${staffName}": ${names}. Which one did you mean?`);
-    return;
-  }
-  const s = matches[0];
-  const existing = _openShiftFor(s.id);
-  if(existing){
-    _copilotAppend('assistant', `${s.name} already has an open shift (clocked in ${existing.date}, ${existing.timeIn||'—'}) — clock them out first.`);
-    return;
-  }
-  _copilotAppendAction(
-    `Clock in ${s.name} (${s.role}) now${task?' for "'+task+'"':''}?`,
-    { type:'clock_in', staffId:s.id, task }
-  );
+  _copilotAppendAction(res.description, { actionType:name, ...res.action });
 }
 
 // Adds an actionable message the user must explicitly Confirm or Cancel —
@@ -15253,15 +15720,31 @@ function confirmCopilotAction(actionId){
   const idx = _copilotHistory.findIndex(m=>m.actionId===actionId);
   if(idx===-1) return;
   const action = _copilotHistory[idx].action || {};
-  let result;
-  if(action.type==='clock_in'){
-    result = _aiClockIn(action.staffId, action.task);
-  } else {
-    result = { ok:false, msg:'Unknown action — nothing was done.' };
+  const def = AI_ACTIONS[action.actionType];
+  if(!def){
+    _copilotHistory[idx] = { role:'assistant', type:'text', content:'❌ Unknown action — nothing was done.' };
+    const log0 = document.getElementById('cop-log');
+    if(log0){ log0.innerHTML=_renderCopilotLog(); log0.scrollTop=log0.scrollHeight; }
+    return;
   }
-  _copilotHistory[idx] = { role:'assistant', type:'text', content:(result.ok?'✅ ':'❌ ')+result.msg };
-  const log = document.getElementById('cop-log');
-  if(log){ log.innerHTML=_renderCopilotLog(); log.scrollTop=log.scrollHeight; }
+  const finish = (result)=>{
+    _copilotHistory[idx] = { role:'assistant', type:'text', content:(result.ok?'✅ ':'❌ ')+result.msg };
+    const log = document.getElementById('cop-log');
+    if(log){ log.innerHTML=_renderCopilotLog(); log.scrollTop=log.scrollHeight; }
+  };
+  if(def.sensitive){
+    // Money-moving actions (e.g. payments) get the same admin-password
+    // re-check as the manual form. This opens its own modal on top of the
+    // Assistant modal — reopen the Assistant afterwards so the result is
+    // visible in the chat instead of leaving the person on a closed modal.
+    requireAdminPassword('save this entry', ()=>{
+      const result = def.execute(action);
+      finish(result);
+      openCopilot();
+    });
+  } else {
+    finish(def.execute(action));
+  }
 }
 
 function cancelCopilotAction(actionId){
