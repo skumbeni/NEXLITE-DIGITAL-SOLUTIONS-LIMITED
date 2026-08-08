@@ -1,9 +1,7 @@
 // MotoConnect Zambia — Service Worker
-// Repo: skumbeni/Motoconnect → served at /Motoconnect/
-// Based on proven GitHub Pages PWA pattern
-
-const GHPATH = '/Motoconnect';
-const CACHE  = 'mc-v8';
+// Served at: https://nexlitedigitalsolutionslimited.digital/motoconnect/
+const GHPATH = '/motoconnect';
+const CACHE  = 'mc-v9';
 
 // Every URL the app needs to open offline — both slash forms required
 const URLS = [
