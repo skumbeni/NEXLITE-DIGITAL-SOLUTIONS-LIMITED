@@ -75,7 +75,7 @@
   --table-row-hover:rgba(255,255,255,.02);
   --fi-bg:rgba(0,0,0,.3);
   --select-bg:rgba(0,0,0,.3);
-  --movl-bg:rgba(0,0,0,.7);
+  --movl-bg:rgba(0,0,0,.78);
 }
 /* ── LIGHT MODE — Pure & Clean ───────────────────────────────
    Solid whites, true blacks, zero glass effects.
@@ -379,7 +379,7 @@ body.light .clockout-btn{border-color:var(--amber);color:var(--amber);}
 .stab.act{background:rgba(59,130,246,.1);color:var(--blue);border-color:rgba(59,130,246,.3);}
 
 /* Modal */
-.movl{position:fixed;inset:0;background:var(--movl-bg);backdrop-filter:blur(6px);z-index:1000;display:flex;align-items:flex-end;justify-content:center;}
+.movl{position:fixed;inset:0;background:var(--movl-bg);z-index:1000;display:flex;align-items:flex-end;justify-content:center;}
 .modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:24px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;box-shadow:var(--shadow-lg);}
 .mtitle{font-family:var(--fh);font-size:24px;font-weight:800;color:var(--white);margin-bottom:18px;letter-spacing:-0.3px;}
 .mact{display:flex;gap:10px;margin-top:20px;}
@@ -413,7 +413,7 @@ body.light .clockout-btn{border-color:var(--amber);color:var(--amber);}
 #cop-log{display:flex;flex-direction:column;max-height:50vh;overflow-y:auto;padding:4px 2px;margin-bottom:10px;}
 .cop-quick{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
 .cop-quick button{font-size:14px;padding:6px 10px;border-radius:20px;border:1px solid var(--border);background:var(--overlay-light-3);color:var(--text);cursor:pointer;}
-#gsearch-overlay{position:fixed;inset:0;background:var(--movl-bg);backdrop-filter:blur(6px);z-index:800;display:none;flex-direction:column;padding:16px 16px 0;}
+#gsearch-overlay{position:fixed;inset:0;background:var(--movl-bg);z-index:800;display:none;flex-direction:column;padding:16px 16px 0;}
 #gsearch-box{background:var(--surface);border:1.5px solid var(--green);border-radius:12px;padding:11px 14px;font-size:20px;color:var(--text);width:100%;box-sizing:border-box;outline:none;}
 #gsearch-results{flex:1;overflow-y:auto;padding-bottom:24px;}
 .gsr-section{font-family:var(--fh);font-size:16px;font-weight:700;color:var(--muted);letter-spacing:.8px;text-transform:uppercase;padding:10px 0 6px;}
@@ -6123,7 +6123,7 @@ function renderGeneral(){
         </div>
       </div>
     </div>
-    ${_syncStatusChip()}
+    <span class="sync-chip-live">${_syncStatusChip()}</span>
 
     ${hasPrices?`
     <!-- Financial Overview -->
@@ -7527,7 +7527,7 @@ function renderMaize(){
 
   return `
     ${comSelector}
-    ${_syncStatusChip()}
+    <span class="sync-chip-live">${_syncStatusChip()}</span>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <div class="sh" style="margin:0">${esc(com.icon)} ${esc(com.name)} Handling</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -8555,7 +8555,7 @@ function tasksForRole(roleName){const r=(DATA.staffRoles||[]).find(x=>x.name===r
 
 function renderStaff(){
   return `
-    ${_syncStatusChip()}
+    <span class="sync-chip-live">${_syncStatusChip()}</span>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:8px">
       <div class="sh" style="margin:0;flex-shrink:0">Staff</div>
       <div style="display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap;padding-bottom:2px">
@@ -12450,6 +12450,17 @@ function _syncStatusChip(){
   return `<div style="display:inline-flex;align-items:center;gap:5px;background:rgba(0,214,143,.06);border:1px solid rgba(0,214,143,.2);border-radius:20px;padding:3px 10px;font-size:15px;font-weight:700;color:var(--green);margin-bottom:10px">✅ ${lbl}</div>`;
 }
 
+// Fix: the sync chip's "Xm/Xh ago" text was baked in at render time and
+// never updated on its own — it looked frozen/stale until something else
+// forced a full re-render (tab switch, data edit). This refreshes just the
+// chip in place so it keeps ticking even while the user is idle on a screen.
+function _refreshSyncChipLive(){
+  document.querySelectorAll('.sync-chip-live').forEach(el=>{
+    el.innerHTML = _syncStatusChip();
+  });
+}
+setInterval(_refreshSyncChipLive, 30*1000);
+
 function saveAutoLogout(){
   if(!requireAdmin('change auto-logout setting'))return;
   const val=Number(document.getElementById('auto-logout-input')?.value||10);
@@ -12944,6 +12955,7 @@ setInterval(()=>{
     _fbSyncFailToastShown = false; // re-arm after a successful sync
   }
   updateLastSyncDisplay(); // keep the Settings label live if the tab is open
+  _refreshSyncChipLive();
 }, 5*60*1000);
 
 // Periodic FB PULL every 60 seconds while online.
@@ -12962,6 +12974,7 @@ setInterval(()=>{
   if (ovl && ovl.style.display === 'flex') return; // don't interrupt active data entry
   fbRestoreData().then(restored=>{
     if (restored) { render(); showToast('☁ Synced changes from another device'); }
+    else { _refreshSyncChipLive(); }
   }).catch(()=>{});
 }, 60*1000);
 
@@ -13909,7 +13922,7 @@ function renderContacts(){
         </div>
       </div>
     </div>
-    ${_syncStatusChip()}
+    <span class="sync-chip-live">${_syncStatusChip()}</span>
     ${suppliers.length||customers.length?`
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
       <div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--green);border-radius:12px;padding:12px">
