@@ -12947,7 +12947,17 @@ setTimeout(async ()=>{
 // unnoticed until the user happens to check Settings.
 let _fbSyncFailToastShown = false;
 setInterval(()=>{
-  if(location.hash!=='#recover' && ONLINE && USER) scheduleFbSync();
+  // Fix: this used to gate on the custom `ONLINE` flag, which is only ever
+  // updated by the browser 'online'/'offline' events. Inside the Android
+  // WebView wrapper (Median.co) those events can be missed or never fire on
+  // reconnect, leaving ONLINE stuck at false forever even though the device
+  // has a live connection — silently blocking auto-sync until app restart.
+  // Resync the flag from the real source of truth (navigator.onLine) on
+  // every tick so a missed event can't wedge sync permanently.
+  if (ONLINE !== navigator.onLine) { ONLINE = navigator.onLine; updPill(); updateConnStatus(); }
+  if(location.hash!=='#recover' && navigator.onLine && USER){
+    flushOfflineQueue().then(() => scheduleFbSync());
+  }
   if(_fbSyncFailCount>=3 && !_fbSyncFailToastShown){
     _fbSyncFailToastShown = true;
     showToast('⚠️ Cloud sync has failed ' + _fbSyncFailCount + 'x: ' + (_lastFbSyncError||'unknown error'), 8000);
@@ -12969,7 +12979,9 @@ setInterval(()=>{
 // someone mid-entry.
 setInterval(()=>{
   if (location.hash === '#recover') return;
-  if (!ONLINE || !USER) return;
+  // Fix: check navigator.onLine directly rather than the custom ONLINE flag —
+  // see note on the 5-minute push interval above for why that flag can go stale.
+  if (!navigator.onLine || !USER) return;
   const ovl = document.getElementById('modal-ovl');
   if (ovl && ovl.style.display === 'flex') return; // don't interrupt active data entry
   fbRestoreData().then(restored=>{
@@ -12977,6 +12989,21 @@ setInterval(()=>{
     else { _refreshSyncChipLive(); }
   }).catch(()=>{});
 }, 60*1000);
+
+// Fix: the offline-write queue previously only flushed on the browser 'online'
+// event, which Android WebView wrappers (Median.co) can fail to fire on
+// reconnect — leaving queued writes stuck until the app was fully restarted.
+// Foregrounding the app is the moment users actually notice a stale sync
+// pill, so use it as an extra trigger to resync ONLINE with reality and
+// retry any pending push.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (location.hash === '#recover') return;
+  const wasOnline = ONLINE;
+  ONLINE = navigator.onLine;
+  if (ONLINE !== wasOnline) { updPill(); updateConnStatus(); }
+  if (ONLINE && USER) flushOfflineQueue().then(() => scheduleFbSync());
+});
 
 // ══════════════════════════════════════════════════════════
 // ██ BOOKS TAB — In-app document creator (Word / Spreadsheet)
