@@ -621,6 +621,12 @@ const TIER_PRICES = { free:0, starter:90, growth:150, pro:300 };
 // just for immediate notification, not the only way you'll see it.
 const SUPPORT_WHATSAPP = '';
 
+// Fill in with the Play Store listing (or your own site) once published —
+// this is what "Share app" on the Settings tab sends people to. Left blank,
+// Share app still works: it just shares the message without a link.
+const APP_SHARE_URL = 'https://nexlitedigitalsolutionslimited.digital/chilimb-master/';
+const APP_SHARE_MESSAGE = "I use Chilimba Master to run our chilimba — contributions, payout rotation, and approvals all tracked automatically instead of a notebook or WhatsApp thread. Worth trying for your group:";
+
 let state = loadState();
 ensureGroupId();
 if(!state.paymentSubmissions) state.paymentSubmissions = {};
@@ -3669,6 +3675,11 @@ function renderSettings(){
         <button class="btn secondary" id="sync_group_id_copy" style="width:auto; padding:8px 12px;">Copy</button>
       </div>
     </div>
+    <div class="card">
+      <h2>Share app</h2>
+      <div class="member-sub" style="margin-bottom:8px;">Know another group still using a notebook or a WhatsApp thread? Send them the app.</div>
+      <button class="btn secondary full" id="share_app_btn">Share Chilimba Master</button>
+    </div>
     ${officer ? renderBackupCard() : ''}
     ${renderAppLockCard()}`;
 }
@@ -3746,6 +3757,36 @@ function bindSettings(){
         // select-and-let-the-person-copy-manually instead of failing silently.
         document.getElementById('sync_group_id').select();
         toast('Selected — copy manually');
+      }
+    };
+  }
+  const shareBtn = document.getElementById('share_app_btn');
+  if(shareBtn){
+    shareBtn.onclick = async ()=>{
+      const shareText = APP_SHARE_URL ? `${APP_SHARE_MESSAGE} ${APP_SHARE_URL}` : APP_SHARE_MESSAGE;
+      // Prefer the native share sheet (works in the Android app shell via
+      // Median and in most mobile browsers) so people can pick WhatsApp,
+      // SMS, email, etc. themselves rather than us guessing.
+      if(navigator.share){
+        try{
+          await navigator.share({ title:'Chilimba Master', text: APP_SHARE_MESSAGE, url: APP_SHARE_URL || undefined });
+        }catch(e){
+          // Person cancelled the share sheet — not an error, do nothing.
+        }
+        return;
+      }
+      // No native share sheet (older/desktop browsers): fall back to
+      // WhatsApp directly, same pattern as the reminder/summary sharing
+      // above, so there's still a one-tap path.
+      try{
+        window.open(`https://wa.me/?text=${encodeURIComponent(shareText)}`, '_blank');
+      }catch(e){
+        try{
+          await navigator.clipboard.writeText(shareText);
+          toast('Copied — paste it anywhere');
+        }catch(e2){
+          toast('Could not open share — copy the link manually');
+        }
       }
     };
   }
