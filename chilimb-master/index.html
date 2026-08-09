@@ -9,6 +9,12 @@
 <link rel="icon" type="image/png" sizes="512x512" href="cm-icon-512.png">
 <link rel="icon" type="image/png" sizes="192x192" href="cm-icon-192.png">
 <link rel="apple-touch-icon" href="cm-apple-touch-icon.png">
+<!-- PWA installability -->
+<link rel="manifest" href="manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Chilimba Master">
 <!-- Open Graph / social preview -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Chilimba Master">
@@ -620,6 +626,40 @@ const TIER_PRICES = { free:0, starter:90, growth:150, pro:300 };
 // picks up every application on its own next refresh either way — this is
 // just for immediate notification, not the only way you'll see it.
 const SUPPORT_WHATSAPP = '';
+
+// ---------------------- Install app (PWA) ----------------------
+// Chrome/Edge/Android fire this before showing their own install UI; we
+// stash the event and trigger it ourselves from the Settings tab button
+// instead, so there's one obvious place to install rather than relying on
+// people noticing a browser icon. Registering this listener at the top
+// level (not inside a function) matters — it can fire any time after
+// load, before the person ever opens Settings.
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e)=>{
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  refreshInstallCard();
+});
+window.addEventListener('appinstalled', ()=>{
+  deferredInstallPrompt = null;
+  refreshInstallCard();
+});
+function isRunningInstalled(){
+  // Standalone display mode covers installed PWAs on Android/desktop
+  // Chrome; navigator.standalone is Safari's older iOS-specific flag.
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+function isIOSDevice(){
+  return /iphone|ipad|ipod/i.test(navigator.userAgent);
+}
+// Re-renders just the install card in place if Settings happens to be the
+// open tab when the browser's install-eligibility event fires, so the
+// button doesn't just silently start working with no visual change.
+function refreshInstallCard(){
+  const card = document.getElementById('installAppCard');
+  if(card) card.outerHTML = renderInstallCard();
+  bindInstallCard();
+}
 
 // Fill in with the Play Store listing (or your own site) once published —
 // this is what "Share app" on the Settings tab sends people to. Left blank,
@@ -3675,6 +3715,7 @@ function renderSettings(){
         <button class="btn secondary" id="sync_group_id_copy" style="width:auto; padding:8px 12px;">Copy</button>
       </div>
     </div>
+    ${renderInstallCard()}
     <div class="card">
       <h2>Share app</h2>
       <div class="member-sub" style="margin-bottom:8px;">Know another group still using a notebook or a WhatsApp thread? Send them the app.</div>
@@ -3682,6 +3723,52 @@ function renderSettings(){
     </div>
     ${officer ? renderBackupCard() : ''}
     ${renderAppLockCard()}`;
+}
+
+// Standalone card so it can be re-rendered on its own via refreshInstallCard()
+// when the browser's install-eligibility event fires after Settings is
+// already open, without re-rendering (and losing scroll position on) the
+// rest of the tab.
+function renderInstallCard(){
+  if(isRunningInstalled()){
+    return `<div class="card" id="installAppCard"><h2>Install app</h2><div class="member-sub">Already installed on this device.</div></div>`;
+  }
+  if(deferredInstallPrompt){
+    return `
+    <div class="card" id="installAppCard">
+      <h2>Install app</h2>
+      <div class="member-sub" style="margin-bottom:8px;">Add Chilimba Master to your home screen — opens like a regular app, no browser bar, works offline for anything already loaded.</div>
+      <button class="btn full" id="install_app_btn">Install Chilimba Master</button>
+    </div>`;
+  }
+  if(isIOSDevice()){
+    return `
+    <div class="card" id="installAppCard">
+      <h2>Install app</h2>
+      <div class="member-sub">On iPhone/iPad: tap the Share icon in Safari, then "Add to Home Screen".</div>
+    </div>`;
+  }
+  // Neither eligible yet (e.g. Chrome hasn't fired beforeinstallprompt —
+  // often needs a bit of time on the page first) nor iOS — say nothing
+  // rather than show a dead button.
+  return `<div class="card" id="installAppCard" style="display:none;"></div>`;
+}
+
+function bindInstallCard(){
+  const installBtn = document.getElementById('install_app_btn');
+  if(installBtn){
+    installBtn.onclick = async ()=>{
+      if(!deferredInstallPrompt) return;
+      installBtn.disabled = true;
+      deferredInstallPrompt.prompt();
+      const choice = await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      refreshInstallCard();
+      if(choice.outcome !== 'accepted'){
+        toast('Install cancelled');
+      }
+    };
+  }
 }
 
 // Human-friendly label for each logActivity() action code. Falls back to
@@ -3790,6 +3877,7 @@ function bindSettings(){
       }
     };
   }
+  bindInstallCard();
   bindAppLockCard();
   bindBackupCard();
 }
