@@ -2132,6 +2132,32 @@ let _lastFbSyncError = null;
 // (b) toast a warning after repeated silent failures instead of never.
 let _fbSyncFailCount = 0;
 
+// Fix: "sync only works after logout/login" turned out to be a real Auth
+// session loss, not just the earlier restoration race — this device's
+// Firebase Auth session isn't surviving app restart inside the Median.co
+// WebView (manual "Upload to Cloud" works right after a fresh password
+// login, then silently 401s again after the app is closed/reopened, even
+// though the local "Stay Signed In" app session is still valid).
+// We deliberately do NOT fix this by persisting a refresh token or password
+// locally — "Stay Signed In" is documented to store only a username +
+// expiry precisely so a stolen device can't be used to extract anything
+// replayable against the backend, and silently working around that here
+// would undo that guarantee. Instead we detect the specific case (a 401/403
+// while the app believes it's logged in but the SDK has no current user)
+// and surface it as a one-tap "reconnect" prompt that asks for the password
+// again — same trust boundary as a normal login, just without forcing a
+// full app logout.
+let _fbAuthSessionLost = false;
+function _flagIfAuthSessionLost(e) {
+  const msg = (e && (e.message || String(e))) || '';
+  const isAuthHttpErr = /^HTTP 40[13]/.test(msg);
+  const hasNoAuthSession = !(typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser);
+  if (isAuthHttpErr && hasNoAuthSession && USER) {
+    _fbAuthSessionLost = true;
+    updPill();
+  }
+}
+
 async function _doFbSyncImpl() {
   if (!isFbConfigured() || !navigator.onLine) return false;
   const key = depotKey();
@@ -2173,11 +2199,13 @@ async function _doFbSyncImpl() {
     sv(DATA); // persist updated _lastFbSync to both localStorage and IDB
     _lastFbSyncError = null;
     _fbSyncFailCount = 0;
+    _fbAuthSessionLost = false; // a successful write proves the Auth session is fine
     updPill();
     return true;
   } catch(e) {
     _lastFbSyncError = (e && (e.message || e.status || String(e))) || 'unknown error';
     _fbSyncFailCount++;
+    _flagIfAuthSessionLost(e);
     console.warn('[MDM] Data sync error:', e);
     updPill();
     return false;
@@ -2250,6 +2278,7 @@ async function _fbRestoreDataImpl() {
     return false;
   } catch(e) {
     console.warn('[MDM] Cloud restore error.');
+    _flagIfAuthSessionLost(e);
     return false;
   }
 }
@@ -4118,7 +4147,15 @@ function updateConnStatus(){
 function updPill(){
   const p=document.getElementById('sync-pill');
   if(!p)return;
+  p.onclick = _fbAuthSessionLost ? reconnectCloudSync : null;
+  p.style.cursor = _fbAuthSessionLost ? 'pointer' : 'default';
   if(!ONLINE){p.className='spill sp-of';p.textContent=_offlineQueue&&_offlineQueue.length?'📵 Offline ('+_offlineQueue.length+' queued)':'📵 Offline';return;}
+  // Fix: distinguish "the Firebase Auth session behind sync has been lost"
+  // (fixed with a quick password re-entry, one tap) from a generic sync
+  // failure (network/rules/App Check — fixed by itself once conditions
+  // clear). Showing both as the same red "Sync failing" pill left this
+  // state undiscoverable except by noticing a stale "Last Synced" time.
+  if(_fbAuthSessionLost){p.className='spill sp-err';p.title='Tap to reconnect cloud sync';p.textContent='🔒 Tap to reconnect';return;}
   const lastSync=DATA._lastFbSync||0;
   const ageMs=lastSync?Date.now()-lastSync:Infinity;
   // Fix: a broken auto-sync (App Check / auth / rules failure) previously
@@ -4127,6 +4164,54 @@ function updPill(){
   if(_fbSyncFailCount>=3){p.className='spill sp-err';p.title=_lastFbSyncError||'';p.textContent='⚠️ Sync failing';return;}
   if(ageMs<10*60*1000){p.className='spill sp-on';p.textContent='✅ Synced';}
   else{p.className='spill sp-sy';p.textContent='☁ Online';}
+}
+
+// Fix: brings the Firebase Auth session behind cloud sync back to life
+// without a full app logout. This asks for the SAME password a normal
+// login would (nothing new is stored — see the _fbAuthSessionLost comment
+// above), then retries the queued write and a pull so the pill recovers
+// immediately instead of waiting for the next 5-minute tick.
+function reconnectCloudSync(){
+  if (!USER) return;
+  openModal(`
+    <div class="mtitle">🔒 Reconnect Cloud Sync</div>
+    <div style="font-size:18px;color:var(--muted);margin-bottom:16px;line-height:1.7;text-align:center">
+      Your cloud sync session expired on this device. Enter your password to reconnect — your data and login stay exactly as they are.
+    </div>
+    <div class="fw">
+      <div class="fl">Password</div>
+      <input class="fi" id="reconn-pw-input" type="password" placeholder="Enter your password"
+        autocomplete="current-password" autocapitalize="none" spellcheck="false"/>
+    </div>
+    <div class="err-box" id="reconn-pw-err" style="display:none"></div>
+    <div class="mact">
+      <button class="btn bo" onclick="closeModal()">Cancel</button>
+      <button class="btn bg" id="reconn-pw-btn" onclick="_confirmReconnectCloudSync()">✅ Reconnect</button>
+    </div>`);
+  const inp = document.getElementById('reconn-pw-input');
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') _confirmReconnectCloudSync(); });
+  inp.focus();
+}
+async function _confirmReconnectCloudSync(){
+  const pw = (document.getElementById('reconn-pw-input')?.value || '');
+  const err = document.getElementById('reconn-pw-err');
+  const btn = document.getElementById('reconn-pw-btn');
+  if (!pw) { err.style.display='block'; err.textContent='⚠️ Enter your password.'; return; }
+  if (btn) { btn.disabled=true; btn.textContent='⏳ Reconnecting…'; }
+  try {
+    await fbAuthSignIn(_authEmailFor(USER.username), pw);
+    _fbAuthSessionLost = false;
+    closeModal();
+    showToast('☁ Cloud sync reconnected');
+    flushOfflineQueue().then(() => scheduleFbSync());
+    fbRestoreData().catch(()=>{});
+  } catch (e) {
+    if (btn) { btn.disabled=false; btn.textContent='✅ Reconnect'; }
+    err.style.display='block';
+    err.textContent = e && e.code === 'INVALID_PASSWORD' ? '❌ Incorrect password. Try again.' : '⚠️ Couldn\'t reconnect: ' + (e.message || 'try again.');
+    document.getElementById('reconn-pw-input').value='';
+    document.getElementById('reconn-pw-input').focus();
+  }
 }
 
 // ── LANDING / SIGNUP FLOW ────────────────────────────────────────────────────
