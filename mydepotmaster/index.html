@@ -2157,11 +2157,39 @@ let _fbAuthSessionLost = false;
 // simply: the app believes you're logged in, but the Firebase Auth SDK has no
 // current user. Trust that combination directly instead of pattern-matching
 // the error message.
+//
+// Separately: a 401 "Permission denied" can ALSO happen with a perfectly
+// valid, current Auth session — that means the token is fine but this uid was
+// never granted access to the depot (see _grantAuthorizedUid). Reconnecting
+// with a password does nothing for that case (a fresh token is just as
+// unauthorized), so it's tracked as a distinct state with its own message and
+// an automatic repair attempt, instead of pill/toast saying "tap to
+// reconnect" for something reconnecting can't fix.
+let _fbAuthorizationDenied = false;
 function _flagIfAuthSessionLost(e) {
-  const hasNoAuthSession = !(typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser);
-  if (hasNoAuthSession && USER) {
+  const hasAuthSession = !!(typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser);
+  if (!USER) return;
+  if (!hasAuthSession) {
     _fbAuthSessionLost = true;
     updPill();
+    return;
+  }
+  const msg = (e && (e.message || String(e))) || '';
+  if (/permission denied/i.test(msg)) {
+    _fbAuthorizationDenied = true;
+    updPill();
+    // One self-heal attempt: the grant write may simply have failed earlier
+    // and never been retried (exactly the Stay-Signed-In gap fixed above).
+    // Idempotent — safe to call even if the grant already exists.
+    const uid = firebase.auth().currentUser.uid;
+    const installId = DATA.installId;
+    if (uid && installId) {
+      _grantAuthorizedUid(installId, uid).then(() => {
+        _fbAuthorizationDenied = false;
+        updPill();
+        scheduleFbSync();
+      });
+    }
   }
 }
 
@@ -2207,6 +2235,7 @@ async function _doFbSyncImpl() {
     _lastFbSyncError = null;
     _fbSyncFailCount = 0;
     _fbAuthSessionLost = false; // a successful write proves the Auth session is fine
+    _fbAuthorizationDenied = false; // ...and that this uid is authorized too
     updPill();
     return true;
   } catch(e) {
@@ -2289,6 +2318,23 @@ async function _fbRestoreDataImpl() {
     return false;
   }
 }
+// Fix: centralizes what to tell the user after any sync failure — routes
+// straight to the reconnect modal for an expired session, to the
+// authorization-denied info for a valid-but-unauthorized session, or falls
+// back to the plain error text for anything else (network blips, etc.).
+// Used by the manual Upload/Download buttons and the periodic background
+// check so all three paths behave consistently instead of each having its
+// own dead-end toast.
+function _syncFailureToast(fallbackMsg){
+  if (_fbAuthSessionLost) {
+    showToast('🔒 Cloud sync session expired — tap to reconnect', 8000, reconnectCloudSync);
+  } else if (_fbAuthorizationDenied) {
+    showToast('🚫 Account not authorized for cloud sync — tap for details', 8000, showAuthorizationDeniedInfo);
+  } else {
+    showToast(fallbackMsg, 6000);
+  }
+}
+
 async function forceFbSync() {
   const btn = document.querySelector('button[onclick="forceFbSync()"]');
   if(btn){btn.disabled=true;btn.textContent='⏳ Syncing…';}
@@ -2298,7 +2344,7 @@ async function forceFbSync() {
   if (ok) {
     showToast('✅ Data uploaded to cloud');
   } else {
-    showToast('❌ Sync failed: ' + (_lastFbSyncError || 'unknown error'), 6000);
+    _syncFailureToast('❌ Sync failed: ' + (_lastFbSyncError || 'unknown error'));
   }
 }
 
@@ -2346,7 +2392,11 @@ async function forceCloudRestore() {
     showToast('✅ Data downloaded from cloud');
     updateLastSyncDisplay();
   } catch(e) {
-    showToast('❌ Download failed: ' + e.message);
+    // Fix: this previously never called _flagIfAuthSessionLost, so a session
+    // loss or authorization gap hit via "Download from Cloud" specifically
+    // never got flagged or offered a fix — just a dead "Download failed" toast.
+    _flagIfAuthSessionLost(e);
+    _syncFailureToast('❌ Download failed: ' + e.message);
   }
   if (btn) { btn.disabled = false; btn.textContent = '⬇ Download from Cloud'; }
 }
@@ -2354,6 +2404,16 @@ async function forceCloudRestore() {
 function updateLastSyncDisplay() {
   const el = document.getElementById('last-sync-time');
   if (!el) return;
+  if (_fbAuthorizationDenied) {
+    el.innerHTML = '🚫 Not authorized — <span style="text-decoration:underline;cursor:pointer" onclick="showAuthorizationDeniedInfo()">tap for details</span>';
+    el.style.color = '#ef4444';
+    return;
+  }
+  if (_fbAuthSessionLost) {
+    el.innerHTML = '🔒 Session expired — <span style="text-decoration:underline;cursor:pointer" onclick="reconnectCloudSync()">tap to reconnect</span>';
+    el.style.color = '#ef4444';
+    return;
+  }
   if (_fbSyncFailCount >= 3) {
     el.textContent = '⚠️ Sync failing — ' + (_lastFbSyncError || 'unknown error');
     el.style.color = '#ef4444';
@@ -4163,8 +4223,8 @@ function updateConnStatus(){
 function updPill(){
   const p=document.getElementById('sync-pill');
   if(!p)return;
-  p.onclick = _fbAuthSessionLost ? reconnectCloudSync : null;
-  p.style.cursor = _fbAuthSessionLost ? 'pointer' : 'default';
+  p.onclick = _fbAuthSessionLost ? reconnectCloudSync : (_fbAuthorizationDenied ? showAuthorizationDeniedInfo : null);
+  p.style.cursor = (_fbAuthSessionLost || _fbAuthorizationDenied) ? 'pointer' : 'default';
   if(!ONLINE){p.className='spill sp-of';p.textContent=_offlineQueue&&_offlineQueue.length?'📵 Offline ('+_offlineQueue.length+' queued)':'📵 Offline';return;}
   // Fix: distinguish "the Firebase Auth session behind sync has been lost"
   // (fixed with a quick password re-entry, one tap) from a generic sync
@@ -4172,6 +4232,12 @@ function updPill(){
   // clear). Showing both as the same red "Sync failing" pill left this
   // state undiscoverable except by noticing a stale "Last Synced" time.
   if(_fbAuthSessionLost){p.className='spill sp-err';p.title='Tap to reconnect cloud sync';p.textContent='🔒 Tap to reconnect';return;}
+  // Fix: a valid session that's still denied by the rules (missing
+  // authorizedUids grant) looks identical to a lost session at the HTTP
+  // level, but a password reconnect can't fix it — a fresh token is just as
+  // unauthorized. Show it as its own state so the person doesn't waste time
+  // re-entering a password that was never the problem.
+  if(_fbAuthorizationDenied){p.className='spill sp-err';p.title='Tap for details';p.textContent='🚫 Not authorized';return;}
   const lastSync=DATA._lastFbSync||0;
   const ageMs=lastSync?Date.now()-lastSync:Infinity;
   // Fix: a broken auto-sync (App Check / auth / rules failure) previously
@@ -4180,6 +4246,29 @@ function updPill(){
   if(_fbSyncFailCount>=3){p.className='spill sp-err';p.title=_lastFbSyncError||'';p.textContent='⚠️ Sync failing';return;}
   if(ageMs<10*60*1000){p.className='spill sp-on';p.textContent='✅ Synced';}
   else{p.className='spill sp-sy';p.textContent='☁ Online';}
+}
+
+// Fix: shown when _fbAuthorizationDenied is true — the account's Firebase
+// token is valid but the depot's rules don't recognize this uid yet. The
+// self-heal retry in _flagIfAuthSessionLost already tried to fix this
+// silently; if the pill is still showing this state, the retry itself
+// failed (likely offline or rules genuinely blocking the grant write too),
+// so surface the concrete IDs the developer needs to fix it manually rather
+// than a vague error.
+function showAuthorizationDeniedInfo(){
+  const uid = (typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser) ? firebase.auth().currentUser.uid : '(none)';
+  openModal(`
+    <div class="mtitle">🚫 Not Authorized for Cloud Sync</div>
+    <div style="font-size:18px;color:var(--muted);margin-bottom:16px;line-height:1.7">
+      Your login is valid, but this device's account isn't yet authorized to sync this depot's cloud data. Re-entering your password won't fix this — it needs to be granted on the backend.
+    </div>
+    <div style="font-size:16px;color:var(--text);background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:16px;word-break:break-all">
+      <div><strong>Depot ID:</strong> ${esc(DATA.installId||'—')}</div>
+      <div><strong>Username:</strong> ${esc(USER?USER.username:'—')}</div>
+      <div><strong>Auth UID:</strong> ${esc(uid)}</div>
+    </div>
+    <div style="font-size:16px;color:var(--muted);margin-bottom:16px">Share these details with support so your uid can be added to this depot's authorized list.</div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Close</button><button class="btn bg" onclick="closeModal();showTab('settings')">Contact Support</button></div>`);
 }
 
 // Fix: brings the Firebase Auth session behind cloud sync back to life
@@ -13043,6 +13132,19 @@ setTimeout(async ()=>{
         updPill();
         applyDepotInfo();
         initFirebase();
+        // Fix: the authorizedUids grant (see _grantAuthorizedUid) was only ever
+        // retried from the full manual login flow — but a "Stay Signed In"
+        // device never goes through that flow again, so a grant write that
+        // failed once (transient network blip, or ran before rules were
+        // tightened) stayed broken forever, permanently 401ing every sync on
+        // this device with "Permission denied" no matter how many times the
+        // user reconnected their password. Retry it here too, on every silent
+        // auto-login — it's a no-op if the grant already exists.
+        if (_userObj.uid) {
+          window._fbAuthSdkReady.then(() => {
+            if (firebase.auth().currentUser) _grantAuthorizedUid(DATA.installId, _userObj.uid);
+          });
+        }
         fbRestoreData().then(restored=>{
           if(restored){ render(); showToast('☁ Data restored from cloud'); }
         }).catch(()=>{});
@@ -13091,14 +13193,11 @@ setInterval(()=>{
   }
   if(_fbSyncFailCount>=3 && !_fbSyncFailToastShown){
     _fbSyncFailToastShown = true;
-    // Fix: route straight into the one-tap reconnect flow when that's the
-    // actual cause, instead of a dead-end warning that leaves logout/login
-    // as the only fix the user knows about.
-    if (_fbAuthSessionLost) {
-      showToast('🔒 Cloud sync session expired — tap to reconnect', 8000, reconnectCloudSync);
-    } else {
-      showToast('⚠️ Cloud sync has failed ' + _fbSyncFailCount + 'x: ' + (_lastFbSyncError||'unknown error'), 8000);
-    }
+    // Fix: route through the same shared helper as the manual buttons, so
+    // the background check offers reconnect / authorization-denied details
+    // instead of a dead-end warning that leaves logout/login as the only
+    // fix the user knows about.
+    _syncFailureToast('⚠️ Cloud sync has failed ' + _fbSyncFailCount + 'x: ' + (_lastFbSyncError||'unknown error'));
   } else if(_fbSyncFailCount===0){
     _fbSyncFailToastShown = false; // re-arm after a successful sync
   }
