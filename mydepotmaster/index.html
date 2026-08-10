@@ -2148,11 +2148,18 @@ let _fbSyncFailCount = 0;
 // again — same trust boundary as a normal login, just without forcing a
 // full app logout.
 let _fbAuthSessionLost = false;
+// Fix: this used to only flag a lost Auth session when the error text matched
+// exactly "HTTP 401"/"HTTP 403" — but a lost session can also surface as a
+// generic fetch failure, a CORS-wrapped error, or an App Check rejection,
+// none of which match that literal string. Those cases fell through with no
+// lock icon and no tap-to-reconnect, so the only "fix" users found was a full
+// logout/login. The real signal that matters isn't the exact error text, it's
+// simply: the app believes you're logged in, but the Firebase Auth SDK has no
+// current user. Trust that combination directly instead of pattern-matching
+// the error message.
 function _flagIfAuthSessionLost(e) {
-  const msg = (e && (e.message || String(e))) || '';
-  const isAuthHttpErr = /^HTTP 40[13]/.test(msg);
   const hasNoAuthSession = !(typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser);
-  if (isAuthHttpErr && hasNoAuthSession && USER) {
+  if (hasNoAuthSession && USER) {
     _fbAuthSessionLost = true;
     updPill();
   }
@@ -4125,8 +4132,11 @@ function _renderCacheKey() {
 window.addEventListener('offline',()=>{ONLINE=false;updPill();updateConnStatus();});
 
 // Simple toast notification
+// onTap (optional): makes the toast itself clickable, e.g. so a sync-failure
+// toast can jump straight into the reconnect flow instead of the user having
+// to separately notice and tap the pill.
 let _toastT1 = null, _toastT2 = null;
-function showToast(msg, duration=3500) {
+function showToast(msg, duration=3500, onTap=null) {
   let t = document.getElementById('update-toast');
   if (!t) return;
   // Cancel any in-progress fade so stale text never flashes
@@ -4135,6 +4145,8 @@ function showToast(msg, duration=3500) {
   t.textContent = msg;
   t.style.display = 'block';
   t.style.opacity = '1';
+  t.onclick = onTap;
+  t.style.cursor = onTap ? 'pointer' : 'default';
   _toastT1 = setTimeout(()=>{
     t.style.opacity = '0';
     _toastT2 = setTimeout(()=>{ t.style.display='none'; _toastT1=null; _toastT2=null; }, 400);
@@ -6439,7 +6451,7 @@ function renderGenReceived(){
       <div style="font-weight:700;font-size:17px">${fmtDate(item.date)}${approvalBadge(item)}</div>
       <div style="font-size:15px;color:var(--muted)">${item.time||'—'}</div>
     </td>
-    <td style="font-weight:600">${esc(item.itemName)}</td>
+    <td style="font-weight:600">${esc(item.itemName)}${item.notes||item.supplierName?`<div style="font-weight:400;font-size:14px;color:var(--muted);white-space:normal">${item.supplierName?`🚚 ${esc(item.supplierName)}`:''}${item.notes&&item.supplierName?' · ':''}${item.notes?`📝 ${esc(item.notes)}`:''}</div>`:''}</td>
     <td style="color:var(--green);text-align:right;font-weight:700">${Number(item.received||0).toLocaleString()}</td>
     <td style="color:var(--muted);text-align:right;font-size:17px">${pp>0?zm(pp):'—'}</td>
     <td style="color:var(--blue);text-align:right;font-size:17px">${sv!==null?zm(sv):'—'}</td>
@@ -7478,6 +7490,7 @@ function _doOpenEditGenRec(id){
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="eger-date" value="${rec.date}"/></div>
     <div class="fw"><div class="fl">Best-Before / Expiry Date <span style="font-size:15px;color:var(--muted)">(optional)</span></div><input class="fi" type="date" id="eger-expiry" value="${rec.expiryDate||''}"/></div>
     <div class="fw"><div class="fl">Notes</div><input class="fi" id="eger-notes" value="${esc(rec.notes||'')}" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div class="fw"><div class="fl">Supplier <span style="font-size:15px;color:var(--muted)">(optional)</span></div>${(()=>{const sups=(DATA.contacts||[]).filter(c=>c.type==='supplier');return sups.length>0?`<select class="fi" id="eger-supplier"><option value="">— None / Unknown —</option>${sups.map(s=>`<option value="${s.id}"${s.id===rec.supplierId?' selected':''}>${esc(s.name)}</option>`).join('')}</select>`:`<input class="fi" id="eger-supplier-name" value="${esc(rec.supplierName||'')}" placeholder="SUPPLIER NAME (optional)" oninput="this.value=this.value.toUpperCase()"/>`;})()}</div>
     <div class="fw"><div class="fl">Purchase Payment Status</div><select class="fi" id="eger-credit"><option value="paid"${(rec.creditStatus||'paid')==='paid'?' selected':''}>✅ PAID — Already paid supplier</option><option value="partial"${rec.creditStatus==='partial'?' selected':''}>🔶 PARTIAL — Partially paid</option><option value="credit"${rec.creditStatus==='credit'?' selected':''}>🔴 CREDIT — Owe supplier / on account</option></select></div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveEditGenRec('${id}')">✓ Save Changes</button></div>`);
 }
@@ -7489,11 +7502,21 @@ function saveEditGenRec(id){
   const pprice=Number(document.getElementById('eger-pprice')?.value||0);
   if(!name||!rec){alert('Enter item name and quantity.');return;}
   const before=DATA.generalInventory.find(x=>String(x.id)===String(id));
+  let supplierId='', supplierName='';
+  const supSel=document.getElementById('eger-supplier');
+  const supNameIn=document.getElementById('eger-supplier-name');
+  if(supSel&&supSel.value){
+    supplierId=supSel.value;
+    const supContact=(DATA.contacts||[]).find(c=>c.id===supSel.value);
+    supplierName=supContact?supContact.name:'';
+  } else if(supNameIn){
+    supplierName=supNameIn.value.trim().toUpperCase();
+  }
   updateData(d=>{
     const prices={...(d.inventoryPrices||{})};
     if(pprice>0)prices[name]={...(prices[name]||{}),purchasePrice:pprice};
     return{...d,
-      generalInventory:d.generalInventory.map(x=>String(x.id)===String(id)?{...x,itemName:name,received:rec,good:Number(document.getElementById('eger-good').value||0),damaged:Number(document.getElementById('eger-dmg').value||0),condition:document.getElementById('eger-cond').value,rejectionReason:uc(document.getElementById('eger-reject-reason')?.value||''),creditStatus:document.getElementById('eger-credit')?.value||x.creditStatus||'paid',date:document.getElementById('eger-date').value,expiryDate:document.getElementById('eger-expiry')?.value||'',notes:uc(document.getElementById('eger-notes').value),purchasePrice:pprice}:x),
+      generalInventory:d.generalInventory.map(x=>String(x.id)===String(id)?{...x,itemName:name,received:rec,good:Number(document.getElementById('eger-good').value||0),damaged:Number(document.getElementById('eger-dmg').value||0),condition:document.getElementById('eger-cond').value,rejectionReason:uc(document.getElementById('eger-reject-reason')?.value||''),creditStatus:document.getElementById('eger-credit')?.value||x.creditStatus||'paid',date:document.getElementById('eger-date').value,expiryDate:document.getElementById('eger-expiry')?.value||'',notes:uc(document.getElementById('eger-notes').value),purchasePrice:pprice,supplierId,supplierName}:x),
       inventoryPrices:prices
     };
   });
@@ -13068,7 +13091,14 @@ setInterval(()=>{
   }
   if(_fbSyncFailCount>=3 && !_fbSyncFailToastShown){
     _fbSyncFailToastShown = true;
-    showToast('⚠️ Cloud sync has failed ' + _fbSyncFailCount + 'x: ' + (_lastFbSyncError||'unknown error'), 8000);
+    // Fix: route straight into the one-tap reconnect flow when that's the
+    // actual cause, instead of a dead-end warning that leaves logout/login
+    // as the only fix the user knows about.
+    if (_fbAuthSessionLost) {
+      showToast('🔒 Cloud sync session expired — tap to reconnect', 8000, reconnectCloudSync);
+    } else {
+      showToast('⚠️ Cloud sync has failed ' + _fbSyncFailCount + 'x: ' + (_lastFbSyncError||'unknown error'), 8000);
+    }
   } else if(_fbSyncFailCount===0){
     _fbSyncFailToastShown = false; // re-arm after a successful sync
   }
