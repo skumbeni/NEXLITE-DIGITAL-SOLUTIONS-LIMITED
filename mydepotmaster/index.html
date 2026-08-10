@@ -700,10 +700,29 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js" defer></script>
 <script defer>
+  // Fix: this used to resolve as soon as firebase.initializeApp() returned,
+  // which only sets up the SDK — it does NOT mean a previously-persisted
+  // Auth session has been restored yet. That restoration reads from
+  // IndexedDB/localStorage asynchronously in the background. Every caller
+  // of _getIdToken() awaits this promise and then reads
+  // firebase.auth().currentUser immediately, so on cold boot (including the
+  // silent "Stay Signed In" auto-login) that read was racing the real
+  // restoration and losing: currentUser was still null, every RTDB request
+  // went out unauthenticated, and rules that require auth rejected it —
+  // silently, since sync failures only toast after 3 misses. The only thing
+  // that produced an immediately-valid session was an explicit password
+  // login, which is why logging out and back in "fixed" it.
+  // Now we explicitly set LOCAL persistence and wait for the SDK's own
+  // first onAuthStateChanged callback (fired once restoration — successful
+  // or not — has actually completed) before resolving, with a timeout so a
+  // slow/broken restore can't hang every Firebase call forever.
   window._fbAuthSdkReady = new Promise(function(resolve) {
     try {
       firebase.initializeApp(FB_CONFIG);
-      resolve();
+      const _done = (function(){ let called=false; return function(){ if(called)return; called=true; resolve(); }; })();
+      firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
+      const unsub = firebase.auth().onAuthStateChanged(function(){ unsub(); _done(); }, function(){ unsub(); _done(); });
+      setTimeout(_done, 4000); // safety net: never block sync forever on a stuck restore
     } catch (e) {
       console.warn('Firebase Auth SDK init failed — falling back to unauthenticated RTDB requests:', e);
       resolve(); // resolve anyway: _getIdToken() degrades to null, same as before Phase 2
