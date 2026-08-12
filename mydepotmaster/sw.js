@@ -25,6 +25,17 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v81 (2026-08-12)
+//
+// v81 changes (2026-08-12) — Books editor action bar moved to top:
+//   - Save / Download / Print PDF were large full-width buttons pinned to
+//     the bottom of the Books editor (easy to lose behind the mobile
+//     keyboard, and took up a lot of vertical space). Moved into a compact
+//     row directly under the title bar instead, using the small button
+//     style — same actions, same ids, just relocated and shrunk.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v80 (2026-08-12)
 //
 // v80 changes (2026-08-12) — Books pagination + global search navigation fix:
@@ -676,7 +687,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'mdm-v80';   // ← bump this whenever you deploy a new version
+const CACHE     = 'mdm-v81';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
