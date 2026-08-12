@@ -574,9 +574,18 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
 .be-tb-btn{background:none;border:1px solid var(--border);border-radius:6px;color:var(--text);padding:4px 9px;font-size:17px;font-weight:700;cursor:pointer;touch-action:manipulation;white-space:nowrap;font-family:var(--fb);}
 .be-tb-btn:active,.be-tb-btn.act{background:var(--green);color:#060d18;border-color:var(--green);}
 .be-tb-sep{width:1px;background:var(--border);margin:2px 2px;}
-.be-doc-area{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px;}
-.be-word-area{min-height:100%;background:#fff;border-radius:var(--radius-md);padding:18px 16px;color:#111;font-family:'Times New Roman',serif;font-size:19px;line-height:1.8;outline:none;word-break:break-word;}
+.be-doc-area{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px;background:var(--bg);}
+.be-word-area{
+  --be-page-h:1010px; --be-page-gap:18px;
+  min-height:var(--be-page-h);
+  background-color:#fff;
+  background-image:repeating-linear-gradient(to bottom,
+    #fff 0, #fff var(--be-page-h),
+    var(--bg) var(--be-page-h), var(--bg) calc(var(--be-page-h) + var(--be-page-gap)));
+  border-radius:var(--radius-md);padding:18px 16px;color:#111;font-family:'Times New Roman',serif;font-size:19px;line-height:1.8;outline:none;word-break:break-word;
+}
 .be-word-area:focus{box-shadow:0 0 0 2px var(--green);}
+.be-page-badge{font-size:14px;color:var(--muted);flex-shrink:0;padding:0 2px;white-space:nowrap;}
 .be-grid-wrap{overflow:auto;-webkit-overflow-scrolling:touch;}
 .be-grid{border-collapse:collapse;font-size:17px;min-width:100%;}
 .be-grid th.row-hdr{background:var(--table-th-bg);color:var(--muted);font-size:15px;padding:4px 6px;border:1px solid var(--border);min-width:28px;text-align:center;position:sticky;left:0;z-index:2;}
@@ -1216,6 +1225,7 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
   <div class="be-hdr">
     <button style="background:none;border:none;color:var(--muted);font-size:27px;cursor:pointer;padding:0 4px;touch-action:manipulation;" onclick="closeBookEditor()">←</button>
     <input class="be-title-input" id="be-title" placeholder="Untitled" autocomplete="off" spellcheck="false"/>
+    <div class="be-page-badge" id="be-page-badge"></div>
     <div style="font-size:16px;color:var(--muted);flex-shrink:0" id="be-type-badge">—</div>
   </div>
   <div class="be-toolbar" id="be-toolbar"><!-- injected by JS --></div>
@@ -1227,7 +1237,8 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
   <div class="be-doc-area" id="be-doc-area"><!-- injected by JS --></div>
   <div class="be-footer">
     <button class="btn bg" style="flex:1" onclick="saveBookFromEditor()">💾 Save</button>
-    <button class="btn bo" style="flex:1" onclick="downloadBookFromEditor()" id="book-dl-btn">⬇ Download PDF / CSV</button>
+    <button class="btn bo" style="flex:1" onclick="downloadBookFromEditor()" id="book-dl-btn">⬇ Download</button>
+    <button class="btn bo" style="flex:1;display:none" onclick="printBookPDF()" id="book-print-btn">🖨 Print PDF</button>
   </div>
 </div>
 
@@ -6455,7 +6466,7 @@ function _doGlobalSearch(q){
     badge:'staff',badgeLabel:'STAFF',
     title:`${esc(x.name)}`,
     sub:`Role: ${esc(x.role||'—')}${x.employeeId?' · ID: '+esc(x.employeeId):''}`,
-    action:`showTab('staff')`
+    action:`showTab('staff');openStaffDetail('${x.id}')`
   }))});
 
   // Staff logs
@@ -6469,7 +6480,8 @@ function _doGlobalSearch(q){
   if(logHits.length) sections.push({label:'Staff Logs',items:logHits.map(x=>{
     const stf=DATA.staff.find(s=>String(s.id)===String(x.staffId));
     return{badge:'staff',badgeLabel:'LOG',title:`${esc(stf?stf.name:'Unknown')} · ${esc(x.task||'Work')}`,
-      sub:`${fmtDate(x.date)} · ${zm(x.earnings||0)} earned`,action:`showTab('staff')`};
+      sub:`${fmtDate(x.date)} · ${zm(x.earnings||0)} earned`,
+      action:stf?`showTab('staff');openStaffDetail('${stf.id}')`:`showTab('staff')`};
   })});
 
   // Commodities
@@ -6498,7 +6510,7 @@ function _doGlobalSearch(q){
     badge:c.type==='supplier'?'rec':'iss',badgeLabel:c.type==='supplier'?'SUP':'CUS',
     title:`${esc(c.name)}${c.phone?' · '+esc(c.phone):''}`,
     sub:`${c.type==='supplier'?'Supplier':'Customer'}${c.balance?` · Balance: ${zm(Math.abs(c.balance))}`:''}${c.address?' · '+esc(c.address):''}`,
-    action:`showTab('contacts')`
+    action:`showTab('contacts');openContactForm('${c.id}')`
   }))});
 
   if(!sections.length){
@@ -13387,6 +13399,16 @@ function _openEditorScreen(name, type, htmlContent='') {
         <option value="p">Paragraph</option>
       </select>`;
     docArea.innerHTML = `<div class="be-word-area" id="be-word-editor" contenteditable="true" spellcheck="true">${htmlContent||'<p>Start typing your document…</p>'}</div>`;
+    const printBtn = document.getElementById('book-print-btn');
+    if(printBtn) printBtn.style.display = 'none';
+    const wEditor = document.getElementById('be-word-editor');
+    if(wEditor){
+      wEditor.addEventListener('input', ()=>{
+        clearTimeout(_bePageCountTimer);
+        _bePageCountTimer = setTimeout(_beUpdateWordPageCount, 200);
+      });
+      setTimeout(_beUpdateWordPageCount, 50);
+    }
   } else {
     // Show formula bar
     const fbarEl = document.getElementById('be-formula-bar');
@@ -13413,11 +13435,57 @@ function _openEditorScreen(name, type, htmlContent='') {
       <div class="be-tb-sep"></div>
       <span style="font-size:15px;color:var(--muted);align-self:center;padding:0 4px">= for formulas</span>`;
     docArea.innerHTML = `<div class="be-grid-wrap">${_renderGrid()}</div>`;
+    const printBtn = document.getElementById('book-print-btn');
+    if(printBtn) printBtn.style.display = 'block';
+    const pageBadge = document.getElementById('be-page-badge');
+    if(pageBadge) pageBadge.textContent = '';
   }
 
   screen.style.display = 'flex';
   // Focus title if new
   if(!_beBookId && titleEl) setTimeout(()=>titleEl.focus(),100);
+}
+
+// ── WORD DOC — LIVE PAGE COUNT ─────────────────────────────
+// Purely visual: the editor is one contenteditable block with a repeating
+// background that draws a page-break line every --be-page-h px, so it reads
+// like real A4 pages instead of one endless sheet. This just keeps the
+// "N pages" badge in the header in sync with that same page height.
+let _bePageCountTimer = null;
+function _beUpdateWordPageCount() {
+  const el = document.getElementById('be-word-editor');
+  const badge = document.getElementById('be-page-badge');
+  if(!el || !badge) return;
+  const pageH = 1010; // must match --be-page-h in CSS
+  const pages = Math.max(1, Math.ceil(el.scrollHeight / pageH));
+  badge.textContent = pages>1 ? `📄 ${pages} pages` : '📄 1 page';
+}
+
+// ── SPREADSHEET — MULTI-PAGE PDF EXPORT ────────────────────
+// CSV has no concept of pages, so give spreadsheets a proper paginated
+// print/PDF export too (reuses the same _pdfPrint engine as Word docs —
+// content flows across as many A4 pages as it needs, no hard cap).
+function printBookPDF() {
+  saveBookFromEditor();
+  if(_beType!=='xlsx'){ downloadBookFromEditor(); return; }
+  const book = (DATA.books||[]).find(b=>b.id===_beBookId);
+  if(!book){alert('Save the document first.');return;}
+  const numCols = _beGrid[0]?.length || BE_COLS;
+  const colHdrs = Array.from({length:numCols},(_,i)=>_colLabel(i));
+  const thead = `<tr>${colHdrs.map(c=>`<th>${esc(c)}</th>`).join('')}</tr>`;
+  const rows = _beGrid
+    .map((row,ri)=>({row,ri}))
+    .filter(x=>x.row.some(c=>c!==''))
+    .map(({row,ri})=>{
+      const cells = Array.from({length:numCols},(_,ci)=>{
+        const raw = row[ci]||'';
+        const disp = String(raw).startsWith('=') ? _fmtCellDisplay(_evalCell(ri,ci)) : raw;
+        return `<td>${esc(String(disp))}</td>`;
+      }).join('');
+      return `<tr>${cells}</tr>`;
+    }).join('');
+  const html = `<div class="pdf-title">${esc(book.name)}</div><table>${thead}<tbody>${rows}</tbody></table>`;
+  _pdfPrint(html, book.name);
 }
 
 // ── WORD COMMANDS ─────────────────────────────────────────

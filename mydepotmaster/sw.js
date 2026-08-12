@@ -25,7 +25,25 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v77 (2026-08-07)
+// Current version: v80 (2026-08-12)
+//
+// v80 changes (2026-08-12) — Books pagination + global search navigation fix:
+//   - Books (Word docs): editor now shows visible A4-style page breaks as you
+//     type instead of one endless block, plus a live "N pages" badge in the
+//     header. No actual size cap existed before or after — this was a visual
+//     fix so long documents don't feel capped at one page.
+//   - Books (Spreadsheets): new "🖨 Print PDF" button exports the grid as a
+//     paginated multi-page PDF via the existing print engine, alongside the
+//     existing CSV download. Grid itself was already uncapped.
+//   - Fix: global search results for Staff, Staff Logs, and Contacts only
+//     ever navigated to the parent tab (e.g. tapping a staff member's log
+//     just opened the Staff list) instead of opening that specific record.
+//     Staff/Staff Log hits now open the matching staff member's profile
+//     directly; Contact hits now open that contact's card directly.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// Current version: v79 (2026-08-07)
 //
 // v77 changes (2026-08-07) — Install App button:
 //   - Settings → Help & Documentation now has an "Install on This Phone" card
@@ -658,7 +676,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'mdm-v79';   // ← bump this whenever you deploy a new version
+const CACHE     = 'mdm-v80';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
