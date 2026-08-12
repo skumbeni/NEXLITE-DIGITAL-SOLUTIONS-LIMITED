@@ -25,7 +25,70 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v75 (2026-08-03)
+// Current version: v81 (2026-08-12)
+//
+// v81 changes (2026-08-12) — Books editor action bar moved to top:
+//   - Save / Download / Print PDF were large full-width buttons pinned to
+//     the bottom of the Books editor (easy to lose behind the mobile
+//     keyboard, and took up a lot of vertical space). Moved into a compact
+//     row directly under the title bar instead, using the small button
+//     style — same actions, same ids, just relocated and shrunk.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// Current version: v80 (2026-08-12)
+//
+// v80 changes (2026-08-12) — Books pagination + global search navigation fix:
+//   - Books (Word docs): editor now shows visible A4-style page breaks as you
+//     type instead of one endless block, plus a live "N pages" badge in the
+//     header. No actual size cap existed before or after — this was a visual
+//     fix so long documents don't feel capped at one page.
+//   - Books (Spreadsheets): new "🖨 Print PDF" button exports the grid as a
+//     paginated multi-page PDF via the existing print engine, alongside the
+//     existing CSV download. Grid itself was already uncapped.
+//   - Fix: global search results for Staff, Staff Logs, and Contacts only
+//     ever navigated to the parent tab (e.g. tapping a staff member's log
+//     just opened the Staff list) instead of opening that specific record.
+//     Staff/Staff Log hits now open the matching staff member's profile
+//     directly; Contact hits now open that contact's card directly.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// Current version: v79 (2026-08-07)
+//
+// v77 changes (2026-08-07) — Install App button:
+//   - Settings → Help & Documentation now has an "Install on This Phone" card
+//     with a real Install App button, wired to the browser's beforeinstallprompt
+//     event (captured in index.html, replayed via .prompt() on tap). Previously
+//     the manifest/SW/icons were all in place for installability, but nothing
+//     in the UI ever triggered the actual install dialog — users had to
+//     discover their browser's own install icon/menu entry on their own.
+//   - Button auto-hides once already installed (display-mode: standalone/
+//     fullscreen, or iOS's navigator.standalone) or before the browser has
+//     signalled the app is installable, with a note explaining how to install
+//     manually as a fallback (e.g. iOS Safari, which never fires the event).
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// Current version: v76 (2026-08-06)
+//
+// v76 changes (2026-08-06) — Depot Assistant proxy fix + graceful overload handling:
+//   - Fix: mdm-copilot-proxy Cloudflare Worker was serving stale "Hello
+//     World" stub code (never actually deployed with the real proxy logic),
+//     and the GEMINI_API_KEY secret had been lost during a Worker
+//     deployment-source change. Both root causes together were producing
+//     "Failed to fetch" and then HTTP 401 errors in Depot Assistant.
+//     Re-deployed the correct worker.js and re-added the secret directly
+//     in the Cloudflare dashboard — key itself was never exposed in
+//     index.html or chat.
+//   - New: _callCopilot now retries once automatically (after a 2s delay)
+//     on transient Gemini overload responses (429/500/503) before
+//     surfacing any error to the user — most "high demand" spikes now
+//     resolve silently.
+//   - New: when an error is shown, it now parses the JSON error body and
+//     displays the human-readable message field (e.g. "gemini-3.5-flash
+//     is currently experiencing high demand...") instead of raw, often
+//     truncated JSON.
 //
 // v75 changes (2026-08-03) — Depot Assistant auth fix + action support:
 //   - Fix: Gemini Interactions API calls were sending GEMINI_API_KEY via the
@@ -624,7 +687,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'mdm-v75';   // ← bump this whenever you deploy a new version
+const CACHE     = 'mdm-v81';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
