@@ -124,6 +124,9 @@ tr:last-child td{border-bottom:none;}
 .badge-inspected{background:var(--navy-tint);color:var(--navy-dark);}
 .badge-approved{background:var(--olive-tint);color:var(--olive-dark);}
 .badge-paid{background:var(--green-tint);color:var(--green-ok);}
+.badge-cancelled{background:var(--paper-2);color:var(--soil-40);}
+.badge-flag{display:inline-block;background:#FDE2E1;color:#B42318;font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:20px;margin:2px 4px 0 0;}
+.flag-badges{margin-top:4px;}
 
 .mini-btn{border:none;background:var(--paper-2);border-radius:7px;padding:6px 10px;font-size:12px;font-weight:600;color:var(--soil);margin-right:6px;}
 .mini-btn:hover{background:var(--line);}
@@ -406,6 +409,7 @@ window.__firebaseReadyPromise = new Promise((resolve) => { window.__firebaseRead
     <button class="nav-item" data-view="c-agents" onclick="setView('company','c-agents')">Agents <span style="opacity:.6;font-size:11px;">optional</span></button>
     <button class="nav-item" data-view="c-staff" onclick="setView('company','c-staff')">Field staff</button>
     <button class="nav-item" data-view="c-purchases" onclick="setView('company','c-purchases')">Purchases</button>
+    <button class="nav-item" data-view="c-contracts" onclick="setView('company','c-contracts')">Contracts</button>
     <button class="nav-item" data-view="c-payroll" onclick="setView('company','c-payroll')">Payroll</button>
     <button class="nav-item" data-view="c-settings" onclick="setView('company','c-settings')">Settings</button>
     <div class="sidebar-spacer"></div>
@@ -473,7 +477,7 @@ window.__firebaseReadyPromise = new Promise((resolve) => { window.__firebaseRead
    ========================================================================= */
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js";
 import {
-  getDatabase, ref, get, set, onValue, goOffline, goOnline
+  getDatabase, ref, get, set, update, onValue, goOffline, goOnline
 } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-database.js";
 import {
   getAuth, signInAnonymously, onAuthStateChanged
@@ -506,7 +510,7 @@ const authReady = new Promise((resolve) => {
 // __firebaseReadyPromise (created synchronously in <head>, before this
 // deferred module script runs) rather than just setting a plain global
 // avoids any race with the classic script that reads it.
-window.__firebase = { rtdb, ref, get, set, onValue, goOffline, goOnline, dataRef, authReady, auth };
+window.__firebase = { rtdb, ref, get, set, update, onValue, goOffline, goOnline, dataRef, authReady, auth };
 window.__firebaseReadyResolve(window.__firebase);
 </script>
 
@@ -599,6 +603,103 @@ function periodLabel(period){
 }
 
 /* =========================================================================
+   LOCATION CAPTURE & PURCHASE FRAUD FLAGS
+   ---------------------------------------------------------------------
+   Every purchase and farmer registration attempts to capture a GPS fix
+   (requires HTTPS — works once deployed, not from a local file). Capture
+   never blocks the save: if location is denied, times out, or the device
+   has no signal, the record just saves with geo:null and picks up a
+   'no_location' flag instead of failing.
+
+   Flags are heuristics for a human to review, not automatic rejections —
+   a company/agent clears them once satisfied. Nothing here blocks a
+   purchase from being logged or paid.
+   ========================================================================= */
+const FRAUD_CONFIG = {
+  mismatchKm: 5,        // purchase GPS vs farmer's registered GPS beyond this = flagged
+  duplicateWindowMin: 15, // same farmer+staff+commodity+qty+price within this window = flagged
+  volumeMultiplier: 3,     // purchase qty vs staff's recent average beyond this = flagged
+  weightDiscrepancyPct: 5  // scale net weight vs expected weight beyond this % = flagged
+};
+const FLAG_LABELS = {
+  no_location: 'No GPS captured',
+  location_mismatch: 'Far from farmer\'s registered location',
+  possible_duplicate: 'Possible duplicate entry',
+  unusual_volume: 'Unusually large vs this staffer\'s recent purchases',
+  weight_discrepancy: 'Scale weight differs from expected'
+};
+// kg-per-unit for turning a logged quantity into an expected weight to check
+// the scale reading against. "bags (50kg)" is the standard sold locally;
+// field staff can still override actual bag weight via gross/tare capture.
+const UNIT_KG = { 'kg': 1, 'bags (50kg)': 50, 'tonne': 1000 };
+function expectedWeightKg(quantity, unit){
+  const factor = UNIT_KG[unit];
+  return factor ? quantity * factor : null;
+}
+
+function getGeo(){
+  return new Promise((resolve) => {
+    if(!navigator.geolocation){ resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: Math.round(pos.coords.accuracy) }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 6000, maximumAge: 60000 }
+    );
+  });
+}
+function distanceKm(a, b){
+  if(!a || !b) return null;
+  const R = 6371;
+  const dLat = (b.lat - a.lat) * Math.PI/180;
+  const dLng = (b.lng - a.lng) * Math.PI/180;
+  const s = Math.sin(dLat/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
+}
+function computePurchaseFlags(purchase, farmer){
+  const flags = [];
+  if(!purchase.geo){
+    flags.push('no_location');
+  }else if(farmer && farmer.geo){
+    const d = distanceKm(purchase.geo, farmer.geo);
+    if(d !== null && d > FRAUD_CONFIG.mismatchKm) flags.push('location_mismatch');
+  }
+  const windowMs = FRAUD_CONFIG.duplicateWindowMin * 60000;
+  const now = Date.now();
+  const isDup = DB.data.purchases.some(p =>
+    p.farmerId === purchase.farmerId && p.fieldStaffId === purchase.fieldStaffId &&
+    p.commodity === purchase.commodity && p.quantity === purchase.quantity && p.price === purchase.price &&
+    p.loggedAt && (now - p.loggedAt) < windowMs
+  );
+  if(isDup) flags.push('possible_duplicate');
+
+  const priorForStaff = DB.data.purchases.filter(p => p.fieldStaffId === purchase.fieldStaffId).slice(-10);
+  if(priorForStaff.length >= 3){
+    const avgQty = priorForStaff.reduce((s,p)=>s+p.quantity,0) / priorForStaff.length;
+    if(avgQty > 0 && purchase.quantity > avgQty * FRAUD_CONFIG.volumeMultiplier) flags.push('unusual_volume');
+  }
+  if(purchase.netWeight != null){
+    const expected = expectedWeightKg(purchase.quantity, purchase.unit);
+    if(expected){
+      const diffPct = Math.abs(purchase.netWeight - expected) / expected * 100;
+      if(diffPct > FRAUD_CONFIG.weightDiscrepancyPct) flags.push('weight_discrepancy');
+    }
+  }
+  return flags;
+}
+function flagBadgesHTML(purchase){
+  if(!purchase.flags || !purchase.flags.length || purchase.flagResolved) return '';
+  return `<div class="flag-badges">${purchase.flags.map(f=>`<span class="badge-flag">⚠ ${FLAG_LABELS[f]||f}</span>`).join('')}</div>`;
+}
+function clearPurchaseFlag(purchaseId){
+  const p = DB.data.purchases.find(x=>x.id===purchaseId);
+  if(!p) return;
+  p.flagResolved = true;
+  DB.save();
+  toast('Flag cleared');
+  refreshCurrentView();
+}
+
+/* =========================================================================
    OFFLINE / SYNC ENGINE
    ---------------------------------------------------------------------
    Everything a field staffer records is written to localStorage instantly,
@@ -619,12 +720,14 @@ const SYNC = {
     const r = DB.data.payrollRuns.filter(x=>x.syncStatus==='pending').length;
     return p + f + r;
   },
-  markSaved(record){
-    // Called right after any local write. DB.save() pushes the whole
-    // dataset to Firebase; the SDK itself queues that write while offline
-    // and flushes it on reconnect, so syncStatus here is purely a UI flag.
+  markSaved(record, collectionKey){
+    // Called right after any local write. When the caller knows which
+    // single collection changed (e.g. 'purchases'), pass it so DB.save()
+    // uploads only that collection instead of the whole dataset — the
+    // delta sync that keeps field data entry light on a rural connection.
+    // Omit it and DB.save() falls back to a full-blob write, same as before.
     record.syncStatus = this.isOnline ? 'synced' : 'pending';
-    DB.save();
+    DB.save(collectionKey ? [collectionKey] : undefined);
   },
   syncNow(){
     if(!this.isOnline){ toast("Still offline — will sync automatically once connected"); return; }
@@ -678,36 +781,14 @@ function refreshCurrentView(){
 
 function seedData(){
   return {
-    companies: [
-      { id:'c1', name:'Zamgrain Millers Ltd', operatingMode:'direct', code:'ZML-2026', phone:'0977 100 200', location:'Lusaka', tpin:'1003456789', commodities:['Maize','Soya beans','Groundnuts'] },
-      { id:'c2', name:'Copperbelt Milling Co', operatingMode:'agent', code:'CMC-2026', phone:'0966 300 400', location:'Kitwe', tpin:'1009988776', commodities:['Maize','Wheat'] }
-    ],
-    agents: [
-      { id:'ag1', name:'Bwalya Mumba', phone:'0955 111 222', code:'AG-BWALYA' },
-      { id:'ag2', name:'Chanda Phiri', phone:'0966 333 444', code:'AG-CHANDA' }
-    ],
+    companies: [],
+    agents: [],
     // Each link = one agent's relationship with one buying company: own rate, own advances.
-    agentLinks: [
-      { id:'l1', agentId:'ag1', companyId:'c1', commissionRate:5, advances:[{amount:3000, date:'2026-06-10', note:'Initial advance', method:'bank_transfer', ref:'FT26161000123'}] },
-      { id:'l2', agentId:'ag1', companyId:'c2', commissionRate:4.5, advances:[] },
-      { id:'l3', agentId:'ag2', companyId:'c1', commissionRate:5.5, advances:[{amount:1500, date:'2026-07-02', note:'Advance for July run', method:'mobile_money_airtel', ref:'0966 333 444'}] }
-    ],
-    fieldStaff: [
-      { id:'fs1', agentId:'ag1', name:'Mutale Banda', phone:'0977 555 666', code:'FS-MUTALE', monthlySalary:4200 },
-      { id:'fs2', agentId:'ag1', name:'Joseph Tembo', phone:'0955 777 888', code:'FS-JOSEPH', monthlySalary:3800 },
-      { id:'fs3', agentId:'ag2', name:'Grace Sakala', phone:'0966 999 000', code:'FS-GRACE', monthlySalary:4500 }
-    ],
-    farmers: [
-      { id:'fm1', name:'Peter Chileshe', nrc:'123456/10/1', phone:'0977 121212', location:'Mkushi', code:'FM-PETER', registeredBy:'fs1', registeredDate:'2026-07-20', syncStatus:'synced' },
-      { id:'fm2', name:'Agnes Mwansa', nrc:'234567/11/1', phone:'0966 232323', location:'Mumbwa', code:'FM-AGNES', registeredBy:'fs2', registeredDate:'2026-07-25', syncStatus:'synced' },
-      { id:'fm3', name:'Davies Zulu', nrc:'345678/12/1', phone:'0955 343434', location:'Chibombo', code:'FM-DAVIES', registeredBy:'fs1', registeredDate:'2026-08-01', syncStatus:'synced' }
-    ],
-    purchases: [
-      { id:'p1', companyId:'c1', agentId:'ag1', fieldStaffId:'fs1', farmerId:'fm1', commodity:'Maize', quantity:180, unit:'bags (50kg)', price:280, date:'2026-07-20', status:'paid', paidTo:'agent', paymentMethod:'mobile_money_mtn', paymentRef:'0977 111 222', syncStatus:'synced' },
-      { id:'p2', companyId:'c1', agentId:'ag1', fieldStaffId:'fs2', farmerId:'fm2', commodity:'Maize', quantity:95, unit:'bags (50kg)', price:275, date:'2026-07-25', status:'approved', paidTo:'agent', paymentMethod:null, paymentRef:null, syncStatus:'synced' },
-      { id:'p3', companyId:'c2', agentId:'ag1', fieldStaffId:'fs1', farmerId:'fm3', commodity:'Soya beans', quantity:40, unit:'bags (50kg)', price:650, date:'2026-08-01', status:'inspected', paidTo:'farmer', paymentMethod:null, paymentRef:null, syncStatus:'synced' },
-      { id:'p4', companyId:'c1', agentId:'ag2', fieldStaffId:'fs3', farmerId:'fm1', commodity:'Maize', quantity:60, unit:'bags (50kg)', price:280, date:'2026-08-03', status:'pending', paidTo:'agent', paymentMethod:null, paymentRef:null, syncStatus:'synced' }
-    ],
+    agentLinks: [],
+    fieldStaff: [],
+    farmers: [],
+    purchases: [],
+    contracts: [],
     payrollRuns: []
   };
 }
@@ -719,10 +800,12 @@ const DB = {
 
   applyMigrations(){
     if(!this.data.payrollRuns) this.data.payrollRuns = [];
+    if(!this.data.contracts) this.data.contracts = [];
     this.data.purchases.forEach(p=>{
       if(!p.paymentStatus){
         p.paymentStatus = p.status==='paid' ? (p.paidTo==='farmer' ? 'paid_to_farmer' : 'paid_to_agent') : 'unpaid';
       }
+      if(typeof p.contractId === 'undefined') p.contractId = null;
     });
     this.data.fieldStaff.forEach(s=>{ if(typeof s.monthlySalary === 'undefined') s.monthlySalary = 0; });
     this.data.farmers.forEach(f=>{ if(!Array.isArray(f.crops)) f.crops = f.crop ? [f.crop] : []; if(typeof f.crop === 'undefined') f.crop = f.crops[0] || ''; });
@@ -739,9 +822,43 @@ const DB = {
   // snapshot from Firebase. Falls back to the same-device localStorage copy
   // if the network read fails (e.g. first launch while offline), and seeds
   // brand-new data only if neither the cloud nor this device has anything yet.
+  //
+  // Sign-in itself needs a moment online the very first time a device ever
+  // opens the app (after that, Firebase Auth caches the session and works
+  // offline). If that first sign-in can't complete within a few seconds
+  // (no signal at all on a brand-new install), don't leave the loading
+  // screen spinning forever — start the app in local-only mode with
+  // whatever's cached (or a blank seed), and finish connecting silently
+  // the moment sign-in succeeds, reconciling anything created in the
+  // meantime rather than discarding it.
   async load(){
     const fb = await window.__firebaseReadyPromise;
-    await fb.authReady;
+    const signedIn = await this._waitForAuth(fb, 8000);
+
+    if(!signedIn){
+      const raw = localStorage.getItem(DB_KEY);
+      this.data = raw ? JSON.parse(raw) : seedData();
+      this.applyMigrations();
+      toast("Working offline — you're not connected yet, but you can carry on. We'll sync once you have signal.");
+      fb.authReady.then(() => this._syncFromCloud(fb, true));
+      return this.data;
+    }
+
+    await this._syncFromCloud(fb, false);
+    return this.data;
+  },
+
+  _waitForAuth(fb, ms){
+    let timer;
+    const timeout = new Promise(resolve => { timer = setTimeout(() => resolve(false), ms); });
+    return Promise.race([ fb.authReady.then(() => true), timeout ]).finally(() => clearTimeout(timer));
+  },
+
+  // reconciling: true once we've already started the app locally (fallback
+  // above) and are now catching up to the cloud for the first time — any
+  // records created on this device in the meantime get merged in rather
+  // than clobbered by whatever the cloud already had.
+  async _syncFromCloud(fb, reconciling){
     let snapshot = null;
     try{
       const snap = await fb.get(fb.dataRef);
@@ -749,13 +866,20 @@ const DB = {
     }catch(err){
       console.error('Firebase read failed, falling back to local cache:', err);
     }
-    if(snapshot){
+    if(snapshot && reconciling){
+      const localData = this.data;
+      this.data = this._mergeLocalIntoCloud(localData, snapshot);
+      this.applyMigrations();
+      this.save();
+      toast('Back online — synced what you did offline.');
+    }else if(snapshot){
       this.data = snapshot;
-    }else{
+      this.applyMigrations();
+    }else if(!reconciling){
       const raw = localStorage.getItem(DB_KEY);
       this.data = raw ? JSON.parse(raw) : seedData();
+      this.applyMigrations();
     }
-    this.applyMigrations();
     if(!snapshot) this.save(); // push seed/local data up as the initial cloud copy
 
     // Live updates from other devices/sessions. Skip the echo of our own
@@ -770,8 +894,20 @@ const DB = {
       SYNC.lastRemoteUpdateAt = Date.now();
       refreshCurrentView();
     });
+  },
 
-    return this.data;
+  // Union-merges record collections by id so nothing created on this
+  // device while offline (before the very first sign-in ever completed)
+  // gets silently dropped once the real cloud data arrives.
+  _mergeLocalIntoCloud(local, cloud){
+    const merged = JSON.parse(JSON.stringify(cloud));
+    ['companies','agents','agentLinks','fieldStaff','farmers','purchases','contracts','payrollRuns'].forEach(key => {
+      if(!Array.isArray(merged[key])) merged[key] = [];
+      if(!Array.isArray(local[key])) return;
+      const existingIds = new Set(merged[key].map(r => r && r.id));
+      local[key].forEach(rec => { if(rec && rec.id && !existingIds.has(rec.id)) merged[key].push(rec); });
+    });
+    return merged;
   },
 
   // Local write is instant and always happens first — the phone stays the
@@ -779,13 +915,24 @@ const DB = {
   // fire-and-forget on top of that; the Realtime Database SDK queues it
   // automatically while offline and flushes it the moment connectivity
   // returns, so no hand-rolled retry queue is needed here.
-  save(){
+  //
+  // Pass `dirtyCollections` (e.g. ['purchases']) for a delta sync — only
+  // those top-level collections get uploaded, which matters a lot on a
+  // slow rural connection: logging one purchase then only pushes the
+  // purchases array, not the whole dataset (companies, agents, payroll
+  // history, etc.) every single time. Leave it out for a full-blob write
+  // — the safe default, used wherever a change might touch more than one
+  // collection at once (or hasn't been split out yet).
+  save(dirtyCollections){
     localStorage.setItem(DB_KEY, JSON.stringify(this.data));
     const fb = window.__firebase;
     if(!fb) return;
     this._suppressNextRemoteApply = true;
     this._remoteWriteInFlight = true;
-    fb.set(fb.dataRef, this.data)
+    const writePromise = (dirtyCollections && dirtyCollections.length)
+      ? fb.update(fb.dataRef, Object.fromEntries(dirtyCollections.map(k => [k, this.data[k]])))
+      : fb.set(fb.dataRef, this.data);
+    writePromise
       .catch(err => console.error('Firebase write failed (queued for retry when back online):', err))
       .finally(() => { this._remoteWriteInFlight = false; });
   },
@@ -824,6 +971,17 @@ const DB = {
       (farmerId ? p.farmerId===farmerId : true)
     );
   },
+  contract(id){ return this.data.contracts.find(c=>c.id===id); },
+  contractsFor({companyId, farmerId, activeOnly}={}){
+    return this.data.contracts.filter(c =>
+      (companyId ? c.companyId===companyId : true) &&
+      (farmerId ? c.farmerId===farmerId : true) &&
+      (activeOnly ? c.status==='active' : true)
+    );
+  },
+  contractDelivered(contractId){
+    return this.data.purchases.filter(p=>p.contractId===contractId).reduce((s,p)=>s+p.quantity,0);
+  },
 
   // ---- ledger math ----
   // Commission accrues only once a purchase is at least 'approved' (inspected & signed off),
@@ -854,16 +1012,47 @@ const DB = {
 };
 
 /* =========================================================================
-   AUTH (demo): each role logs in with a join code. Buying company + agent
-   also pick their identity from a dropdown seeded from DB.
+   AUTH (demo): company/agent/farmer log in with a single join code.
+   Field staff log in with an ID (non-secret, name-based) + a separate PIN
+   (secret, generated by whoever adds them — agent or company). The ID never
+   changes once issued; the PIN can be regenerated any time without
+   affecting the ID, so a lost/forgotten PIN doesn't break the worker's
+   purchase history or references to their staff ID elsewhere in the data.
    ========================================================================= */
+function genStaffPin(){ return String(Math.floor(100000 + Math.random()*900000)); } // 6-digit PIN, independent of name
+
+// PIN is never stored or transmitted in the clear: we derive a salted PBKDF2
+// hash and keep only {pinSalt, pinHash}. The plaintext PIN exists only in
+// memory for the instant it's generated/checked, and is shown to the
+// agent/company once (create or regenerate) — it cannot be looked up again,
+// only reset. This matters because the whole DB node is read client-side
+// (see DB.load), so anything stored in the clear is effectively public to
+// anyone with database read access.
+function bufToHex(buf){ return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join(''); }
+function hexToBuf(hex){ const a=new Uint8Array(hex.length/2); for(let i=0;i<a.length;i++) a[i]=parseInt(hex.substr(i*2,2),16); return a; }
+async function derivePinHash(pin, saltHex){
+  const salt = hexToBuf(saltHex);
+  const keyMaterial = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({name:'PBKDF2', salt, iterations:100000, hash:'SHA-256'}, keyMaterial, 256);
+  return bufToHex(bits);
+}
+async function makePinRecord(pin){
+  const saltHex = bufToHex(crypto.getRandomValues(new Uint8Array(16)));
+  const hashHex = await derivePinHash(pin, saltHex);
+  return { pinSalt: saltHex, pinHash: hashHex };
+}
+async function verifyPin(staff, pin){
+  if(!staff.pinSalt || !staff.pinHash) return false;
+  const candidate = await derivePinHash(pin, staff.pinSalt);
+  return candidate === staff.pinHash;
+}
 let session = null; // {role, id}
 let pendingRole = null;
 
 const roleMeta = {
   company: { title:'Buying company sign in', sub:'Sign in to manage direct buying, agents, field staff, farmers, approvals and payments.', hint:'Demo codes — <code>ZML-2026</code> (Zamgrain Millers) or <code>CMC-2026</code> (Copperbelt Milling).', btnClass:'btn-company' },
   agent:   { title:'Agent sign in', sub:'Enter the agent code given to you by any buying company you work with.', hint:'Demo codes — <code>AG-BWALYA</code> or <code>AG-CHANDA</code>.', btnClass:'btn-agent' },
-  staff:   { title:'Field staff sign in', sub:'Enter the staff code given to you by your agent.', hint:'Demo codes — <code>FS-MUTALE</code>, <code>FS-JOSEPH</code>, or <code>FS-GRACE</code>.', btnClass:'btn-staff' },
+  staff:   { title:'Field staff sign in', sub:'Enter your staff ID and the PIN given to you by whoever added you.', hint:'Demo — ID <code>FS-MUTALE</code> / PIN <code>482913</code>, ID <code>FS-JOSEPH</code> / PIN <code>108452</code>, or ID <code>FS-GRACE</code> / PIN <code>930277</code>.', btnClass:'btn-staff', twoField:true },
   farmer:  { title:'Farmer sign in', sub:'Enter the code given to you when you sold your crop.', hint:'Demo codes — <code>FM-PETER</code>, <code>FM-AGNES</code>, or <code>FM-DAVIES</code>.', btnClass:'btn-farmer' }
 };
 
@@ -884,7 +1073,10 @@ function goLogin(role){
   document.getElementById('login-hint').innerHTML = meta.hint;
   document.getElementById('login-err').style.display='none';
   const fields = document.getElementById('login-fields');
-  fields.innerHTML = `<div class="field"><label>Join code</label><input id="login-code" placeholder="Enter your code" autocomplete="off"></div>`;
+  fields.innerHTML = meta.twoField
+    ? `<div class="field"><label>Staff ID</label><input id="login-code" placeholder="e.g. FS-MUTALE23" autocomplete="off"></div>
+       <div class="field"><label>PIN</label><input id="login-pin" type="password" inputmode="numeric" placeholder="6-digit PIN" autocomplete="off"></div>`
+    : `<div class="field"><label>Join code</label><input id="login-code" placeholder="Enter your code" autocomplete="off"></div>`;
   const btn = document.getElementById('login-submit');
   btn.className = 'submit-btn ' + meta.btnClass;
   btn.textContent = 'Sign in';
@@ -892,15 +1084,23 @@ function goLogin(role){
   document.getElementById('login-code').focus();
 }
 
-function attemptLogin(){
+async function attemptLogin(){
   const code = document.getElementById('login-code').value.trim().toUpperCase();
   const err = document.getElementById('login-err');
   let found = null;
   if(pendingRole==='company') found = DB.data.companies.find(c=>c.code.toUpperCase()===code);
   if(pendingRole==='agent') found = DB.data.agents.find(a=>a.code.toUpperCase()===code);
-  if(pendingRole==='staff') found = DB.data.fieldStaff.find(s=>s.code.toUpperCase()===code);
   if(pendingRole==='farmer') found = DB.data.farmers.find(f=>f.code.toUpperCase()===code);
-  if(!found){ err.textContent = "That code wasn't recognized. Check with whoever issued it."; err.style.display='block'; return; }
+  if(pendingRole==='staff'){
+    const pinEl = document.getElementById('login-pin');
+    const pin = pinEl ? pinEl.value.trim() : '';
+    const byId = DB.data.fieldStaff.find(s=>s.code.toUpperCase()===code);
+    if(byId && !pin){ err.textContent = "Enter your PIN as well as your staff ID."; err.style.display='block'; return; }
+    const ok = byId ? await verifyPin(byId, pin) : false;
+    found = ok ? byId : null;
+    if(byId && !found){ err.textContent = "ID recognized but that PIN is wrong. Check with whoever issued it."; err.style.display='block'; return; }
+  }
+  if(!found){ err.textContent = "That wasn't recognized. Check with whoever issued it."; err.style.display='block'; return; }
   session = { role: pendingRole, id: found.id };
   enterApp();
 }
@@ -974,6 +1174,7 @@ function renderCompany(view){
     const totalValue = purchases.filter(p=>DB.isCommissionable(p)).reduce((s,p)=>s+DB.purchaseValue(p),0);
     const totalCommission = links.reduce((s,l)=>s+DB.linkLedger(l.agentId, companyId).commissionAccrued,0);
     const pendingCount = purchases.filter(p=>p.status==='pending').length;
+    const flaggedCount = purchases.filter(p=>p.flags && p.flags.length && !p.flagResolved).length;
     main.innerHTML = syncBannerHTML() + `
       <div class="main-head"><div><h1>Overview</h1><p class="desc">${DB.company(companyId).name}</p></div></div>
       <div class="stat-grid">
@@ -981,6 +1182,7 @@ function renderCompany(view){
         <div class="stat-card"><div class="lbl">Approved purchase value</div><div class="val">${fmtK(totalValue)}</div><div class="sub">inspected & approved lots</div></div>
         <div class="stat-card"><div class="lbl">Commission accrued</div><div class="val">${fmtK(totalCommission)}</div><div class="sub">owed to agents</div></div>
         <div class="stat-card"><div class="lbl">Awaiting inspection</div><div class="val">${pendingCount}</div><div class="sub">purchases pending</div></div>
+        ${flaggedCount>0?`<div class="stat-card" style="border:1px solid #F3B7B4;"><div class="lbl">Flagged for review</div><div class="val" style="color:#B42318;">${flaggedCount}</div><div class="sub">possible fraud/error</div></div>`:''}
       </div>
       <div class="panel">
         <div class="panel-head"><h3>Buying channels</h3></div>
@@ -1010,6 +1212,15 @@ function renderCompany(view){
     main.innerHTML = syncBannerHTML() + `
       <div class="main-head"><div><h1>Purchases</h1><p class="desc">Inspect, approve, and choose how each purchase gets paid.</p></div></div>
       <div class="panel"><div class="panel-body">${purchasesTable(purchases.slice().reverse(), {showCompany:false, actions:'company'})}</div></div>`;
+  }
+  if(view==='c-contracts'){
+    const contracts = DB.contractsFor({companyId}).slice().reverse();
+    main.innerHTML = syncBannerHTML() + `
+      <div class="main-head">
+        <div><h1>Contracts</h1><p class="desc">Forward buying agreements — committed volume tracked against what's actually been delivered.</p></div>
+        <button class="action-btn" style="background:var(--olive)" onclick="openNewContractModal('${companyId}')">+ New contract</button>
+      </div>
+      <div class="panel"><div class="panel-body">${contractsTable(contracts)}</div></div>`;
   }
   if(view==='c-payroll'){
     const period = currentPayrollPeriod();
@@ -1127,14 +1338,16 @@ function purchasesTable(purchases, opts){
       <td>${farmer.name}<br><span style="color:var(--soil-40);font-size:12px;">${farmer.location}</span></td>
       ${opts.showCompany?`<td>${company.name}</td>`:''}
       <td>${p.commodity}</td>
-      <td>${fmtQty(p.quantity)} ${p.unit}</td>
+      <td>${fmtQty(p.quantity)} ${p.unit}${p.netWeight!=null?`<br><span style="color:var(--soil-40);font-size:11px;">scale: ${fmtQty(p.netWeight)} kg net</span>`:''}</td>
       <td>${fmtK(p.price)}</td>
       <td>${fmtK(DB.purchaseValue(p))}</td>
       <td>${statusBadge(p.status)}
         ${p.status==='paid' ? `<br><span style="font-size:11px;color:var(--soil-40);">to ${p.paidTo==='agent'?'agent':'farmer'}</span>${p.paymentMethod?`<br><span class="pm-badge ${paymentMethodMeta(p.paymentMethod).badge}">${paymentMethodMeta(p.paymentMethod).label}</span>`:''}` : ''}
         ${p.syncStatus==='pending' ? `<br><span class="badge-syncing">syncing</span>` : ''}
+        ${p.contractId ? `<br><span style="font-size:11px;color:var(--olive-dark);">📄 contract</span>` : ''}
+        ${flagBadgesHTML(p)}
       </td>
-      <td>${actions}</td>
+      <td>${actions}${(opts.actions==='company' && p.flags && p.flags.length && !p.flagResolved) ? `<button class="mini-btn" onclick="clearPurchaseFlag('${p.id}')">Clear flag</button>` : ''}</td>
     </tr>`;
   }).join('');
   return `<table><tr><th>Date</th><th>Farmer</th>${opts.showCompany?'<th>Company</th>':''}<th>Commodity</th><th>Qty</th><th>Price</th><th>Value</th><th>Status</th><th></th></tr>${rows}</table>`;
@@ -1177,7 +1390,7 @@ function confirmPay(purchaseId){
   const method = document.getElementById('pay-method').value;
   const ref = document.getElementById('pay-ref').value.trim();
   const p = DB.data.purchases.find(x=>x.id===purchaseId);
-  p.status='paid'; p.paymentStatus=payTo==='farmer' ? 'paid_to_farmer' : 'paid_to_agent'; p.paidTo=payTo; p.paymentMethod=method; p.paymentRef=ref; p.syncStatus='pending'; DB.save(); SYNC.markSaved(p);
+  p.status='paid'; p.paymentStatus=payTo==='farmer' ? 'paid_to_farmer' : 'paid_to_agent'; p.paidTo=payTo; p.paymentMethod=method; p.paymentRef=ref; SYNC.markSaved(p, 'purchases');
   closeModal();
   toast('Payment recorded via ' + paymentMethodMeta(method).label);
   setView('company', document.querySelector('#app-company .nav-item.active').dataset.view);
@@ -1388,7 +1601,7 @@ function confirmCompanyPayroll(staffId){
   const calc=calcPayroll(s.monthlySalary||0), period=currentPayrollPeriod();
   if(DB.data.payrollRuns.some(r=>r.staffId===staffId && r.period===period)){toast('Payroll already run for this staff member');return;}
   const run={id:DB.uid('pr'),staffId,companyId:session.id,agentId:null,period,gross:calc.gross,napsaEmployee:calc.napsaEmployee,nhimaEmployee:calc.nhimaEmployee,paye:calc.paye,net:calc.net,paymentMethod:document.getElementById('cpr-method').value,paymentRef:document.getElementById('cpr-ref').value.trim(),date:new Date().toISOString().slice(0,10)};
-  DB.data.payrollRuns.push(run); SYNC.markSaved(run); closeModal(); toast('Payroll paid for '+s.name+' — '+fmtK(calc.net)); setView('company','c-payroll');
+  DB.data.payrollRuns.push(run); SYNC.markSaved(run, 'payrollRuns'); closeModal(); toast('Payroll paid for '+s.name+' — '+fmtK(calc.net)); setView('company','c-payroll');
 }
 
 /* =========================================================================
@@ -1526,7 +1739,7 @@ function confirmPayroll(staffId){
     date: new Date().toISOString().slice(0,10)
   };
   DB.data.payrollRuns.push(run);
-  SYNC.markSaved(run);
+  SYNC.markSaved(run, 'payrollRuns');
   closeModal();
   toast('Payroll run for ' + s.name + ' — ' + fmtK(calc.net) + ' net paid');
   setView('agent','a-payroll');
@@ -1553,16 +1766,21 @@ function agentLinksTable(agentId, withRequest){
 function generateStaffLogin(staffId){
   const s = DB.fieldStaffById(staffId);
   if(!s || s.agentId!==session.id){ toast('You can only manage your own field staff'); return; }
-  s.code = 'FS-' + s.name.split(' ')[0].toUpperCase() + Math.floor(Math.random()*900+100);
+  regenerateStaffPinAsync(s, 'agent','a-settings');
+}
+async function regenerateStaffPinAsync(s, role, view){
+  const pin = genStaffPin();
+  const { pinSalt, pinHash } = await makePinRecord(pin);
+  s.pinSalt = pinSalt; s.pinHash = pinHash;
   DB.save();
-  toast('New login code generated for ' + s.name + ': ' + s.code);
-  setView('agent','a-settings');
+  toast('New PIN for ' + s.name + ': ' + pin + ' (ID ' + s.code + ' stays the same — write it down, it won\'t be shown again)');
+  setView(role, view);
 }
 function staffLoginSettingsTable(agentId){
   const staff = DB.staffForAgent(agentId);
   if(!staff.length) return `<table><tr class="empty-row"><td>No field staff accounts yet. Add a field staff member to generate a login.</td></tr></table>`;
-  const rows = staff.map(s=>`<tr><td><strong>${s.name}</strong><br><span style="color:var(--soil-40);font-size:12px;">${s.phone||'No phone'}</span></td><td class="mono" style="font-weight:600;">${s.code}</td><td><button class="mini-btn primary" onclick="generateStaffLogin('${s.id}')">Generate new code</button></td></tr>`).join('');
-  return `<table><tr><th>Field staff</th><th>Login code</th><th>Access</th></tr>${rows}</table>`;
+  const rows = staff.map(s=>`<tr><td><strong>${s.name}</strong><br><span style="color:var(--soil-40);font-size:12px;">${s.phone||'No phone'}</span></td><td class="mono" style="font-weight:600;">${s.code}</td><td><button class="mini-btn primary" onclick="generateStaffLogin('${s.id}')">Regenerate PIN</button></td></tr>`).join('');
+  return `<table><tr><th>Field staff</th><th>Staff ID</th><th>Access</th></tr>${rows}</table>`;
 }
 
 function staffTable(agentId){
@@ -1572,7 +1790,7 @@ function staffTable(agentId){
     const count = DB.purchasesFor({fieldStaffId:s.id}).length;
     return `<tr><td><strong>${s.name}</strong></td><td>${s.phone}</td><td class="mono">${s.code}</td><td>${s.monthlySalary?fmtK(s.monthlySalary):'—'}</td><td>${count} purchases logged</td><td><button class="mini-btn" onclick="openEditStaffModal('${s.id}')">Edit</button></td></tr>`;
   }).join('');
-  return `<table><tr><th>Name</th><th>Phone</th><th>Login code</th><th>Salary</th><th>Activity</th><th></th></tr>${rows}</table>`;
+  return `<table><tr><th>Name</th><th>Phone</th><th>Staff ID</th><th>Salary</th><th>Activity</th><th></th></tr>${rows}</table>`;
 }
 
 function companyStaffTable(companyId){
@@ -1580,9 +1798,9 @@ function companyStaffTable(companyId){
   if(!staff.length) return `<table><tr class="empty-row"><td>No direct field staff yet. Add staff to operate without an agent.</td></tr></table>`;
   const rows = staff.map(s=>{
     const count = DB.purchasesFor({companyId, fieldStaffId:s.id}).length;
-    return `<tr><td><strong>${s.name}</strong><br><span style="color:var(--soil-40);font-size:12px;">${s.phone||'No phone'}</span></td><td class="mono">${s.code}</td><td>${s.monthlySalary?fmtK(s.monthlySalary):'—'}</td><td>${count} purchases</td><td><button class="mini-btn" onclick="generateCompanyStaffLogin('${s.id}')">New login</button> <button class="mini-btn" onclick="openEditCompanyStaffModal('${s.id}')">Edit</button></td></tr>`;
+    return `<tr><td><strong>${s.name}</strong><br><span style="color:var(--soil-40);font-size:12px;">${s.phone||'No phone'}</span></td><td class="mono">${s.code}</td><td>${s.monthlySalary?fmtK(s.monthlySalary):'—'}</td><td>${count} purchases</td><td><button class="mini-btn" onclick="generateCompanyStaffLogin('${s.id}')">Regenerate PIN</button> <button class="mini-btn" onclick="openEditCompanyStaffModal('${s.id}')">Edit</button></td></tr>`;
   }).join('');
-  return `<table><tr><th>Field staff</th><th>Login</th><th>Salary</th><th>Activity</th><th></th></tr>${rows}</table>`;
+  return `<table><tr><th>Field staff</th><th>Staff ID</th><th>Salary</th><th>Activity</th><th></th></tr>${rows}</table>`;
 }
 function openAddCompanyStaffModal(companyId){
   openModal(`<button class="modal-close" onclick="closeModal()">&times;</button><h3>Add direct field staff</h3><p class="sub">This staff member works directly for your company. No agent is required.</p><div class="field"><label>Full name</label><input id="csf-name" placeholder="e.g. Mwape Chola"></div><div class="field"><label>Phone number</label><input id="csf-phone" placeholder="e.g. 0977 000 000"></div><div class="field"><label>Monthly gross salary (K)</label><input id="csf-salary" type="number" placeholder="e.g. 4000"></div><button class="submit-btn" style="background:var(--olive)" onclick="confirmAddCompanyStaff('${companyId}')">Create staff account</button>`);
@@ -1590,14 +1808,19 @@ function openAddCompanyStaffModal(companyId){
 function confirmAddCompanyStaff(companyId){
   const name=document.getElementById('csf-name').value.trim(), phone=document.getElementById('csf-phone').value.trim(), salary=Number(document.getElementById('csf-salary').value)||0;
   if(!name){toast('Enter a name');return;}
+  addCompanyStaffAsync(companyId, name, phone, salary);
+}
+async function addCompanyStaffAsync(companyId, name, phone, salary){
   const code='FS-'+name.split(' ')[0].toUpperCase()+Math.floor(Math.random()*900+100);
-  DB.data.fieldStaff.push({id:DB.uid('fs'), companyId, agentId:null, name, phone, code, monthlySalary:salary});
+  const pin=genStaffPin();
+  const { pinSalt, pinHash } = await makePinRecord(pin);
+  DB.data.fieldStaff.push({id:DB.uid('fs'), companyId, agentId:null, name, phone, code, pinSalt, pinHash, monthlySalary:salary});
   const c=DB.company(companyId); c.operatingMode = c.operatingMode==='agent' ? 'hybrid' : 'direct';
-  DB.save(); closeModal(); toast('Direct field staff created — login: '+code); setView('company','c-staff');
+  DB.save(); closeModal(); toast('Direct field staff created — ID: '+code+'  PIN: '+pin+' (write it down, it won\'t be shown again)'); setView('company','c-staff');
 }
 function generateCompanyStaffLogin(staffId){
   const s=DB.fieldStaffById(staffId); if(!s || s.companyId!==session.id){toast('You can only manage your company staff');return;}
-  s.code='FS-'+s.name.split(' ')[0].toUpperCase()+Math.floor(Math.random()*900+100); DB.save(); toast('New login generated: '+s.code); setView('company','c-staff');
+  regenerateStaffPinAsync(s, 'company','c-staff');
 }
 function openEditCompanyStaffModal(staffId){
   const s=DB.fieldStaffById(staffId); if(!s || s.companyId!==session.id){toast('You can only manage your company staff');return;}
@@ -1613,7 +1836,7 @@ function openAddStaffModal(){
   openModal(`
     <button class="modal-close" onclick="closeModal()">&times;</button>
     <h3>Add field staff</h3>
-    <p class="sub">They'll use the generated code to log in and record purchases.</p>
+    <p class="sub">You'll get a staff ID and a PIN — give both to them so they can log in and record purchases.</p>
     <div class="field"><label>Full name</label><input id="ns-name" placeholder="e.g. Mwape Chola"></div>
     <div class="field"><label>Phone number</label><input id="ns-phone" placeholder="e.g. 0977 000 000"></div>
     <div class="field"><label>Monthly gross salary (K)</label><input id="ns-salary" type="number" placeholder="e.g. 4000"></div>
@@ -1625,10 +1848,15 @@ function confirmAddStaff(){
   const phone = document.getElementById('ns-phone').value.trim();
   const salary = Number(document.getElementById('ns-salary').value) || 0;
   if(!name){ toast('Enter a name'); return; }
+  addStaffAsync(name, phone, salary);
+}
+async function addStaffAsync(name, phone, salary){
   const code = 'FS-' + name.split(' ')[0].toUpperCase() + Math.floor(Math.random()*90+10);
-  DB.data.fieldStaff.push({ id: DB.uid('fs'), agentId: session.id, name, phone, code, monthlySalary: salary });
+  const pin = genStaffPin();
+  const { pinSalt, pinHash } = await makePinRecord(pin);
+  DB.data.fieldStaff.push({ id: DB.uid('fs'), agentId: session.id, name, phone, code, pinSalt, pinHash, monthlySalary: salary });
   DB.save(); closeModal();
-  toast('Field staff added — login code: ' + code);
+  toast('Field staff added — ID: ' + code + '  PIN: ' + pin + ' (write it down, it won\'t be shown again)');
   setView('agent','a-staff');
 }
 
@@ -1637,7 +1865,7 @@ function openEditStaffModal(staffId){
   openModal(`
     <button class="modal-close" onclick="closeModal()">&times;</button>
     <h3>Edit field staff</h3>
-    <p class="sub">Their login code stays the same.</p>
+    <p class="sub">Their staff ID stays the same. Use "Regenerate PIN" on the staff list if they've forgotten it.</p>
     <div class="field"><label>Full name</label><input id="es-name" value="${s.name}"></div>
     <div class="field"><label>Phone number</label><input id="es-phone" value="${s.phone}"></div>
     <div class="field"><label>Monthly gross salary (K)</label><input id="es-salary" type="number" value="${s.monthlySalary||0}"></div>
@@ -1673,7 +1901,7 @@ function renderStaff(view){
     main.innerHTML = syncBannerHTML() + `
       <div class="main-head"><div><h1>Log a purchase</h1><p class="desc">Saves to this device instantly — even offline.</p></div></div>
       <div class="panel"><div class="panel-body pad">
-        <div class="field"><label>Buying company</label><select id="lp-company" onchange="updateCommodityOptions()">${companyOptions}</select></div>
+        <div class="field"><label>Buying company</label><select id="lp-company" onchange="updateCommodityOptions();updateContractOptions();">${companyOptions}</select></div>
         <h3 style="margin:18px 0 10px;font-size:14px;">Farmer</h3>
         <div class="field">
           <label>Search a farmer you've registered before</label>
@@ -1692,19 +1920,34 @@ function renderStaff(view){
           </div>
           <div class="field"><label>Crop to be bought</label><input id="lp-farmer-crop" list="lp-farmer-crop-list" placeholder="e.g. Maize"><datalist id="lp-farmer-crop-list"></datalist></div>
         </div>
+        <div class="field" id="lp-contract-field" style="display:none;">
+          <label>Link to a forward contract (optional)</label>
+          <select id="lp-contract-id"></select>
+        </div>
         <h3 style="margin:18px 0 10px;font-size:14px;">Purchase details</h3>
         <div class="two-col">
           <div class="field"><label>Commodity</label><input id="lp-commodity" list="lp-commodity-list" placeholder="e.g. Maize" value="Maize"><datalist id="lp-commodity-list"></datalist></div>
-          <div class="field"><label>Unit</label><select id="lp-unit"><option value="kg">Kilograms (kg)</option><option value="bags (50kg)" selected>Bags (50kg)</option><option value="tonne">Tonnes</option></select></div>
+          <div class="field"><label>Unit</label><select id="lp-unit" onchange="updateWeightExpected()"><option value="kg">Kilograms (kg)</option><option value="bags (50kg)" selected>Bags (50kg)</option><option value="tonne">Tonnes</option></select></div>
         </div>
         <div class="two-col">
-          <div class="field"><label>Quantity</label><input id="lp-qty" type="number" placeholder="e.g. 50"></div>
+          <div class="field"><label>Quantity</label><input id="lp-qty" type="number" placeholder="e.g. 50" oninput="updateWeightExpected()"></div>
           <div class="field"><label>Price per unit (K)</label><input id="lp-price" type="number" placeholder="e.g. 280"></div>
         </div>
+        <details style="margin:10px 0 4px;">
+          <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--soil-70);">Scale weight check (optional)</summary>
+          <p class="sub" style="margin:8px 0;">If you weighed the load, enter the scale readings — we'll flag it for review if it's off from what the quantity above implies.</p>
+          <div class="two-col">
+            <div class="field"><label>Gross weight (kg)</label><input id="lp-gross" type="number" placeholder="e.g. 2550" oninput="updateWeightExpected()"></div>
+            <div class="field"><label>Tare weight (kg)</label><input id="lp-tare" type="number" placeholder="e.g. 50" oninput="updateWeightExpected()"></div>
+          </div>
+          <p class="sub" id="lp-weight-summary" style="margin:0;"></p>
+        </details>
         <button class="action-btn" style="background:var(--olive);width:100%;justify-content:center;margin-top:6px;" onclick="submitPurchase()">Save purchase</button>
       </div></div>`;
     renderFarmerPicker();
     updateCommodityOptions();
+    updateContractOptions();
+    updateWeightExpected();
   }
   if(view==='s-register'){
     main.innerHTML = syncBannerHTML() + `
@@ -1726,7 +1969,10 @@ function renderStaff(view){
   if(view==='s-farmers'){
     const farmers = DB.data.farmers.filter(f=>f.registeredBy===staffId);
     main.innerHTML = syncBannerHTML() + `
-      <div class="main-head"><div><h1>My farmers</h1><p class="desc">Farmers you've registered.</p></div></div>
+      <div class="main-head">
+        <div><h1>My farmers</h1><p class="desc">Farmers you've registered.</p></div>
+        <button class="action-btn" style="background:var(--navy)" onclick="openBulkImportModal()">⇪ Bulk import (CSV)</button>
+      </div>
       <div class="panel"><div class="panel-body">${farmersTable(farmers)}</div></div>`;
   }
   if(view==='s-history'){
@@ -1755,6 +2001,83 @@ function staffPayslipsTable(runs){
     <td><span class="pm-badge ${paymentMethodMeta(r.paymentMethod).badge}">${paymentMethodMeta(r.paymentMethod).label}</span></td>
   </tr>`).join('');
   return `<table><tr><th>Period</th><th>Gross</th><th>NAPSA</th><th>NHIMA</th><th>PAYE</th><th>Net pay</th><th>Method</th></tr>${rows}</table>`;
+}
+
+function contractStatusInfo(contract){
+  const delivered = DB.contractDelivered(contract.id);
+  const pct = contract.committedQty > 0 ? Math.min(100, Math.round(delivered/contract.committedQty*100)) : 0;
+  const overdue = contract.status==='active' && new Date(contract.deadlineDate) < new Date() && delivered < contract.committedQty;
+  let label, cls;
+  if(contract.status==='cancelled'){ label='Cancelled'; cls='badge-cancelled'; }
+  else if(delivered >= contract.committedQty){ label='Fulfilled'; cls='badge-paid'; }
+  else if(overdue){ label='Overdue'; cls='badge-flag'; }
+  else { label='Active'; cls='badge-pending'; }
+  return { delivered, pct, overdue, label, cls };
+}
+function contractsTable(contracts){
+  if(!contracts.length) return `<table><tr class="empty-row"><td>No forward contracts yet. Use "+ New contract" to commit a farmer to a delivery volume ahead of the season.</td></tr></table>`;
+  let rows = contracts.map(c=>{
+    const f = DB.farmer(c.farmerId);
+    const info = contractStatusInfo(c);
+    return `<tr>
+      <td><strong>${f ? f.name : '—'}</strong><br><span style="color:var(--soil-40);font-size:12px;">${f ? f.location||'—' : ''}</span></td>
+      <td>${c.commodity}</td>
+      <td>${fmtQty(c.committedQty)} ${c.unit}<br><span style="color:var(--soil-40);font-size:12px;">${fmtQty(info.delivered)} delivered (${info.pct}%)</span></td>
+      <td>${c.agreedPrice ? 'K'+c.agreedPrice+' locked' : 'Market price at delivery'}</td>
+      <td>${c.deadlineDate}</td>
+      <td><span class="badge ${info.cls}">${info.label}</span></td>
+      <td>${c.status==='active' ? `<button class="mini-btn" onclick="cancelContract('${c.id}')">Cancel</button>` : ''}</td>
+    </tr>`;
+  }).join('');
+  return `<table><tr><th>Farmer</th><th>Commodity</th><th>Committed / delivered</th><th>Price</th><th>Deadline</th><th>Status</th><th></th></tr>${rows}</table>`;
+}
+function openNewContractModal(companyId){
+  const farmerOptions = DB.data.farmers.map(f=>`<option value="${f.id}">${f.name} — ${f.location||'—'}</option>`).join('');
+  openModal(`
+    <button class="modal-close" onclick="closeModal()">&times;</button>
+    <h3>New forward contract</h3>
+    <p class="sub">Commit a farmer to a delivery volume ahead of the season. Purchases can be linked to it as they come in.</p>
+    <div class="field"><label>Farmer</label><select id="nc-farmer">${farmerOptions}</select></div>
+    <div class="two-col">
+      <div class="field"><label>Commodity</label><input id="nc-commodity" placeholder="e.g. Maize"></div>
+      <div class="field"><label>Unit</label><select id="nc-unit"><option value="kg">Kilograms (kg)</option><option value="bags (50kg)" selected>Bags (50kg)</option><option value="tonne">Tonnes</option></select></div>
+    </div>
+    <div class="two-col">
+      <div class="field"><label>Committed quantity</label><input id="nc-qty" type="number" placeholder="e.g. 400"></div>
+      <div class="field"><label>Agreed price per unit (K) — optional</label><input id="nc-price" type="number" placeholder="Leave blank for market price"></div>
+    </div>
+    <div class="two-col">
+      <div class="field"><label>Start date</label><input id="nc-start" type="date"></div>
+      <div class="field"><label>Delivery deadline</label><input id="nc-deadline" type="date"></div>
+    </div>
+    <div class="field"><label>Notes (optional)</label><input id="nc-notes" placeholder="e.g. Input credit advanced against this contract"></div>
+    <button class="submit-btn" style="background:var(--olive)" onclick="createContract('${companyId}')">Create contract</button>
+  `);
+}
+function createContract(companyId){
+  const farmerId = document.getElementById('nc-farmer').value;
+  const commodity = document.getElementById('nc-commodity').value.trim();
+  const unit = document.getElementById('nc-unit').value;
+  const qty = Number(document.getElementById('nc-qty').value);
+  const price = Number(document.getElementById('nc-price').value) || null;
+  const startDate = document.getElementById('nc-start').value || new Date().toISOString().slice(0,10);
+  const deadlineDate = document.getElementById('nc-deadline').value;
+  const notes = document.getElementById('nc-notes').value.trim();
+  if(!farmerId || !commodity || !qty || !deadlineDate){ toast('Fill in farmer, commodity, quantity and deadline'); return; }
+  const contract = { id: DB.uid('ct'), companyId, farmerId, commodity, unit, committedQty: qty, agreedPrice: price, startDate, deadlineDate, status:'active', createdDate:new Date().toISOString().slice(0,10), notes };
+  DB.data.contracts.push(contract);
+  DB.save();
+  closeModal();
+  toast('Contract created');
+  setView('company','c-contracts');
+}
+function cancelContract(contractId){
+  const c = DB.contract(contractId);
+  if(!c) return;
+  c.status = 'cancelled';
+  DB.save();
+  toast('Contract cancelled');
+  refreshCurrentView();
 }
 
 function farmersTable(farmers){
@@ -1798,7 +2121,7 @@ function confirmEditFarmer(farmerId){
   if(!name){ toast('Name cannot be empty'); return; }
   const f = DB.farmer(farmerId);
   f.name = name; f.nrc = nrc; f.location = location; f.phone = phone;
-  SYNC.markSaved(f);
+  SYNC.markSaved(f, 'farmers');
   closeModal();
   toast('Farmer details updated' + (SYNC.isOnline ? '' : ' (will sync when back online)'));
   setView('staff','s-farmers');
@@ -1830,7 +2153,7 @@ function confirmEditPurchase(purchaseId){
   if(!commodity || !qty || !price){ toast('Fill in all fields'); return; }
   const p = DB.data.purchases.find(x=>x.id===purchaseId);
   p.commodity = commodity; p.unit = unit; p.quantity = qty; p.price = price;
-  SYNC.markSaved(p);
+  SYNC.markSaved(p, 'purchases');
   closeModal();
   toast('Purchase updated' + (SYNC.isOnline ? '' : ' (will sync when back online)'));
   setView('staff','s-history');
@@ -1862,21 +2185,59 @@ function renderFarmerPicker(){
   html += `<div class="new-farmer-opt" onclick="selectNewFarmer()">+ Register a new farmer</div>`;
   box.innerHTML = html;
 }
+function updateWeightExpected(){
+  const summary = document.getElementById('lp-weight-summary');
+  if(!summary) return;
+  const qty = Number(document.getElementById('lp-qty').value) || 0;
+  const unit = document.getElementById('lp-unit').value;
+  const gross = document.getElementById('lp-gross').value;
+  const tare = document.getElementById('lp-tare').value;
+  const expected = expectedWeightKg(qty, unit);
+  let msg = expected ? `Expected from quantity entered: ${fmtQty(expected)} kg.` : '';
+  if(gross !== '' && tare !== ''){
+    const net = Number(gross) - Number(tare);
+    msg += ` Net scale weight: ${fmtQty(net)} kg.`;
+    if(expected && expected > 0){
+      const diffPct = Math.abs(net - expected) / expected * 100;
+      if(diffPct > FRAUD_CONFIG.weightDiscrepancyPct){
+        msg += ` <span style="color:#B42318;font-weight:600;">⚠ ${diffPct.toFixed(1)}% off — will be flagged for review.</span>`;
+      }
+    }
+  }
+  summary.innerHTML = msg;
+}
+function updateContractOptions(){
+  const field = document.getElementById('lp-contract-field');
+  const select = document.getElementById('lp-contract-id');
+  if(!field || !select) return;
+  const companyId = document.getElementById('lp-company').value;
+  const farmerId = document.getElementById('lp-farmer-id').value;
+  if(!companyId || !farmerId){ field.style.display = 'none'; select.innerHTML = ''; return; }
+  const active = DB.contractsFor({companyId, farmerId, activeOnly:true});
+  if(!active.length){ field.style.display = 'none'; select.innerHTML = ''; return; }
+  select.innerHTML = `<option value="">No contract — spot purchase</option>` + active.map(c=>{
+    const delivered = DB.contractDelivered(c.id);
+    return `<option value="${c.id}">${c.commodity} — ${fmtQty(delivered)}/${fmtQty(c.committedQty)} ${c.unit} delivered, due ${c.deadlineDate}</option>`;
+  }).join('');
+  field.style.display = 'block';
+}
 function selectFarmerForPurchase(id){
   const f = DB.farmer(id);
   document.getElementById('lp-farmer-id').value = id;
   document.getElementById('lp-farmer-search').value = f.name;
   document.getElementById('lp-new-farmer-fields').style.display = 'none';
   renderFarmerPicker();
+  updateContractOptions();
 }
 function selectNewFarmer(){
   document.getElementById('lp-farmer-id').value = '';
   document.getElementById('lp-farmer-search').value = '';
   document.getElementById('lp-new-farmer-fields').style.display = 'block';
   renderFarmerPicker();
+  updateContractOptions();
 }
 
-function registerFarmer(){
+async function registerFarmer(){
   const staff = DB.fieldStaffById(session.id);
   const name = document.getElementById('rf-name').value.trim();
   const nrc = document.getElementById('rf-nrc').value.trim();
@@ -1886,14 +2247,125 @@ function registerFarmer(){
   if(!name){ toast("Enter the farmer's name"); return; }
   if(!crop){ toast('Select or enter the crop to be bought'); return; }
   const code = 'FM-' + name.split(' ')[0].toUpperCase() + Math.floor(Math.random()*90+10);
-  const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop, crops: crop ? [crop] : [], code, registeredBy: staff.id, registeredDate: new Date().toISOString().slice(0,10) };
+  const geo = await getGeo();
+  const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop, crops: crop ? [crop] : [], code, geo, registeredBy: staff.id, registeredDate: new Date().toISOString().slice(0,10) };
   DB.data.farmers.push(farmer);
-  SYNC.markSaved(farmer);
+  SYNC.markSaved(farmer, 'farmers');
   toast('Farmer registered — code ' + code + (SYNC.isOnline ? '' : ' (will sync when back online)'));
   setView('staff','s-farmers');
 }
 
-function submitPurchase(){
+/* =========================================================================
+   BULK FARMER IMPORT (CSV)
+   ---------------------------------------------------------------------
+   For registering a whole village or cooperative at once instead of one
+   farmer at a time in the field. Expects a header row with any of:
+   name, nrc, phone, location, crop (name is the only required column,
+   any column order, case-insensitive). One GPS fix is taken for the
+   whole batch (all farmers assumed to be registered from roughly the
+   same place) rather than one per row.
+   ========================================================================= */
+let __bulkImportRows = [];
+
+function openBulkImportModal(){
+  __bulkImportRows = [];
+  openModal(`
+    <button class="modal-close" onclick="closeModal()">&times;</button>
+    <h3>Bulk import farmers</h3>
+    <p class="sub">Upload a CSV with columns: <span class="mono">name, nrc, phone, location, crop</span>. Only "name" is required — any column order works.</p>
+    <div class="field"><label>CSV file</label><input type="file" id="bi-file" accept=".csv,text/csv" onchange="handleBulkImportFile(event)"></div>
+    <div id="bi-preview"></div>
+  `);
+}
+
+function parseCSV(text){
+  const lines = text.split(/\r\n|\n|\r/).filter(l => l.trim().length);
+  if(!lines.length) return { header: [], rows: [] };
+  const splitLine = (line) => {
+    // Handles simple quoted fields (commas inside "..."); fine for typical farmer-list exports.
+    const out = []; let cur = ''; let inQuotes = false;
+    for(let i=0;i<line.length;i++){
+      const ch = line[i];
+      if(ch === '"'){ inQuotes = !inQuotes; }
+      else if(ch === ',' && !inQuotes){ out.push(cur.trim()); cur=''; }
+      else cur += ch;
+    }
+    out.push(cur.trim());
+    return out;
+  };
+  const header = splitLine(lines[0]).map(h => h.toLowerCase());
+  const rows = lines.slice(1).map(l => splitLine(l));
+  return { header, rows };
+}
+
+function handleBulkImportFile(evt){
+  const file = evt.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const { header, rows } = parseCSV(reader.result);
+    const nameIdx = header.indexOf('name');
+    if(nameIdx === -1){
+      document.getElementById('bi-preview').innerHTML = `<p class="err-msg" style="display:block;">Couldn't find a "name" column — check your CSV has a header row.</p>`;
+      return;
+    }
+    const idx = {
+      name: nameIdx, nrc: header.indexOf('nrc'), phone: header.indexOf('phone'),
+      location: header.indexOf('location'), crop: header.indexOf('crop')
+    };
+    const existingNrcs = new Set(DB.data.farmers.map(f=>f.nrc).filter(Boolean));
+    __bulkImportRows = rows.map(r => {
+      const name = (r[idx.name]||'').trim();
+      const nrc = idx.nrc>-1 ? (r[idx.nrc]||'').trim() : '';
+      return {
+        name, nrc,
+        phone: idx.phone>-1 ? (r[idx.phone]||'').trim() : '',
+        location: idx.location>-1 ? (r[idx.location]||'').trim() : '',
+        crop: idx.crop>-1 ? (r[idx.crop]||'').trim() : '',
+        skip: !name, duplicate: !!nrc && existingNrcs.has(nrc)
+      };
+    });
+    const valid = __bulkImportRows.filter(r=>!r.skip && !r.duplicate).length;
+    const skipped = __bulkImportRows.filter(r=>r.skip).length;
+    const dupes = __bulkImportRows.filter(r=>r.duplicate).length;
+    const previewRows = __bulkImportRows.slice(0,8).map(r=>
+      `<tr>
+        <td>${r.name||'<em>missing</em>'}</td><td>${r.nrc||'—'}</td><td>${r.location||'—'}</td><td>${r.crop||'—'}</td>
+        <td>${r.skip?'<span class="badge-flag">skip: no name</span>':r.duplicate?'<span class="badge-flag">skip: duplicate NRC</span>':'<span class="badge badge-paid">will import</span>'}</td>
+      </tr>`).join('');
+    document.getElementById('bi-preview').innerHTML = `
+      <p class="sub" style="margin-top:14px;">${__bulkImportRows.length} row(s) found — ${valid} will import, ${skipped} missing a name, ${dupes} duplicate NRC already on file.</p>
+      <table><tr><th>Name</th><th>NRC</th><th>Location</th><th>Crop</th><th></th></tr>${previewRows}</table>
+      ${__bulkImportRows.length>8 ? `<p class="sub">…and ${__bulkImportRows.length-8} more.</p>` : ''}
+      <button class="submit-btn" style="background:var(--olive)" onclick="confirmBulkImport()" ${valid===0?'disabled':''}>Import ${valid} farmer(s)</button>
+    `;
+  };
+  reader.readAsText(file);
+}
+
+async function confirmBulkImport(){
+  const staff = DB.fieldStaffById(session.id);
+  const toImport = __bulkImportRows.filter(r=>!r.skip && !r.duplicate);
+  if(!toImport.length){ toast('Nothing to import'); return; }
+  toast('Getting location for this batch…');
+  const geo = await getGeo(); // one fix for the whole batch
+  const today = new Date().toISOString().slice(0,10);
+  toImport.forEach(r => {
+    const code = 'FM-' + r.name.split(' ')[0].toUpperCase() + Math.floor(Math.random()*90+10);
+    const farmer = {
+      id: DB.uid('fm'), name: r.name, nrc: r.nrc, phone: r.phone, location: r.location,
+      crop: r.crop, crops: r.crop ? [r.crop] : [], code, geo,
+      registeredBy: staff.id, registeredDate: today, syncStatus: SYNC.isOnline ? 'synced' : 'pending'
+    };
+    DB.data.farmers.push(farmer);
+  });
+  DB.save(['farmers']); // one delta save for the whole batch, not one per row
+  closeModal();
+  toast(`Imported ${toImport.length} farmer(s)` + (SYNC.isOnline ? '' : ' — will sync when back online'));
+  setView('staff','s-farmers');
+}
+
+async function submitPurchase(){
   const staff = DB.fieldStaffById(session.id);
   const companyId = document.getElementById('lp-company').value;
   const commodity = document.getElementById('lp-commodity').value.trim() || 'Maize';
@@ -1910,20 +2382,30 @@ function submitPurchase(){
     const farmerCrop = document.getElementById('lp-farmer-crop').value.trim();
     if(!name){ toast('Search for an existing farmer or register a new one'); return; }
     const code = 'FM-' + name.split(' ')[0].toUpperCase() + Math.floor(Math.random()*90+10);
-    const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop: farmerCrop || commodity, crops: [farmerCrop || commodity], code, registeredBy: staff.id, registeredDate: new Date().toISOString().slice(0,10) };
+    const farmerGeo = await getGeo();
+    const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop: farmerCrop || commodity, crops: [farmerCrop || commodity], code, geo: farmerGeo, registeredBy: staff.id, registeredDate: new Date().toISOString().slice(0,10) };
     DB.data.farmers.push(farmer);
-    SYNC.markSaved(farmer);
+    SYNC.markSaved(farmer, 'farmers');
     farmerId = farmer.id;
   }
   if(!qty || !price){ toast('Enter quantity and price'); return; }
 
+  const geo = await getGeo();
+  const contractId = document.getElementById('lp-contract-id') ? (document.getElementById('lp-contract-id').value || null) : null;
+  const grossVal = document.getElementById('lp-gross').value;
+  const tareVal = document.getElementById('lp-tare').value;
+  const grossWeight = grossVal !== '' ? Number(grossVal) : null;
+  const tareWeight = tareVal !== '' ? Number(tareVal) : null;
+  const netWeight = (grossWeight != null && tareWeight != null) ? grossWeight - tareWeight : null;
   const purchase = {
     id: DB.uid('p'), companyId, agentId: staff.agentId || null, fieldStaffId: staff.id, farmerId,
     commodity, quantity: qty, unit, price, crop: commodity, date: new Date().toISOString().slice(0,10),
-    status: 'pending', paymentStatus: 'unpaid', paidTo: staff.agentId ? 'agent' : 'farmer', paymentMethod: null, paymentRef: null
+    status: 'pending', paymentStatus: 'unpaid', paidTo: staff.agentId ? 'agent' : 'farmer', paymentMethod: null, paymentRef: null,
+    geo, loggedAt: Date.now(), contractId, grossWeight, tareWeight, netWeight
   };
+  purchase.flags = computePurchaseFlags(purchase, DB.farmer(farmerId));
   DB.data.purchases.push(purchase);
-  SYNC.markSaved(purchase);
+  SYNC.markSaved(purchase, 'purchases');
   toast(SYNC.isOnline ? 'Purchase logged and synced' : 'Saved on this device — will sync when back online');
   setView('staff','s-log');
 }
