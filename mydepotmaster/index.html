@@ -3400,7 +3400,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'mdm-v79';
+const SW_VERSION  = 'mdm-v82';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -3695,7 +3695,10 @@ const DEFAULT={
   staffRoles:[],
   deductionReasons:['Damaged bags','Late arrival','Misconduct','Short count'],
   depotInfo:{name:'',district:'',country:'',setupDone:false},
-  currency:'',    // depot-wide currency symbol/code — admin must define (e.g. ZMW, USD, KES)
+  currency:'',    // depot-wide currency ISO code — admin must define (e.g. ZMW, USD, KES)
+  fxRates:null,        // {CODE: rateVsUSD} — last fetched snapshot from live FX API
+  fxRatesUpdatedAt:0,  // ms timestamp of last successful FX fetch
+  fxRateSetAt:0,        // the USD rate for DATA.currency at the moment it was last applied to stored figures
   inventoryPrices:{}, // {itemName: {purchasePrice, sellingPrice}} — per-item price memory
   books:[],          // {id,name,type,size,createdAt,updatedAt,data,mimeType}
   contacts:[],       // {id,type,name,phone,email,address,balance,notes,contactPerson,taxNumber,bankDetails,paymentTerms,leadTimeDays,category,rating,lastOrderDate} type=supplier|customer
@@ -3924,6 +3927,229 @@ function cur(){return(DATA&&DATA.currency)||'';}
 function zm(n){const c=cur();return(c?c+' ':'')+Number(n||0).toFixed(2);}
 function zmFull(n){const c=cur()||'—';return c+' '+Number(n||0).toFixed(2);}
 function uc(s){return(s||'').toString().trim().toUpperCase();} // uppercase-trim helper
+
+// ── CURRENCY LIST (ISO 4217) ─────────────────────────────────────────────────
+// {code, name, symbol} — used to populate the currency dropdown everywhere.
+const CURRENCY_LIST = [
+  {code:'ZMW',name:'Zambian Kwacha',symbol:'K'},
+  {code:'USD',name:'US Dollar',symbol:'$'},
+  {code:'EUR',name:'Euro',symbol:'€'},
+  {code:'GBP',name:'British Pound',symbol:'£'},
+  {code:'ZAR',name:'South African Rand',symbol:'R'},
+  {code:'KES',name:'Kenyan Shilling',symbol:'KSh'},
+  {code:'TZS',name:'Tanzanian Shilling',symbol:'TSh'},
+  {code:'UGX',name:'Ugandan Shilling',symbol:'USh'},
+  {code:'MWK',name:'Malawian Kwacha',symbol:'MK'},
+  {code:'BWP',name:'Botswana Pula',symbol:'P'},
+  {code:'NAD',name:'Namibian Dollar',symbol:'N$'},
+  {code:'ZWL',name:'Zimbabwean Dollar',symbol:'Z$'},
+  {code:'MZN',name:'Mozambican Metical',symbol:'MT'},
+  {code:'AOA',name:'Angolan Kwanza',symbol:'Kz'},
+  {code:'CDF',name:'Congolese Franc',symbol:'FC'},
+  {code:'RWF',name:'Rwandan Franc',symbol:'FRw'},
+  {code:'BIF',name:'Burundian Franc',symbol:'FBu'},
+  {code:'XAF',name:'Central African CFA Franc',symbol:'FCFA'},
+  {code:'XOF',name:'West African CFA Franc',symbol:'CFA'},
+  {code:'NGN',name:'Nigerian Naira',symbol:'₦'},
+  {code:'GHS',name:'Ghanaian Cedi',symbol:'GH₵'},
+  {code:'EGP',name:'Egyptian Pound',symbol:'E£'},
+  {code:'MAD',name:'Moroccan Dirham',symbol:'DH'},
+  {code:'DZD',name:'Algerian Dinar',symbol:'DA'},
+  {code:'TND',name:'Tunisian Dinar',symbol:'DT'},
+  {code:'ETB',name:'Ethiopian Birr',symbol:'Br'},
+  {code:'SDG',name:'Sudanese Pound',symbol:'SDG'},
+  {code:'SOS',name:'Somali Shilling',symbol:'Sh'},
+  {code:'LSL',name:'Lesotho Loti',symbol:'L'},
+  {code:'SZL',name:'Eswatini Lilangeni',symbol:'L'},
+  {code:'MUR',name:'Mauritian Rupee',symbol:'₨'},
+  {code:'SCR',name:'Seychellois Rupee',symbol:'₨'},
+  {code:'GMD',name:'Gambian Dalasi',symbol:'D'},
+  {code:'SLL',name:'Sierra Leonean Leone',symbol:'Le'},
+  {code:'LRD',name:'Liberian Dollar',symbol:'L$'},
+  {code:'GNF',name:'Guinean Franc',symbol:'FG'},
+  {code:'CVE',name:'Cape Verdean Escudo',symbol:'$'},
+  {code:'STN',name:'São Tomé & Príncipe Dobra',symbol:'Db'},
+  {code:'DJF',name:'Djiboutian Franc',symbol:'Fdj'},
+  {code:'ERN',name:'Eritrean Nakfa',symbol:'Nfk'},
+  {code:'KMF',name:'Comorian Franc',symbol:'CF'},
+  {code:'MGA',name:'Malagasy Ariary',symbol:'Ar'},
+  {code:'MRU',name:'Mauritanian Ouguiya',symbol:'UM'},
+  {code:'LYD',name:'Libyan Dinar',symbol:'LD'},
+  {code:'AED',name:'UAE Dirham',symbol:'د.إ'},
+  {code:'SAR',name:'Saudi Riyal',symbol:'﷼'},
+  {code:'QAR',name:'Qatari Riyal',symbol:'﷼'},
+  {code:'KWD',name:'Kuwaiti Dinar',symbol:'د.ك'},
+  {code:'BHD',name:'Bahraini Dinar',symbol:'.د.ب'},
+  {code:'OMR',name:'Omani Rial',symbol:'﷼'},
+  {code:'JOD',name:'Jordanian Dinar',symbol:'د.ا'},
+  {code:'ILS',name:'Israeli Shekel',symbol:'₪'},
+  {code:'TRY',name:'Turkish Lira',symbol:'₺'},
+  {code:'INR',name:'Indian Rupee',symbol:'₹'},
+  {code:'PKR',name:'Pakistani Rupee',symbol:'₨'},
+  {code:'BDT',name:'Bangladeshi Taka',symbol:'৳'},
+  {code:'LKR',name:'Sri Lankan Rupee',symbol:'₨'},
+  {code:'NPR',name:'Nepalese Rupee',symbol:'₨'},
+  {code:'CNY',name:'Chinese Yuan',symbol:'¥'},
+  {code:'JPY',name:'Japanese Yen',symbol:'¥'},
+  {code:'KRW',name:'South Korean Won',symbol:'₩'},
+  {code:'HKD',name:'Hong Kong Dollar',symbol:'HK$'},
+  {code:'SGD',name:'Singapore Dollar',symbol:'S$'},
+  {code:'MYR',name:'Malaysian Ringgit',symbol:'RM'},
+  {code:'THB',name:'Thai Baht',symbol:'฿'},
+  {code:'IDR',name:'Indonesian Rupiah',symbol:'Rp'},
+  {code:'PHP',name:'Philippine Peso',symbol:'₱'},
+  {code:'VND',name:'Vietnamese Dong',symbol:'₫'},
+  {code:'AUD',name:'Australian Dollar',symbol:'A$'},
+  {code:'NZD',name:'New Zealand Dollar',symbol:'NZ$'},
+  {code:'CAD',name:'Canadian Dollar',symbol:'C$'},
+  {code:'CHF',name:'Swiss Franc',symbol:'CHF'},
+  {code:'SEK',name:'Swedish Krona',symbol:'kr'},
+  {code:'NOK',name:'Norwegian Krone',symbol:'kr'},
+  {code:'DKK',name:'Danish Krone',symbol:'kr'},
+  {code:'PLN',name:'Polish Złoty',symbol:'zł'},
+  {code:'CZK',name:'Czech Koruna',symbol:'Kč'},
+  {code:'HUF',name:'Hungarian Forint',symbol:'Ft'},
+  {code:'RON',name:'Romanian Leu',symbol:'lei'},
+  {code:'RUB',name:'Russian Ruble',symbol:'₽'},
+  {code:'UAH',name:'Ukrainian Hryvnia',symbol:'₴'},
+  {code:'BRL',name:'Brazilian Real',symbol:'R$'},
+  {code:'MXN',name:'Mexican Peso',symbol:'Mex$'},
+  {code:'ARS',name:'Argentine Peso',symbol:'$'},
+  {code:'COP',name:'Colombian Peso',symbol:'$'},
+  {code:'CLP',name:'Chilean Peso',symbol:'$'},
+  {code:'PEN',name:'Peruvian Sol',symbol:'S/'},
+];
+function currencyByCode(code){return CURRENCY_LIST.find(c=>c.code===(code||'').toUpperCase());}
+function currencySymbol(code){const c=currencyByCode(code);return c?c.symbol:(code||'');}
+function currencyOptionsHtml(selected){
+  const sel=(selected||'').toUpperCase();
+  const opts=['<option value="">— Select currency —</option>']
+    .concat(CURRENCY_LIST.map(c=>`<option value="${c.code}"${c.code===sel?' selected':''}>${c.code} — ${esc(c.name)} (${esc(c.symbol)})</option>`));
+  return opts.join('');
+}
+
+// ── EXCHANGE RATES ────────────────────────────────────────────────────────────
+// Free, keyless FX API — returns { result:'success', rates:{ CODE: rateVsUSD, ... } }
+const FX_API_URL = 'https://open.er-api.com/v6/latest/USD';
+const FX_STALE_MS = 12*60*60*1000; // consider rates stale after 12h
+
+async function fetchFxRates(){
+  const resp = await fetch(FX_API_URL);
+  if(!resp.ok) throw new Error('FX request failed: HTTP '+resp.status);
+  const json = await resp.json();
+  if(json.result!=='success' || !json.rates) throw new Error('FX response malformed');
+  return json.rates;
+}
+
+// Ensures DATA.fxRates is present and reasonably fresh. Returns the rates map.
+async function ensureFxRates(force){
+  if(!force && DATA.fxRates && (Date.now()-(DATA.fxRatesUpdatedAt||0))<FX_STALE_MS){
+    return DATA.fxRates;
+  }
+  const rates = await fetchFxRates();
+  updateData(d=>({...d, fxRates:rates, fxRatesUpdatedAt:Date.now()}));
+  return rates;
+}
+
+function getFxRate(code){
+  if(!DATA.fxRates||!code) return null;
+  const r = DATA.fxRates[(code||'').toUpperCase()];
+  return (typeof r==='number' && r>0) ? r : null;
+}
+
+// ── MONETARY FIELD REGISTRY ───────────────────────────────────────────────────
+// Every place a financial figure lives in DATA. Used to rescale all stored
+// figures when the depot currency changes or exchange rates are refreshed.
+function convertAllMonetaryValues(factor){
+  if(!factor || !isFinite(factor) || factor<=0 || factor===1) return;
+  const mul = n => Math.round(Number(n||0)*factor*100)/100;
+
+  (DATA.contacts||[]).forEach(c=>{ if(c.balance!=null) c.balance=mul(c.balance); });
+  (DATA.budgets||[]).forEach(b=>{ if(b.budgetValue!=null) b.budgetValue=mul(b.budgetValue); });
+
+  Object.values(DATA.inventoryPrices||{}).forEach(p=>{
+    if(p.purchasePrice!=null) p.purchasePrice=mul(p.purchasePrice);
+    if(p.sellingPrice!=null)  p.sellingPrice =mul(p.sellingPrice);
+  });
+
+  (DATA.generalInventory||[]).forEach(r=>{ if(r.purchasePrice!=null) r.purchasePrice=mul(r.purchasePrice); });
+  (DATA.generalIssued||[]).forEach(r=>{
+    if(r.sellingPrice!=null) r.sellingPrice=mul(r.sellingPrice);
+    if(r.partialPaid!=null)  r.partialPaid =mul(r.partialPaid);
+  });
+
+  Object.values(DATA.commodityReceived||{}).forEach(arr=>(arr||[]).forEach(r=>{
+    if(r.unitPrice!=null) r.unitPrice=mul(r.unitPrice);
+  }));
+  Object.values(DATA.commodityIssued||{}).forEach(arr=>(arr||[]).forEach(r=>{
+    if(r.salePrice!=null)   r.salePrice=mul(r.salePrice);
+    if(r.partialPaid!=null) r.partialPaid=mul(r.partialPaid);
+  }));
+
+  (DATA.maizeReceived||[]).forEach(r=>{ if(r.purchasePrice!=null) r.purchasePrice=mul(r.purchasePrice); });
+  (DATA.maizeIssued||[]).forEach(r=>{ if(r.sellingPrice!=null) r.sellingPrice=mul(r.sellingPrice); });
+
+  (DATA.staffLogs||[]).forEach(l=>{
+    if(l.earnings!=null)  l.earnings=mul(l.earnings);
+    if(l.deduction!=null) l.deduction=mul(l.deduction);
+    if(Array.isArray(l.deductions)) l.deductions.forEach(d=>{ if(d.amount!=null) d.amount=mul(d.amount); });
+  });
+  (DATA.staffPayments||[]).forEach(p=>{ if(p.amount!=null) p.amount=mul(p.amount); });
+  (DATA.staffRoles||[]).forEach(role=>(role.tasks||[]).forEach(t=>{ if(t.rate!=null) t.rate=mul(t.rate); }));
+}
+
+// Changes the depot currency and (if old currency + rates for both are known)
+// rescales every stored financial figure to the new currency using live FX rates.
+// Returns {changed, converted, factor} for the caller to report to the user.
+async function changeDepotCurrency(newCode, opts){
+  opts = opts||{};
+  newCode = (newCode||'').toUpperCase();
+  if(!newCode) throw new Error('No currency selected.');
+  const oldCode = (DATA.currency||'').toUpperCase();
+  if(oldCode===newCode) return {changed:false, converted:false};
+
+  let rates;
+  try { rates = await ensureFxRates(opts.forceRefresh); }
+  catch(e){ rates = DATA.fxRates||null; } // fall back to last-known rates if offline
+
+  const oldRate = oldCode ? (rates?rates[oldCode]:null) : null;
+  const newRate = rates ? rates[newCode] : null;
+
+  // No prior currency, or no rates available for one side → just switch, no conversion.
+  if(!oldCode || !oldRate || !newRate){
+    updateData(d=>({...d, currency:newCode, fxRateSetAt:newRate||d.fxRateSetAt||0}));
+    return {changed:true, converted:false};
+  }
+
+  const factor = newRate/oldRate; // e.g. figures in ZMW × (USDrate_ZMW→? ) re-expressed in newCode
+  updateData(d=>{
+    const next = JSON.parse(JSON.stringify(d));
+    next.currency = newCode;
+    next.fxRateSetAt = newRate;
+    return next;
+  });
+  convertAllMonetaryValues(factor);
+  // convertAllMonetaryValues mutates DATA in place (post-updateData clone) — persist that mutation:
+  updateData(d=>d);
+  return {changed:true, converted:true, factor, oldCode, newCode};
+}
+
+// Re-applies the latest fetched exchange rate to stored figures WITHOUT changing
+// the selected currency — used when the admin wants figures rebased after a
+// live rate refresh (e.g. correcting for a stale rate used at signup time).
+async function reapplyLatestFxRate(){
+  const code = (DATA.currency||'').toUpperCase();
+  if(!code) throw new Error('Set a currency first.');
+  const rates = await ensureFxRates(true);
+  const newRate = rates[code];
+  if(!newRate) throw new Error('No live rate available for '+code+'.');
+  const oldRate = DATA.fxRateSetAt||newRate;
+  const factor = newRate/oldRate;
+  if(factor===1) return {changed:false};
+  convertAllMonetaryValues(factor);
+  updateData(d=>({...d, fxRateSetAt:newRate}));
+  return {changed:true, factor, oldRate, newRate};
+}
 
 // ── AGGREGATE MEMO CACHE (Fix 2) ────────────────────────────────────────────
 // filterPeriod and reduce-based aggregates are called 8+ times per dashboard
@@ -4843,8 +5069,8 @@ function renderSignupStep() {
         <div style="font-size:16px;color:var(--muted);margin-top:5px;line-height:1.6">Used only for account recovery. Stored privately on this device.</div>
       </div>
       <div class="fw"><div class="fl">Currency <span style="color:var(--red)">*</span></div>
-        <input class="fi" id="su-currency" placeholder="E.G. ZMW, USD, KES, K, $" maxlength="10" style="text-transform:uppercase" value="${esc(_signupData.currency||'')}"/>
-        <div style="font-size:16px;color:var(--muted);margin-top:5px;line-height:1.6">Currency code or symbol used across all financial figures.</div>
+        <select class="fi" id="su-currency">${currencyOptionsHtml(_signupData.currency)}</select>
+        <div style="font-size:16px;color:var(--muted);margin-top:5px;line-height:1.6">Used across all financial figures. Live exchange rates let you switch currency later without losing your figures.</div>
       </div>
       <div style="background:rgba(0,214,143,.06);border:1px solid rgba(0,214,143,.2);border-radius:10px;padding:10px 13px;margin-bottom:14px;font-size:17px;color:var(--green);line-height:1.7">💡 Add your commodities (e.g. Maize, Wheat, Rice) after sign-in via <strong>Settings → Commodities</strong>.</div>
       <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:18px;background:var(--surface);border:1.5px solid var(--border);border-radius:10px;padding:11px 13px">
@@ -5059,6 +5285,11 @@ async function signupFinish() {
     showTab('dashboard');
     scheduleFbSync();
     showToast('🎉 1-month free trial started! Welcome, ' + username);
+    // Best-effort: seed a baseline exchange rate for this currency in the background.
+    ensureFxRates(true).then(rates=>{
+      const r=rates[suCurrency];
+      if(r) updateData(d=>({...d, fxRateSetAt:r}));
+    }).catch(()=>{ /* offline at signup — fine, can update later in Settings */ });
   } catch(e) {
     if (btn) { btn.disabled=false; btn.textContent='✅ Create Company & Sign In'; }
     err.style.display='block';
@@ -11054,13 +11285,21 @@ function _renderAdminSettings(){
         <div style="font-size:16px;color:var(--muted);margin-top:6px;line-height:1.6">Auto follows your device's system setting. Manually choose Dark or Light to override.</div>
       </div>
       <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px">
-        <div class="fl">Currency ${mdmTip('Enter your local currency code or symbol (e.g. ZMW for Zambian Kwacha, USD, KES). This appears on all financial figures across the app.')}</div>
+        <div class="fl">Currency ${mdmTip('Choose your depot currency. Switching currency uses live exchange rates to automatically convert every stored financial figure — balances, prices, earnings, budgets — into the new currency.')}</div>
+        ${DATA.currency&&!currencyByCode(DATA.currency)?`<div class="warn" style="margin-bottom:8px">⚠️ Your current currency setting ("${esc(DATA.currency)}") isn't a recognised currency code. Pick one below and Save to enable live exchange rate conversion.</div>`:''}
         <div style="display:flex;gap:8px;align-items:center">
-          <input class="fi" id="currency-input" value="${esc(DATA.currency||'')}" placeholder="e.g. ZMW, USD, KES, K, $" maxlength="10" style="flex:1;text-transform:uppercase"/>
+          <select class="fi" id="currency-input" style="flex:1">${currencyOptionsHtml(DATA.currency)}</select>
           <button class="btn bg bsm" style="width:auto" onclick="saveCurrencySetting()">Save</button>
         </div>
-        <div style="font-size:16px;color:var(--muted);margin-top:6px;line-height:1.6">Enter any currency code or symbol (e.g. ZMW, USD, KES, K, $). Used on all financial figures across the app.</div>
+        <div style="font-size:16px;color:var(--muted);margin-top:6px;line-height:1.6">Changing currency converts all stored figures using the current exchange rate. Used on all financial figures across the app.</div>
         <div id="currency-msg" style="margin-top:6px"></div>
+        <div style="margin-top:12px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 13px">
+          <div style="font-size:16px;color:var(--muted);line-height:1.7">
+            💱 Exchange rate: ${DATA.currency&&DATA.fxRates&&DATA.fxRates[DATA.currency]?`1 USD ≈ ${Number(DATA.fxRates[DATA.currency]).toLocaleString(undefined,{maximumFractionDigits:4})} ${esc(DATA.currency)}`:'not yet fetched'}
+            <br>Last updated: ${DATA.fxRatesUpdatedAt?new Date(DATA.fxRatesUpdatedAt).toLocaleString():'never'}
+          </div>
+          <button class="btn bsm" style="width:auto;margin-top:8px" onclick="updateExchangeRateNow()">🔄 Update Exchange Rate</button>
+        </div>
       </div>
       ${USER.role==='admin'?`
       <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px">
@@ -11980,6 +12219,9 @@ function clearAll(){
     const keepUsers      = DATA.users      || [];
     const keepDepotInfo  = DATA.depotInfo  ? JSON.parse(JSON.stringify(DATA.depotInfo)) : DEFAULT.depotInfo;
     const keepCurrency   = DATA.currency   || '';
+    const keepFxRates    = DATA.fxRates ? JSON.parse(JSON.stringify(DATA.fxRates)) : null;
+    const keepFxRatesAt  = DATA.fxRatesUpdatedAt || 0;
+    const keepFxRateSetAt= DATA.fxRateSetAt || 0;
     const keepTier       = DATA.tier       || 'trial';
     // Roles & deduction reasons are Settings configuration, not transactional
     // records — clearing data should never make an admin re-define these.
@@ -12028,6 +12270,9 @@ function clearAll(){
     DATA.users      = keepUsers;
     DATA.depotInfo  = keepDepotInfo;
     DATA.currency   = keepCurrency;
+    DATA.fxRates    = keepFxRates;
+    DATA.fxRatesUpdatedAt = keepFxRatesAt;
+    DATA.fxRateSetAt = keepFxRateSetAt;
     DATA.tier       = keepTier;
     DATA.staffRoles = keepStaffRoles;
     DATA.deductionReasons = keepDeductionReasons;
@@ -12558,14 +12803,59 @@ window.matchMedia('(prefers-color-scheme:light)').addEventListener('change', e =
 });
 
 // ── CURRENCY SETTING ──────────────────────────────────────────────────────────
-function saveCurrencySetting(){
+async function saveCurrencySetting(){
   if(!requireAdmin('change currency setting'))return;
   const val=(document.getElementById('currency-input')?.value||'').trim().toUpperCase();
   const msg=document.getElementById('currency-msg');
-  if(!val){if(msg)msg.innerHTML='<div class="err-box">Enter a currency code or symbol.</div>';return;}
-  updateData(d=>({...d,currency:val}));
-  if(msg)msg.innerHTML='<div class="ok-msg">✅ Currency updated to '+esc(val)+'</div>';
-  setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
+  if(!val){if(msg)msg.innerHTML='<div class="err-box">Select a currency.</div>';return;}
+  if(val===(DATA.currency||'').toUpperCase()){if(msg)msg.innerHTML='';return;}
+
+  const oldCode=(DATA.currency||'').toUpperCase();
+  if(msg)msg.innerHTML='<div style="color:var(--muted)">⏳ Fetching exchange rate…</div>';
+
+  let result;
+  try { result = await changeDepotCurrency(val); }
+  catch(e){ if(msg)msg.innerHTML='<div class="err-box">Could not change currency: '+esc(e.message)+'</div>'; return; }
+
+  if(result.converted){
+    if(msg)msg.innerHTML='<div class="ok-msg">✅ Currency changed to '+esc(val)+'. All stored financial figures were converted from '+esc(oldCode)+' using 1 USD = '+Number(DATA.fxRates[val]||0).toLocaleString(undefined,{maximumFractionDigits:4})+' '+esc(val)+'.</div>';
+  } else if(!oldCode){
+    if(msg)msg.innerHTML='<div class="ok-msg">✅ Currency set to '+esc(val)+'.</div>';
+  } else {
+    if(msg)msg.innerHTML='<div class="ok-msg">✅ Currency set to '+esc(val)+'. A live exchange rate wasn\'t available, so figures were left unchanged — check your connection and use "Update Exchange Rate" to convert them.</div>';
+  }
+  render();
+  setTimeout(()=>{const m=document.getElementById('currency-msg');if(m)m.innerHTML='';},6000);
+}
+
+async function updateExchangeRateNow(){
+  if(!requireAdmin('update exchange rate'))return;
+  const msg=document.getElementById('currency-msg');
+  if(!DATA.currency){ if(msg)msg.innerHTML='<div class="err-box">Set a currency first.</div>'; return; }
+  if(msg)msg.innerHTML='<div style="color:var(--muted)">⏳ Fetching latest exchange rate…</div>';
+  try {
+    await ensureFxRates(true);
+    const newRate = DATA.fxRates[DATA.currency];
+    const oldRate = DATA.fxRateSetAt||newRate;
+    if(!newRate){ if(msg)msg.innerHTML='<div class="err-box">No live rate found for '+esc(DATA.currency)+'.</div>'; return; }
+    if(Math.abs(newRate-oldRate)<1e-9){
+      if(msg)msg.innerHTML='<div class="ok-msg">✅ Rate refreshed — no change (1 USD = '+newRate.toLocaleString(undefined,{maximumFractionDigits:4})+' '+esc(DATA.currency)+').</div>';
+      render();
+      return;
+    }
+    const proceed=confirm('Live rate for '+DATA.currency+' has moved:\n\n1 USD = '+oldRate.toLocaleString(undefined,{maximumFractionDigits:4})+' '+DATA.currency+' (previous)\n1 USD = '+newRate.toLocaleString(undefined,{maximumFractionDigits:4})+' '+DATA.currency+' (now)\n\nApply the new rate and rescale ALL stored financial figures accordingly? This affects balances, prices, earnings and budgets.');
+    if(!proceed){
+      if(msg)msg.innerHTML='<div style="color:var(--muted)">Rate refreshed but not applied — figures unchanged.</div>';
+      render();
+      return;
+    }
+    const r=await reapplyLatestFxRate();
+    if(msg)msg.innerHTML='<div class="ok-msg">✅ Figures rescaled by ×'+r.factor.toFixed(4)+' to match the updated exchange rate.</div>';
+    render();
+  } catch(e){
+    if(msg)msg.innerHTML='<div class="err-box">Could not fetch exchange rate: '+esc(e.message)+' (check your internet connection).</div>';
+  }
+  setTimeout(()=>{const m=document.getElementById('currency-msg');if(m)m.innerHTML='';},8000);
 }
 
 function saveShiftHours(){
