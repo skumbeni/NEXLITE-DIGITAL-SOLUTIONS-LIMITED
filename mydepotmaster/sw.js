@@ -25,6 +25,60 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v95 (2026-08-19)
+//
+// v95 changes (2026-08-19) — Hamburger menu + Global Search role scoping:
+//   - The hamburger menu showed every row to every role — General
+//     Inventory, Commodities, Books, Contacts, Reports & Records (P&L/Cash
+//     Flow/Budget), Audit Log, Setup Checklist, Today at a Glance
+//     company-wide stats, and Cloud Sync management — even to a Staff login
+//     that's view-only and self-scoped everywhere else (showTab() already
+//     bounces it back to Dashboard via STAFF_BLOCKED_TABS, and Audit
+//     Log/Setup Checklist already refuse non-admins). Tapping those rows
+//     just produced a bounce or a refusal alert — confusing dead rows.
+//   - Menu rows now hide per-role to match what each account can actually
+//     do: Staff no longer sees any of the rows above; Manager/Admin are
+//     unaffected except Audit Log and Setup Checklist, which now show for
+//     Admin only (matching their existing requireAdmin()/role checks).
+//     Synced on login and every time the menu opens, so switching accounts
+//     on one device always reflects the current role.
+//   - Bigger fix: Global Search (_doGlobalSearch) searched the FULL depot
+//     — every staff member, all commodities, all contacts, all General
+//     Inventory — regardless of role. This was a real side-door around the
+//     Staff role's self-only scoping (same class of bug as the v93/v94
+//     Depot Assistant fixes): a Staff login could search for and read
+//     anyone else's records even though every tab that data lives on is
+//     blocked for that role. Staff logins now only ever search their own
+//     staff profile and their own logs; General Inventory, Commodities,
+//     and Contacts sections are skipped entirely for that role.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// Current version: v94 (2026-08-19)
+//
+// v94 changes (2026-08-19) — Depot Assistant full role scoping:
+//   - v93 only fixed account/user-roster leakage. The Assistant still handed
+//     a Staff-role login (view-only everywhere else in the app) the FULL
+//     depot dataset — every staff member's logs and pay, all inventory,
+//     commodities, and financials — plus every data-entry tool (clock
+//     in/out, log commodity moves, log payments, etc.), none of which a
+//     Staff login can touch anywhere else in the UI.
+//   - buildCopilotContext() now branches on role: a Staff login gets ONLY
+//     its own linked staff profile, own logs/pay/warnings/leave/attendance
+//     (mirrors renderStaffDash's existing self-only scope) — no other staff,
+//     no inventory, no commodities, no financials exist in that payload at
+//     all. Admin/Manager keep the full operational dataset as before.
+//   - Data-entry tools are no longer sent to the model for a Staff login,
+//     and _handleAIActionCall() independently refuses to resolve/execute any
+//     tool call for that role even if one somehow arrives — belt and
+//     suspenders, so no code path can let a view-only account write data
+//     through chat.
+//   - System prompts updated to explain the new "accessScope" field so the
+//     model states plainly it doesn't have other accounts'/staff's data
+//     instead of guessing.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v93 (2026-08-19)
 //
 // v93 changes (2026-08-19) — Depot Assistant account isolation:
@@ -721,7 +775,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'mdm-v93';   // ← bump this whenever you deploy a new version
+const CACHE     = 'mdm-v95';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
