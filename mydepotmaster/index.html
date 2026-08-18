@@ -3529,7 +3529,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v2.1';
+const SW_VERSION  = 'v2.2';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -6121,10 +6121,13 @@ function doLogout(){
 })();
 
 // ── STAY SIGNED IN ───────────────────────────────────────────────────────────
-// Optional, per-device, opt-in persistent session. Off by default. Stores ONLY
-// a username + expiry timestamp in localStorage — never a password or hash —
-// so a copied/stolen localStorage value can skip the login SCREEN on this one
-// device but cannot be replayed elsewhere or used to derive credentials.
+// Per-device persistent session. On by default (a device that has never set
+// a preference gets enabled:true from getStaySignedInPref() below) so sync
+// keeps running in the background without a fresh login every time; the
+// person can still turn it off in Settings. Stores ONLY a username + expiry
+// timestamp in localStorage — never a password or hash — so a copied/stolen
+// localStorage value can skip the login SCREEN on this one device but cannot
+// be replayed elsewhere or used to derive credentials.
 // Any explicit logout (button, idle timeout, remote-tab logout) always clears
 // this — "stay signed in" only survives a page reload/app relaunch, never an
 // actual logout.
@@ -6134,10 +6137,16 @@ const _STAY_DAYS_DEFAULT = 30;
 function getStaySignedInPref(){
   try {
     const raw = localStorage.getItem(_STAY_KEY);
-    if (!raw) return { enabled:false, days:_STAY_DAYS_DEFAULT };
+    // Default ON for a device that has never touched this setting — sync
+    // (push every 5 min / pull every 60s) only runs while USER is set, so
+    // leaving this off by default meant every idle timeout or app restart
+    // fully signed the device out and silently stopped syncing until the
+    // next manual password login. Once a device has an explicit preference
+    // saved (below), that choice is always respected instead of this default.
+    if (!raw) return { enabled:true, days:_STAY_DAYS_DEFAULT };
     const p = JSON.parse(raw);
     return { enabled: !!p.enabled, days: Number(p.days)||_STAY_DAYS_DEFAULT };
-  } catch { return { enabled:false, days:_STAY_DAYS_DEFAULT }; }
+  } catch { return { enabled:true, days:_STAY_DAYS_DEFAULT }; }
 }
 
 // Called on every successful login (password or biometric) to persist (or
