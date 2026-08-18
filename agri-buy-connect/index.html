@@ -497,20 +497,28 @@ const rtdb = getDatabase(firebaseApp);
 const auth = getAuth(firebaseApp);
 const dataRef = ref(rtdb, 'agribuy_data_v1');
 
-// Resolves once we have a signed-in (anonymous) user. Everything that
-// touches the database waits on this first.
-const authReady = new Promise((resolve) => {
-  onAuthStateChanged(auth, (user) => { if(user) resolve(user); });
+// Resolves once we have a signed-in (anonymous) user — but the sign-in
+// itself is NOT started here. Visitors browsing the public landing page
+// never get an anonymous account. Sign-in only kicks off when something
+// calls startAnonymousAuth(), which DB.ensureLoaded() does the moment the
+// user actually tries to sign in/up (see goLogin/attemptLogin below).
+let authStarted = false;
+let resolveAuthReady;
+const authReady = new Promise((resolve) => { resolveAuthReady = resolve; });
+onAuthStateChanged(auth, (user) => { if(user) resolveAuthReady(user); });
+function startAnonymousAuth(){
+  if(authStarted) return;
+  authStarted = true;
   signInAnonymously(auth).catch(err => {
     console.error('Firebase anonymous sign-in failed:', err);
   });
-});
+}
 
 // Expose the bits the classic (non-module) script below needs. Resolving
 // __firebaseReadyPromise (created synchronously in <head>, before this
 // deferred module script runs) rather than just setting a plain global
 // avoids any race with the classic script that reads it.
-window.__firebase = { rtdb, ref, get, set, update, onValue, goOffline, goOnline, dataRef, authReady, auth };
+window.__firebase = { rtdb, ref, get, set, update, onValue, goOffline, goOnline, dataRef, authReady, auth, startAnonymousAuth };
 window.__firebaseReadyResolve(window.__firebase);
 </script>
 
@@ -831,8 +839,18 @@ const DB = {
   // whatever's cached (or a blank seed), and finish connecting silently
   // the moment sign-in succeeds, reconciling anything created in the
   // meantime rather than discarding it.
+  // Call sites should use ensureLoaded() (below), not load() directly —
+  // it memoizes so the anonymous sign-in + cloud read only ever happens
+  // once, no matter how many places trigger it (opening the login form,
+  // then submitting it, etc).
+  ensureLoaded(){
+    if(!this._loadPromise) this._loadPromise = this.load();
+    return this._loadPromise;
+  },
+
   async load(){
     const fb = await window.__firebaseReadyPromise;
+    fb.startAnonymousAuth(); // only actually signs in the first time this runs
     const signedIn = await this._waitForAuth(fb, 8000);
 
     if(!signedIn){
@@ -1082,11 +1100,31 @@ function goLogin(role){
   btn.textContent = 'Sign in';
   show('screen-login');
   document.getElementById('login-code').focus();
+  // The user is now actually trying to sign in — this is the trigger point
+  // for anonymous auth + the initial cloud read. Kick it off in the
+  // background so it's likely done by the time they submit; attemptLogin()
+  // below still awaits it in case it isn't.
+  DB.ensureLoaded();
 }
 
 async function attemptLogin(){
-  const code = document.getElementById('login-code').value.trim().toUpperCase();
+  const btn = document.getElementById('login-submit');
   const err = document.getElementById('login-err');
+  err.style.display = 'none';
+  const originalBtnText = btn.textContent;
+  if(!DB.data){
+    btn.disabled = true;
+    btn.textContent = 'Connecting…';
+  }
+  try{
+    await DB.ensureLoaded();
+  }catch(e){
+    console.error('Sign-in load failed:', e);
+  }
+  btn.disabled = false;
+  btn.textContent = originalBtnText;
+
+  const code = document.getElementById('login-code').value.trim().toUpperCase();
   let found = null;
   if(pendingRole==='company') found = DB.data.companies.find(c=>c.code.toUpperCase()===code);
   if(pendingRole==='agent') found = DB.data.agents.find(a=>a.code.toUpperCase()===code);
@@ -2437,9 +2475,11 @@ function renderFarmer(view){
 /* =========================================================================
    INIT
    ========================================================================= */
-(async function init(){
+(function init(){
   wireConnectionState();
-  await DB.load(); // waits for anonymous sign-in + initial cloud read
+  // No anonymous sign-in and no cloud read here — the public landing page
+  // needs neither. DB.ensureLoaded() (auth + cloud fetch) only fires once
+  // someone actually tries to sign in, from goLogin()/attemptLogin() below.
   const overlay = document.getElementById('cloud-loading-overlay');
   if(overlay) overlay.style.display = 'none';
 })();
