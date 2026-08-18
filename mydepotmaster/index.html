@@ -3434,6 +3434,24 @@ function isManagerRole() {
 function isStaffRole() {
   return USER && USER.role === 'staff';
 }
+// ── STAFF SELF-SCOPE ─────────────────────────────────────────────────────────
+// A 'staff' login only ever sees data tied to its own linked staff profile.
+// These helpers are the single source of truth for that scoping — every
+// staff-tab render function and the dashboard route through them.
+function myStaffRecord(){
+  if(!USER||!USER.linkedStaffId) return null;
+  return (DATA.staff||[]).find(s=>String(s.id)===String(USER.linkedStaffId))||null;
+}
+function scopedStaff(){
+  if(isStaffRole()){ const me=myStaffRecord(); return me?[me]:[]; }
+  return DATA.staff||[];
+}
+function scopedStaffIds(){
+  return new Set(scopedStaff().map(s=>String(s.id)));
+}
+// Tabs/sub-tabs a 'staff' login is never allowed onto — always redirected away.
+const STAFF_BLOCKED_TABS=['general','maize','books','contacts','settings'];
+const STAFF_BLOCKED_STAB=['roster','stafflist','rolesrates'];
 function canAddRecords() {
   return isAdmin() || isManagerRole();
 }
@@ -4275,85 +4293,39 @@ function getFxRate(code){
 }
 
 // ── MONETARY FIELD REGISTRY ───────────────────────────────────────────────────
-// Every place a financial figure lives in DATA. Used to rescale all stored
-// figures when the depot currency changes or exchange rates are refreshed.
+// DISABLED — currency changes and exchange-rate refreshes must never rescale
+// historical entries (see changeDepotCurrency / reapplyLatestFxRate). Kept as
+// a no-op, not deleted, so nothing that still calls it can silently mutate
+// stored figures if it's ever wired back up.
 function convertAllMonetaryValues(factor){
-  if(!factor || !isFinite(factor) || factor<=0 || factor===1) return;
-  const mul = n => Math.round(Number(n||0)*factor*100)/100;
-
-  (DATA.contacts||[]).forEach(c=>{ if(c.balance!=null) c.balance=mul(c.balance); });
-  (DATA.budgets||[]).forEach(b=>{ if(b.budgetValue!=null) b.budgetValue=mul(b.budgetValue); });
-
-  Object.values(DATA.inventoryPrices||{}).forEach(p=>{
-    if(p.purchasePrice!=null) p.purchasePrice=mul(p.purchasePrice);
-    if(p.sellingPrice!=null)  p.sellingPrice =mul(p.sellingPrice);
-  });
-
-  (DATA.generalInventory||[]).forEach(r=>{ if(r.purchasePrice!=null) r.purchasePrice=mul(r.purchasePrice); });
-  (DATA.generalIssued||[]).forEach(r=>{
-    if(r.sellingPrice!=null) r.sellingPrice=mul(r.sellingPrice);
-    if(r.partialPaid!=null)  r.partialPaid =mul(r.partialPaid);
-  });
-
-  Object.values(DATA.commodityReceived||{}).forEach(arr=>(arr||[]).forEach(r=>{
-    if(r.unitPrice!=null) r.unitPrice=mul(r.unitPrice);
-  }));
-  Object.values(DATA.commodityIssued||{}).forEach(arr=>(arr||[]).forEach(r=>{
-    if(r.salePrice!=null)   r.salePrice=mul(r.salePrice);
-    if(r.partialPaid!=null) r.partialPaid=mul(r.partialPaid);
-  }));
-
-  (DATA.maizeReceived||[]).forEach(r=>{ if(r.purchasePrice!=null) r.purchasePrice=mul(r.purchasePrice); });
-  (DATA.maizeIssued||[]).forEach(r=>{ if(r.sellingPrice!=null) r.sellingPrice=mul(r.sellingPrice); });
-
-  (DATA.staffLogs||[]).forEach(l=>{
-    if(l.earnings!=null)  l.earnings=mul(l.earnings);
-    if(l.deduction!=null) l.deduction=mul(l.deduction);
-    if(Array.isArray(l.deductions)) l.deductions.forEach(d=>{ if(d.amount!=null) d.amount=mul(d.amount); });
-  });
-  (DATA.staffPayments||[]).forEach(p=>{ if(p.amount!=null) p.amount=mul(p.amount); });
-  (DATA.staffRoles||[]).forEach(role=>(role.tasks||[]).forEach(t=>{ if(t.rate!=null) t.rate=mul(t.rate); }));
+  return; // intentionally disabled — see comment above
 }
 
-// Changes the depot currency and (if old currency + rates for both are known)
-// rescales every stored financial figure to the new currency using live FX rates.
-// Returns {changed, converted, factor} for the caller to report to the user.
+// Switches the depot's currency LABEL. Historical figures are never touched —
+// every past entry keeps the exact number it was recorded with; only the
+// currency used for display and for NEW entries going forward changes. We
+// still fetch/store the live rate at switch time purely as a reference figure
+// shown in Settings — it is never applied to stored data. See
+// reapplyLatestFxRate() for the same no-rescale policy on rate refreshes.
 async function changeDepotCurrency(newCode, opts){
   opts = opts||{};
   newCode = (newCode||'').toUpperCase();
   if(!newCode) throw new Error('No currency selected.');
   const oldCode = (DATA.currency||'').toUpperCase();
-  if(oldCode===newCode) return {changed:false, converted:false};
+  if(oldCode===newCode) return {changed:false};
 
   let rates;
   try { rates = await ensureFxRates(opts.forceRefresh); }
   catch(e){ rates = DATA.fxRates||null; } // fall back to last-known rates if offline
-
-  const oldRate = oldCode ? (rates?rates[oldCode]:null) : null;
   const newRate = rates ? rates[newCode] : null;
 
-  // No prior currency, or no rates available for one side → just switch, no conversion.
-  if(!oldCode || !oldRate || !newRate){
-    updateData(d=>({...d, currency:newCode, fxRateSetAt:newRate||d.fxRateSetAt||0}));
-    return {changed:true, converted:false};
-  }
-
-  const factor = newRate/oldRate; // e.g. figures in ZMW × (USDrate_ZMW→? ) re-expressed in newCode
-  updateData(d=>{
-    const next = JSON.parse(JSON.stringify(d));
-    next.currency = newCode;
-    next.fxRateSetAt = newRate;
-    return next;
-  });
-  convertAllMonetaryValues(factor);
-  // convertAllMonetaryValues mutates DATA in place (post-updateData clone) — persist that mutation:
-  updateData(d=>d);
-  return {changed:true, converted:true, factor, oldCode, newCode};
+  updateData(d=>({...d, currency:newCode, fxRateSetAt:newRate||d.fxRateSetAt||0}));
+  return {changed:true};
 }
 
-// Re-applies the latest fetched exchange rate to stored figures WITHOUT changing
-// the selected currency — used when the admin wants figures rebased after a
-// live rate refresh (e.g. correcting for a stale rate used at signup time).
+// Refreshes the reference exchange rate shown in Settings for the current
+// currency. Never rescales stored figures — historical entries are never
+// modified by a rate update, only the displayed reference rate changes.
 async function reapplyLatestFxRate(){
   const code = (DATA.currency||'').toUpperCase();
   if(!code) throw new Error('Set a currency first.');
@@ -4361,11 +4333,8 @@ async function reapplyLatestFxRate(){
   const newRate = rates[code];
   if(!newRate) throw new Error('No live rate available for '+code+'.');
   const oldRate = DATA.fxRateSetAt||newRate;
-  const factor = newRate/oldRate;
-  if(factor===1) return {changed:false};
-  convertAllMonetaryValues(factor);
   updateData(d=>({...d, fxRateSetAt:newRate}));
-  return {changed:true, factor, oldRate, newRate};
+  return {changed:newRate!==oldRate, oldRate, newRate};
 }
 
 // ── AGGREGATE MEMO CACHE (Fix 2) ────────────────────────────────────────────
@@ -4802,11 +4771,15 @@ function showMainUI() {
   document.getElementById('main-hdr').style.display = 'flex';
   document.getElementById('content').style.display  = 'block';
   document.getElementById('nav').style.display      = 'flex';
-  const nb=document.getElementById('nb-books');    if(nb) nb.style.display='flex';
-  const ns=document.getElementById('nb-settings'); if(ns) ns.style.display= USER?'flex':'none';
+  const staffOnly=isStaffRole();
+  const nb=document.getElementById('nb-books');    if(nb) nb.style.display= staffOnly?'none':'flex';
+  const ns=document.getElementById('nb-settings'); if(ns) ns.style.display= (USER&&!staffOnly)?'flex':'none';
+  const ng=document.getElementById('nb-gen');      if(ng) ng.style.display= staffOnly?'none':'flex';
+  const nm=document.getElementById('nb-maize');    if(nm) nm.style.display= staffOnly?'none':'flex';
+  const nc=document.getElementById('nb-contacts'); if(nc) nc.style.display= staffOnly?'none':'flex';
   const fab=document.getElementById('gsearch-fab'); if(fab) fab.style.display='flex';
   _copilotFabSync();
-  const hms=document.getElementById('hdr-menu-settings-btn'); if(hms) hms.style.display= USER?'flex':'none';
+  const hms=document.getElementById('hdr-menu-settings-btn'); if(hms) hms.style.display= (USER&&!staffOnly)?'flex':'none';
 }
 
 // Builds the landing-page "starting at" stat and tier-ladder cards straight
@@ -6330,6 +6303,9 @@ document.querySelectorAll('.nb').forEach(btn=>{
 });
 
 function showTab(tab){
+  // Staff logins are self-scoped — never allowed onto company-wide tabs,
+  // regardless of how the navigation was triggered.
+  if(isStaffRole() && STAFF_BLOCKED_TABS.includes(tab)) tab='dashboard';
   const tabChanged = TAB!==tab;
   // Landing on Settings (from another tab) always starts at the category
   // menu, never a sub-page the user happened to be on last time.
@@ -6361,7 +6337,7 @@ function render(resetScroll=false){
   // Ensure content area is visible (guards against edge-case where it stayed hidden)
   if(c.style.display==='none') c.style.display='block';
   try {
-    if(TAB==='dashboard') c.innerHTML=renderDash();
+    if(TAB==='dashboard') c.innerHTML=isStaffRole()?renderStaffDash():renderDash();
     else if(TAB==='general') c.innerHTML=renderGeneral();
     else if(TAB==='maize') c.innerHTML=renderMaize();
     else if(TAB==='staff') c.innerHTML=renderStaff();
@@ -6435,6 +6411,112 @@ function fmtAgo(ms){
 // ══════════════════════════════════════════════════════════
 // DASHBOARD
 // ══════════════════════════════════════════════════════════
+// ── STAFF PERSONAL DASHBOARD ──────────────────────────────────────────────────
+// Shown instead of renderDash() for role==='staff'. No company-wide figures
+// (no inventory, no other staff, no financials) — only the signed-in staff
+// member's own attendance, earnings and leave.
+function renderStaffDash(){
+  const me=myStaffRecord();
+  const di=DATA.depotInfo||{};
+  const now=new Date();
+  const dateStr=now.toLocaleDateString('en-GB',{weekday:'long',day:'2-digit',month:'long',year:'numeric'});
+
+  if(!me){
+    return `${statusBanner()}
+    <div class="card" style="margin-top:12px"><div class="empty">⚠️ Your login isn't linked to a staff profile yet.<br><span style="font-size:17px">Ask your Admin to link your account under Staff.</span></div></div>`;
+  }
+
+  const myLogs=(DATA.staffLogs||[]).filter(l=>String(l.staffId)===String(me.id));
+  const openShift=_openShiftFor(me.id);
+  const approvedMine=approvedArr(myLogs).filter(l=>!l.entryType||l.entryType==='work');
+  const periodLogs=filterPeriod(approvedMine, PERIOD.staff, 'date', 'staff');
+  const {start:_pStart,end:_pEnd}=_periodBounds(PERIOD.staff,'staff');
+  const isSalaried=me.payType==='salary';
+  const gross=isSalaried?_proratedSalaryForStaff(me,_pStart,_pEnd):periodLogs.reduce((a,b)=>a+Number(b.earnings||0),0);
+  const ded=periodLogs.reduce((a,b)=>a+Number(b.deduction||0),0);
+  const net=Math.max(0,gross-ded);
+  const bags=periodLogs.reduce((a,b)=>a+Number(b.bags||0),0);
+  const paidTotal=approvedArr((DATA.staffPayments||[]).filter(p=>String(p.staffId)===String(me.id))).reduce((a,b)=>a+Number(b.amount||0),0);
+  const allApprovedNet=approvedMine.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
+  const unpaid=Math.max(0,allApprovedNet-paidTotal);
+
+  // Leave balance
+  const stdAnnual=Number((DATA.depotInfo||{}).annualLeaveEntitlement||15);
+  const myLeave=approvedArr(DATA.leaveLog||[]).filter(l=>String(l.staffId)===String(me.id));
+  const annualUsed=myLeave.filter(l=>l.type==='leave').reduce((a,b)=>a+Number(b.days||1),0);
+  const sickUsed=myLeave.filter(l=>l.type==='sick').reduce((a,b)=>a+Number(b.days||1),0);
+  const annualBal=stdAnnual-annualUsed;
+
+  const recent=myLogs.slice().sort((a,b)=>b.date.localeCompare(a.date)||String(b.id).localeCompare(String(a.id))).slice(0,6).map(log=>{
+    if(log.entryType&&log.entryType!=='work'){
+      const typeLabels={absent:'ABSENT',leave:'ON LEAVE',sick:'SICK DAY'};
+      const col={absent:'var(--red)',leave:'var(--blue)',sick:'var(--amber)'}[log.entryType]||'var(--muted)';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)">
+        <div><div style="font-weight:700">${fmtDate(log.date)}${approvalBadge(log)}</div><div style="font-size:15px;color:var(--muted)">${esc(log.role||me.role||'')}</div></div>
+        <div style="color:${col};font-weight:700">${typeLabels[log.entryType]||log.entryType.toUpperCase()}</div>
+      </div>`;
+    }
+    const isOpen=log.status==='open'&&!isRejected(log);
+    const lnet=Number(log.earnings||0)-Number(log.deduction||0);
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--border)">
+      <div><div style="font-weight:700">${fmtDate(log.date)}${approvalBadge(log)}${isOpen?` <span class="bdg bdg-active">🟢 ACTIVE</span>`:''}</div>
+      <div style="font-size:15px;color:var(--muted)">${esc(log.task||log.role||'')} · ${log.timeIn||'—'}${log.timeOut?'–'+log.timeOut:''}</div></div>
+      <div style="color:var(--green);font-weight:700">${isOpen?'—':zm(lnet)}</div>
+    </div>`;
+  }).join('');
+
+  return `
+    ${statusBanner()}
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:14px 16px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div>
+          <div style="font-size:15px;color:var(--muted);letter-spacing:.8px;text-transform:uppercase">${dateStr}</div>
+          <div style="font-family:var(--fh);font-size:25px;font-weight:800;color:var(--white);line-height:1.2;margin:3px 0">${esc(me.name)}</div>
+          <div style="font-size:16px;color:var(--muted)">${esc(me.role||'')}${di.name?' · '+esc(di.name):''}</div>
+        </div>
+        <span style="display:inline-block;background:rgba(13,42,74,.15);border:1px solid var(--blue);border-radius:20px;padding:1px 7px;font-size:14px;font-weight:800;color:var(--blue);letter-spacing:.6px">${roleLabel(USER&&USER.role)}</span>
+      </div>
+    </div>
+
+    <!-- Clock status -->
+    <div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ${openShift?'var(--green)':'var(--amber)'};border-radius:12px;padding:14px 16px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:10px">
+      <div>
+        <div style="font-family:var(--fh);font-size:20px;font-weight:800;color:${openShift?'var(--green)':'var(--amber)'}">${openShift?'🟢 Clocked In':'⚪ Not Clocked In'}</div>
+        <div style="font-size:16px;color:var(--muted)">${openShift?`Since ${openShift.timeIn||'—'} on ${fmtDate(openShift.date)}. Ask your Admin to clock you out.`:'Tap Clock In to start your shift.'}</div>
+      </div>
+      ${!openShift?`<button class="btn bg bsm" style="width:auto;flex-shrink:0" onclick="showTab('staff');setTimeout(()=>openClockInForm(),80)">⏵ Clock In</button>`:''}
+    </div>
+
+    <!-- Earnings summary -->
+    <div class="sh">My Earnings <span style="font-size:16px;color:var(--muted);font-weight:400;text-transform:capitalize">(${PERIOD.staff||'period'})</span></div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="srow">
+        <div class="sbox"><div class="sv">${bags.toLocaleString()}</div><div class="sl">Bags/Units</div></div>
+        <div class="sbox bl"><div class="sv">${cur()} ${net.toFixed(0)}</div><div class="sl">Net (Period)</div></div>
+      </div>
+      <div class="srow" style="margin-top:8px">
+        <div class="sbox"><div class="sv" style="color:var(--amber)">${cur()} ${unpaid.toFixed(0)}</div><div class="sl">Unpaid Balance</div></div>
+        <div class="sbox"><div class="sv" style="color:var(--red)">${cur()} ${ded.toFixed(0)}</div><div class="sl">Deductions (Period)</div></div>
+      </div>
+      <div class="prow" style="margin-top:10px">${pBtns('staff')}</div>
+    </div>
+
+    <!-- Leave balance -->
+    <div class="sh">My Leave</div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="srow">
+        <div class="sbox"><div class="sv" style="color:${annualBal<0?'var(--red)':annualBal<=3?'var(--amber)':'var(--green)'}">${annualBal}</div><div class="sl">Annual Days Left</div></div>
+        <div class="sbox bl"><div class="sv">${sickUsed}</div><div class="sl">Sick Days Used</div></div>
+      </div>
+    </div>
+
+    <!-- Recent activity -->
+    <div class="sh">My Recent Activity</div>
+    <div class="card">
+      ${recent||'<div class="empty">No activity yet.</div>'}
+    </div>`;
+}
+
 function renderDash(){
   // Dashboard uses all commodities aggregated
   const _allCRec=(DATA.commodityReceived||{});
@@ -9256,38 +9338,42 @@ function allRoleNames(){return(DATA.staffRoles||[]).map(r=>r.name);}
 function tasksForRole(roleName){const r=(DATA.staffRoles||[]).find(x=>x.name===roleName);return r?r.tasks||[]:[]; }
 
 function renderStaff(){
+  const staffOnly=isStaffRole();
+  // A staff login never lands on a company-wide sub-tab, however it got set.
+  if(staffOnly && STAFF_BLOCKED_STAB.includes(STAB)) STAB='logs';
   return `
     <span class="sync-chip-live">${_syncStatusChip()}</span>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:8px">
-      <div class="sh" style="margin:0;flex-shrink:0">Staff</div>
+      <div class="sh" style="margin:0;flex-shrink:0">${staffOnly?'My Staff Record':'Staff'}</div>
       <div style="display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap;padding-bottom:2px">
         ${USER.role==='admin'?`<button class="btn bo bsm" id="btn-add-staff" style="flex-shrink:0">+ Add Staff</button>`:''}
         <button class="btn bg bsm" id="btn-clock-in" style="flex-shrink:0">⏵ Clock In</button>
-        <button class="btn bo bsm" id="btn-log-work" style="flex-shrink:0">✏️ Manual</button>
+        ${!staffOnly?`<button class="btn bo bsm" id="btn-log-work" style="flex-shrink:0">✏️ Manual</button>
         <button class="btn bo bsm" id="btn-bulk-log" style="flex-shrink:0">👥 Bulk Log</button>
-        <button class="btn ba bsm" id="btn-pay-staff" style="flex-shrink:0">💳 Pay</button>
+        <button class="btn ba bsm" id="btn-pay-staff" style="flex-shrink:0">💳 Pay</button>`:''}
         <button class="btn bo bsm" onclick="exportCurrentTabCSV()" title="Export current view as PDF" style="flex-shrink:0">⬇️ PDF</button>
       </div>
     </div>
     <div class="stabs">
-      <button class="stab${STAB==='logs'?' act':''}" id="stab-logs">Work Logs</button>
-      <button class="stab${STAB==='roster'?' act':''}" id="stab-roster">Roster</button>
-      <button class="stab${STAB==='earnings'?' act':''}" id="stab-earnings">Earnings</button>
-      <button class="stab${STAB==='payments'?' act':''}" id="stab-payments">💳 Payments</button>
-      <button class="stab${STAB==='leave'?' act':''}" id="stab-leave">🏖 Leave</button>
-      <button class="stab${STAB==='stafflist'?' act':''}" id="stab-stafflist">👥 Staff List</button>
-      <button class="stab${STAB==='rolesrates'?' act':''}" id="stab-rolesrates">⚙️ Roles & Rates</button>
+      <button class="stab${STAB==='logs'?' act':''}" id="stab-logs">${staffOnly?'My Logs':'Work Logs'}</button>
+      ${!staffOnly?`<button class="stab${STAB==='roster'?' act':''}" id="stab-roster">Roster</button>`:''}
+      <button class="stab${STAB==='earnings'?' act':''}" id="stab-earnings">${staffOnly?'My Earnings':'Earnings'}</button>
+      <button class="stab${STAB==='payments'?' act':''}" id="stab-payments">💳 ${staffOnly?'My Payments':'Payments'}</button>
+      <button class="stab${STAB==='leave'?' act':''}" id="stab-leave">🏖 ${staffOnly?'My Leave':'Leave'}</button>
+      ${!staffOnly?`<button class="stab${STAB==='stafflist'?' act':''}" id="stab-stafflist">👥 Staff List</button>
+      <button class="stab${STAB==='rolesrates'?' act':''}" id="stab-rolesrates">⚙️ Roles & Rates</button>`:''}
     </div>
     ${STAB==='logs'?renderStaffLogs():STAB==='roster'?renderRoster():STAB==='earnings'?renderEarnings():STAB==='payments'?renderPayments():STAB==='leave'?renderLeave():STAB==='rolesrates'?renderRolesRatesTab():renderStaffList()}`;
 }
 
 function renderStaffLogs(){
-  const logs=filterPeriod(DATA.staffLogs, PERIOD.staff, 'date', 'staff');
+  const _sIds=scopedStaffIds();
+  const logs=filterPeriod(DATA.staffLogs.filter(l=>_sIds.has(String(l.staffId))), PERIOD.staff, 'date', 'staff');
   const staffById=Object.fromEntries(DATA.staff.map(s=>[s.id,s]));
   const totQty=approvedArr(logs).filter(l=>l.status!=='open').reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
   const totNet=approvedArr(logs).filter(l=>l.status!=='open').reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
   // Open shifts across ALL time (not period-filtered)
-  const allOpenShifts=(DATA.staffLogs||[]).filter(l=>l.status==='open'&&!isRejected(l)&&(!l.entryType||l.entryType==='work'));
+  const allOpenShifts=(DATA.staffLogs||[]).filter(l=>l.status==='open'&&!isRejected(l)&&(!l.entryType||l.entryType==='work')&&_sIds.has(String(l.staffId)));
 
   // Build cumulative totals per staff across ALL logs (career running total up to each entry) — approved only
   const allSorted=approvedArr(DATA.staffLogs).slice().sort((a,b)=>a.date.localeCompare(b.date)||String(a.id).localeCompare(String(b.id)));
@@ -9418,8 +9504,10 @@ function renderRoster(){
       <button class="btn br bsm" style="padding:4px 10px;font-size:16px" onclick="setStaffStatusReason('${s.id}','terminated')">⛔ Terminate</button>
     </div>`;
   };
-  return allRoleNames().map(role=>{
-    const members=DATA.staff.filter(s=>s.role===role);
+  const _sList=scopedStaff();
+  const _roleNames=isStaffRole()?[...new Set(_sList.map(s=>s.role))]:allRoleNames();
+  return _roleNames.map(role=>{
+    const members=_sList.filter(s=>s.role===role);
     const mRows=members.map(s=>{
       const sLogs=DATA.staffLogs.filter(l=>String(l.staffId)===String(s.id));
       const net=sLogs.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
@@ -9451,7 +9539,7 @@ function renderRoster(){
 }
 
 function renderEarnings(){
-  const staffList=DATA.staff;
+  const staffList=scopedStaff();
   const {start:_eStart,end:_eEnd}=_periodBounds(PERIOD.staff,'staff');
   const rows=staffList.map(s=>{
     const isSalaried=s.payType==='salary';
@@ -9488,6 +9576,7 @@ function renderEarnings(){
 }
 
 function openStaffForm(){
+  if(isStaffRole()){alert('⛔ Staff logins cannot register staff.');return;}
   if (isAtCap('staff', (DATA.staff||[]).length)) { showCapReachedPrompt('staff', 'Staff Profiles'); return; }
   const roleOpts=allRoleNames().map(r=>`<option>${r}</option>`).join('');
   openModal(`
@@ -9779,6 +9868,7 @@ function saveClockOut(logId){
 }
 
 function openLogForm(){
+  if(isStaffRole()){alert('⛔ Staff logins can only clock themselves in. Ask your Admin to log manual work entries.');return;}
   if(DATA.staff.length===0){alert('Register staff members first.');return;}
   if((DATA.staffRoles||[]).length===0){alert('No roles defined. Go to Staff > Roles & Rates to add roles first.');return;}
   const activeStaff=DATA.staff.filter(s=>!s.status||s.status==='active');
@@ -9989,6 +10079,7 @@ function saveLog(){if(isReadOnly()){alert("🔒 This account is in read-only mod
 // work-log entry per selected staff member via a single updateData() call.
 // ══════════════════════════════════════════════════════════
 function openBulkLogForm(){
+  if(isStaffRole()){alert('⛔ Staff logins can only clock themselves in. Ask your Admin to log work entries.');return;}
   if(DATA.staff.length===0){alert('Register staff members first.');return;}
   if((DATA.staffRoles||[]).length===0){alert('No roles defined. Go to Staff > Roles & Rates to add roles first.');return;}
   const activeStaff=DATA.staff.filter(s=>!s.status||s.status==='active');
@@ -10098,7 +10189,7 @@ function saveBulkLog(){
 
 // ── RENDER PAYMENTS ──────────────────────────────────────────────────────────
 function renderPayments(){
-  const staffList=DATA.staff;
+  const staffList=scopedStaff();
   const payments=DATA.staffPayments||[];
   // Summary by role — approved entries only (pending staff entries aren't official yet)
   const byRole={};
@@ -10202,7 +10293,8 @@ function renderPayments(){
 
 // ── STAFF LIST ───────────────────────────────────────────────────────────────
 function renderStaffList(){
-  const roles=allRoleNames();
+  const _sList=scopedStaff();
+  const roles=isStaffRole()?[...new Set(_sList.map(s=>s.role))]:allRoleNames();
   const statusBadge=s=>{
     if(s.status==='terminated')return`<span class="bdg br2" style="font-size:15px">TERMINATED</span>`;
     if(s.status==='resigned')return`<span class="bdg br2" style="font-size:15px">RESIGNED</span>`;
@@ -10211,7 +10303,7 @@ function renderStaffList(){
     return`<span class="bdg bg2" style="font-size:15px">ACTIVE</span>`;
   };
   const sections=roles.map((role,ri)=>{
-    const members=DATA.staff.filter(s=>s.role===role);
+    const members=_sList.filter(s=>s.role===role);
     if(members.length===0)return`<div class="card"><div class="ctitle">👷 ${role}s</div><div class="empty" style="padding:8px 0">No ${role.toLowerCase()}s registered</div></div>`;
     const active=members.filter(s=>!s.status||s.status==='active').length;
     const susp=members.filter(s=>s.status==='suspended').length;
@@ -10713,6 +10805,7 @@ function delStaffWarning(wid,staffId){
 
 // Payment form
 function openPayForm(){
+  if(isStaffRole()){alert('⛔ Staff logins cannot record payments. Ask your Admin.');return;}
   if(DATA.staff.length===0){alert('Register staff members first.');return;}
   const opts=DATA.staff.map(s=>{
     const earned=DATA.staffLogs.filter(l=>String(l.staffId)===String(s.id)).reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
@@ -10965,10 +11058,11 @@ function delStaff(id){requireAdminPassword('delete this staff member',()=>{updat
 
 // ── LEAVE BALANCE (Fix 7) ─────────────────────────────────────────────────────
 function renderLeave(){
-  const leaveLog=DATA.leaveLog||[];
+  const _sIds=scopedStaffIds();
+  const leaveLog=(DATA.leaveLog||[]).filter(l=>_sIds.has(String(l.staffId)));
   const approvedLeaveLog=approvedArr(leaveLog);
   const stdAnnual=Number((DATA.depotInfo||{}).annualLeaveEntitlement||15); // default 15, configurable in Settings → Staff Policy
-  const rows=DATA.staff.filter(s=>s.status==='active'||!s.status).map(s=>{
+  const rows=scopedStaff().filter(s=>s.status==='active'||!s.status).map(s=>{
     const sLeave=approvedLeaveLog.filter(l=>String(l.staffId)===String(s.id));
     const annualUsed=sLeave.filter(l=>l.type==='leave').reduce((a,b)=>a+Number(b.days||1),0);
     const sickUsed=sLeave.filter(l=>l.type==='sick').reduce((a,b)=>a+Number(b.days||1),0);
@@ -13205,20 +13299,13 @@ async function saveCurrencySetting(){
   if(!val){if(msg)msg.innerHTML='<div class="err-box">Select a currency.</div>';return;}
   if(val===(DATA.currency||'').toUpperCase()){if(msg)msg.innerHTML='';return;}
 
-  const oldCode=(DATA.currency||'').toUpperCase();
   if(msg)msg.innerHTML='<div style="color:var(--muted)">⏳ Fetching exchange rate…</div>';
 
   let result;
   try { result = await changeDepotCurrency(val); }
   catch(e){ if(msg)msg.innerHTML='<div class="err-box">Could not change currency: '+esc(e.message)+'</div>'; return; }
 
-  if(result.converted){
-    if(msg)msg.innerHTML='<div class="ok-msg">✅ Currency changed to '+esc(val)+'. All stored financial figures were converted from '+esc(oldCode)+' using 1 USD = '+Number(DATA.fxRates[val]||0).toLocaleString(undefined,{maximumFractionDigits:4})+' '+esc(val)+'.</div>';
-  } else if(!oldCode){
-    if(msg)msg.innerHTML='<div class="ok-msg">✅ Currency set to '+esc(val)+'.</div>';
-  } else {
-    if(msg)msg.innerHTML='<div class="ok-msg">✅ Currency set to '+esc(val)+'. A live exchange rate wasn\'t available, so figures were left unchanged — check your connection and use "Update Exchange Rate" to convert them.</div>';
-  }
+  if(msg)msg.innerHTML='<div class="ok-msg">✅ Currency set to '+esc(val)+'. Existing entries keep the amounts they were recorded with — only new entries and today\'s display use '+esc(val)+' going forward.</div>';
   render();
   setTimeout(()=>{const m=document.getElementById('currency-msg');if(m)m.innerHTML='';},6000);
 }
@@ -13229,23 +13316,10 @@ async function updateExchangeRateNow(){
   if(!DATA.currency){ if(msg)msg.innerHTML='<div class="err-box">Set a currency first.</div>'; return; }
   if(msg)msg.innerHTML='<div style="color:var(--muted)">⏳ Fetching latest exchange rate…</div>';
   try {
-    await ensureFxRates(true);
-    const newRate = DATA.fxRates[DATA.currency];
-    const oldRate = DATA.fxRateSetAt||newRate;
-    if(!newRate){ if(msg)msg.innerHTML='<div class="err-box">No live rate found for '+esc(DATA.currency)+'.</div>'; return; }
-    if(Math.abs(newRate-oldRate)<1e-9){
-      if(msg)msg.innerHTML='<div class="ok-msg">✅ Rate refreshed — no change (1 USD = '+newRate.toLocaleString(undefined,{maximumFractionDigits:4})+' '+esc(DATA.currency)+').</div>';
-      render();
-      return;
-    }
-    const proceed=confirm('Live rate for '+DATA.currency+' has moved:\n\n1 USD = '+oldRate.toLocaleString(undefined,{maximumFractionDigits:4})+' '+DATA.currency+' (previous)\n1 USD = '+newRate.toLocaleString(undefined,{maximumFractionDigits:4})+' '+DATA.currency+' (now)\n\nApply the new rate and rescale ALL stored financial figures accordingly? This affects balances, prices, earnings and budgets.');
-    if(!proceed){
-      if(msg)msg.innerHTML='<div style="color:var(--muted)">Rate refreshed but not applied — figures unchanged.</div>';
-      render();
-      return;
-    }
     const r=await reapplyLatestFxRate();
-    if(msg)msg.innerHTML='<div class="ok-msg">✅ Figures rescaled by ×'+r.factor.toFixed(4)+' to match the updated exchange rate.</div>';
+    if(msg)msg.innerHTML=r.changed
+      ? '<div class="ok-msg">✅ Reference rate updated: 1 USD ≈ '+r.newRate.toLocaleString(undefined,{maximumFractionDigits:4})+' '+esc(DATA.currency)+'. Stored figures are unaffected.</div>'
+      : '<div class="ok-msg">✅ Rate refreshed — no change (1 USD ≈ '+r.newRate.toLocaleString(undefined,{maximumFractionDigits:4})+' '+esc(DATA.currency)+').</div>';
     render();
   } catch(e){
     if(msg)msg.innerHTML='<div class="err-box">Could not fetch exchange rate: '+esc(e.message)+' (check your internet connection).</div>';
