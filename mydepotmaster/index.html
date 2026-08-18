@@ -3910,6 +3910,7 @@ migrateShiftLogStatus();  // Two-Stage Shift Log: tag legacy logs as completed
 let USER=null;
 let STAFF_MODAL_PIN=false; // when true, staff profile modal stays open across actions instead of auto-closing
 let TAB='dashboard';
+let SETTINGS_VIEW='menu'; // 'menu' or a category id — which Settings sub-page is showing
 let ONLINE=navigator.onLine;
 let PERIOD={dashboard:'monthly',general:'monthly',maize:'monthly',staff:'monthly'};
 let DATE_RANGE={general:{from:'',to:''},maize:{from:'',to:''},staff:{from:'',to:''},dashboard:{from:'',to:''}};
@@ -4605,7 +4606,7 @@ function openPendingApprovalsModal(){
 // are all identical to the previous render — cuts redundant work on rapid saves.
 let _renderCache = { key: null };
 function _renderCacheKey() {
-  return TAB+'|'+(DATA._v||0)+'|'+JSON.stringify(PERIOD)+'|'+JSON.stringify(DATE_RANGE)+'|'+STAB+'|'+MTAB+'|'+GTAB+'|'+CTAB+'|'+BTAB+'|'+CCOM;
+  return TAB+'|'+(DATA._v||0)+'|'+JSON.stringify(PERIOD)+'|'+JSON.stringify(DATE_RANGE)+'|'+STAB+'|'+MTAB+'|'+GTAB+'|'+CTAB+'|'+BTAB+'|'+CCOM+'|'+SETTINGS_VIEW;
 }
 
 // ── ONLINE ──────────────────────────────────────────────────────────────────
@@ -6295,6 +6296,9 @@ document.querySelectorAll('.nb').forEach(btn=>{
 
 function showTab(tab){
   const tabChanged = TAB!==tab;
+  // Landing on Settings (from another tab) always starts at the category
+  // menu, never a sub-page the user happened to be on last time.
+  if(tabChanged && tab==='settings') SETTINGS_VIEW='menu';
   TAB=tab;
   document.querySelectorAll('.nb').forEach(b=>b.classList.toggle('act',b.dataset.tab===tab));
   document.querySelectorAll('.hdr-menu-navbtn[data-tab]').forEach(b=>b.classList.toggle('act',b.dataset.tab===tab));
@@ -11350,9 +11354,105 @@ function _renderCompanyInfoCard(){
 // no Settings tab at all; now they get one, but scoped to only what's
 // relevant and safe for them — their own display/password/device preferences
 // — not company-wide, billing, or destructive controls.
+// ── SETTINGS: two-level menu ────────────────────────────────────────────────
+// Settings had grown into one long scrolling page. It's now a category menu
+// (SETTINGS_VIEW==='menu') that drills into focused sub-pages. The full-page
+// generators (_renderAdminSettings / _renderStaffSettings) are UNCHANGED —
+// a sub-page is produced by rendering the full page into a detached <div>
+// and keeping only the .sh-titled groups whose title matches the chosen
+// category, via _filterSettingsHtmlByCategory(). This avoids duplicating
+// or re-deriving any of the section markup/logic.
+const SETTINGS_CATS = {
+  admin: [
+    {id:'account-security', icon:'🔐', label:'Account & Security', desc:'Password, recovery, users & permissions',
+      match:['Change Password','Recovery PIN','Recovery Email','User Accounts','Role Permissions','Fingerprint Login','Stay Signed In']},
+    {id:'company-billing', icon:'🏢', label:'Company & Billing', desc:'Plan, license, company info, branding & policies',
+      match:['My Plan','License & Connection','Company Information','Branding','Staff & Records Policy']},
+    {id:'appearance', icon:'🎨', label:'Appearance', desc:'Theme, text size, currency & dashboard widgets',
+      match:['Display Preferences','Dashboard Widgets']},
+    {id:'data-backup', icon:'💾', label:'Data & Backup', desc:'Backup, audit log, cloud sync & account deletion',
+      match:['Data Management','Cloud Data Protection','Danger Zone']},
+    {id:'help-about', icon:'❓', label:'Help & About', desc:'Install app, docs, support & legal',
+      match:['Contact & Support','Install on This Phone','Help & Documentation','Legal']},
+  ],
+  staff: [
+    {id:'preferences', icon:'🎨', label:'Preferences', desc:'Text size, theme, currency & dashboard',
+      match:['Company Information','Display Preferences','Dashboard Widgets']},
+    {id:'account-help', icon:'🔐', label:'Account & Help', desc:'Password, fingerprint, install, support & legal',
+      match:['Fingerprint Login','Stay Signed In','Change Password','Install on This Phone','Help & Documentation','Contact & Support','Legal']},
+  ],
+};
+
 function renderSettings(){
-  if (USER && USER.role !== 'admin') return _renderStaffSettings();
-  return _renderAdminSettings();
+  const role = (USER && USER.role !== 'admin') ? 'staff' : 'admin';
+  if (SETTINGS_VIEW === 'menu') return _renderSettingsMenu(role);
+  return _renderSettingsCategoryPage(role, SETTINGS_VIEW);
+}
+
+function _renderSettingsMenu(role){
+  const cats = SETTINGS_CATS[role]||[];
+  return `
+    ${statusBanner()}
+    ${!DATA.currency&&USER.role==='admin'?`<div class="warn" style="margin-bottom:12px">⚠️ No currency set. Open <strong>${role==='admin'?'Appearance':'Display Preferences'}</strong> below to set your currency (e.g. ZMW, USD, KES).</div>`:''}
+    <div class="sh">Settings</div>
+    ${cats.map(c=>`
+      <div class="card" style="display:flex;align-items:center;gap:14px;cursor:pointer;margin-bottom:10px;padding:16px" onclick="openSettingsCategory('${c.id}')">
+        <div style="font-size:28px;line-height:1">${c.icon}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:18px;color:var(--white)">${c.label}</div>
+          <div style="font-size:15px;color:var(--muted);margin-top:2px">${c.desc}</div>
+        </div>
+        <div style="color:var(--muted);font-size:22px;flex-shrink:0">›</div>
+      </div>`).join('')}
+    <div style="text-align:center;padding:12px 0 4px;font-size:16px;color:var(--muted)">My Depot Master · © ${new Date().getFullYear()} NEXLITE-DIGITAL-SOLUTIONS-LIMITED (t/a Spike Trading and General Dealers) · General Purpose Business Management Software</div>
+    <div style="height:60px"></div>`;
+}
+
+function _renderSettingsCategoryPage(role, catId){
+  const cat = (SETTINGS_CATS[role]||[]).find(c=>c.id===catId);
+  if(!cat){ SETTINGS_VIEW='menu'; return _renderSettingsMenu(role); }
+  const full = role==='admin' ? _renderAdminSettings() : _renderStaffSettings();
+  const body = _filterSettingsHtmlByCategory(full, cat);
+  return `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;cursor:pointer;user-select:none" onclick="backToSettingsMenu()">
+      <span style="font-size:22px">←</span>
+      <span style="font-family:var(--fh);font-weight:700;font-size:20px">${cat.icon} ${cat.label}</span>
+    </div>
+    ${statusBanner()}
+    ${body}
+    <div style="height:60px"></div>`;
+}
+
+// Parses the full Settings page HTML into a detached container and keeps
+// only the .sh-titled groups whose title matches this category. Runs in
+// the browser (not a regex over the template strings), so it doesn't need
+// to know anything about how each section builds its markup.
+function _filterSettingsHtmlByCategory(fullHtml, cat){
+  const wrap = document.createElement('div');
+  wrap.innerHTML = fullHtml;
+  let out = '';
+  let matches = false;
+  Array.from(wrap.childNodes).forEach(node=>{
+    if(node.nodeType===1 && node.classList && node.classList.contains('sh')){
+      const title = (node.textContent||'').trim();
+      matches = cat.match.some(t=>title.indexOf(t)!==-1);
+    }
+    // Drop the page footer / bottom-spacer — the sub-page adds its own.
+    if(node.nodeType===1 && /My Depot Master ·|height:60px/.test(node.outerHTML||'')) return;
+    if(matches){
+      out += node.nodeType===1 ? node.outerHTML : (node.textContent||'');
+    }
+  });
+  return out || `<div class="card"><div style="color:var(--muted);text-align:center;padding:20px">Nothing here yet.</div></div>`;
+}
+
+function openSettingsCategory(catId){
+  SETTINGS_VIEW = catId;
+  render(true);
+}
+function backToSettingsMenu(){
+  SETTINGS_VIEW = 'menu';
+  render(true);
 }
 
 // Trimmed Settings view for non-admin accounts (data-entry, staff).
