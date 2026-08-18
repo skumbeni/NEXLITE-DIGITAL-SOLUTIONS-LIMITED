@@ -25,6 +25,25 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v89 (2026-08-18)
+//
+// v89 changes (2026-08-18) — Manager/Staff role tiers + self clock-in:
+//   - New "Staff" role (in addition to Admin and Manager/Data Entry): a
+//     genuinely view-only tier — dashboards, own password, own earnings —
+//     that cannot add or edit any records.
+//   - Staff logins can now be linked to a specific Staff Profile and clock
+//     THEMSELVES in only (no picking another staff member); clocking out
+//     stays Admin-only as before.
+//   - Self clock-ins by Staff go through the existing pending-approval
+//     workflow; that Pending Approvals review is now visible to Managers
+//     too, not just Admin.
+//   - Login screen now has an on-screen "← Back" button to landing (was
+//     missing; hardware back already worked, this adds the visible one).
+//   - New "Create Login" shortcut on each staff profile card, pre-filling
+//     role=Staff and the linked staff profile.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v81 (2026-08-12)
 //
 // v81 changes (2026-08-12) — Books editor action bar moved to top:
@@ -687,7 +706,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'mdm-v88';   // ← bump this whenever you deploy a new version
+const CACHE     = 'mdm-v89';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

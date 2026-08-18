@@ -952,6 +952,7 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
       </div>
     </div>
     <div class="login-pc-wrap">
+    <button id="login-back-btn" onclick="showLanding()" style="position:absolute;top:max(16px,env(safe-area-inset-top,16px));left:16px;background:none;border:none;color:var(--muted);font-size:18px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:4px;touch-action:manipulation;z-index:1">← Back</button>
     <div class="login-logo">MDM</div>
     <div class="login-title">My Depot Master</div>
     <div class="login-sub"><span id="login-depot-sub">My Depot Master</span><br><span id="conn-status" style="color:var(--amber)">● Checking connection…</span></div>
@@ -3419,6 +3420,37 @@ function requireAdmin(action) {
   return true;
 }
 
+// ── ROLE TIERS: Admin / Manager / Staff ─────────────────────────────────────
+// Admin: full access (unchanged — every existing requireAdmin() check below).
+// Manager: can add records (work logs, receive/issue stock, sales, transport,
+//   clock in/out, stock counts) but cannot edit/delete or manage settings.
+//   The legacy 'data_entry' role IS the Manager tier — it already behaved
+//   this way everywhere else in the app, so no other code needed to change.
+// Staff: view-only — can see dashboards, change their own password, and view
+//   their own earnings, but cannot add or edit anything.
+function isManagerRole() {
+  return USER && (USER.role === 'manager' || USER.role === 'data_entry');
+}
+function isStaffRole() {
+  return USER && USER.role === 'staff';
+}
+function canAddRecords() {
+  return isAdmin() || isManagerRole();
+}
+function requireAddPermission(action) {
+  if (!canAddRecords()) {
+    alert('⛔ You do not have permission to ' + (action || 'add records') + '. Ask your Admin or Manager.');
+    return false;
+  }
+  return true;
+}
+// Friendly label for a role value, used anywhere a raw role is displayed.
+function roleLabel(role) {
+  if (role === 'admin') return 'ADMIN';
+  if (role === 'manager' || role === 'data_entry') return 'MANAGER';
+  return 'STAFF';
+}
+
 // Shows a password confirmation modal and calls cb() only if the current
 // admin password is correct. Used for destructive / sensitive operations.
 function requireAdminPassword(action, cb) {
@@ -3479,7 +3511,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'mdm-v88';
+const SW_VERSION  = 'mdm-v89';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -4542,12 +4574,14 @@ function _mutateApprovalStatus(cat,cid,id,newStatus,extra){
   });
 }
 function approveEntry(cat,cid,id){
+  if(!(isAdmin()||isManagerRole())){ alert('⛔ Only an Admin or Manager can approve entries.'); return; }
   _mutateApprovalStatus(cat,cid,id,'approved',{approvedBy:USER.username,approvedAt:Date.now()});
   logAuditEvent('APPROVE',(_APPROVAL_CATS[cat]||{}).label||cat,`ID:${id}`);
   showToast('✅ Entry approved — now part of official data');
   _refreshPendingApprovalsModal();
 }
 function rejectEntry(cat,cid,id){
+  if(!(isAdmin()||isManagerRole())){ alert('⛔ Only an Admin or Manager can reject entries.'); return; }
   const reason=(prompt('Reason for rejection (optional, shown to the staff member):')||'').trim();
   _mutateApprovalStatus(cat,cid,id,'rejected',{rejectedBy:USER.username,rejectedAt:Date.now(),approvalRejectionReason:reason});
   logAuditEvent('REJECT',(_APPROVAL_CATS[cat]||{}).label||cat,`ID:${id}${reason?' · Reason: '+reason:''}`);
@@ -4598,6 +4632,7 @@ function renderPendingApprovals(){
   return `<div style="margin-bottom:10px;font-size:15px;color:var(--muted)">${items.length} entr${items.length===1?'y':'ies'} awaiting approval — excluded from balances and totals until approved.</div>${rows}`;
 }
 function openPendingApprovalsModal(){
+  if(!(isAdmin()||isManagerRole())){ alert('⛔ Only an Admin or Manager can review pending approvals.'); return; }
   openModal(`<div class="mtitle">✅ Pending Approvals</div><div id="pending-approvals-list">${renderPendingApprovals()}</div><div class="mact"><button class="btn bo" onclick="closeModal()">Close</button></div>`);
 }
 
@@ -6512,8 +6547,8 @@ function renderDash(){
     if(daysLeft<=0){warnings.push({icon:'🗓',title:`EXPIRED STOCK — ${r.itemName}`,msg:`Batch received ${fmtDate(r.date)} expired on <strong style="color:var(--red)">${fmtDate(r.expiryDate)}</strong> (${Math.abs(daysLeft)} days ago). Qty: <strong>${Number(r.received||0).toLocaleString()}</strong>`});}
     else if(daysLeft<=30){warnings.push({icon:'⏳',title:`EXPIRING SOON — ${r.itemName}`,msg:`Batch expires <strong style="color:var(--amber)">${fmtDate(r.expiryDate)}</strong> (${daysLeft} days). Qty: <strong>${Number(r.received||0).toLocaleString()}</strong>`});}
   });
-  // Pending-approval alert (admin only — nudges admin to review staff entries)
-  if(_pendingCount>0 && USER.role==='admin'){
+  // Pending-approval alert (Admin & Manager — nudges them to review staff entries)
+  if(_pendingCount>0 && (isAdmin()||isManagerRole())){
     warnings.unshift({icon:'✅',title:`${_pendingCount} ENTRY${_pendingCount>1?'IES':'Y'} AWAITING APPROVAL`,msg:`Staff-entered records are excluded from balances and totals until approved. <span style="color:var(--blue);text-decoration:underline;cursor:pointer" onclick="openPendingApprovalsModal()">Review now →</span>`});
   }
 
@@ -6589,7 +6624,7 @@ function renderDash(){
         <div style="text-align:right">
           <div style="font-size:15px;color:var(--muted)">Signed in</div>
           <div style="font-family:var(--fh);font-size:19px;font-weight:700;color:var(--green)">${esc((USER&&USER.username||'').toUpperCase())}</div>
-          <span style="display:inline-block;background:${USER&&USER.role==='admin'?'rgba(0,43,31,.15)':'rgba(13,42,74,.15)'};border:1px solid ${USER&&USER.role==='admin'?'var(--green)':'var(--blue)'};border-radius:20px;padding:1px 7px;font-size:14px;font-weight:800;color:${USER&&USER.role==='admin'?'var(--green)':'var(--blue)'};letter-spacing:.6px">${USER&&USER.role==='admin'?'ADMIN':'STAFF'}</span>
+          <span style="display:inline-block;background:${USER&&USER.role==='admin'?'rgba(0,43,31,.15)':'rgba(13,42,74,.15)'};border:1px solid ${USER&&USER.role==='admin'?'var(--green)':'var(--blue)'};border-radius:20px;padding:1px 7px;font-size:14px;font-weight:800;color:${USER&&USER.role==='admin'?'var(--green)':'var(--blue)'};letter-spacing:.6px">${roleLabel(USER&&USER.role)}</span>
         </div>
       </div>
     </div>
@@ -7551,7 +7586,7 @@ function calcGenDmg(){
   if(dmg)dmg.value=Math.max(0,rec-good);
 }
 
-function saveGenRec(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+function saveGenRec(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;} if(!requireAddPermission('receive stock'))return;
   const sel=document.getElementById('gr-name');
   let name='';
   if(sel&&sel.tagName==='SELECT'){
@@ -7700,7 +7735,7 @@ function giSaveNewCustomer(){
   giToggleNewCustomer();
 }
 
-function saveGenIss(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+function saveGenIss(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;} if(!requireAddPermission('issue stock'))return;
   const name=document.getElementById('gi-name').value;
   const qty=Number(document.getElementById('gi-qty').value||0);
   const sprice=Number(document.getElementById('gi-sprice')?.value||0);
@@ -8542,7 +8577,7 @@ function openMaizeRecForm(){
     <div class="fw"><div class="fl">Date Received</div><input class="fi" type="date" id="mr-date" value="${today()}"/></div>
     <div class="fw"><div class="fl">Supplier <span style="font-size:15px;color:var(--muted)">(optional)</span></div>${(()=>{const sups=(DATA.contacts||[]).filter(c=>c.type==='supplier');return sups.length>0?`<select class="fi" id="mr-supplier"><option value="">— None / Unknown —</option>${sups.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>`:`<input class="fi" id="mr-supplier-name" placeholder="SUPPLIER NAME (optional)" oninput="this.value=this.value.toUpperCase()"/>`;})()}</div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveMaizeRec()">✓ Save</button></div>`);}
-function saveMaizeRec(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+function saveMaizeRec(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;} if(!requireAddPermission('record received commodity'))return;
   const batch=uc(document.getElementById('mr-batch').value);
   const rec=Number(document.getElementById('mr-rec').value||0);
   if(!batch||!rec){alert('Enter batch name and quantity.');return;}
@@ -8603,7 +8638,7 @@ function _miAutoSrcRec(batchName){
   const rec=cRec(CCOM).filter(r=>r.batchName===batchName).sort((a,b)=>b.date.localeCompare(a.date))[0];
   if(rec) sel.value=rec.id;
 }
-function saveMaizeIss(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+function saveMaizeIss(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;} if(!requireAddPermission('record issued commodity'))return;
   const batch=document.getElementById('mi-batch').value;
   const trans=document.getElementById('mi-trans').value.trim();
   const qty=Number(document.getElementById('mi-qty').value||0);
@@ -8692,7 +8727,7 @@ function openTransportForm(){
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveTransport()">✓ Save</button></div>`);
 }
 
-function saveTransport(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+function saveTransport(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;} if(!requireAddPermission('log transport'))return;
   const vehicle=uc(document.getElementById('tl-vehicle').value);
   const driver=uc(document.getElementById('tl-driver').value);
   const batch=uc(document.getElementById('tl-batch').value);
@@ -8907,7 +8942,7 @@ function updateVarianceHint(){
   const label=variance<0?`SHORTAGE OF ${Math.abs(variance).toLocaleString()}`:variance===0?'EXACT MATCH — NO VARIANCE':`SURPLUS OF ${variance.toLocaleString()}`;
   hint.innerHTML=`<div style="background:var(--surface2);border:1px solid ${color};border-radius:8px;padding:10px 13px;margin-bottom:12px;font-size:18px;color:${color};font-weight:700">VARIANCE: ${variance} &nbsp;·&nbsp; ${label}</div>`;
 }
-function saveStockCount(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+function saveStockCount(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;} if(!requireAddPermission('log a stock count'))return;
   const batch=document.getElementById('sc-batch').value;
   const phys=Number(document.getElementById('sc-phys').value||0);
   if(!phys&&phys!==0){alert('Enter the physical count.');return;}
@@ -9516,10 +9551,22 @@ function openClockInForm(preStaffId){
   if((DATA.staffRoles||[]).length===0){alert('No roles defined. Go to Staff > Roles & Rates to add roles first.');return;}
   const activeStaff=DATA.staff.filter(s=>!s.status||s.status==='active');
   if(activeStaff.length===0){alert('No active staff. Check roster for suspended/expelled staff.');return;}
+
+  // Staff-role logins can only clock themselves in — never pick another staff member.
+  if(isStaffRole()){
+    const myId=USER.linkedStaffId;
+    const me=myId?activeStaff.find(s=>String(s.id)===String(myId)):null;
+    if(!me){ alert('⚠️ Your account isn\'t linked to a staff profile yet. Ask your Admin to link it in Settings → User Accounts.'); return; }
+    preStaffId=me.id;
+  }
+
   const opts=activeStaff.map(s=>`<option value="${esc(s.id)}"${String(s.id)===String(preStaffId||'')?' selected':''}>${esc(s.name)} (${esc(s.role)})</option>`).join('');
+  const staffFieldHtml = isStaffRole()
+    ? `<div class="fw"><div class="fl">Staff Member</div><div class="fi" style="background:var(--surface);padding:12px 14px;border-radius:10px;border:1.5px solid var(--border);font-weight:700">${esc(activeStaff.find(s=>String(s.id)===String(preStaffId))?.name||'')}</div><input type="hidden" id="ci-staff" value="${esc(preStaffId)}"/></div>`
+    : `<div class="fw"><div class="fl">Staff Member</div><select class="fi" id="ci-staff" onchange="onClockInStaffChange()">${opts}</select></div>`;
   openModal(`
     <div class="mtitle">⏵ Clock In ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>
-    <div class="fw"><div class="fl">Staff Member</div><select class="fi" id="ci-staff" onchange="onClockInStaffChange()">${opts}</select></div>
+    ${staffFieldHtml}
     <div id="ci-open-warn" style="display:none"></div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="ci-date" value="${today()}"/></div>
     <div class="fw"><div class="fl">Time In</div><input class="fi" type="time" id="ci-time-in" value="${nowTime()}"/></div>
@@ -9537,7 +9584,7 @@ function onClockInStaffChange(){
   const existing=_openShiftFor(sid);
   if(existing&&warnEl){
     warnEl.style.display='';
-    warnEl.innerHTML=`<div class="warn" style="margin-bottom:12px">⚠️ <strong>${esc(s?.name||'This staff member')}</strong> already has an open shift (clocked in ${existing.date}, ${existing.timeIn||'—'}). <button type="button" onclick="closeModal();setTimeout(()=>openClockOutForm('${existing.id}'),50)" style="background:none;border:1px solid var(--amber);border-radius:6px;color:var(--amber);cursor:pointer;padding:2px 8px;font-size:16px;font-weight:700;margin-left:6px">⏹ Clock Out Now</button></div>`;
+    warnEl.innerHTML=`<div class="warn" style="margin-bottom:12px">⚠️ <strong>${esc(s?.name||'This staff member')}</strong> already has an open shift (clocked in ${existing.date}, ${existing.timeIn||'—'}).${isStaffRole()?' Ask your Admin to clock you out.':` <button type="button" onclick="closeModal();setTimeout(()=>openClockOutForm('${existing.id}'),50)" style="background:none;border:1px solid var(--amber);border-radius:6px;color:var(--amber);cursor:pointer;padding:2px 8px;font-size:16px;font-weight:700;margin-left:6px">⏹ Clock Out Now</button>`}</div>`;
   } else if(warnEl){
     warnEl.style.display='none';warnEl.innerHTML='';
   }
@@ -9559,7 +9606,12 @@ function onClockInStaffChange(){
 
 function saveClockIn(){
   if(isReadOnly()){alert('🔒 This account is in read-only mode. Contact your administrator.');return;}
-  const sid=document.getElementById('ci-staff').value;
+  let sid=document.getElementById('ci-staff').value;
+  // Defense in depth: a Staff-role login can only ever clock in as their own linked profile.
+  if(isStaffRole()){
+    if(!USER.linkedStaffId){ alert('⚠️ Your account isn\'t linked to a staff profile yet. Ask your Admin to link it.'); return; }
+    sid=USER.linkedStaffId;
+  }
   const date=document.getElementById('ci-date').value;
   const timeIn=document.getElementById('ci-time-in').value;
   const role=document.getElementById('ci-role').value;
@@ -9569,6 +9621,7 @@ function saveClockIn(){
   const existing=_openShiftFor(sid);
   if(existing){
     const s=DATA.staff.find(x=>String(x.id)===String(sid));
+    if(isStaffRole()){ alert(`⚠️ You already have an open shift (clocked in ${existing.date}, ${existing.timeIn||'—'}). Ask your Admin to clock you out before clocking in again.`); return; }
     if(!confirm(`${s?.name||'This staff'} already has an open shift.\nClose that form and go to Clock Out instead?\n\nCancel to stay here, OK to go to Clock Out.`))return;
     closeModal();setTimeout(()=>openClockOutForm(existing.id),50);return;
   }
@@ -9884,7 +9937,7 @@ function removeDeductionLine(btn){
   else{line.querySelector('.ded-amount').value=0;line.querySelector('.ded-reason').value='';}
   calcGross();
 }
-function saveLog(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+function saveLog(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;} if(!requireAddPermission('log staff activity'))return;
   const entryType=(document.getElementById('lf-entry-type')?.value)||'work';
   const sid=document.getElementById('lf-staff').value;
   const date=document.getElementById('lf-date').value;
@@ -10007,6 +10060,7 @@ function _blSelectAll(on){
 
 function saveBulkLog(){
   if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+  if(!requireAddPermission('log staff activity'))return;
   const role=document.getElementById('bl-role')?.value;
   const task=document.getElementById('bl-task')?.value;
   const date=document.getElementById('bl-date')?.value||today();
@@ -10274,6 +10328,12 @@ function openStaffDetail(id){
   ):'';
   const editDetailsBtn=USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px" onclick="closeModal();setTimeout(()=>openEditStaffDetails('${s.id}'),50)">✏️ Edit Details</button>`:'';
   const removePhotoBtn=(USER.role==='admin'&&s.photoDataUrl)?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--red);border-color:rgba(192,57,43,.4)" onclick="removeStaffPhoto('${s.id}')">🗑 Remove Photo</button>`:'';
+  const linkedUser=(DATA.users||[]).find(u=>String(u.linkedStaffId||'')===String(s.id));
+  const loginAccountBtn = USER.role==='admin' ? (
+    linkedUser
+      ? `<div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;margin-bottom:8px"><div style="font-size:16px"><span style="color:var(--muted)">🔑 Login: </span><strong>${esc(linkedUser.username)}</strong> <span class="bdg ${linkedUser.role==='admin'?'bg2':(linkedUser.role==='staff'?'br2':'ba2')}" style="margin-left:4px">${roleLabel(linkedUser.role)}</span></div><button class="editbtn" onclick="adminResetUserPass('${esc(linkedUser.username)}')">🔑 Reset</button></div>`
+      : `<button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--blue);border-color:rgba(59,130,246,.4)" onclick="closeModal();setTimeout(()=>addUser('${s.id}'),50)">👤 Create Login for ${esc(s.name.split(' ')[0])}</button>`
+  ) : '';
 
   openModal(`
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px">
@@ -10312,6 +10372,7 @@ function openStaffDetail(id){
     ${recentLogs?`<div style="margin-bottom:14px"><div style="font-size:16px;font-weight:700;color:var(--muted);letter-spacing:.8px;margin-bottom:4px">RECENT SESSIONS</div>${recentLogs}</div>`:''}
     ${editDetailsBtn}
     ${removePhotoBtn}
+    ${loginAccountBtn}
     <button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--green);border-color:rgba(0,214,143,.4)" onclick="printStaffIdCard('${s.id}')">🪪 Print ID Card</button>
     ${USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px" onclick="closeModal();setTimeout(()=>openStaffWarnings('${s.id}'),50)">⚠️ Disciplinary / Warnings</button>`:''}
     ${actionBtns?`<div style="margin-top:14px">${actionBtns}</div>`:''}
@@ -11260,7 +11321,7 @@ function _renderChangePasswordCard(){
     <div class="sh">Change Password</div>
     <div class="card">
       <div id="pw-msg"></div>
-      <div class="fw"><div class="fl">Account</div><select class="fi" id="pw-target">${DATA.users.filter(u=>USER.role==='admin'||u.username===USER.username).map(u=>`<option value="${esc(u.username)}">${esc(u.username)} (${esc(u.role)})</option>`).join('')}</select></div>
+      <div class="fw"><div class="fl">Account</div><select class="fi" id="pw-target">${DATA.users.filter(u=>USER.role==='admin'||u.username===USER.username).map(u=>`<option value="${esc(u.username)}">${esc(u.username)} (${roleLabel(u.role)})</option>`).join('')}</select></div>
       <div class="fw"><div class="fl">New Password</div><input class="fi" type="password" id="pw-new"/></div>
       <div class="fw"><div class="fl">Confirm Password</div><input class="fi" type="password" id="pw-conf"/></div>
       <button class="btn ba" onclick="changePw()">🔒 Update Password</button>
@@ -11514,7 +11575,7 @@ function _renderStaffSettings(){
 function _renderAdminSettings(){
   const users=DATA.users.map(u=>`
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
-      <div><div style="font-weight:700">${esc(u.username)}</div><span class="bdg ${u.role==='admin'?'bg2':'ba2'}">${esc(u.role)}</span></div>
+      <div><div style="font-weight:700">${esc(u.username)}</div><span class="bdg ${u.role==='admin'?'bg2':(u.role==='staff'?'br2':'ba2')}">${roleLabel(u.role)}</span></div>
       <div style="display:flex;gap:6px;align-items:center">
         <button class="editbtn" onclick="adminResetUserPass('${esc(u.username)}')">🔑 Reset</button>
         ${u.username!==USER.username?`<button class="delbtn" onclick="removeUser('${esc(u.username)}')">🗑</button>`:''}
@@ -11700,11 +11761,11 @@ function _renderAdminSettings(){
 
       <div class="fw" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
         <div class="fl">Per-Role Timeout Overrides <span style="font-size:15px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">(optional — overrides global above per role)</span></div>
-        <div style="font-size:16px;color:var(--muted);margin-bottom:8px;line-height:1.6">Leave blank to use the global setting. Useful for giving Admins a longer session while Data Entry users log out quickly.</div>
-        ${['admin','data_entry'].map(role=>{
+        <div style="font-size:16px;color:var(--muted);margin-bottom:8px;line-height:1.6">Leave blank to use the global setting. Useful for giving Admins a longer session while Manager/Staff users log out quickly.</div>
+        ${['admin','data_entry','staff'].map(role=>{
           const byRole=(DATA.depotInfo||{}).autoLogoutMinutesByRole||{};
           const cur=byRole[role]||'';
-          const label=role==='admin'?'Admin':'Data Entry';
+          const label=roleLabel(role).charAt(0)+roleLabel(role).slice(1).toLowerCase();
           return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
             <span style="font-size:17px;color:var(--text);width:80px;flex-shrink:0">${label}</span>
             <select class="fi" id="per-role-timeout-${role}" style="flex:1">
@@ -11725,7 +11786,7 @@ function _renderAdminSettings(){
     <div class="sh">Change Password</div>
     <div class="card">
       <div id="pw-msg"></div>
-      <div class="fw"><div class="fl">Account</div><select class="fi" id="pw-target">${DATA.users.filter(u=>USER.role==='admin'||u.username===USER.username).map(u=>`<option value="${esc(u.username)}">${esc(u.username)} (${esc(u.role)})</option>`).join('')}</select></div>
+      <div class="fw"><div class="fl">Account</div><select class="fi" id="pw-target">${DATA.users.filter(u=>USER.role==='admin'||u.username===USER.username).map(u=>`<option value="${esc(u.username)}">${esc(u.username)} (${roleLabel(u.role)})</option>`).join('')}</select></div>
       <div class="fw"><div class="fl">New Password</div><input class="fi" type="password" id="pw-new"/></div>
       <div class="fw"><div class="fl">Confirm Password</div><input class="fi" type="password" id="pw-conf"/></div>
       <button class="btn ba" onclick="changePw()">🔒 Update Password</button>
@@ -12267,20 +12328,44 @@ async function changePw(){
   msg.innerHTML='<div class="ok-msg">✅ Password updated!</div>';
   document.getElementById('pw-new').value='';document.getElementById('pw-conf').value='';
 }
-function addUser(){
+function _onAddUserRoleChange(){
+  const role=document.getElementById('au-role')?.value;
+  const wrap=document.getElementById('au-linked-staff-wrap');
+  if(wrap) wrap.style.display = (role==='staff') ? '' : 'none';
+}
+function _suggestUsername(name){
+  const base=(name||'').toLowerCase().replace(/[^a-z0-9\s]/g,'').trim().split(/\s+/).join('.')||'staff';
+  let candidate=base, n=1;
+  const taken=new Set((DATA.users||[]).map(u=>(u.username||'').toLowerCase()));
+  while(taken.has(candidate)){ n++; candidate=base+n; }
+  return candidate;
+}
+function addUser(preStaffId){
   if(!requireAdmin('add users'))return;
   if(!hasFeature('staff_multi_user')){ showUpgradePrompt('staff_multi_user'); return; }
+  const preStaff = preStaffId ? (DATA.staff||[]).find(s=>String(s.id)===String(preStaffId)) : null;
+  const suggestedUser = preStaff ? _suggestUsername(preStaff.name) : '';
   openModal(`
-    <div class="mtitle">👤 Add User</div>
+    <div class="mtitle">👤 ${preStaff?`Create Login — ${esc(preStaff.name)}`:'Add User'}</div>
     <div id="au-err" class="err-box" style="display:none"></div>
     <div class="fw"><div class="fl">Username <span style="color:var(--red)">*</span></div>
-      <input class="fi" id="au-user" placeholder="e.g. dataentry1" autocapitalize="none" autocomplete="off" style="text-transform:none"/>
+      <input class="fi" id="au-user" placeholder="e.g. dataentry1" autocapitalize="none" autocomplete="off" style="text-transform:none" value="${esc(suggestedUser)}"/>
     </div>
     <div class="fw"><div class="fl">Role <span style="color:var(--red)">*</span></div>
-      <select class="fi" id="au-role">
-        <option value="data_entry">Data Entry</option>
+      <select class="fi" id="au-role" onchange="_onAddUserRoleChange()" ${preStaff?'disabled':''}>
+        <option value="data_entry">Manager</option>
+        <option value="staff"${preStaff?' selected':''}>Staff</option>
         <option value="admin">Admin</option>
       </select>
+      <div style="font-size:15px;color:var(--muted);margin-top:6px;line-height:1.6">Manager: can add records (stock, staff logs, sales) but not edit/delete or access Settings. Staff: view-only — dashboards, own password, own earnings, and can clock themselves in (not out).</div>
+    </div>
+    <div class="fw" id="au-linked-staff-wrap" style="display:${preStaff?'':'none'}">
+      <div class="fl">Link to Staff Profile <span style="color:var(--red)">*</span></div>
+      <select class="fi" id="au-linked-staff" ${preStaff?'disabled':''}>
+        <option value="">Select the staff member this login belongs to</option>
+        ${(DATA.staff||[]).filter(s=>!s.status||s.status==='active').map(s=>`<option value="${esc(s.id)}"${preStaff&&String(s.id)===String(preStaff.id)?' selected':''}>${esc(s.name)} (${esc(s.role)})</option>`).join('')}
+      </select>
+      <div style="font-size:15px;color:var(--muted);margin-top:6px;line-height:1.6">This links the login to a staff profile so they can clock themselves in — they won't be able to clock in on behalf of anyone else.</div>
     </div>
     <div class="fw"><div class="fl">Password <span style="color:var(--red)">*</span></div>
       <input class="fi" type="password" id="au-pass" placeholder="Min 8 characters" autocomplete="new-password"/>
@@ -12309,6 +12394,11 @@ async function _confirmAddUser(){
   if(exists){ err.style.display='block'; err.textContent='⛔ Username "'+username+'" is already taken. Choose a different one.'; return; }
   if(pass.length<8){ err.style.display='block'; err.textContent='⚠️ Password must be at least 8 characters.'; return; }
   if(pass!==pass2){ err.style.display='block'; err.textContent='❌ Passwords do not match.'; return; }
+  let linkedStaffId = '';
+  if(role==='staff'){
+    linkedStaffId = document.getElementById('au-linked-staff')?.value||'';
+    if(!linkedStaffId){ err.style.display='block'; err.textContent='⚠️ Select which staff profile this Staff login belongs to.'; return; }
+  }
 
   // ── GLOBAL FIREBASE DUPLICATE CHECK ────────────────────────────────────────
   // Usernames are registered globally across all depots in Firebase usernames/.
@@ -12376,7 +12466,7 @@ async function _confirmAddUser(){
     } catch(ae) { console.warn('Firebase Auth signup failed for sub-user (will migrate on first login):', ae.message); }
   }
 
-  updateData(d=>({...d,users:[...(d.users||[]),{username,password:hashed,role,..._newUserAuth}]}));
+  updateData(d=>({...d,users:[...(d.users||[]),{username,password:hashed,role,...(linkedStaffId?{linkedStaffId}:{}),..._newUserAuth}]}));
   closeModal();
   showToast('✅ User "'+username+'" added.');
 }
@@ -13305,7 +13395,7 @@ function savePerRoleTimeout(){
   const msg=document.getElementById('per-role-timeout-msg');
   const valid=[0,5,10,15,20,30,60];
   const byRole={...(DATA.depotInfo||{}).autoLogoutMinutesByRole||{}};
-  ['admin','data_entry'].forEach(role=>{
+  ['admin','data_entry','staff'].forEach(role=>{
     const el=document.getElementById('per-role-timeout-'+role);
     const val=Number(el?.value||0);
     if(!valid.includes(val)){if(msg)msg.innerHTML='<div class="err-box">Invalid selection.</div>';return;}
