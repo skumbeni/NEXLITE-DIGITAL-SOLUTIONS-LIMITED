@@ -775,7 +775,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v2.0';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v2.1';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
