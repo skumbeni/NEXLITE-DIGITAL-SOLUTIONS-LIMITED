@@ -25,6 +25,21 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v93 (2026-08-19)
+//
+// v93 changes (2026-08-19) — Depot Assistant account isolation:
+//   - Fix: Depot Assistant's context payload sent the FULL user roster
+//     (every account's recovery email, phone, linked staff member, role) to
+//     whichever account was chatting, regardless of that account's own role.
+//     A Staff or Data Entry login could ask "about my account" and get every
+//     other account's details.
+//   - Now the Assistant is only ever given a single "myAccount" object — the
+//     record for the account actually chatting. No other account's data is
+//     ever included, admin included; system prompts updated so the model
+//     explains it can't see other accounts if asked.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v89 (2026-08-18)
 //
 // v89 changes (2026-08-18) — Manager/Staff role tiers + self clock-in:
@@ -706,7 +721,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'mdm-v91';   // ← bump this whenever you deploy a new version
+const CACHE     = 'mdm-v93';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

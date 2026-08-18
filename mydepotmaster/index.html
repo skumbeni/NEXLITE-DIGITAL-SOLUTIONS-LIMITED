@@ -3529,7 +3529,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'mdm-v89';
+const SW_VERSION  = 'mdm-v93';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -16247,10 +16247,19 @@ function buildCopilotContext(daysBack, full){
     })
     .map(it=>({ item: _invItemName(it), minStock: it.minStock }));
 
-  // Strip login credentials from staff/user records before they ever reach
-  // the prompt — everything else about the depot is fair game.
+  // Strip login credentials from staff records before they ever reach the
+  // prompt — everything else operational about the depot is fair game.
   const staffSafe = (DATA.staff||[]).map(({password, ...rest})=>rest);
-  const usersSafe = (DATA.users||[]).map(({password, ...rest})=>rest);
+
+  // Account/user records are NOT depot-operational data — they're per-person
+  // login/contact info (recovery email, phone, linked-staff identity, role).
+  // The Assistant is only ever given the record for the account that is
+  // actually asking, never the full roster, regardless of that account's
+  // role (admin included). This prevents any account — including staff or
+  // data-entry accounts — from learning who else has access, their recovery
+  // email, phone, or linked-staff identity via chat.
+  const _myAccount = (DATA.users||[]).find(u => u.username === (USER && USER.username));
+  const myAccountSafe = _myAccount ? (({password, ...rest})=>rest)(_myAccount) : null;
 
   return {
     depotName: (DATA.depotInfo||{}).name || 'Unnamed depot',
@@ -16260,7 +16269,9 @@ function buildCopilotContext(daysBack, full){
     dataTruncatedToRecent: !full, // tells the model logs may be a recent-only subset
     lowStockItems: lowStock,
     staff: staffSafe,
-    users: usersSafe,
+    // Only the calling account's own record — see note above. Never the
+    // full users roster; other accounts are out of scope for the Assistant.
+    myAccount: myAccountSafe,
     staffRoles: DATA.staffRoles||[],
     staffPayments: cap(DATA.staffPayments),
     staffWarnings: cap(DATA.staffWarnings),
@@ -16340,8 +16351,10 @@ function _copilotSystemPrompt(mode){
   if(mode==='reconciliation'){
     return 'You are Depot Assistant, an operations analyst for a Zambian commodity '+
       'depot management app called My Depot Master. You are given the full current '+
-      'JSON data for this depot — staff, commodities, stock movements, clock logs, '+
-      'transport, and finances. Run an end-of-day reconciliation: check received vs '+
+      'JSON data for this depot\'s operations — staff, commodities, stock movements, '+
+      'clock logs, transport, and finances — plus a single "myAccount" object for '+
+      'only the account running this reconciliation; no other account\'s details are '+
+      'included. Run an end-of-day reconciliation: check received vs '+
       'issued quantities for obvious mismatches, flag anything unusual (missing '+
       'clock-outs, negative or suspicious balances, low stock), and double-check '+
       'your own arithmetic before answering. Be concise and use plain language, '+
@@ -16350,10 +16363,17 @@ function _copilotSystemPrompt(mode){
   }
   return 'You are Depot Assistant, a helpful assistant embedded in a Zambian '+
     'commodity depot management app called My Depot Master. You are given the '+
-    'full current JSON data for this depot — staff, commodities, stock '+
-    'movements, clock logs, transport, and finances. Answer the user\'s '+
-    'question using only that data. Be concise and use plain language, not '+
-    'code. If the data doesn\'t contain what\'s needed to answer, say so '+
+    'full current JSON data for this depot\'s operations — staff, '+
+    'commodities, stock movements, clock logs, transport, and finances — '+
+    'plus a single "myAccount" object describing ONLY the account that is '+
+    'chatting with you right now. You are never given other user accounts\' '+
+    'details (no other recovery emails, phone numbers, usernames, or linked '+
+    'staff identities exist in your data), and this is intentional: never '+
+    'imply you could look them up, never speculate about who else has '+
+    'access, and if asked about another account, explain that you can only '+
+    'see the current account\'s own details. Answer the user\'s question '+
+    'using only the data you\'re given. Be concise and use plain language, '+
+    'not code. If the data doesn\'t contain what\'s needed to answer, say so '+
     'rather than guessing.\n\n'+
     'You may also perform data entry using the tools available to you — '+
     'clocking staff in/out, logging completed work or absences, logging '+
