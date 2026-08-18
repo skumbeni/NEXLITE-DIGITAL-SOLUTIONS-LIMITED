@@ -3215,6 +3215,7 @@ async function submitSubscriptionRequest(planTier) {
     installId:   key,
     depotName:   di.name || '',
     district:    di.district || '',
+    province:    di.province || '',
     country:     di.country || '',
     requestedPlan: planTier,
     planLabel:   (TIER_META[planTier] || {}).label || planTier,
@@ -3400,7 +3401,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'mdm-v83';
+const SW_VERSION  = 'mdm-v84';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -3694,7 +3695,7 @@ const DEFAULT={
   leaveLog:[],          // {id,staffId,type,date,days,note}
   staffRoles:[],
   deductionReasons:['Damaged bags','Late arrival','Misconduct','Short count'],
-  depotInfo:{name:'',district:'',country:'',setupDone:false},
+  depotInfo:{name:'',district:'',province:'',country:'',setupDone:false},
   currency:'',    // depot-wide currency ISO code — admin must define (e.g. ZMW, USD, KES)
   fxRates:null,        // {CODE: rateVsUSD} — last fetched snapshot from live FX API
   fxRatesUpdatedAt:0,  // ms timestamp of last successful FX fetch
@@ -4026,6 +4027,111 @@ function currencyOptionsHtml(selected){
   const opts=['<option value="">— Select currency —</option>']
     .concat(CURRENCY_LIST.map(c=>`<option value="${c.code}"${c.code===sel?' selected':''}>${c.code} — ${esc(c.name)} (${esc(c.symbol)})</option>`));
   return opts.join('');
+}
+
+// ── COUNTRY LIST (ISO 3166-1) ────────────────────────────────────────────────
+const COUNTRY_LIST = [
+  {code:'ZM',name:'Zambia'},{code:'ZA',name:'South Africa'},{code:'KE',name:'Kenya'},
+  {code:'TZ',name:'Tanzania'},{code:'UG',name:'Uganda'},{code:'ZW',name:'Zimbabwe'},
+  {code:'MW',name:'Malawi'},{code:'MZ',name:'Mozambique'},{code:'BW',name:'Botswana'},
+  {code:'NA',name:'Namibia'},{code:'AO',name:'Angola'},{code:'CD',name:'DR Congo'},
+  {code:'CG',name:'Congo (Republic)'},{code:'RW',name:'Rwanda'},{code:'BI',name:'Burundi'},
+  {code:'NG',name:'Nigeria'},{code:'GH',name:'Ghana'},{code:'CI',name:"Côte d'Ivoire"},
+  {code:'SN',name:'Senegal'},{code:'ML',name:'Mali'},{code:'BF',name:'Burkina Faso'},
+  {code:'NE',name:'Niger'},{code:'TD',name:'Chad'},{code:'CM',name:'Cameroon'},
+  {code:'GA',name:'Gabon'},{code:'GN',name:'Guinea'},{code:'GM',name:'Gambia'},
+  {code:'SL',name:'Sierra Leone'},{code:'LR',name:'Liberia'},{code:'TG',name:'Togo'},
+  {code:'BJ',name:'Benin'},{code:'CV',name:'Cabo Verde'},{code:'ST',name:'São Tomé & Príncipe'},
+  {code:'GW',name:'Guinea-Bissau'},{code:'EQ',name:'Equatorial Guinea'},{code:'CF',name:'Central African Republic'},
+  {code:'DJ',name:'Djibouti'},{code:'ER',name:'Eritrea'},{code:'SO',name:'Somalia'},
+  {code:'ET',name:'Ethiopia'},{code:'SD',name:'Sudan'},{code:'SS',name:'South Sudan'},
+  {code:'EG',name:'Egypt'},{code:'LY',name:'Libya'},{code:'TN',name:'Tunisia'},
+  {code:'DZ',name:'Algeria'},{code:'MA',name:'Morocco'},{code:'MR',name:'Mauritania'},
+  {code:'LS',name:'Lesotho'},{code:'SZ',name:'Eswatini'},{code:'MU',name:'Mauritius'},
+  {code:'SC',name:'Seychelles'},{code:'MG',name:'Madagascar'},{code:'KM',name:'Comoros'},
+  {code:'US',name:'United States'},{code:'CA',name:'Canada'},{code:'MX',name:'Mexico'},
+  {code:'GB',name:'United Kingdom'},{code:'IE',name:'Ireland'},{code:'FR',name:'France'},
+  {code:'DE',name:'Germany'},{code:'ES',name:'Spain'},{code:'PT',name:'Portugal'},
+  {code:'IT',name:'Italy'},{code:'NL',name:'Netherlands'},{code:'BE',name:'Belgium'},
+  {code:'CH',name:'Switzerland'},{code:'AT',name:'Austria'},{code:'SE',name:'Sweden'},
+  {code:'NO',name:'Norway'},{code:'DK',name:'Denmark'},{code:'FI',name:'Finland'},
+  {code:'PL',name:'Poland'},{code:'CZ',name:'Czech Republic'},{code:'HU',name:'Hungary'},
+  {code:'RO',name:'Romania'},{code:'GR',name:'Greece'},{code:'UA',name:'Ukraine'},
+  {code:'RU',name:'Russia'},{code:'TR',name:'Turkey'},{code:'IL',name:'Israel'},
+  {code:'AE',name:'United Arab Emirates'},{code:'SA',name:'Saudi Arabia'},{code:'QA',name:'Qatar'},
+  {code:'KW',name:'Kuwait'},{code:'BH',name:'Bahrain'},{code:'OM',name:'Oman'},
+  {code:'JO',name:'Jordan'},{code:'LB',name:'Lebanon'},{code:'IQ',name:'Iraq'},
+  {code:'IR',name:'Iran'},{code:'PK',name:'Pakistan'},{code:'IN',name:'India'},
+  {code:'BD',name:'Bangladesh'},{code:'LK',name:'Sri Lanka'},{code:'NP',name:'Nepal'},
+  {code:'CN',name:'China'},{code:'JP',name:'Japan'},{code:'KR',name:'South Korea'},
+  {code:'HK',name:'Hong Kong'},{code:'SG',name:'Singapore'},{code:'MY',name:'Malaysia'},
+  {code:'TH',name:'Thailand'},{code:'ID',name:'Indonesia'},{code:'PH',name:'Philippines'},
+  {code:'VN',name:'Vietnam'},{code:'AU',name:'Australia'},{code:'NZ',name:'New Zealand'},
+  {code:'BR',name:'Brazil'},{code:'AR',name:'Argentina'},{code:'CL',name:'Chile'},
+  {code:'CO',name:'Colombia'},{code:'PE',name:'Peru'},{code:'VE',name:'Venezuela'},
+  {code:'EC',name:'Ecuador'},{code:'BO',name:'Bolivia'},{code:'PY',name:'Paraguay'},
+  {code:'UY',name:'Uruguay'},
+];
+function countryByCode(code){return COUNTRY_LIST.find(c=>c.code===(code||'').toUpperCase());}
+function codeForCountryName(name){
+  const n=(name||'').trim().toUpperCase();
+  const found=COUNTRY_LIST.find(c=>c.name.toUpperCase()===n);
+  return found?found.code:'';
+}
+function countryOptionsHtml(selected){
+  const sel=(selected||'').toUpperCase();
+  const opts=['<option value="">— Select country —</option>']
+    .concat(COUNTRY_LIST.map(c=>`<option value="${c.code}"${c.code===sel?' selected':''}>${esc(c.name)}</option>`));
+  return opts.join('');
+}
+
+// ── STATE / PROVINCE DATA (curated — most relevant to NEXLITE's markets) ────
+// Countries not listed here fall back to a free-text Province/State input.
+const STATE_PROVINCE_MAP = {
+  ZM:['Central','Copperbelt','Eastern','Luapula','Lusaka','Muchinga','Northern','North-Western','Southern','Western'],
+  ZA:['Eastern Cape','Free State','Gauteng','KwaZulu-Natal','Limpopo','Mpumalanga','Northern Cape','North West','Western Cape'],
+  KE:['Nairobi','Mombasa','Kisumu','Nakuru','Kiambu','Machakos','Kakamega','Uasin Gishu','Meru','Kilifi','Other County'],
+  TZ:['Arusha','Dar es Salaam','Dodoma','Iringa','Kigoma','Kilimanjaro','Mbeya','Morogoro','Mwanza','Tanga','Zanzibar','Other Region'],
+  UG:['Central Region','Eastern Region','Northern Region','Western Region'],
+  ZW:['Bulawayo','Harare','Manicaland','Mashonaland Central','Mashonaland East','Mashonaland West','Masvingo','Matabeleland North','Matabeleland South','Midlands'],
+  MW:['Northern Region','Central Region','Southern Region'],
+  MZ:['Cabo Delgado','Gaza','Inhambane','Manica','Maputo','Nampula','Niassa','Sofala','Tete','Zambezia'],
+  BW:['Central','Ghanzi','Kgalagadi','Kgatleng','Kweneng','North-East','North-West','South-East','Southern'],
+  NA:['Erongo','Hardap','Karas','Kavango East','Kavango West','Khomas','Kunene','Ohangwena','Omaheke','Omusati','Oshana','Oshikoto','Otjozondjupa','Zambezi'],
+  AO:['Bengo','Benguela','Bié','Cabinda','Cuando Cubango','Cuanza Norte','Cuanza Sul','Cunene','Huambo','Huíla','Luanda','Lunda Norte','Lunda Sul','Malanje','Moxico','Namibe','Uíge','Zaire'],
+  CD:['Kinshasa','Kongo Central','Haut-Katanga','Lualaba','Katanga','Kasaï','Kasaï-Central','Kasaï-Oriental','Équateur','Kivu (North)','Kivu (South)','Maniema','Tshopo','Other Province'],
+  RW:['Kigali','Eastern Province','Northern Province','Southern Province','Western Province'],
+  NG:['Abia','Adamawa','Akwa Ibom','Anambra','Bauchi','Bayelsa','Benue','Borno','Cross River','Delta','Ebonyi','Edo','Ekiti','Enugu','FCT (Abuja)','Gombe','Imo','Jigawa','Kaduna','Kano','Katsina','Kebbi','Kogi','Kwara','Lagos','Nasarawa','Niger','Ogun','Ondo','Osun','Oyo','Plateau','Rivers','Sokoto','Taraba','Yobe','Zamfara'],
+  GH:['Ahafo','Ashanti','Bono','Bono East','Central','Eastern','Greater Accra','North East','Northern','Oti','Savannah','Upper East','Upper West','Volta','Western','Western North'],
+  IN:['Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh','Delhi','Goa','Gujarat','Haryana','Himachal Pradesh','Jharkhand','Karnataka','Kerala','Madhya Pradesh','Maharashtra','Manipur','Meghalaya','Mizoram','Nagaland','Odisha','Punjab','Rajasthan','Sikkim','Tamil Nadu','Telangana','Tripura','Uttar Pradesh','Uttarakhand','West Bengal'],
+  US:['Alabama','Alaska','Arizona','Arkansas','California','Colorado','Connecticut','Delaware','Florida','Georgia','Hawaii','Idaho','Illinois','Indiana','Iowa','Kansas','Kentucky','Louisiana','Maine','Maryland','Massachusetts','Michigan','Minnesota','Mississippi','Missouri','Montana','Nebraska','Nevada','New Hampshire','New Jersey','New Mexico','New York','North Carolina','North Dakota','Ohio','Oklahoma','Oregon','Pennsylvania','Rhode Island','South Carolina','South Dakota','Tennessee','Texas','Utah','Vermont','Virginia','Washington','West Virginia','Wisconsin','Wyoming'],
+  GB:['England','Scotland','Wales','Northern Ireland'],
+  CA:['Alberta','British Columbia','Manitoba','New Brunswick','Newfoundland and Labrador','Nova Scotia','Ontario','Prince Edward Island','Quebec','Saskatchewan','Northwest Territories','Nunavut','Yukon'],
+  AU:['New South Wales','Queensland','South Australia','Tasmania','Victoria','Western Australia','Australian Capital Territory','Northern Territory'],
+};
+function statesForCountry(code){return STATE_PROVINCE_MAP[(code||'').toUpperCase()]||null;}
+
+// Renders the Province/State field: a <select> when curated data exists for
+// the chosen country, otherwise a free-text fallback input. `prefix` is the
+// id namespace (e.g. 'su' → #su-province-wrap containing #su-province).
+function provinceFieldHtml(prefix, countryCode, selectedValue){
+  const states = statesForCountry(countryCode);
+  if(states){
+    const sel=(selectedValue||'');
+    const opts=['<option value="">— Select province/state —</option>']
+      .concat(states.map(s=>`<option value="${esc(s)}"${s===sel?' selected':''}>${esc(s)}</option>`));
+    return `<select class="fi" id="${prefix}-province">${opts.join('')}</select>`;
+  }
+  return `<input class="fi" id="${prefix}-province" placeholder="E.G. YOUR PROVINCE/STATE" oninput="this.value=this.value.toUpperCase()" value="${esc(selectedValue||'')}"/>`;
+}
+
+// Bound to the Country <select>'s onchange — swaps the Province/State field
+// to match the newly chosen country (select vs free-text fallback).
+function onCountryFieldChange(prefix){
+  const countrySel=document.getElementById(prefix+'-country');
+  const wrap=document.getElementById(prefix+'-province-wrap');
+  if(!countrySel||!wrap)return;
+  wrap.innerHTML=provinceFieldHtml(prefix, countrySel.value, '');
 }
 
 // ── EXCHANGE RATES ────────────────────────────────────────────────────────────
@@ -5029,10 +5135,12 @@ function renderSignupStep() {
       <div id="su-err1" class="err-box" style="display:none"></div>
       <div class="fw"><div class="fl">Company Name <span style="color:var(--red)">*</span></div>
         <input class="fi" id="su-name" placeholder="E.G. MANSA COMPANY" oninput="this.value=this.value.toUpperCase()" value="${esc(_signupData.name||'')}"/></div>
+      <div class="fw"><div class="fl">Country <span style="color:var(--red)">*</span></div>
+        <select class="fi" id="su-country" onchange="onCountryFieldChange('su')">${countryOptionsHtml(_signupData.countryCode)}</select></div>
+      <div class="fw"><div class="fl">Province / State <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— optional</span></div>
+        <div id="su-province-wrap">${provinceFieldHtml('su', _signupData.countryCode, _signupData.province)}</div></div>
       <div class="fw"><div class="fl">District <span style="color:var(--red)">*</span></div>
         <input class="fi" id="su-district" placeholder="E.G. MANSA DISTRICT" oninput="this.value=this.value.toUpperCase()" value="${esc(_signupData.district||'')}"/></div>
-      <div class="fw"><div class="fl">Country <span style="color:var(--red)">*</span></div>
-        <input class="fi" id="su-country" placeholder="E.G. YOUR COUNTRY" oninput="this.value=this.value.toUpperCase()" value="${esc(_signupData.country||'')}"/></div>
       <div class="fw"><div class="fl">Contact Person Name <span style="color:var(--red)">*</span></div>
         <input class="fi" id="su-contact" placeholder="E.G. JOHN BANDA" oninput="this.value=this.value.toUpperCase()" value="${esc(_signupData.contactName||'')}"/></div>
       <div class="fw"><div class="fl">Contact Phone <span style="color:var(--red)">*</span></div>
@@ -5087,16 +5195,18 @@ function signupGoBack() { _signupStep--; renderSignupStep(); }
 
 function signupStep1Next() {
   const name        = uc(document.getElementById('su-name')?.value);
+  const countryCode = document.getElementById('su-country')?.value||'';
+  const country     = (countryByCode(countryCode)||{}).name ? uc((countryByCode(countryCode)||{}).name) : '';
+  const province    = uc(document.getElementById('su-province')?.value||'');
   const district    = uc(document.getElementById('su-district')?.value);
-  const country     = uc(document.getElementById('su-country')?.value);
   const contactName = uc(document.getElementById('su-contact')?.value);
   const contactPhone= (document.getElementById('su-phone')?.value||'').trim();
   const requestedPlan = (document.getElementById('su-plan')?.value||'').trim();
   const err = document.getElementById('su-err1');
   const missing = [];
   if (!name)         missing.push('Company Name');
-  if (!district)     missing.push('District');
   if (!country)      missing.push('Country');
+  if (!district)     missing.push('District');
   if (!contactName)  missing.push('Contact Person Name');
   if (!contactPhone) missing.push('Contact Phone');
   if (!requestedPlan) missing.push('Plan Interested In');
@@ -5106,7 +5216,7 @@ function signupStep1Next() {
     err.style.display='block'; err.textContent='⚠️ Enter a valid phone number.'; return;
   }
   err.style.display='none';
-  _signupData = {..._signupData, name, district, country, contactName, contactPhone, requestedPlan};
+  _signupData = {..._signupData, name, countryCode, country, province, district, contactName, contactPhone, requestedPlan};
   _signupStep = 2;
   renderSignupStep();
 }
@@ -5227,6 +5337,7 @@ async function signupFinish() {
           status: 'trial',
           depotName:      _signupData.name || 'Unnamed Depot',
           district:       _signupData.district || '',
+          province:       _signupData.province || '',
           country:        _signupData.country || '',
           contactName:    _signupData.contactName || '',
           contactPhone:   _signupData.contactPhone || '',
@@ -5261,7 +5372,7 @@ async function signupFinish() {
 
     const fresh = JSON.parse(JSON.stringify(DEFAULT));
     fresh.users = [{ username, password: hashed, role: 'admin', recoveryEmail: emailRaw || '', ..._newUserAuth }];
-    fresh.depotInfo = { name: _signupData.name, district: _signupData.district, country: _signupData.country, setupDone: true, recoveryEmail: emailRaw || '' };
+    fresh.depotInfo = { name: _signupData.name, district: _signupData.district, province: _signupData.province, country: _signupData.country, setupDone: true, recoveryEmail: emailRaw || '' };
     fresh.currency = suCurrency;
     fresh.commodities=[];
     fresh.dailyCloseOuts=[];
@@ -6023,7 +6134,7 @@ function _idleReset() {
 // ── DEPOT INFO ───────────────────────────────────────────────────────────────
 function applyDepotInfo(){
   const di=DATA.depotInfo||{};
-  const parts=[di.name,di.district,di.country].filter(Boolean);
+  const parts=[di.name,di.district,di.province,di.country].filter(Boolean);
   const sub=parts.length>0?parts.join(' · '):'My Depot Master';
   // Update login subtitle
   const lsub=document.getElementById('login-depot-sub');
@@ -6050,12 +6161,16 @@ function showDepotSetupModal(){
       <input class="fi" id="ds-name" placeholder="E.G. ABC COMPANY LTD" value="${di.name||''}" oninput="this.value=this.value.toUpperCase()"/>
     </div>
     <div class="fw">
-      <div class="fl">District <span style="color:var(--red)">*</span></div>
-      <input class="fi" id="ds-district" placeholder="E.G. MANSA DISTRICT" value="${di.district||''}" oninput="this.value=this.value.toUpperCase()"/>
+      <div class="fl">Country <span style="color:var(--red)">*</span></div>
+      <select class="fi" id="ds-country" onchange="onCountryFieldChange('ds')">${countryOptionsHtml(codeForCountryName(di.country))}</select>
     </div>
     <div class="fw">
-      <div class="fl">Country <span style="color:var(--red)">*</span></div>
-      <input class="fi" id="ds-country" placeholder="E.G. YOUR COUNTRY" value="${di.country||''}" oninput="this.value=this.value.toUpperCase()"/>
+      <div class="fl">Province / State <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— optional</span></div>
+      <div id="ds-province-wrap">${provinceFieldHtml('ds', codeForCountryName(di.country), di.province)}</div>
+    </div>
+    <div class="fw">
+      <div class="fl">District <span style="color:var(--red)">*</span></div>
+      <input class="fi" id="ds-district" placeholder="E.G. MANSA DISTRICT" value="${di.district||''}" oninput="this.value=this.value.toUpperCase()"/>
     </div>
     <div style="font-size:16px;color:var(--muted);margin-bottom:14px">* All fields are required</div>
     <div class="mact">
@@ -6067,19 +6182,21 @@ function showDepotSetupModal(){
 function saveDepotSetup(){
   const name=uc(document.getElementById('ds-name').value);
   const district=uc(document.getElementById('ds-district').value);
-  const country=uc(document.getElementById('ds-country').value);
+  const countryCode=document.getElementById('ds-country').value||'';
+  const country=countryCode?uc((countryByCode(countryCode)||{}).name||''):'';
+  const province=uc(document.getElementById('ds-province')?.value||'');
   const errEl=document.getElementById('ds-err');
   const missing=[];
   if(!name)missing.push('Company Name');
-  if(!district)missing.push('District');
   if(!country)missing.push('Country');
+  if(!district)missing.push('District');
   if(missing.length>0){
     errEl.style.display='block';
     errEl.textContent='Please fill in: '+missing.join(', ');
     return;
   }
   errEl.style.display='none';
-  updateData(d=>({...d,depotInfo:{name,district,country,setupDone:true}}));
+  updateData(d=>({...d,depotInfo:{name,district,province,country,setupDone:true}}));
   applyDepotInfo();
   // Restore backdrop close behaviour for future modals
   const ovl=document.getElementById('modal-ovl');
@@ -6380,7 +6497,7 @@ function renderDash(){
         <div>
           <div style="font-size:15px;color:var(--muted);letter-spacing:.8px;text-transform:uppercase">${dateStr}</div>
           <div style="font-family:var(--fh);font-size:25px;font-weight:800;color:var(--white);line-height:1.2;margin:3px 0">${esc(di.name||'My Company')}</div>
-          ${di.district?`<div style="font-size:16px;color:var(--muted)">${esc(di.district)}${di.country?' · '+esc(di.country):''}</div>`:''}
+          ${(di.district||di.province||di.country)?`<div style="font-size:16px;color:var(--muted)">${esc([di.district,di.province,di.country].filter(Boolean).join(' · '))}</div>`:''}
         </div>
         <div style="text-align:right">
           <div style="font-size:15px;color:var(--muted)">Signed in</div>
@@ -11137,6 +11254,7 @@ function _renderCompanyInfoCard(){
       <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:17px;color:var(--muted)">🔒 Company name, district and country are set once during initial setup and cannot be changed. These are used as your unique license identifier.</div>
       <div class="fw"><div class="fl">Company Name</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).name||'—'}</div></div>
       <div class="fw"><div class="fl">District</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).district||'—'}</div></div>
+      ${(DATA.depotInfo||{}).province?`<div class="fw"><div class="fl">Province / State</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).province}</div></div>`:''}
       <div class="fw"><div class="fl">Country</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).country||'—'}</div></div>
     </div>`;
 }
@@ -11227,6 +11345,7 @@ function _renderAdminSettings(){
       <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:17px;color:var(--muted)">🔒 Company name, district and country are set once during initial setup and cannot be changed. These are used as your unique license identifier.</div>
       <div class="fw"><div class="fl">Company Name</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).name||'—'}</div></div>
       <div class="fw"><div class="fl">District</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).district||'—'}</div></div>
+      ${(DATA.depotInfo||{}).province?`<div class="fw"><div class="fl">Province / State</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).province}</div></div>`:''}
       <div class="fw"><div class="fl">Country</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).country||'—'}</div></div>
     </div>
     <div class="sh">Branding ${hasFeature('custom_branding')?'':'🔒'}</div>
@@ -11773,8 +11892,10 @@ async function _executeAccountDeletion(){
 function saveDepotInfo(){
   const name=uc(document.getElementById('di-name').value)||'MY COMPANY';
   const district=uc(document.getElementById('di-district').value);
-  const country=uc(document.getElementById('di-country').value)||'';
-  updateData(d=>({...d,depotInfo:{...d.depotInfo,name,district,country,setupDone:true}}));
+  const countryCode=document.getElementById('di-country')?.value||'';
+  const country=countryCode?uc((countryByCode(countryCode)||{}).name||''):uc(document.getElementById('di-country')?.value||'');
+  const province=uc(document.getElementById('di-province')?.value||'');
+  updateData(d=>({...d,depotInfo:{...d.depotInfo,name,district,province,country,setupDone:true}}));
   applyDepotInfo();
   alert('\u2705 Company info updated!');
 }
@@ -13414,7 +13535,7 @@ setTimeout(async ()=>{
     // ── END REINSTALL RECOVERY ──────────────────────────────────────────
 
     const di=DATA.depotInfo||{};
-    const parts=[di.name,di.district,di.country].filter(Boolean);
+    const parts=[di.name,di.district,di.province,di.country].filter(Boolean);
     const el=document.getElementById('login-depot-sub');
     if(el&&parts.length>0)el.textContent=parts.join(' · ');
 
