@@ -1043,6 +1043,9 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
         <div class="hsub" id="hdr-sub">Loading…</div>
       </div>
     </div>
+    <button class="spill" id="notif-bell-btn" onclick="openNotificationsInbox()" aria-label="Notifications" style="position:relative;flex-shrink:0;padding:8px 11px;margin-right:6px;font-size:19px">
+      🔔<span id="notif-badge" style="display:none;position:absolute;top:1px;right:1px;background:var(--red);color:#fff;font-size:11px;font-weight:800;min-width:16px;height:16px;border-radius:8px;align-items:center;justify-content:center;padding:0 4px;line-height:16px;box-shadow:0 0 0 2px var(--card,#1a1a1a)"></span>
+    </button>
     <button class="spill sp-on" id="sync-pill" style="cursor:pointer;flex-shrink:0;max-width:38vw;overflow:hidden;text-overflow:ellipsis">✅ Synced</button>
   </div>
 
@@ -2078,6 +2081,119 @@ async function fbDelete(path) {
   }
   return true;
 }
+
+// POST to a Firebase RTDB list path — server generates a unique push key and
+// returns it as {name:"-Nxxxx"}. Unlike fbSet (PUT), concurrent callers never
+// collide because each write lands on its own new key instead of overwriting
+// a shared node — this is what makes notifications/chat safe to write from
+// multiple devices without the whole-blob last-write-wins risk that DATA has.
+async function fbPush(path, data) {
+  const idToken = await _getIdToken();
+  const url = _withAuthParam(FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json', idToken);
+  const acToken = await _getAppCheckToken();
+  const headers = { 'Content-Type': 'application/json', ...(acToken ? { 'X-Firebase-AppCheck': acToken } : {}) };
+  const res = await _fetchWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(data) }, _FB_TIMEOUT_MS);
+  if (!res.ok) {
+    const body = await res.text().catch(()=>'');
+    throw new Error('HTTP ' + res.status + (body ? ': ' + body.slice(0,120) : ''));
+  }
+  return res.json(); // { name: "-Nxxxxxxxxxxxxxxxxxxxx" }
+}
+
+// ── NOTIFICATIONS / CHAT ─────────────────────────────────────────────────
+// Stored at depots/{installId}/notifications/{pushId} — already covered by
+// the existing open depots/$depotKey rule, no Firebase Console change needed.
+// Each message is its own push-generated node (see fbPush above), so two
+// people messaging around the same time never clobber each other the way a
+// whole-blob DATA sync write could.
+//
+// Shapes:
+//   Broadcast to everyone: {type:'all',  from, fromRole, text, ts, readBy:{}}
+//   Broadcast to a role:   {type:'role', role, from, fromRole, text, ts, readBy:{}}
+//   Individual (2-way):    {type:'user', thread:<non-admin username lowercase>,
+//                            from, fromRole, text, ts, readBy:{}}
+// "thread" is always the non-admin party's username — an individual chat is
+// always between Admin and exactly one Manager/Staff account, so that one
+// username fully identifies the conversation regardless of which side sent
+// a given message.
+let NOTIFS = [];
+let _notifsLastFetch = 0;
+
+async function fetchNotifications(){
+  const key = DATA.installId || _loadPersistedInstallId();
+  if (!key || !navigator.onLine) return false;
+  try {
+    const val = await fbGet('depots/' + key + '/notifications');
+    NOTIFS = Object.keys(val||{}).map(id => ({id, ...val[id]})).sort((a,b)=>(a.ts||0)-(b.ts||0));
+    _notifsLastFetch = Date.now();
+    _refreshNotifBadge();
+    return true;
+  } catch(e) {
+    console.warn('[MDM] notification fetch error:', e);
+    return false;
+  }
+}
+
+// targetType: 'all' | 'role' | 'user'. targetValue: role name, or the
+// individual's username (either side of that thread can call this the same
+// way — a non-admin replying always passes their own username).
+async function sendNotification(targetType, targetValue, text, extra){
+  const key = DATA.installId || _loadPersistedInstallId();
+  const clean = (text||'').trim().slice(0, 1000);
+  if (!key || !USER || !clean) return false;
+  const msg = { type: targetType, from: USER.username, fromRole: USER.role, text: clean, ts: {'.sv':'timestamp'} };
+  if (targetType === 'role') msg.role = targetValue;
+  if (targetType === 'user') msg.thread = (targetValue||'').toLowerCase();
+  if (extra && extra.replyToId) { msg.replyToId = extra.replyToId; msg.replyToText = (extra.replyToText||'').slice(0,200); msg.replyToFrom = extra.replyToFrom || ''; }
+  try {
+    await fbPush('depots/' + key + '/notifications', msg);
+    await fetchNotifications();
+    return true;
+  } catch(e) {
+    console.warn('[MDM] send notification failed:', e);
+    showToast('⚠️ Message failed to send — check your connection', 5000);
+    return false;
+  }
+}
+
+// Notifications the currently signed-in user is allowed to see.
+function _myVisibleNotifs(){
+  if (!USER) return [];
+  const myUname = (USER.username||'').toLowerCase();
+  return NOTIFS.filter(n=>{
+    if (n.type==='all') return true;
+    if (n.type==='role') return n.role === USER.role;
+    if (n.type==='user') return USER.role==='admin' ? true : (n.thread||'')===myUname;
+    return false;
+  });
+}
+function _isNotifRead(n){
+  if (!USER) return true;
+  return !!(n.readBy && n.readBy[(USER.username||'').toLowerCase()]);
+}
+function _unreadNotifCount(){
+  if (!USER) return 0;
+  const myUname = (USER.username||'').toLowerCase();
+  return _myVisibleNotifs().filter(n => (n.from||'').toLowerCase()!==myUname && !_isNotifRead(n)).length;
+}
+async function markNotifRead(id){
+  const key = DATA.installId || _loadPersistedInstallId();
+  if (!key || !USER) return;
+  const uname = (USER.username||'').toLowerCase();
+  const n = NOTIFS.find(x=>x.id===id);
+  if (n) { n.readBy = n.readBy || {}; n.readBy[uname] = true; } // optimistic local update
+  _refreshNotifBadge();
+  try { await fbSet('depots/'+key+'/notifications/'+id+'/readBy/'+uname, true); } catch(e) {}
+}
+function _refreshNotifBadge(){
+  const b = document.getElementById('notif-badge');
+  if (!b) return;
+  const c = _unreadNotifCount();
+  if (c > 0) { b.textContent = c > 99 ? '99+' : String(c); b.style.display = 'flex'; }
+  else { b.style.display = 'none'; }
+}
+
+
 
 // ── PHASE 3: OWNERSHIP RECORDS ───────────────────────────────────────────
 // Grants a Firebase Auth UID access to a depot by writing
@@ -3529,7 +3645,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v2.2';
+const SW_VERSION  = 'v2.4';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -6006,6 +6122,7 @@ async function doLogin(){
     fbRestoreData().then(restored=>{
       if(restored){ render(); showToast('☁ Data restored from cloud'); }
     }).catch(()=>{});
+    fetchNotifications();
     checkLicense(async ()=>{
       if(!(DATA.depotInfo&&DATA.depotInfo.setupDone)){
         if(USER.role==='admin'){
@@ -6038,6 +6155,7 @@ function _doLogoutNow(){
   USER=null; TAB='dashboard';
   _idleClear(); // stop idle timers on explicit logout
   fbAuthSignOutSilently(); // Phase 2: clear the Auth SDK session too — fire-and-forget, non-blocking
+  NOTIFS=[]; _refreshNotifBadge(); // clear notifications cache/badge — next account starts fresh
   _hideMainUI();
   document.getElementById('login-err').style.display='none';
   document.getElementById('l-user').value='';
@@ -6404,6 +6522,207 @@ function openModal(html, uncloseable=false){
 }
 function closeModal(){document.getElementById('modal-ovl').style.display='none';}
 // Backdrop click handled dynamically inside openModal()
+
+// ── NOTIFICATIONS / CHAT UI ─────────────────────────────────────────────
+async function openNotificationsInbox(){
+  openModal(`<div class="mtitle">🔔 Notifications</div><div style="text-align:center;padding:30px 0;color:var(--muted)">Loading…</div>`);
+  await fetchNotifications();
+  openModal(_renderNotifInbox());
+}
+
+function _renderNotifInbox(){
+  const isAdmin = USER.role==='admin';
+  const mine = _myVisibleNotifs();
+  const broadcasts = mine.filter(n=>n.type==='all'||n.type==='role').slice().reverse();
+  const composeBtn = isAdmin ? `<button class="btn bo" style="width:100%;margin-bottom:12px" onclick="openComposeNotification()">✉️ New Announcement</button>` : '';
+
+  let threadsHtml = '';
+  if (isAdmin){
+    // One row per non-admin user — always listed even with no messages yet,
+    // so Admin can start a new conversation with anyone.
+    const nonAdmins = (DATA.users||[]).filter(u=>u.role!=='admin');
+    const rows = nonAdmins.map(u=>{
+      const uname = (u.username||'').toLowerCase();
+      const thread = mine.filter(n=>n.type==='user' && n.thread===uname);
+      const last = thread[thread.length-1];
+      const unread = thread.filter(n=>(n.from||'').toLowerCase()!==((USER.username||'').toLowerCase()) && !_isNotifRead(n)).length;
+      return `<div class="card" style="display:flex;align-items:center;gap:10px;margin-bottom:8px;cursor:pointer" onclick="openChatThread('${esc(uname)}')">
+        <div style="flex:1;min-width:0">
+          <div style="font-family:var(--fh);font-weight:700;color:var(--white)">${esc(u.username||'')} <span style="font-size:13px;color:var(--muted);font-weight:400">(${esc(u.role||'')})</span></div>
+          <div style="font-size:15px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${last?esc(last.text):'No messages yet'}</div>
+        </div>
+        ${unread>0?`<div style="background:var(--red);color:#fff;font-size:12px;font-weight:800;min-width:20px;height:20px;border-radius:10px;display:flex;align-items:center;justify-content:center;padding:0 5px">${unread}</div>`:''}
+      </div>`;
+    }).join('');
+    threadsHtml = `<div class="sh">Conversations</div>${rows || '<div style="color:var(--muted);font-size:15px;padding:6px 0">No staff or manager accounts yet.</div>'}`;
+  } else {
+    const myUname = (USER.username||'').toLowerCase();
+    const thread = mine.filter(n=>n.type==='user' && n.thread===myUname);
+    const last = thread[thread.length-1];
+    const unread = thread.filter(n=>(n.from||'').toLowerCase()!==myUname && !_isNotifRead(n)).length;
+    threadsHtml = `<div class="sh">Chat with Admin</div>
+      <div class="card" style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="openChatThread('${esc(myUname)}')">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:15px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${last?esc(last.text):'Tap to message the Admin'}</div>
+        </div>
+        ${unread>0?`<div style="background:var(--red);color:#fff;font-size:12px;font-weight:800;min-width:20px;height:20px;border-radius:10px;display:flex;align-items:center;justify-content:center;padding:0 5px">${unread}</div>`:''}
+      </div>`;
+  }
+
+  const broadcastRows = broadcasts.length ? broadcasts.map(n=>{
+    const unread = (n.from||'').toLowerCase()!==(USER.username||'').toLowerCase() && !_isNotifRead(n);
+    const scope = n.type==='all' ? 'Everyone' : ('Role: ' + (n.role||''));
+    if (unread) markNotifRead(n.id);
+    const replyBtn = isAdmin ? '' : `<button class="btn bo bsm" style="margin-top:8px" onclick="replyToBroadcast('${esc(n.id)}')">↩ Reply</button>`;
+    return `<div class="card" style="margin-bottom:8px;${unread?'border-color:var(--green)':''}">
+      <div style="font-size:13px;color:var(--muted);margin-bottom:4px">${esc(n.from||'')} · ${esc(scope)} · ${n.ts?fmtAgo(Date.now()-n.ts):''} ago</div>
+      <div style="font-size:16px;color:var(--text);line-height:1.5">${esc(n.text||'')}</div>
+      ${replyBtn}
+    </div>`;
+  }).join('') : '<div style="color:var(--muted);font-size:15px;padding:6px 0 16px">No announcements yet.</div>';
+
+  return `
+    <div class="mtitle">🔔 Notifications</div>
+    <div style="max-height:65vh;overflow-y:auto">
+      ${composeBtn}
+      ${threadsHtml}
+      <div class="sh" style="margin-top:14px">Announcements</div>
+      ${broadcastRows}
+    </div>
+    <div class="mact"><button class="btn bo" style="width:100%" onclick="closeModal()">Close</button></div>`;
+}
+
+function openComposeNotification(){
+  const nonAdmins = (DATA.users||[]).filter(u=>u.role!=='admin');
+  const roles = [...new Set(nonAdmins.map(u=>u.role))];
+  openModal(`
+    <div class="mtitle">✉️ New Announcement</div>
+    <div class="fw">
+      <div class="fl">Send to</div>
+      <select class="fi" id="notif-target-type" onchange="document.getElementById('notif-role-wrap').style.display=this.value==='role'?'block':'none';document.getElementById('notif-user-wrap').style.display=this.value==='user'?'block':'none';">
+        <option value="all">Everyone</option>
+        <option value="role">A specific role</option>
+        <option value="user">A specific individual</option>
+      </select>
+    </div>
+    <div class="fw" id="notif-role-wrap" style="display:none">
+      <div class="fl">Role</div>
+      <select class="fi" id="notif-target-role">${roles.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('')}</select>
+    </div>
+    <div class="fw" id="notif-user-wrap" style="display:none">
+      <div class="fl">Individual</div>
+      <select class="fi" id="notif-target-user">${nonAdmins.map(u=>`<option value="${esc((u.username||'').toLowerCase())}">${esc(u.username||'')} (${esc(u.role||'')})</option>`).join('')}</select>
+    </div>
+    <div class="fw">
+      <div class="fl">Message</div>
+      <textarea class="fi" id="notif-compose-text" rows="4" maxlength="1000" placeholder="Type your message…"></textarea>
+    </div>
+    <div class="mact">
+      <button class="btn bo" onclick="openNotificationsInbox()">Cancel</button>
+      <button class="btn bg" id="notif-send-btn" onclick="_doSendCompose()">Send</button>
+    </div>`);
+}
+
+async function _doSendCompose(){
+  const type = document.getElementById('notif-target-type').value;
+  const text = document.getElementById('notif-compose-text').value;
+  const target = type==='role' ? document.getElementById('notif-target-role').value
+               : type==='user' ? document.getElementById('notif-target-user').value
+               : null;
+  if (!text.trim()) { showToast('⚠️ Enter a message first'); return; }
+  const btn = document.getElementById('notif-send-btn');
+  if (btn) { btn.disabled=true; btn.textContent='Sending…'; }
+  const ok = await sendNotification(type, target, text);
+  if (ok) { showToast('✅ Sent'); openNotificationsInbox(); }
+  else if (btn) { btn.disabled=false; btn.textContent='Send'; }
+}
+
+// Reply to a broadcast (All/Role) — always goes privately to Admin as part
+// of the replier's own individual thread, quoting the original announcement.
+// The broadcast itself stays one-way to the whole group; only the reply is
+// a real 1:1 message.
+function replyToBroadcast(id){
+  const n = NOTIFS.find(x=>x.id===id);
+  if (!n) return;
+  openModal(`
+    <div class="mtitle">↩ Reply to ${esc(n.from||'Admin')}</div>
+    <div class="card" style="margin-bottom:12px;background:var(--card2,#222)">
+      <div style="font-size:13px;color:var(--muted);margin-bottom:3px">${esc(n.from||'')} said</div>
+      <div style="font-size:15px;color:var(--muted);line-height:1.4">${esc((n.text||'').slice(0,200))}</div>
+    </div>
+    <div class="fw">
+      <div class="fl">Your reply (sent privately to Admin)</div>
+      <textarea class="fi" id="broadcast-reply-text" rows="4" maxlength="1000" placeholder="Type your reply…"></textarea>
+    </div>
+    <div class="mact">
+      <button class="btn bo" onclick="openNotificationsInbox()">Cancel</button>
+      <button class="btn bg" id="broadcast-reply-send-btn" onclick="_doSendBroadcastReply('${esc(id)}')">Send</button>
+    </div>`);
+}
+
+async function _doSendBroadcastReply(id){
+  const n = NOTIFS.find(x=>x.id===id);
+  const el = document.getElementById('broadcast-reply-text');
+  const text = el ? el.value : '';
+  if (!n || !text.trim()) { showToast('⚠️ Enter a message first'); return; }
+  const btn = document.getElementById('broadcast-reply-send-btn');
+  if (btn) { btn.disabled=true; btn.textContent='Sending…'; }
+  // Individual threads are always keyed by the non-admin party's username —
+  // that's always the current (non-admin) user replying, regardless of
+  // whether the broadcast was type 'all' or 'role'.
+  const ok = await sendNotification('user', USER.username, text, {
+    replyToId: id, replyToText: n.text, replyToFrom: n.from
+  });
+  if (ok) { showToast('✅ Reply sent to ' + (n.from||'Admin')); openChatThread((USER.username||'').toLowerCase()); }
+  else if (btn) { btn.disabled=false; btn.textContent='Send'; }
+}
+
+async function openChatThread(username){
+  openModal(`<div class="mtitle">💬 ${esc(username)}</div><div style="text-align:center;padding:30px 0;color:var(--muted)">Loading…</div>`);
+  await fetchNotifications();
+  _renderChatThread(username);
+}
+
+function _renderChatThread(username){
+  const myUname = (USER.username||'').toLowerCase();
+  const msgs = NOTIFS.filter(n=>n.type==='user' && n.thread===username);
+  msgs.forEach(n=>{ if((n.from||'').toLowerCase()!==myUname && !_isNotifRead(n)) markNotifRead(n.id); });
+  const bubbles = msgs.length ? msgs.map(n=>{
+    const mine = (n.from||'').toLowerCase()===myUname;
+    const quote = n.replyToId ? `<div style="font-size:13px;opacity:.75;border-left:2px solid currentColor;padding-left:7px;margin-bottom:5px">↩ ${esc(n.replyToFrom||'')}: ${esc((n.replyToText||'').slice(0,120))}</div>` : '';
+    return `<div style="display:flex;justify-content:${mine?'flex-end':'flex-start'};margin-bottom:8px">
+      <div style="max-width:78%;background:${mine?'var(--green)':'var(--card2,#222)'};color:${mine?'#04241a':'var(--text)'};border-radius:14px;padding:9px 13px;font-size:16px;line-height:1.4">
+        ${!mine?`<div style="font-size:12px;opacity:.7;margin-bottom:2px;font-weight:700">${esc(n.from||'')}</div>`:''}
+        ${quote}
+        ${esc(n.text||'')}
+        <div style="font-size:11px;opacity:.6;margin-top:3px;text-align:right">${n.ts?fmtAgo(Date.now()-n.ts)+' ago':''}</div>
+      </div>
+    </div>`;
+  }).join('') : '<div style="color:var(--muted);font-size:15px;text-align:center;padding:20px 0">No messages yet — say hello 👋</div>';
+
+  openModal(`
+    <div class="mtitle">💬 ${esc(username)}</div>
+    <div id="chat-thread-scroll" style="max-height:50vh;overflow-y:auto;padding:2px 2px 8px">${bubbles}</div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <textarea class="fi" id="chat-reply-text" rows="1" maxlength="1000" placeholder="Type a message…" style="flex:1;resize:none"></textarea>
+      <button class="btn bg" id="chat-send-btn" onclick="_doSendChatReply('${esc(username)}')">Send</button>
+    </div>
+    <div class="mact"><button class="btn bo" style="width:100%" onclick="openNotificationsInbox()">← Back to Inbox</button></div>`);
+  const scroll = document.getElementById('chat-thread-scroll');
+  if (scroll) scroll.scrollTop = scroll.scrollHeight;
+}
+
+async function _doSendChatReply(username){
+  const el = document.getElementById('chat-reply-text');
+  const text = el ? el.value : '';
+  if (!text.trim()) return;
+  const btn = document.getElementById('chat-send-btn');
+  if (btn) btn.disabled = true;
+  const ok = await sendNotification('user', username, text);
+  if (btn) btn.disabled = false;
+  if (ok) _renderChatThread(username);
+  else showToast('⚠️ Message failed to send — check your connection');
+}
 
 // ── STATUS BANNER ─────────────────────────────────────────────────────────────
 function statusBanner(){
@@ -13983,6 +14302,7 @@ setTimeout(async ()=>{
         fbRestoreData().then(restored=>{
           if(restored){ render(); showToast('☁ Data restored from cloud'); }
         }).catch(()=>{});
+        fetchNotifications();
         checkLicense(async ()=>{
           if(!(DATA.depotInfo&&DATA.depotInfo.setupDone)){
             if(USER.role==='admin'){ showDepotSetupModal(); }
@@ -14054,6 +14374,7 @@ setInterval(()=>{
   // Fix: check navigator.onLine directly rather than the custom ONLINE flag —
   // see note on the 5-minute push interval above for why that flag can go stale.
   if (!navigator.onLine || !USER) return;
+  fetchNotifications(); // badge/inbox refresh — safe even with a modal open, doesn't touch DATA
   const ovl = document.getElementById('modal-ovl');
   if (ovl && ovl.style.display === 'flex') return; // don't interrupt active data entry
   fbRestoreData().then(restored=>{
