@@ -51,6 +51,8 @@ input,select{font-family:inherit;}
 .role-card h3{font-size:17px;margin:0 0 6px;font-weight:600;}
 .role-card p{font-size:13px;color:var(--soil-70);margin:0 0 16px;line-height:1.5;min-height:52px;}
 .role-card button{width:100%;border:none;border-radius:9px;padding:10px;font-size:13px;font-weight:600;color:#fff;}
+.link-btn{width:100%;background:none !important;border:none;color:var(--soil-70) !important;font-size:12px;font-weight:500 !important;padding:8px 0 0;text-decoration:underline;text-underline-offset:2px;}
+.link-btn:hover{color:var(--soil) !important;}
 .chip-company{background:var(--navy-tint);color:var(--navy-dark);}
 .chip-agent{background:var(--rust-tint);color:var(--rust-dark);}
 .chip-staff{background:var(--olive-tint);color:var(--olive-dark);}
@@ -374,8 +376,8 @@ window.__firebaseReadyPromise = new Promise((resolve) => { window.__firebaseRead
       <div id="roles-section">
         <h2 class="roles-title">Already part of the network? Sign in</h2>
         <div class="role-grid">
-          <div class="role-card"><div class="role-chip chip-company">🏢</div><h3>Buying company</h3><p>Manage buying, agents, field staff, farmers, approvals, payments and reports.</p><button class="btn-company" onclick="goLogin('company')">Company sign in</button></div>
-          <div class="role-card"><div class="role-chip chip-agent">🤝</div><h3>Agent</h3><p>Coordinate farmer supply, field staff, purchases and commission.</p><button class="btn-agent" onclick="goLogin('agent')">Agent sign in</button></div>
+          <div class="role-card"><div class="role-chip chip-company">🏢</div><h3>Buying company</h3><p>Manage buying, agents, field staff, farmers, approvals, payments and reports.</p><button class="btn-company" onclick="goLogin('company')">Company sign in</button><button class="link-btn" onclick="goSignup('company')">New company? Create account</button></div>
+          <div class="role-card"><div class="role-chip chip-agent">🤝</div><h3>Agent</h3><p>Coordinate farmer supply, field staff, purchases and commission.</p><button class="btn-agent" onclick="goLogin('agent')">Agent sign in</button><button class="link-btn" onclick="goSignup('agent')">New agent? Create account</button></div>
           <div class="role-card"><div class="role-chip chip-staff">🚜</div><h3>Field staff</h3><p>Register farmers and capture crop transactions in the field.</p><button class="btn-staff" onclick="goLogin('staff')">Staff sign in</button></div>
           <div class="role-card"><div class="role-chip chip-farmer">🌾</div><h3>Farmer</h3><p>View sales, quantities, buyers and payment status.</p><button class="btn-farmer" onclick="goLogin('farmer')">Farmer sign in</button></div>
         </div>
@@ -392,10 +394,25 @@ window.__firebaseReadyPromise = new Promise((resolve) => { window.__firebaseRead
       <button class="login-back" onclick="goLanding()">← Back</button>
       <h2 id="login-title">Sign in</h2>
       <p class="sub" id="login-sub"></p>
+      <p class="sub" id="login-signup-link" style="display:none;margin:-10px 0 18px;"><a href="#" onclick="goSignup(pendingRole);return false;" style="color:var(--gold-dark);font-weight:600;text-decoration:underline;">Don't have an account? Create one</a></p>
       <div class="hint-box" id="login-hint"></div>
       <div id="login-fields"></div>
       <div class="err-msg" id="login-err"></div>
       <button class="submit-btn" id="login-submit" onclick="attemptLogin()">Sign in</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ SIGNUP (company / agent create their own login) ============ -->
+<div class="screen" id="screen-signup">
+  <div class="center-wrap">
+    <div class="login-box">
+      <button class="login-back" onclick="goLogin(pendingRole)">← Back</button>
+      <h2 id="signup-title">Create account</h2>
+      <p class="sub" id="signup-sub"></p>
+      <div id="signup-fields"></div>
+      <div class="err-msg" id="signup-err"></div>
+      <button class="submit-btn" id="signup-submit" onclick="attemptSignup()">Create account</button>
     </div>
   </div>
 </div>
@@ -1064,14 +1081,34 @@ async function verifyPin(staff, pin){
   const candidate = await derivePinHash(pin, staff.pinSalt);
   return candidate === staff.pinHash;
 }
+// Same hashing approach as the staff PIN above, used for company/agent
+// self-chosen passwords (kept as separate authSalt/authHash fields so a
+// legacy record created for someone else — e.g. an agent a company added
+// before they'd signed up themselves — can be told apart from one that
+// already has its own password).
+async function makeAuthRecord(secret){
+  const saltHex = bufToHex(crypto.getRandomValues(new Uint8Array(16)));
+  const hashHex = await derivePinHash(secret, saltHex);
+  return { authSalt: saltHex, authHash: hashHex };
+}
+async function verifySecret(record, secret){
+  if(!record.authSalt || !record.authHash) return false;
+  const candidate = await derivePinHash(secret, record.authSalt);
+  return candidate === record.authHash;
+}
 let session = null; // {role, id}
 let pendingRole = null;
 
 const roleMeta = {
-  company: { title:'Buying company sign in', sub:'Sign in to manage direct buying, agents, field staff, farmers, approvals and payments.', btnClass:'btn-company' },
-  agent:   { title:'Agent sign in', sub:'Enter the agent code given to you by any buying company you work with.', btnClass:'btn-agent' },
-  staff:   { title:'Field staff sign in', sub:'Enter your staff ID and the PIN given to you by whoever added you.', btnClass:'btn-staff', twoField:true },
-  farmer:  { title:'Farmer sign in', sub:'Enter the code given to you when you sold your crop.', btnClass:'btn-farmer' }
+  company: { title:'Buying company sign in', sub:'Sign in with your company ID and password.', btnClass:'btn-company', idLabel:'Company ID', idPlaceholder:'e.g. AGRIFOODS', hasSecond:true, secondLabel:'Password', secondPlaceholder:'Your password', canSignup:true },
+  agent:   { title:'Agent sign in', sub:'Sign in with your agent ID and password.', btnClass:'btn-agent', idLabel:'Agent ID', idPlaceholder:'e.g. AG-BWALYA', hasSecond:true, secondLabel:'Password', secondPlaceholder:'Your password', canSignup:true },
+  staff:   { title:'Field staff sign in', sub:'Enter your staff ID and the PIN given to you by whoever added you.', btnClass:'btn-staff', idLabel:'Staff ID', idPlaceholder:'e.g. FS-MUTALE23', hasSecond:true, secondLabel:'PIN', secondPlaceholder:'6-digit PIN', numeric:true },
+  farmer:  { title:'Farmer sign in', sub:'Enter the code given to you when you sold your crop.', btnClass:'btn-farmer', idLabel:'Code', idPlaceholder:'Enter your code', hasSecond:false }
+};
+
+const signupMeta = {
+  company: { title:'Create your company account', sub:'Set up your buying company on AgriBuy Connect — no one needs to create this for you.', btnClass:'btn-company' },
+  agent:   { title:'Create your agent account', sub:"Set up your own login. Buying companies can link you afterwards using the ID you choose below.", btnClass:'btn-agent' }
 };
 
 let selectedPlan = JSON.parse(localStorage.getItem('agribuy_selected_plan') || 'null');
@@ -1090,11 +1127,10 @@ function goLogin(role){
   document.getElementById('login-sub').textContent = meta.sub;
   document.getElementById('login-hint').style.display = 'none';
   document.getElementById('login-err').style.display='none';
+  document.getElementById('login-signup-link').style.display = meta.canSignup ? 'block' : 'none';
   const fields = document.getElementById('login-fields');
-  fields.innerHTML = meta.twoField
-    ? `<div class="field"><label>Staff ID</label><input id="login-code" placeholder="e.g. FS-MUTALE23" autocomplete="off"></div>
-       <div class="field"><label>PIN</label><input id="login-pin" type="password" inputmode="numeric" placeholder="6-digit PIN" autocomplete="off"></div>`
-    : `<div class="field"><label>Join code</label><input id="login-code" placeholder="Enter your code" autocomplete="off"></div>`;
+  fields.innerHTML = `<div class="field"><label>${meta.idLabel}</label><input id="login-code" placeholder="${meta.idPlaceholder}" autocomplete="off"></div>` +
+    (meta.hasSecond ? `<div class="field"><label>${meta.secondLabel}</label><input id="login-pin" type="password" inputmode="${meta.numeric?'numeric':'text'}" placeholder="${meta.secondPlaceholder}" autocomplete="off"></div>` : '');
   const btn = document.getElementById('login-submit');
   btn.className = 'submit-btn ' + meta.btnClass;
   btn.textContent = 'Sign in';
@@ -1105,6 +1141,88 @@ function goLogin(role){
   // background so it's likely done by the time they submit; attemptLogin()
   // below still awaits it in case it isn't.
   DB.ensureLoaded();
+}
+
+function goSignup(role){
+  if(role!=='company' && role!=='agent') return; // field staff and farmers are provisioned by whoever adds them, not self-signup
+  pendingRole = role;
+  const meta = signupMeta[role];
+  document.getElementById('signup-title').textContent = meta.title;
+  document.getElementById('signup-sub').textContent = meta.sub;
+  document.getElementById('signup-err').style.display = 'none';
+  const fields = document.getElementById('signup-fields');
+  fields.innerHTML = role==='company' ? `
+    <div class="field"><label>Company name</label><input id="su-name" placeholder="e.g. Zambeef Products" autocomplete="off"></div>
+    <div class="two-col">
+      <div class="field"><label>Location</label><input id="su-location" placeholder="e.g. Lusaka" autocomplete="off"></div>
+      <div class="field"><label>Phone</label><input id="su-phone" placeholder="e.g. 0977 000 000" autocomplete="off"></div>
+    </div>
+    <div class="field"><label>Choose a company ID</label><input id="su-code" class="mono" placeholder="e.g. AGRIFOODS" autocomplete="off"></div>
+    <div class="hint-box">This is the ID you'll sign in with — letters and numbers, no spaces.</div>
+    <div class="field"><label>Choose a password</label><input id="su-pass" type="password" placeholder="At least 6 characters" autocomplete="new-password"></div>
+    <div class="field"><label>Confirm password</label><input id="su-pass2" type="password" placeholder="Re-enter password" autocomplete="new-password"></div>
+  ` : `
+    <div class="field"><label>Full name</label><input id="su-name" placeholder="e.g. Chanda Bwalya" autocomplete="off"></div>
+    <div class="field"><label>Phone</label><input id="su-phone" placeholder="e.g. 0977 000 000" autocomplete="off"></div>
+    <div class="field"><label>Choose an agent ID</label><input id="su-code" class="mono" placeholder="e.g. AG-BWALYA" autocomplete="off"></div>
+    <div class="hint-box">This is the ID you'll sign in with, and the ID buying companies use to link you. If a company already added you under an ID, enter that same ID here to claim it.</div>
+    <div class="field"><label>Choose a password</label><input id="su-pass" type="password" placeholder="At least 6 characters" autocomplete="new-password"></div>
+    <div class="field"><label>Confirm password</label><input id="su-pass2" type="password" placeholder="Re-enter password" autocomplete="new-password"></div>
+  `;
+  const btn = document.getElementById('signup-submit');
+  btn.className = 'submit-btn ' + meta.btnClass;
+  btn.textContent = 'Create account';
+  show('screen-signup');
+  document.getElementById('su-name').focus();
+  DB.ensureLoaded();
+}
+
+async function attemptSignup(){
+  const btn = document.getElementById('signup-submit');
+  const err = document.getElementById('signup-err');
+  err.style.display = 'none';
+  const originalBtnText = btn.textContent;
+  if(!DB.data){ btn.disabled = true; btn.textContent = 'Connecting…'; }
+  try{ await DB.ensureLoaded(); }catch(e){ console.error('Sign-in load failed:', e); }
+  btn.disabled = false; btn.textContent = originalBtnText;
+
+  const role = pendingRole;
+  const name = document.getElementById('su-name').value.trim();
+  const phone = document.getElementById('su-phone').value.trim();
+  const code = document.getElementById('su-code').value.trim().toUpperCase().replace(/\s+/g,'');
+  const pass = document.getElementById('su-pass').value;
+  const pass2 = document.getElementById('su-pass2').value;
+
+  if(!name){ err.textContent = 'Enter a name.'; err.style.display='block'; return; }
+  if(!code){ err.textContent = 'Choose an ID to sign in with.'; err.style.display='block'; return; }
+  if(pass.length < 6){ err.textContent = 'Password must be at least 6 characters.'; err.style.display='block'; return; }
+  if(pass !== pass2){ err.textContent = "Passwords don't match."; err.style.display='block'; return; }
+
+  const collection = role==='company' ? DB.data.companies : DB.data.agents;
+  const existing = collection.find(r=>r.code.toUpperCase()===code);
+  if(existing && existing.authHash){ err.textContent = 'That ID is already taken. Choose another.'; err.style.display='block'; return; }
+
+  const { authSalt, authHash } = await makeAuthRecord(pass);
+  let record, claimed = false;
+  if(existing){
+    // Claiming an ID that was created for them (e.g. a company added this
+    // agent by code) but that has no password on it yet.
+    existing.name = name;
+    if(phone) existing.phone = phone;
+    existing.authSalt = authSalt; existing.authHash = authHash;
+    record = existing; claimed = true;
+  } else if(role==='company'){
+    const location = document.getElementById('su-location').value.trim();
+    record = { id: DB.uid('co'), name, location, phone, tpin:'', code, commodities:[], operatingMode:'direct', authSalt, authHash };
+    DB.data.companies.push(record);
+  } else {
+    record = { id: DB.uid('ag'), name, phone, code, authSalt, authHash };
+    DB.data.agents.push(record);
+  }
+  DB.save();
+  toast('Account created' + (claimed ? ' — linked to your existing ' + code + ' ID' : ''));
+  session = { role, id: record.id };
+  enterApp();
 }
 
 async function attemptLogin(){
@@ -1138,7 +1256,22 @@ async function attemptLogin(){
     found = ok ? byId : null;
     if(byId && !found){ err.textContent = "ID recognized but that PIN is wrong. Check with whoever issued it."; err.style.display='block'; return; }
   }
+  if(pendingRole==='company' || pendingRole==='agent'){
+    if(!found){ err.textContent = "That ID wasn't recognized. Check it, or create an account below."; err.style.display='block'; return; }
+    const pinEl = document.getElementById('login-pin');
+    const pass = pinEl ? pinEl.value : '';
+    if(found.authHash){
+      const ok = await verifySecret(found, pass);
+      if(!ok){ err.textContent = "That ID is right, but the password is wrong."; err.style.display='block'; return; }
+    } else {
+      // Legacy record with no password set yet (e.g. added by someone
+      // else before self-signup existed) — let them through and nudge
+      // them to set one, rather than locking them out.
+      found._needsPasswordSetup = true;
+    }
+  }
   if(!found){ err.textContent = "That wasn't recognized. Check with whoever issued it."; err.style.display='block'; return; }
+  if(found._needsPasswordSetup) toast('Signed in — set a password for this account in Settings.');
   session = { role: pendingRole, id: found.id };
   enterApp();
 }
@@ -1296,8 +1429,31 @@ function renderCompany(view){
             <button class="action-btn ghost" onclick="addCommodity('${companyId}')">+ Add commodity</button>
           </div>
         </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Login & security</h3></div>
+        <div class="panel-body pad">
+          <p class="sub" style="margin:0 0 14px;">Your company ID is <span class="mono" style="font-weight:600;">${c.code}</span>. ${c.authHash ? 'Change your password below.' : 'No password is set yet — set one so only your team can sign in.'}</p>
+          <div class="two-col">
+            <div class="field"><label>New password</label><input id="cs-newpass" type="password" placeholder="At least 6 characters"></div>
+            <div class="field"><label>Confirm password</label><input id="cs-newpass2" type="password" placeholder="Re-enter password"></div>
+          </div>
+          <button class="action-btn ghost" onclick="changeCompanyPassword('${companyId}')">${c.authHash?'Change password':'Set password'}</button>
+        </div>
       </div>`;
   }
+}
+async function changeCompanyPassword(companyId){
+  const c = DB.company(companyId);
+  const p1 = document.getElementById('cs-newpass').value;
+  const p2 = document.getElementById('cs-newpass2').value;
+  if(p1.length < 6){ toast('Password must be at least 6 characters'); return; }
+  if(p1 !== p2){ toast("Passwords don't match"); return; }
+  const { authSalt, authHash } = await makeAuthRecord(p1);
+  c.authSalt = authSalt; c.authHash = authHash;
+  DB.save();
+  toast('Password updated');
+  setView('company','c-settings');
 }
 
 function commodityPills(company){
@@ -1485,7 +1641,7 @@ function openAddAgentModal(companyId){
     <h3>Add agent</h3>
     <p class="sub">Link an agent already on AgriBuy Connect, or add a new one.</p>
     <div class="field"><label>Existing agent code (optional)</label><input id="aa-code" placeholder="e.g. AG-BWALYA" class="mono"></div>
-    <div class="hint-box">Leave the code blank to create a brand-new agent instead.</div>
+    <div class="hint-box">Leave the code blank to create a brand-new agent instead. They'll need to visit "Create account" on the agent sign-in page using the ID shown here to set their own password.</div>
     <div class="two-col">
       <div class="field"><label>Agent name</label><input id="aa-name" placeholder="Only needed for a new agent"></div>
       <div class="field"><label>Phone</label><input id="aa-phone" placeholder="e.g. 0977 000 000"></div>
@@ -1514,7 +1670,7 @@ function confirmAddAgent(companyId){
   if(DB.link(agent.id, companyId)){ toast(agent.name + ' is already linked to your company'); return; }
   DB.data.agentLinks.push({ id: DB.uid('l'), agentId: agent.id, companyId, commissionRate: rate, advances: [] });
   DB.save(); closeModal();
-  toast(agent.name + ' added' + (code?'':' — login code ' + agent.code));
+  toast(agent.name + ' added' + (code?'':' — share ID ' + agent.code + ' so they can create their own login'));
   setView('company','c-agents');
 }
 
@@ -1690,9 +1846,21 @@ function renderAgent(view){
       <div class="panel"><div class="panel-body">${purchasesTable(purchases.slice().reverse(), {showCompany:true})}</div></div>`;
   }
   if(view==='a-settings'){
+    const agent = DB.agent(agentId);
     main.innerHTML = syncBannerHTML() + `
       <div class="main-head"><div><h1>Settings</h1><p class="desc">Manage field staff accounts and generate login codes.</p></div><button class="action-btn" onclick="openAddStaffModal()">+ Add field staff</button></div>
-      <div class="panel"><div class="panel-head"><h3>Field staff login access</h3></div><div class="panel-body">${staffLoginSettingsTable(agentId)}</div></div>`;
+      <div class="panel"><div class="panel-head"><h3>Field staff login access</h3></div><div class="panel-body">${staffLoginSettingsTable(agentId)}</div></div>
+      <div class="panel">
+        <div class="panel-head"><h3>Login & security</h3></div>
+        <div class="panel-body pad">
+          <p class="sub" style="margin:0 0 14px;">Your agent ID is <span class="mono" style="font-weight:600;">${agent.code}</span>. ${agent.authHash ? 'Change your password below.' : 'No password is set yet — set one to secure your account.'}</p>
+          <div class="two-col">
+            <div class="field"><label>New password</label><input id="as-newpass" type="password" placeholder="At least 6 characters"></div>
+            <div class="field"><label>Confirm password</label><input id="as-newpass2" type="password" placeholder="Re-enter password"></div>
+          </div>
+          <button class="action-btn ghost" onclick="changeAgentPassword('${agentId}')">${agent.authHash?'Change password':'Set password'}</button>
+        </div>
+      </div>`;
   }
   if(view==='a-payroll'){
     const period = currentPayrollPeriod();
@@ -1707,6 +1875,19 @@ function renderAgent(view){
         <div class="panel-body">${payrollHistoryTable(agentId)}</div>
       </div>`;
   }
+}
+
+async function changeAgentPassword(agentId){
+  const agent = DB.agent(agentId);
+  const p1 = document.getElementById('as-newpass').value;
+  const p2 = document.getElementById('as-newpass2').value;
+  if(p1.length < 6){ toast('Password must be at least 6 characters'); return; }
+  if(p1 !== p2){ toast("Passwords don't match"); return; }
+  const { authSalt, authHash } = await makeAuthRecord(p1);
+  agent.authSalt = authSalt; agent.authHash = authHash;
+  DB.save();
+  toast('Password updated');
+  setView('agent','a-settings');
 }
 
 function payrollTable(agentId, period){
@@ -2486,6 +2667,7 @@ function renderFarmer(view){
 document.getElementById('login-code') && document.getElementById('login-code').addEventListener('keydown', e=>{ if(e.key==='Enter') attemptLogin(); });
 document.addEventListener('keydown', e=>{
   if(e.key==='Enter' && document.getElementById('screen-login').classList.contains('active')) attemptLogin();
+  if(e.key==='Enter' && document.getElementById('screen-signup').classList.contains('active')) attemptSignup();
 });
 </script>
 </body>
