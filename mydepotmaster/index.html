@@ -3671,7 +3671,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v2.5';
+const SW_VERSION  = 'v2.6';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -7400,13 +7400,13 @@ function _doGlobalSearch(q){
   const staffPool = staffOnly ? (myId?[myStaffRecord()]:[]) : DATA.staff;
   const staffHits=staffPool.filter(x=>
     x.name.toLowerCase().includes(term)||
-    (x.role||'').toLowerCase().includes(term)||
+    staffRoleList(x).some(r=>(r||'').toLowerCase().includes(term))||
     (x.employeeId||'').toLowerCase().includes(term)
   ).slice(0,6);
   if(staffHits.length) sections.push({label:'Staff',items:staffHits.map(x=>({
     badge:'staff',badgeLabel:'STAFF',
     title:`${esc(x.name)}`,
-    sub:`Role: ${esc(x.role||'—')}${x.employeeId?' · ID: '+esc(x.employeeId):''}`,
+    sub:`Role: ${esc(staffRoleLabel(x))}${x.employeeId?' · ID: '+esc(x.employeeId):''}`,
     action: staffOnly ? `showTab('staff')` : `showTab('staff');openStaffDetail('${x.id}')`
   }))});
 
@@ -9730,6 +9730,46 @@ function qtyLabelForTask(role,taskName){
 function allRoleNames(){return(DATA.staffRoles||[]).map(r=>r.name);}
 // Helper: get tasks for a role name
 function tasksForRole(roleName){const r=(DATA.staffRoles||[]).find(x=>x.name===roleName);return r?r.tasks||[]:[]; }
+// ── MULTI-ROLE STAFF ─────────────────────────────────────────────────────────
+// A staff member can now be assigned more than one job role (e.g. Loader +
+// Guard). `s.roles` (array) is the source of truth; `s.role` is kept in sync
+// as the primary/first role for backward compatibility with the many places
+// that still just read a single role (badges, CSV exports, ID cards, default
+// clock-in role, etc). Older records without `roles` fall back to `[s.role]`.
+function staffRoleList(s){
+  if(!s)return[];
+  if(Array.isArray(s.roles)&&s.roles.length)return s.roles;
+  return s.role?[s.role]:[];
+}
+function staffRoleLabel(s){return staffRoleList(s).join(' + ')||'—';}
+function staffHasRole(s,roleName){return staffRoleList(s).includes(roleName);}
+// Deterministic colour per role name (same role always gets the same colour,
+// regardless of how many roles exist or what order they're in) — used to
+// visually distinguish roles in the Staff List.
+const ROLE_COLOR_PALETTE=['0,214,143','59,130,246','165,105,189','231,76,60','243,156,18','34,211,238','236,72,153','163,230,53'];
+function _roleColorRGB(role){
+  const str=String(role||'');
+  let h=0;for(let i=0;i<str.length;i++){h=(h*31+str.charCodeAt(i))>>>0;}
+  return ROLE_COLOR_PALETTE[h%ROLE_COLOR_PALETTE.length];
+}
+// Same hash-based colour trick, keyed by a date string instead of a role
+// name — used to give Work Log rows a faint per-day tint so consecutive
+// entries from the same day are easy to tell apart from the next day's.
+function _dayColorRGB(dateStr){return _roleColorRGB(dateStr);}
+// Search a task name across ALL of a staff member's assigned roles (not just
+// their primary one) — a multi-role staff member may log work under any role
+// they're assigned. Returns [{role,task}] matches.
+function _findTaskAcrossRoles(s,taskName){
+  const q=(taskName||'').trim().toLowerCase();
+  if(!q)return[];
+  const roles=staffRoleList(s);
+  const exact=[];
+  roles.forEach(role=>{tasksForRole(role).forEach(t=>{if((t.name||'').toLowerCase()===q)exact.push({role,task:t});});});
+  if(exact.length)return exact;
+  const partial=[];
+  roles.forEach(role=>{tasksForRole(role).forEach(t=>{if((t.name||'').toLowerCase().includes(q))partial.push({role,task:t});});});
+  return partial;
+}
 
 function renderStaff(){
   const staffOnly=isStaffRole();
@@ -9791,7 +9831,8 @@ function renderStaffLogs(){
       const typeColors={absent:'var(--red)',leave:'var(--blue)',sick:'var(--amber)'};
       const lbl=typeLabels[log.entryType]||log.entryType.toUpperCase();
       const col=typeColors[log.entryType]||'var(--muted)';
-      return `<tr>
+      const dayRGB=_dayColorRGB(log.date);
+      return `<tr style="background:rgba(${dayRGB},.035)">
         <td style="white-space:nowrap"><div style='font-size:17px;font-weight:700'>${fmtDate(log.date)}${approvalBadge(log)}</div><div style='font-size:15px;color:var(--muted)'>${log.time||'—'}</div></td>
         <td style="font-weight:700">${s?.name||'—'}</td>
         <td><span class="tag">${esc(log.role||s?.role||'—')}</span></td>
@@ -9815,7 +9856,7 @@ function renderStaffLogs(){
       const ot=mins/60>stdHrs;
       hoursCell=`${hrs}h${ot?` <span style="color:var(--amber);font-size:14px">OT</span>`:''}`;
     }
-    return `<tr${isOpen?' style="background:rgba(0,214,143,.03)"':''}>
+    return `<tr${isOpen?' style="background:rgba(0,214,143,.05)"':` style="background:rgba(${_dayColorRGB(log.date)},.035)"`}>
       <td style="white-space:nowrap"><div style='font-size:17px;font-weight:700'>${fmtDate(log.date)}${approvalBadge(log)}</div><div style='font-size:15px;color:var(--muted)'>${log.time||'—'}</div>${isOpen?`<span class="bdg bdg-active" style="margin-top:3px;display:inline-block">🟢 ACTIVE</span>`:''}
       ${isOpen&&USER.role==='admin'?`<div style="margin-top:4px"><button class="clockout-btn" onclick="openClockOutForm('${log.id}')">⏹ Clock Out</button></div>`:''}</td>
       <td style="font-weight:700">${s?.name||'—'}</td>
@@ -9899,9 +9940,9 @@ function renderRoster(){
     </div>`;
   };
   const _sList=scopedStaff();
-  const _roleNames=isStaffRole()?[...new Set(_sList.map(s=>s.role))]:allRoleNames();
+  const _roleNames=isStaffRole()?[...new Set(_sList.flatMap(s=>staffRoleList(s)))]:allRoleNames();
   return _roleNames.map(role=>{
-    const members=_sList.filter(s=>s.role===role);
+    const members=_sList.filter(s=>staffHasRole(s,role));
     const mRows=members.map(s=>{
       const sLogs=DATA.staffLogs.filter(l=>String(l.staffId)===String(s.id));
       const net=sLogs.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
@@ -9952,7 +9993,7 @@ function renderEarnings(){
     }).join(', ');
     return `<tr>
       <td style="font-weight:700">${esc(s.name)}${isSalaried?' <span class="tag" style="font-size:13px">SALARY</span>':''}</td>
-      <td><span class="tag">${esc(s.role)}</span></td>
+      <td><span class="tag">${esc(staffRoleLabel(s))}</span></td>
       <td>${isSalaried?'<span style="color:var(--muted)">—</span>':totBags.toLocaleString()}</td>
       <td style="color:var(--green)">${zm(gross)}${isSalaried?' <span style="font-size:14px;color:var(--muted)">/mo</span>':''}</td>
       <td style="color:var(--red)">-${zm(ded)}</td>
@@ -9972,12 +10013,16 @@ function renderEarnings(){
 function openStaffForm(){
   if(isStaffRole()){alert('⛔ Staff logins cannot register staff.');return;}
   if (isAtCap('staff', (DATA.staff||[]).length)) { showCapReachedPrompt('staff', 'Staff Profiles'); return; }
-  const roleOpts=allRoleNames().map(r=>`<option>${r}</option>`).join('');
+  const roleNames=allRoleNames();
+  const roleCbs=roleNames.map((r,i)=>`<label style="display:flex;align-items:center;gap:6px;background:var(--surface);border:1.5px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:16px"><input type="checkbox" class="sf-role-cb" value="${esc(r)}"${i===0?' checked':''}> ${esc(r)}</label>`).join('');
   openModal(`
     <div class="mtitle">👤 Register Staff</div>
     <div class="fw"><div class="fl">Full Name <span style="color:var(--red)">*</span></div><input class="fi" id="sf-name" placeholder="E.G. JOHN BANDA"/></div>
     <div class="fw"><div class="fl">Profile Photo (optional)</div><input type="file" class="fi" id="sf-photo" accept="image/png,image/jpeg,image/webp" style="padding:9px"></div>
-    <div class="fw"><div class="fl">Job Role <span style="color:var(--red)">*</span></div><select class="fi" id="sf-role">${roleOpts||'<option>No roles defined</option>'}</select></div>
+    <div class="fw"><div class="fl">Job Role(s) <span style="color:var(--red)">*</span></div>
+      <div id="sf-roles" style="display:flex;flex-wrap:wrap;gap:8px">${roleCbs||'<div style="color:var(--muted)">No roles defined</div>'}</div>
+      <div style="font-size:14px;color:var(--muted);margin-top:5px">Check every role this staff member can perform. The topmost checked role is used as their primary role in lists and reports.</div>
+    </div>
     <div class="fw"><div class="fl">Contract Type</div><select class="fi" id="sf-contract"><option value="permanent">PERMANENT</option><option value="casual">CASUAL</option><option value="seasonal">SEASONAL</option><option value="probation">PROBATION</option></select></div>
     <div class="fw"><div class="fl">Pay Type</div><select class="fi" id="sf-paytype" onchange="_toggleSalaryField('sf')"><option value="rate">TASK / RATE-BASED (per bag, hour, day, etc.)</option><option value="salary">FIXED MONTHLY SALARY</option></select></div>
     <div class="fw" id="sf-salary-wrap" style="display:none"><div class="fl">Monthly Salary (K)</div><input class="fi" type="number" min="0" step="0.01" id="sf-salary" placeholder="E.G. 3500"/></div>
@@ -9999,6 +10044,8 @@ function saveStaff(){if(isReadOnly()){alert("🔒 This account is in read-only m
   if (isAtCap('staff', (DATA.staff||[]).length)) { closeModal(); showCapReachedPrompt('staff', 'Staff Profiles'); return; }
   const name=uc(document.getElementById('sf-name').value);
   if(!name){alert('Enter staff name.');return;}
+  const roles=[...document.querySelectorAll('#sf-roles .sf-role-cb:checked')].map(cb=>cb.value);
+  if(roles.length===0){alert('Select at least one job role.');return;}
   const joined=document.getElementById('sf-joined').value;
   if(!joined){alert('Enter date joined.');return;}
   const payType=document.getElementById('sf-paytype')?.value||'rate';
@@ -10006,7 +10053,7 @@ function saveStaff(){if(isReadOnly()){alert("🔒 This account is in read-only m
   if(payType==='salary'&&monthlySalary<=0){alert('Enter a monthly salary amount.');return;}
   const photoFile=document.getElementById('sf-photo')?.files?.[0]||null;
   const finish=(photoDataUrl)=>{
-    const payload={id:uid(),name,role:document.getElementById('sf-role').value,contractType:document.getElementById('sf-contract').value||'permanent',payType,monthlySalary,dateJoined:joined,dateOfBirth:document.getElementById('sf-dob')?.value||'',phone:document.getElementById('sf-phone').value,employeeId:(document.getElementById('sf-empid').value||'').trim(),emergencyContactName:uc(document.getElementById('sf-ecname').value),emergencyContactPhone:(document.getElementById('sf-ecphone').value||'').trim(),notes:uc(document.getElementById('sf-notes').value),status:'active',photoDataUrl:photoDataUrl||null};
+    const payload={id:uid(),name,role:roles[0],roles,contractType:document.getElementById('sf-contract').value||'permanent',payType,monthlySalary,dateJoined:joined,dateOfBirth:document.getElementById('sf-dob')?.value||'',phone:document.getElementById('sf-phone').value,employeeId:(document.getElementById('sf-empid').value||'').trim(),emergencyContactName:uc(document.getElementById('sf-ecname').value),emergencyContactPhone:(document.getElementById('sf-ecphone').value||'').trim(),notes:uc(document.getElementById('sf-notes').value),status:'active',photoDataUrl:photoDataUrl||null};
     updateData(d=>({...d,staff:[...d.staff,payload]}));
     closeModal();
   };
@@ -10043,7 +10090,7 @@ function openClockInForm(preStaffId){
     preStaffId=me.id;
   }
 
-  const opts=activeStaff.map(s=>`<option value="${esc(s.id)}"${String(s.id)===String(preStaffId||'')?' selected':''}>${esc(s.name)} (${esc(s.role)})</option>`).join('');
+  const opts=activeStaff.map(s=>`<option value="${esc(s.id)}"${String(s.id)===String(preStaffId||'')?' selected':''}>${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('');
   const staffFieldHtml = isStaffRole()
     ? `<div class="fw"><div class="fl">Staff Member</div><div class="fi" style="background:var(--surface);padding:12px 14px;border-radius:10px;border:1.5px solid var(--border);font-weight:700">${esc(activeStaff.find(s=>String(s.id)===String(preStaffId))?.name||'')}</div><input type="hidden" id="ci-staff" value="${esc(preStaffId)}"/></div>`
     : `<div class="fw"><div class="fl">Staff Member</div><select class="fi" id="ci-staff" onchange="onClockInStaffChange()">${opts}</select></div>`;
@@ -10053,10 +10100,22 @@ function openClockInForm(preStaffId){
     <div id="ci-open-warn" style="display:none"></div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="ci-date" value="${today()}"/></div>
     <div class="fw"><div class="fl">Time In</div><input class="fi" type="time" id="ci-time-in" value="${nowTime()}"/></div>
-    <div class="fw" id="ci-role-wrap"><div class="fl">Role</div><div class="fi" id="ci-role-display" style="background:var(--surface);padding:12px 14px;border-radius:10px;border:1.5px solid var(--border);font-weight:700;color:var(--green)">—</div><input type="hidden" id="ci-role"/></div>
+    <div class="fw" id="ci-role-wrap"><div class="fl">Role</div><div id="ci-role-field"></div></div>
     <div class="fw"><div class="fl">Task</div><select class="fi" id="ci-task"><option>—</option></select></div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveClockIn()">⏵ Clock In</button></div>`);
   onClockInStaffChange();
+}
+
+function onClockInRoleChange(){
+  const role=document.getElementById('ci-role')?.value;
+  const taskEl=document.getElementById('ci-task');
+  if(taskEl){
+    const tasks=tasksForRole(role);
+    taskEl.innerHTML=tasks.length>0?tasks.map(t=>{
+      const u=t.rateUnit||'bag';const ul=u==='custom'?(t.customUnit||'unit'):u;
+      return`<option value="${esc(t.name)}">${esc(t.name)} — K${Number(t.rate||0).toFixed(2)}/${ul}</option>`;
+    }).join(''):'<option>No tasks defined</option>';
+  }
 }
 
 function onClockInStaffChange(){
@@ -10072,18 +10131,16 @@ function onClockInStaffChange(){
     warnEl.style.display='none';warnEl.innerHTML='';
   }
   if(s){
-    const display=document.getElementById('ci-role-display');
-    const hidden=document.getElementById('ci-role');
-    if(display)display.textContent=s.role.toUpperCase();
-    if(hidden)hidden.value=s.role;
-    const taskEl=document.getElementById('ci-task');
-    if(taskEl){
-      const tasks=tasksForRole(s.role);
-      taskEl.innerHTML=tasks.length>0?tasks.map(t=>{
-        const u=t.rateUnit||'bag';const ul=u==='custom'?(t.customUnit||'unit'):u;
-        return`<option value="${esc(t.name)}">${esc(t.name)} — K${Number(t.rate||0).toFixed(2)}/${ul}</option>`;
-      }).join(''):'<option>No tasks defined</option>';
+    const roleField=document.getElementById('ci-role-field');
+    if(roleField){
+      const roles=staffRoleList(s);
+      if(roles.length>1){
+        roleField.innerHTML=`<select class="fi" id="ci-role" onchange="onClockInRoleChange()">${roles.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('')}</select>`;
+      } else {
+        roleField.innerHTML=`<div class="fi" id="ci-role-display" style="background:var(--surface);padding:12px 14px;border-radius:10px;border:1.5px solid var(--border);font-weight:700;color:var(--green)">${esc((roles[0]||'').toUpperCase())}</div><input type="hidden" id="ci-role" value="${esc(roles[0]||'')}"/>`;
+      }
     }
+    onClockInRoleChange();
   }
 }
 
@@ -10126,7 +10183,10 @@ function openClockOutForm(logId){
   if(log.status!=='open'){alert('This shift is already completed.');return;}
   if(isRejected(log)){alert('❌ This clock-in was rejected and cannot be clocked out. Ask the staff member to clock in again.');return;}
   const s=DATA.staff.find(x=>String(x.id)===String(log.staffId));
-  const staffRole=s?.role||log.role||'';
+  // Prefer the role actually used at clock-in (log.role) — a multi-role staff
+  // member's current primary role (s.role) may differ from the role their
+  // open shift was logged under.
+  const staffRole=log.role||s?.role||'';
   const tasks=tasksForRole(staffRole);
   const taskOpts=tasks.length>0?tasks.map(t=>{
     const u=t.rateUnit||'bag';const ul=u==='custom'?(t.customUnit||'unit'):u;
@@ -10267,7 +10327,7 @@ function openLogForm(){
   if((DATA.staffRoles||[]).length===0){alert('No roles defined. Go to Staff > Roles & Rates to add roles first.');return;}
   const activeStaff=DATA.staff.filter(s=>!s.status||s.status==='active');
   if(activeStaff.length===0){alert('No active staff. Check roster for suspended/expelled staff.');return;}
-  const opts=activeStaff.map(s=>`<option value="${esc(s.id)}">${esc(s.name)} (${esc(s.role)})</option>`).join('');
+  const opts=activeStaff.map(s=>`<option value="${esc(s.id)}">${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('');
   openModal(`
     <div class="mtitle">📋 Log Work ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>
     <div class="fw"><div class="fl">Entry Type</div>
@@ -10280,7 +10340,7 @@ function openLogForm(){
     </div>
     <div class="fw"><div class="fl">Staff Member</div><select class="fi" id="lf-staff" onchange="onStaffChange()">${opts}</select></div>
     <div id="lf-work-fields">
-      <div class="fw"><div class="fl">Role</div><div class="fi" id="lf-role-display" style="background:var(--surface);padding:12px 14px;border-radius:10px;border:1.5px solid var(--border);font-weight:700;color:var(--green)">—</div><input type="hidden" id="lf-role"/></div>
+      <div class="fw"><div class="fl">Role</div><div id="lf-role-field"></div></div>
       <div class="fw"><div class="fl">Task</div><select class="fi" id="lf-task" onchange="onTaskChange()"><option>—</option></select></div>
       <div class="fw" id="lf-qty-wrap"><div class="fl" id="lf-qty-label">Quantity</div><input class="fi" type="number" id="lf-bags" placeholder="0" inputmode="decimal" step="0.01" oninput="calcGross()"/></div>
       <div id="gross-hint"></div>
@@ -10313,25 +10373,34 @@ function onEntryTypeChange(){
   else{workFields.style.display='none';noteWrap.style.display='';}
 }
 
+function onLogRoleChange(){
+  const role=document.getElementById('lf-role')?.value;
+  const taskEl=document.getElementById('lf-task');
+  if(taskEl){
+    const tasks=tasksForRole(role);
+    taskEl.innerHTML=tasks.length>0?tasks.map(t=>{
+      const u=t.rateUnit||'bag';
+      const ul=u==='custom'?(t.customUnit||'unit'):u;
+      return `<option value="${esc(t.name)}">${esc(t.name)} — K${Number(t.rate||0).toFixed(2)}/${ul}</option>`;
+    }).join(''):'<option>No tasks defined</option>';
+  }
+  updateQtyLabel();
+  calcGross();
+}
 function onStaffChange(){
   const sid=document.getElementById('lf-staff')?.value;
   const s=DATA.staff.find(x=>String(x.id)===String(sid));
   if(s){
-    const display=document.getElementById('lf-role-display');
-    const hidden=document.getElementById('lf-role');
-    if(display)display.textContent=s.role.toUpperCase();
-    if(hidden)hidden.value=s.role;
-    const taskEl=document.getElementById('lf-task');
-    if(taskEl){
-      const tasks=tasksForRole(s.role);
-      taskEl.innerHTML=tasks.length>0?tasks.map(t=>{
-        const u=t.rateUnit||'bag';
-        const ul=u==='custom'?(t.customUnit||'unit'):u;
-        return `<option value="${esc(t.name)}">${esc(t.name)} — K${Number(t.rate||0).toFixed(2)}/${ul}</option>`;
-      }).join(''):'<option>No tasks defined</option>';
+    const roleField=document.getElementById('lf-role-field');
+    if(roleField){
+      const roles=staffRoleList(s);
+      if(roles.length>1){
+        roleField.innerHTML=`<select class="fi" id="lf-role" onchange="onLogRoleChange()">${roles.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('')}</select>`;
+      } else {
+        roleField.innerHTML=`<div class="fi" id="lf-role-display" style="background:var(--surface);padding:12px 14px;border-radius:10px;border:1.5px solid var(--border);font-weight:700;color:var(--green)">${esc((roles[0]||'').toUpperCase())}</div><input type="hidden" id="lf-role" value="${esc(roles[0]||'')}"/>`;
+      }
     }
-    updateQtyLabel();
-    calcGross();
+    onLogRoleChange();
   }
 }
 function onTaskChange(){
@@ -10515,7 +10584,7 @@ function _blRoleChange(){
       return`<option value="${esc(t.name)}">${esc(t.name)} — K${Number(t.rate||0).toFixed(2)}/${ul}</option>`;
     }).join(''):'<option>No tasks defined</option>';
   }
-  const staffInRole=DATA.staff.filter(s=>(!s.status||s.status==='active')&&s.role===role);
+  const staffInRole=DATA.staff.filter(s=>(!s.status||s.status==='active')&&staffHasRole(s,role));
   const rowsEl=document.getElementById('bl-staff-rows');
   if(rowsEl){
     rowsEl.innerHTML = staffInRole.length>0 ? staffInRole.map(s=>`
@@ -10657,7 +10726,7 @@ function renderPayments(){
     }).join('');
     const unpaid=cumEarned-cumPaid;
     return `<div class="card" style="margin-bottom:14px">
-      <div class="ctitle" style="margin-bottom:4px">${esc(s.name)} <span class="tag" style="font-size:16px;margin-left:4px">${esc(s.role)}</span></div>
+      <div class="ctitle" style="margin-bottom:4px">${esc(s.name)} <span class="tag" style="font-size:16px;margin-left:4px">${esc(staffRoleLabel(s))}</span></div>
       <div class="srow" style="margin-bottom:10px">
         <div class="sbox"><div class="sv" style="font-size:23px">${zm(cumEarned)}</div><div class="sl">TOTAL EARNED</div></div>
         <div class="sbox bl"><div class="sv" style="font-size:23px">${zm(cumPaid)}</div><div class="sl">TOTAL PAID</div></div>
@@ -10688,7 +10757,7 @@ function renderPayments(){
 // ── STAFF LIST ───────────────────────────────────────────────────────────────
 function renderStaffList(){
   const _sList=scopedStaff();
-  const roles=isStaffRole()?[...new Set(_sList.map(s=>s.role))]:allRoleNames();
+  const roles=isStaffRole()?[...new Set(_sList.flatMap(s=>staffRoleList(s)))]:allRoleNames();
   const statusBadge=s=>{
     if(s.status==='terminated')return`<span class="bdg br2" style="font-size:15px">TERMINATED</span>`;
     if(s.status==='resigned')return`<span class="bdg br2" style="font-size:15px">RESIGNED</span>`;
@@ -10697,13 +10766,12 @@ function renderStaffList(){
     return`<span class="bdg bg2" style="font-size:15px">ACTIVE</span>`;
   };
   const sections=roles.map((role,ri)=>{
-    const members=_sList.filter(s=>s.role===role);
+    const members=_sList.filter(s=>staffHasRole(s,role));
+    const roleRGB=_roleColorRGB(role);
     if(members.length===0)return`<div class="card"><div class="ctitle">👷 ${role}s</div><div class="empty" style="padding:8px 0">No ${role.toLowerCase()}s registered</div></div>`;
     const active=members.filter(s=>!s.status||s.status==='active').length;
     const susp=members.filter(s=>s.status==='suspended').length;
     const exp=members.filter(s=>s.status==='expelled'||s.status==='terminated'||s.status==='resigned').length;
-    const avatarColors=['lo','st','pu','rd'];
-    const avatarClass=avatarColors[ri%avatarColors.length];
     const initials=n=>n.split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
     const cards=members.map(s=>{
       const sLogs=DATA.staffLogs.filter(l=>String(l.staffId)===String(s.id));
@@ -10714,9 +10782,9 @@ function renderStaffList(){
       const paid=(DATA.staffPayments||[]).filter(p=>String(p.staffId)===String(s.id)).reduce((a,b)=>a+Number(b.amount||0),0);
       const unpaid=net-paid;
       const dimmed=s.status==='expelled'?'opacity:.55;':'';
-      return`<div class="sl-card" style="${dimmed}" onclick="openStaffDetail('${s.id}')">
+      return`<div class="sl-card" style="background:rgba(${roleRGB},.06);border-color:rgba(${roleRGB},.3);${dimmed}" onclick="openStaffDetail('${s.id}')">
         <div style="display:flex;align-items:center;gap:12px">
-          <div class="sl-avatar ${avatarClass}" style="${s.photoDataUrl?'overflow:hidden;padding:0':''}">${s.photoDataUrl?`<img src="${s.photoDataUrl}" style="width:100%;height:100%;object-fit:cover">`:initials(s.name)}</div>
+          <div class="sl-avatar" style="background:rgba(${roleRGB},.2);color:rgb(${roleRGB});${s.photoDataUrl?'overflow:hidden;padding:0':''}">${s.photoDataUrl?`<img src="${s.photoDataUrl}" style="width:100%;height:100%;object-fit:cover">`:initials(s.name)}</div>
           <div style="flex:1;min-width:0">
             <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
               <span style="font-family:var(--fh);font-size:20px;font-weight:700;color:var(--white)">${esc(s.name)}</span>
@@ -10747,7 +10815,7 @@ function renderStaffList(){
       </div>`;
     }).join('');
     return`<div style="margin-bottom:16px">
-      <div class="sh" style="margin-bottom:8px">👷 ${role}s <span style="font-size:16px;color:var(--muted);font-weight:400">${active} active${susp>0?` · ${susp} suspended`:''}${exp>0?` · ${exp} inactive`:''}</span></div>
+      <div class="sh" style="margin-bottom:8px;display:flex;align-items:center;gap:7px"><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:rgb(${roleRGB});flex-shrink:0"></span>👷 ${role}s <span style="font-size:16px;color:var(--muted);font-weight:400">${active} active${susp>0?` · ${susp} suspended`:''}${exp>0?` · ${exp} inactive`:''}</span></div>
       ${cards}
     </div>`;
   }).join('');
@@ -10781,13 +10849,14 @@ function openStaffDetail(id){
   const unpaid=net-paid;
   const isInactive=s.status==='terminated'||s.status==='resigned'||s.status==='expelled';
   const statusBadge=isInactive?(s.status==='resigned'?`<span class="bdg br2">RESIGNED</span>`:`<span class="bdg br2">TERMINATED</span>`):s.status==='suspended'?`<span class="bdg ba2">SUSPENDED</span>`:`<span class="bdg bg2">ACTIVE</span>`;
-  const taskBreakdown=tasksForRole(s.role).map(tObj=>{
+  const _allTasksForStaff=[...new Map(staffRoleList(s).flatMap(r=>tasksForRole(r).map(t=>[t.name,{...t,_role:r}]))).values()];
+  const taskBreakdown=_allTasksForStaff.map(tObj=>{
     const task=tObj.name;
     const tLogs=sLogs.filter(l=>l.task===task);
     if(tLogs.length===0)return'';
     const tQty=tLogs.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
     const tNet=tLogs.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
-    const ul=taskRateUnitLabel(s.role,task);
+    const ul=taskRateUnitLabel(tObj._role,task);
     return`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)">
       <span style="font-size:17px;color:var(--muted)">${task}</span>
       <span style="font-size:17px;font-weight:700">${tQty.toLocaleString()} ${ul}s · ${zm(tNet)}</span>
@@ -10832,7 +10901,7 @@ function openStaffDetail(id){
       </div>
       <div>
         <div style="font-family:var(--fh);font-size:25px;font-weight:800;color:var(--white)">${esc(s.name)}</div>
-        <div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span class="tag">${esc(s.role)}</span>${statusBadge}${s.contractType&&s.contractType!=='permanent'?`<span style="background:rgba(139,92,246,.15);color:var(--purple);border-radius:6px;padding:1px 7px;font-size:15px;font-weight:700">${s.contractType.toUpperCase()}</span>`:''}</div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span class="tag">${esc(staffRoleLabel(s))}</span>${statusBadge}${s.contractType&&s.contractType!=='permanent'?`<span style="background:rgba(139,92,246,.15);color:var(--purple);border-radius:6px;padding:1px 7px;font-size:15px;font-weight:700">${s.contractType.toUpperCase()}</span>`:''}</div>
         <div style="font-size:17px;color:var(--muted);margin-top:3px">${esc(s.phone)||'No phone on record'}</div>
         ${s.dateJoined?`<div style="font-size:16px;color:var(--muted)">Joined: <strong style="color:var(--text)">${fmtDate(s.dateJoined)}</strong></div>`:''}
         ${s.dateOfBirth?`<div style="font-size:16px;color:var(--muted)">DOB: <strong style="color:var(--text)">${fmtDate(s.dateOfBirth)}</strong></div>`:''}
@@ -10877,11 +10946,16 @@ function openEditStaffDetails(id){
 function _openEditStaffDetails(id){
   const s=DATA.staff.find(x=>String(x.id)===String(id));
   if(!s){alert('Staff member not found.');return;}
-  const roleOpts=allRoleNames().map(r=>`<option${r===s.role?' selected':''}>${r}</option>`).join('');
+  const roleNames=allRoleNames();
+  const curRoles=staffRoleList(s);
+  const roleCbs=roleNames.map(r=>`<label style="display:flex;align-items:center;gap:6px;background:var(--surface);border:1.5px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:16px"><input type="checkbox" class="esd-role-cb" value="${esc(r)}"${curRoles.includes(r)?' checked':''}> ${esc(r)}</label>`).join('');
   openModal(`
     <div class="mtitle">✏️ Edit Staff Details</div>
     <div class="fw"><div class="fl">Full Name <span style="color:var(--red)">*</span></div><input class="fi" id="esd-name" value="${esc(s.name)}" placeholder="FULL NAME"/></div>
-    <div class="fw"><div class="fl">Job Role <span style="color:var(--red)">*</span></div><select class="fi" id="esd-role">${roleOpts||'<option>No roles defined</option>'}</select></div>
+    <div class="fw"><div class="fl">Job Role(s) <span style="color:var(--red)">*</span></div>
+      <div id="esd-roles" style="display:flex;flex-wrap:wrap;gap:8px">${roleCbs||'<div style="color:var(--muted)">No roles defined</div>'}</div>
+      <div style="font-size:14px;color:var(--muted);margin-top:5px">Check every role this staff member can perform. The topmost checked role is used as their primary role in lists and reports.</div>
+    </div>
     <div class="fw"><div class="fl">Contract Type</div><select class="fi" id="esd-contract"><option value="permanent"${(s.contractType||'permanent')==='permanent'?' selected':''}>PERMANENT</option><option value="casual"${s.contractType==='casual'?' selected':''}>CASUAL</option><option value="seasonal"${s.contractType==='seasonal'?' selected':''}>SEASONAL</option><option value="probation"${s.contractType==='probation'?' selected':''}>PROBATION</option></select></div>
     <div class="fw"><div class="fl">Pay Type</div><select class="fi" id="esd-paytype" onchange="_toggleSalaryField('esd')"><option value="rate"${(s.payType||'rate')==='rate'?' selected':''}>TASK / RATE-BASED (per bag, hour, day, etc.)</option><option value="salary"${s.payType==='salary'?' selected':''}>FIXED MONTHLY SALARY</option></select></div>
     <div class="fw" id="esd-salary-wrap" style="display:${s.payType==='salary'?'block':'none'}"><div class="fl">Monthly Salary (K)</div><input class="fi" type="number" min="0" step="0.01" id="esd-salary" value="${Number(s.monthlySalary||0)||''}" placeholder="E.G. 3500"/></div>
@@ -10898,7 +10972,9 @@ function saveEditStaffDetails(id){
   if(isReadOnly()){alert('🔒 This account is in read-only mode.');return;}
   const name=uc(document.getElementById('esd-name').value);
   if(!name){alert('Enter staff name.');return;}
-  const role=document.getElementById('esd-role').value;
+  const roles=[...document.querySelectorAll('#esd-roles .esd-role-cb:checked')].map(cb=>cb.value);
+  if(roles.length===0){alert('Select at least one job role.');return;}
+  const role=roles[0];
   const contractType=document.getElementById('esd-contract').value||'permanent';
   const payType=document.getElementById('esd-paytype')?.value||'rate';
   const monthlySalary=payType==='salary'?Math.max(0,Number(document.getElementById('esd-salary')?.value)||0):0;
@@ -10909,7 +10985,7 @@ function saveEditStaffDetails(id){
   const emergencyContactName=uc(document.getElementById('esd-ecname').value);
   const emergencyContactPhone=(document.getElementById('esd-ecphone').value||'').trim();
   const notes=uc(document.getElementById('esd-notes').value);
-  updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,name,role,contractType,payType,monthlySalary,phone,dateOfBirth,employeeId,emergencyContactName,emergencyContactPhone,notes}:s)}));
+  updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,name,role,roles,contractType,payType,monthlySalary,phone,dateOfBirth,employeeId,emergencyContactName,emergencyContactPhone,notes}:s)}));
   closeModal();
   showToast('✅ Staff details updated.');
 }
@@ -11080,7 +11156,7 @@ function _printStaffIdCard(id) {
         <div class="card-avatar" style="${s.photoDataUrl?'overflow:hidden;padding:0':''}">${s.photoDataUrl?`<img src="${s.photoDataUrl}" style="width:100%;height:100%;object-fit:cover;border-radius:50%">`:initials}</div>
         <div class="card-info">
           <div class="card-name">${esc(s.name)}</div>
-          <div class="card-role">${esc(s.role)}</div>
+          <div class="card-role">${esc(staffRoleLabel(s))}</div>
           <div class="card-detail">
             ${s.phone ? `<div>📞 <strong>${esc(s.phone)}</strong></div>` : ''}
             ${s.dateJoined ? `<div>📅 Joined: <strong>${fmtDate(s.dateJoined)}</strong></div>` : ''}
@@ -11204,7 +11280,7 @@ function openPayForm(){
   const opts=DATA.staff.map(s=>{
     const earned=DATA.staffLogs.filter(l=>String(l.staffId)===String(s.id)).reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
     const paid=(DATA.staffPayments||[]).filter(p=>String(p.staffId)===String(s.id)).reduce((a,b)=>a+Number(b.amount||0),0);
-    return `<option value="${s.id}">${esc(s.name)} (${esc(s.role)}) — Balance: ${zm(earned-paid)}</option>`;
+    return `<option value="${s.id}">${esc(s.name)} (${esc(staffRoleLabel(s))}) — Balance: ${zm(earned-paid)}</option>`;
   }).join('');
   openModal(`
     <div class="mtitle">💳 Record Payment</div>
@@ -11316,7 +11392,7 @@ function generatePayslip(staffId, periodMonth, periodYear){
 ${_getBrandedHeader('Payslip — '+s.name)}
 <table>
   <tr><th>Employee Name</th><td>${esc(s.name)}</td><th>Period</th><td>${period}</td></tr>
-  <tr><th>Job Role</th><td>${esc(s.role)}</td><th>Date Issued</th><td>${today.toLocaleDateString('en-GB')}</td></tr>
+  <tr><th>Job Role</th><td>${esc(staffRoleLabel(s))}</td><th>Date Issued</th><td>${today.toLocaleDateString('en-GB')}</td></tr>
   ${s.dateJoined?`<tr><th>Date Joined</th><td>${fmtDate(s.dateJoined)}</td><th>Employee ID</th><td>${esc(s.employeeId||'—')}</td></tr>`:''}
 </table>
 <div class="pay-section-title">Earnings</div>
@@ -11360,9 +11436,11 @@ function _doOpenEditLog(id){
   const log=DATA.staffLogs.find(x=>String(x.id)===String(id));
   if(!log){alert('Record not found.');return;}
   const activeStaff=DATA.staff.filter(s=>!s.status||s.status==='active');
-  const staffOpts=activeStaff.map(s=>`<option value="${s.id}"${String(s.id)===String(log.staffId)?' selected':''}>${esc(s.name)} (${esc(s.role)})</option>`).join('');
+  const staffOpts=activeStaff.map(s=>`<option value="${s.id}"${String(s.id)===String(log.staffId)?' selected':''}>${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('');
   const staffRec=DATA.staff.find(s=>String(s.id)===String(log.staffId));
-  const staffRole=staffRec?.role||log.role||'';
+  // Preserve the role the log was actually recorded under — a multi-role
+  // staff member's current primary role may differ from the role used here.
+  const staffRole=log.role||staffRec?.role||'';
   const tasks=tasksForRole(staffRole);
   const taskOpts=tasks.length>0?tasks.map(t=>{
     const u=t.rateUnit||'bag';const ul=u==='custom'?(t.customUnit||'unit'):u;
@@ -11385,12 +11463,15 @@ function _doOpenEditLog(id){
     </div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="elg-date" value="${log.date}"/></div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveEditLog('${id}')">✓ Save Changes</button></div>`);
+  const m=document.querySelector('.modal');if(m)m.dataset.elgRole=staffRole;
   calcEditGross();
+}
+function _elgRole(){
+  const m=document.querySelector('.modal');return m?.dataset.elgRole||'';
 }
 function calcEditGross(){
   const staffId=document.getElementById('elg-staff')?.value;
-  const s=DATA.staff.find(x=>String(x.id)===String(staffId));
-  const role=s?.role||'';
+  const role=_elgRole();
   const task=document.getElementById('elg-task')?.value;
   const qty=document.getElementById('elg-bags')?.value;
   const ded=Number(document.getElementById('elg-ded')?.value||0);
@@ -11412,7 +11493,7 @@ function saveEditLog(id){
   const qty=Number(document.getElementById('elg-bags').value||0);
   if(!sid||!qty){alert('Select staff and enter a quantity.');return;}
   const s=DATA.staff.find(x=>String(x.id)===String(sid));
-  const role=s?.role||'';
+  const role=_elgRole()||s?.role||'';
   const task=document.getElementById('elg-task').value;
   const ru=taskRateUnit(role,task);
   const earnings=getEarnings(qty,role,task);
@@ -11464,7 +11545,7 @@ function renderLeave(){
     return{s,annualUsed,sickUsed,absences,annualBal:stdAnnual-annualUsed};
   });
   const tableRows=rows.map(function(x){const s=x.s,annualUsed=x.annualUsed,sickUsed=x.sickUsed,absences=x.absences,annualBal=x.annualBal;
-    return `<tr><td style="font-weight:700">${esc(s.name)}</td><td><span class="tag">${esc(s.role)}</span></td><td style="text-align:right;color:var(--green)">${stdAnnual}</td><td style="text-align:right;color:var(--amber)">${annualUsed}</td><td style="text-align:right;font-weight:700;color:${annualBal<0?'var(--red)':annualBal<=3?'var(--amber)':'var(--green)'}">${annualBal}</td><td style="text-align:right;color:var(--blue)">${sickUsed}</td><td style="text-align:right;color:var(--red)">${absences}</td>${USER.role==='admin'?`<td><button class="btn bg bsm" style="padding:3px 8px;font-size:16px" onclick="openLeaveEntryForm('${s.id}')">+ Log</button></td>`:'<td></td>'}</tr>`;
+    return `<tr><td style="font-weight:700">${esc(s.name)}</td><td><span class="tag">${esc(staffRoleLabel(s))}</span></td><td style="text-align:right;color:var(--green)">${stdAnnual}</td><td style="text-align:right;color:var(--amber)">${annualUsed}</td><td style="text-align:right;font-weight:700;color:${annualBal<0?'var(--red)':annualBal<=3?'var(--amber)':'var(--green)'}">${annualBal}</td><td style="text-align:right;color:var(--blue)">${sickUsed}</td><td style="text-align:right;color:var(--red)">${absences}</td>${USER.role==='admin'?`<td><button class="btn bg bsm" style="padding:3px 8px;font-size:16px" onclick="openLeaveEntryForm('${s.id}')">+ Log</button></td>`:'<td></td>'}</tr>`;
   }).join('');
   const recentEntries=leaveLog.slice().sort(function(a,b){return b.date.localeCompare(a.date);}).slice(0,20);
   const recentRows=recentEntries.map(function(l){
@@ -11477,7 +11558,7 @@ function renderLeave(){
 }
 function openLeaveEntryForm(preselectId){
   if(!hasFeature('staff_leave')){ showUpgradePrompt('staff_leave'); return; }
-  const opts=DATA.staff.filter(s=>!s.status||s.status==='active').map(s=>`<option value="${s.id}"${String(s.id)===String(preselectId)?' selected':''}>${esc(s.name)} (${esc(s.role)})</option>`).join('');
+  const opts=DATA.staff.filter(s=>!s.status||s.status==='active').map(s=>`<option value="${s.id}"${String(s.id)===String(preselectId)?' selected':''}>${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('');
   openModal(`<div class="mtitle">🏖 Log Leave / Absence</div><div class="fw"><div class="fl">Staff Member</div><select class="fi" id="lv-staff">${opts}</select></div><div class="fw"><div class="fl">Type</div><select class="fi" id="lv-type"><option value="leave">Annual Leave</option><option value="sick">Sick Day</option><option value="absent">Absent (Unexcused)</option></select></div><div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="lv-date" value="${today()}"/></div><div class="fw"><div class="fl">Days</div><input class="fi" type="number" id="lv-days" value="1" min="0.5" step="0.5" inputmode="decimal"/></div><div class="fw"><div class="fl">Note (optional)</div><input class="fi" id="lv-note" placeholder="E.G. APPROVED BY MANAGEMENT"/></div><div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveLeaveEntry()">✓ Save</button></div>`);
 }
 function saveLeaveEntry(){
@@ -12700,7 +12781,7 @@ function removeRole(ri){
   if(!requireAdmin('manage roles'))return;
   const role=(DATA.staffRoles||[])[ri];
   if(!role)return;
-  const inUse=DATA.staff.some(s=>s.role===role.name);
+  const inUse=DATA.staff.some(s=>staffHasRole(s,role.name));
   if(inUse){alert(`⚠️ Cannot remove "${role.name}" — it is assigned to existing staff members. Re-assign or remove those staff first.`);return;}
   requireAdminPassword('delete this role', ()=>{
     if(!confirm(`Remove role "${role.name}" and all its tasks?`))return;
@@ -12834,7 +12915,7 @@ function addUser(preStaffId){
       <div class="fl">Link to Staff Profile <span style="color:var(--red)">*</span></div>
       <select class="fi" id="au-linked-staff" ${preStaff?'disabled':''}>
         <option value="">Select the staff member this login belongs to</option>
-        ${(DATA.staff||[]).filter(s=>!s.status||s.status==='active').map(s=>`<option value="${esc(s.id)}"${preStaff&&String(s.id)===String(preStaff.id)?' selected':''}>${esc(s.name)} (${esc(s.role)})</option>`).join('')}
+        ${(DATA.staff||[]).filter(s=>!s.status||s.status==='active').map(s=>`<option value="${esc(s.id)}"${preStaff&&String(s.id)===String(preStaff.id)?' selected':''}>${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('')}
       </select>
       <div style="font-size:15px;color:var(--muted);margin-top:6px;line-height:1.6">This links the login to a staff profile so they can clock themselves in — they won't be able to clock in on behalf of anyone else.</div>
     </div>
@@ -15266,13 +15347,13 @@ function exportCSV_StaffEarnings(){
   DATA.staff.forEach(s=>{
     const earned=logs.filter(l=>String(l.staffId)===String(s.id)).reduce((a,l)=>a+(Number(l.earnings||0)-Number(l.deduction||0)),0);
     const paid=pays.filter(p=>String(p.staffId)===String(s.id)).reduce((a,p)=>a+Number(p.amount||0),0);
-    rows.push(_csvRow([s.name,s.role||'',earned.toFixed(2),paid.toFixed(2),(earned-paid).toFixed(2)]));
+    rows.push(_csvRow([s.name,staffRoleLabel(s),earned.toFixed(2),paid.toFixed(2),(earned-paid).toFixed(2)]));
   });
   _csvDownload(rows,_csvFilename('Staff_Earnings'));
 }
 function exportCSV_StaffRoster(){
   const rows=[_csvRow(['Name','Role','Phone','Status','Contract Type','Emergency Contact','Emergency Phone','Date of Hire','Date of Birth'])];
-  DATA.staff.forEach(s=>rows.push(_csvRow([s.name,s.role||'',s.phone||'',s.status||'active',s.contractType||'',s.emergencyContactName||'',s.emergencyContactPhone||'',s.dateJoined||'',s.dateOfBirth||''])));
+  DATA.staff.forEach(s=>rows.push(_csvRow([s.name,staffRoleLabel(s),s.phone||'',s.status||'active',s.contractType||'',s.emergencyContactName||'',s.emergencyContactPhone||'',s.dateJoined||'',s.dateOfBirth||''])));
   _csvDownload(rows,_csvFilename('Staff_Roster'));
 }
 
@@ -15829,7 +15910,7 @@ function generatePrintSummary(startStr,endStr,periodLabel){
     const earned=sLogs.filter(l=>String(l.staffId)===String(s.id)).reduce((a,l)=>a+Number(l.earnings||0)-Number(l.deduction||0),0);
     const paid=sPays.filter(p=>String(p.staffId)===String(s.id)).reduce((a,p)=>a+Number(p.amount||0),0);
     if(!earned&&!paid)return '';
-    return `<tr><td>${esc(s.name)}</td><td>${esc(s.role||'')}</td><td style="text-align:right">${zm(earned)}</td><td style="text-align:right">${zm(paid)}</td><td style="text-align:right;color:${earned-paid>0?'#c00':'#060'}">${zm(earned-paid)}</td></tr>`;
+    return `<tr><td>${esc(s.name)}</td><td>${esc(staffRoleLabel(s))}</td><td style="text-align:right">${zm(earned)}</td><td style="text-align:right">${zm(paid)}</td><td style="text-align:right;color:${earned-paid>0?'#c00':'#060'}">${zm(earned-paid)}</td></tr>`;
   }).join('');
 
   // Leave
@@ -16904,7 +16985,8 @@ _registerAIAction('clock_in_staff', {
     'missing, ask the user to clarify in plain text instead of calling this.',
   parameters: { type:'object', properties: {
     staffName: { type:'string', description:'The staff member\'s name, as close as possible to how it appears in the roster.' },
-    task: { type:'string', description:'Optional task name for their role. Leave blank if the user didn\'t specify one.' }
+    task: { type:'string', description:'Optional task name for their role. Leave blank if the user didn\'t specify one.' },
+    role: { type:'string', description:'Optional — which of the staff member\'s job roles to clock them in as, only needed if they have more than one role assigned. Leave blank otherwise.' }
   }, required:['staffName'] }
 }, function resolveClockIn(args){
   const matches = _findActiveStaffByName(args.staffName);
@@ -16913,15 +16995,24 @@ _registerAIAction('clock_in_staff', {
   const s = matches[0];
   const existing = _openShiftFor(s.id);
   if(existing) return { error:`${s.name} already has an open shift (clocked in ${existing.date}, ${existing.timeIn||'—'}) — clock them out first.` };
+  const roles = staffRoleList(s);
+  let role = roles[0] || '';
+  if(args.role){
+    const rMatch = roles.find(r=>r.toLowerCase()===String(args.role).trim().toLowerCase());
+    if(!rMatch) return { error:`${s.name} isn't assigned the role "${args.role}" — their roles are: ${roles.join(', ')||'none'}.` };
+    role = rMatch;
+  } else if(roles.length>1){
+    return { error:`${s.name} has more than one role (${roles.join(', ')}) — which one should I clock them in as?` };
+  }
   const task = args.task || '';
-  return { description:`Clock in ${s.name} (${s.role}) now${task?' for "'+task+'"':''}?`, action:{ staffId:s.id, task } };
+  return { description:`Clock in ${s.name} (${role}) now${task?' for "'+task+'"':''}?`, action:{ staffId:s.id, task, role } };
 }, function executeClockIn(action){
   if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode — ask an administrator to clock in staff.' };
   const s = DATA.staff.find(x=>String(x.id)===String(action.staffId));
   if(!s) return { ok:false, msg:'Could not find that staff member anymore — they may have been removed.' };
   const existing = _openShiftFor(action.staffId);
   if(existing) return { ok:false, msg:`${s.name} already has an open shift (clocked in ${existing.date}, ${existing.timeIn||'—'}). Clock them out first.` };
-  const role = s.role;
+  const role = action.role || staffRoleList(s)[0] || '';
   const tasks = tasksForRole(role);
   const task = (action.task && tasks.some(t=>t.name===action.task)) ? action.task : (tasks[0]?.name || '');
   const timeIn = nowTime(), timeInTs = Date.now();
@@ -16956,25 +17047,27 @@ _registerAIAction('log_completed_work', {
   const s = staffMatches[0];
   const qty = Number(args.quantity||0);
   if(!(qty>0)) return { error:`How much should I log for ${s.name}'s "${args.task}"? I need a quantity greater than zero.` };
-  const taskMatches = _findTaskForRole(s.role, args.task);
+  // Search across ALL of the staff member's assigned roles — not just their
+  // primary one — since the requested task may belong to a secondary role.
+  const taskMatches = _findTaskAcrossRoles(s, args.task);
   if(taskMatches.length===0){
-    const available = tasksForRole(s.role).map(t=>t.name).join(', ') || 'none defined';
-    return { error:`"${args.task}" isn't a defined task for ${s.name}'s role (${s.role}). Defined tasks: ${available}.` };
+    const available = staffRoleList(s).flatMap(r=>tasksForRole(r).map(t=>t.name)).join(', ') || 'none defined';
+    return { error:`"${args.task}" isn't a defined task for ${s.name}'s role${staffRoleList(s).length>1?'s':''} (${staffRoleLabel(s)}). Defined tasks: ${available}.` };
   }
-  if(taskMatches.length>1) return { error:`A few tasks match "${args.task}" for ${s.role}: ${taskMatches.map(t=>t.name).join(', ')}. Which one did you mean?` };
-  const task = taskMatches[0];
+  if(taskMatches.length>1) return { error:`A few tasks match "${args.task}": ${taskMatches.map(m=>`${m.task.name} (${m.role})`).join(', ')}. Which one did you mean?` };
+  const { role, task } = taskMatches[0];
   const useDate = _aiDate(args.date);
-  const earnings = getEarnings(qty, s.role, task.name);
-  const ul = taskRateUnitLabel(s.role, task.name);
+  const earnings = getEarnings(qty, role, task.name);
+  const ul = taskRateUnitLabel(role, task.name);
   return {
     description: `Log ${qty} ${ul}${qty!==1?'s':''} of "${task.name}" for ${s.name} on ${useDate} — K${earnings.toFixed(2)} earned. Save this?`,
-    action: { staffId:s.id, task:task.name, qty, date:useDate }
+    action: { staffId:s.id, task:task.name, role, qty, date:useDate }
   };
 }, function executeLogWork(action){
   if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode — ask an administrator to log work.' };
   const s = DATA.staff.find(x=>String(x.id)===String(action.staffId));
   if(!s) return { ok:false, msg:'Could not find that staff member anymore — they may have been removed.' };
-  const role = s.role;
+  const role = action.role || staffRoleList(s)[0] || '';
   const task = tasksForRole(role).find(t=>t.name===action.task);
   if(!task) return { ok:false, msg:`"${action.task}" isn't a defined task for ${s.name}'s role (${role}).` };
   const qty = Number(action.qty||0);
@@ -17015,19 +17108,23 @@ _registerAIAction('clock_out_staff', {
   const openShift = _openShiftFor(s.id);
   if(!openShift) return { error:`${s.name} doesn't have an open shift right now.` };
   let taskName = openShift.task || '';
+  // Validate/resolve the task against the role the shift was actually
+  // clocked in under — a multi-role staff member's current primary role may
+  // differ from the role used for this specific open shift.
+  const shiftRole = openShift.role || staffRoleList(s)[0] || '';
   if(args.task){
-    const taskMatches = _findTaskForRole(s.role, args.task);
-    if(taskMatches.length===0) return { error:`"${args.task}" isn't a defined task for ${s.name}'s role (${s.role}).` };
+    const taskMatches = _findTaskForRole(shiftRole, args.task);
+    if(taskMatches.length===0) return { error:`"${args.task}" isn't a defined task for ${s.name}'s role (${shiftRole}).` };
     if(taskMatches.length>1) return { error:`A few tasks match "${args.task}": ${taskMatches.map(t=>t.name).join(', ')}. Which one did you mean?` };
     taskName = taskMatches[0].name;
   }
   const isSalaried = s.payType==='salary';
   const qty = Number(args.quantity||0);
   if(!isSalaried && !(qty>0)) return { error:`How much should I log for ${s.name}'s shift (task: ${taskName||'—'})? I need a quantity greater than zero.` };
-  const earnings = isSalaried ? 0 : getEarnings(qty, s.role, taskName);
+  const earnings = isSalaried ? 0 : getEarnings(qty, shiftRole, taskName);
   const description = isSalaried
     ? `Complete ${s.name}'s shift now — salaried, no per-task pay. Save this?`
-    : `Complete ${s.name}'s shift now — ${qty} ${taskRateUnitLabel(s.role,taskName)}${qty!==1?'s':''} of "${taskName}" — K${earnings.toFixed(2)} earned. Save this?`;
+    : `Complete ${s.name}'s shift now — ${qty} ${taskRateUnitLabel(shiftRole,taskName)}${qty!==1?'s':''} of "${taskName}" — K${earnings.toFixed(2)} earned. Save this?`;
   return { description, action:{ logId:openShift.id, task:taskName, qty } };
 }, function executeClockOut(action){
   if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
