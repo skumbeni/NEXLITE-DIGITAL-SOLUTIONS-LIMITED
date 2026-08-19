@@ -1613,7 +1613,11 @@ function esc(str) {
 //
 // ── ACTIVE RULES (apply these in Firebase Console → Realtime Database → Rules) ──
 // This block reflects what is ACTUALLY deployed (confirmed directly from the
-// Firebase Console on 28 Jun 2026), not a theoretical/aspirational version.
+// Firebase Console on 19 Aug 2026), not a theoretical/aspirational version.
+// The "notifications" node under depots/$depotKey is REQUIRED for the
+// notifications/chat feature — it did not exist in the previously deployed
+// rules, which is why sends/receives silently failed (permission denied,
+// swallowed by the try/catch in sendNotification/fetchNotifications).
 // {
 //   "rules": {
 //     ".read": false,
@@ -1622,19 +1626,39 @@ function esc(str) {
 //       ".read": true,
 //       "$depotKey": {
 //         ".read": true,
-//         ".write": true
+//         ".write": "(!data.exists() && newData.child('status').val() === 'trial') || auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2'"
 //       }
 //     },
 //     "depots": {
 //       "$depotKey": {
-//         ".read": true,
-//         ".write": true
+//         "authorizedUids": {
+//           ".read": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || (auth.uid != null && data.child(auth.uid).exists())",
+//           "$uid": {
+//             ".write": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || (auth.uid === $uid && (root.child('depots').child($depotKey).child('authorizedUids').exists() ? root.child('depots').child($depotKey).child('authorizedUids').child(auth.uid).exists() : root.child('licenses').child($depotKey).child('createdAt').val() > (now - 300000))) || (auth.uid != null && root.child('depots').child($depotKey).child('authorizedUids').child(auth.uid).exists())"
+//           }
+//         },
+//         "auth": {
+//           ".read": true,
+//           ".write": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || (auth.uid != null && (root.child('depots').child($depotKey).child('authorizedUids').exists() ? root.child('depots').child($depotKey).child('authorizedUids').child(auth.uid).exists() : root.child('licenses').child($depotKey).child('createdAt').val() > (now - 300000)))"
+//         },
+//         "data": {
+//           ".read": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || (auth.uid != null && root.child('depots').child($depotKey).child('authorizedUids').child(auth.uid).exists())",
+//           ".write": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || (auth.uid != null && root.child('depots').child($depotKey).child('authorizedUids').child(auth.uid).exists())"
+//         },
+//         "meta": {
+//           ".read": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || (auth.uid != null && root.child('depots').child($depotKey).child('authorizedUids').child(auth.uid).exists())",
+//           ".write": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || (auth.uid != null && root.child('depots').child($depotKey).child('authorizedUids').child(auth.uid).exists())"
+//         },
+//         "notifications": {
+//           ".read": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || (auth.uid != null && root.child('depots').child($depotKey).child('authorizedUids').child(auth.uid).exists())",
+//           ".write": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || (auth.uid != null && root.child('depots').child($depotKey).child('authorizedUids').child(auth.uid).exists())"
+//         }
 //       }
 //     },
 //     "usernames": {
 //       "$username": {
 //         ".read": true,
-//         ".write": true
+//         ".write": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || !data.exists() || (auth.uid != null && root.child('depots').child(data.child('installId').val()).child('authorizedUids').child(auth.uid).exists())"
 //       }
 //     },
 //     "lockouts": {
@@ -1647,7 +1671,9 @@ function esc(str) {
 //       ".read": true,
 //       "$installId": {
 //         ".read": true,
-//         ".write": true
+//         "$reqKey": {
+//           ".write": "!data.exists() || auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2'"
+//         }
 //       }
 //     }
 //   }
@@ -3645,7 +3671,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v2.4';
+const SW_VERSION  = 'v2.5';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -6703,9 +6729,9 @@ function _renderChatThread(username){
   openModal(`
     <div class="mtitle">💬 ${esc(username)}</div>
     <div id="chat-thread-scroll" style="max-height:50vh;overflow-y:auto;padding:2px 2px 8px">${bubbles}</div>
-    <div style="display:flex;gap:8px;margin-top:8px">
-      <textarea class="fi" id="chat-reply-text" rows="1" maxlength="1000" placeholder="Type a message…" style="flex:1;resize:none"></textarea>
-      <button class="btn bg" id="chat-send-btn" onclick="_doSendChatReply('${esc(username)}')">Send</button>
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:8px;align-items:end">
+      <textarea class="fi" id="chat-reply-text" rows="2" maxlength="1000" placeholder="Type a message…" style="min-width:0;resize:none"></textarea>
+      <button class="btn bg" id="chat-send-btn" style="white-space:nowrap;height:44px" onclick="_doSendChatReply('${esc(username)}')">Send</button>
     </div>
     <div class="mact"><button class="btn bo" style="width:100%" onclick="openNotificationsInbox()">← Back to Inbox</button></div>`);
   const scroll = document.getElementById('chat-thread-scroll');
