@@ -393,6 +393,7 @@
             <header class="landing-header">
                 <div class="landing-logo">ZamAgro<span>Track</span></div>
                 <div style="display:flex;gap:10px;align-items:center;">
+                    <button id="install-btn-landing" class="btn btn-sm install-app-btn hidden" onclick="installApp()" style="background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.35);">⬇️ Install App</button>
                     <button onclick="showLogin()" class="btn btn-secondary">Log In / Sign Up →</button>
                 </div>
             </header>
@@ -683,7 +684,10 @@
                     <button class="hamburger" onclick="toggleSidebar()" aria-label="Menu">&#9776;</button>
                     <h2 id="page-title">Dashboard</h2>
                 </div>
-                <div id="date-display" style="color: var(--gray);"></div>
+                <div style="display:flex;align-items:center;gap:.7rem;">
+                    <button id="install-btn-app" class="btn btn-sm install-app-btn hidden" onclick="installApp()" style="background:var(--accent);color:#fff;">⬇️ Install App</button>
+                    <div id="date-display" style="color: var(--gray);"></div>
+                </div>
             </div>
 
             <!-- 1. DASHBOARD VIEW -->
@@ -2520,6 +2524,57 @@
             document.body.appendChild(el);
             setTimeout(() => el.remove(), 3000);
         }
+
+        // --- PWA INSTALL PROMPT ---
+        let deferredInstallPrompt = null;
+        const INSTALLED_FLAG_KEY = 'zamagro_pwa_installed';
+
+        function isWrappedApp() {
+            // Median/GoNative wrapped APK — already an installed app, PWA install prompt is irrelevant here.
+            const ua = navigator.userAgent || '';
+            return !!(window.median || window.gonative || /median|gonative/i.test(ua));
+        }
+
+        function isAppInstalled() {
+            return window.matchMedia('(display-mode: standalone)').matches
+                || window.navigator.standalone === true
+                || isWrappedApp()
+                || localStorage.getItem(INSTALLED_FLAG_KEY) === '1';
+        }
+
+        function refreshInstallButtons() {
+            const show = !!deferredInstallPrompt && !isAppInstalled();
+            document.querySelectorAll('.install-app-btn').forEach(btn => btn.classList.toggle('hidden', !show));
+        }
+
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredInstallPrompt = e;
+            refreshInstallButtons();
+        });
+
+        window.addEventListener('appinstalled', () => {
+            deferredInstallPrompt = null;
+            localStorage.setItem(INSTALLED_FLAG_KEY, '1');
+            refreshInstallButtons();
+            showToast('App installed! Launch it anytime from your home screen.');
+        });
+
+        async function installApp() {
+            if (!deferredInstallPrompt) {
+                showToast('Open your browser menu and choose "Add to Home screen" / "Install app" to install.');
+                return;
+            }
+            deferredInstallPrompt.prompt();
+            const choice = await deferredInstallPrompt.userChoice;
+            if (choice && choice.outcome === 'accepted') {
+                localStorage.setItem(INSTALLED_FLAG_KEY, '1');
+            }
+            deferredInstallPrompt = null;
+            refreshInstallButtons();
+        }
+
+        document.addEventListener('DOMContentLoaded', refreshInstallButtons);
 
         // --- NAVIGATION & VIEWS ---
 
