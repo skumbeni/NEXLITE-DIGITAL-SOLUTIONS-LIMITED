@@ -3671,7 +3671,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v2.6';
+const SW_VERSION  = 'v2.7';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -16894,8 +16894,9 @@ function _copilotSystemPrompt(mode){
     ) : (
       '\n\nYou may also perform data entry using the tools available to you — '+
       'clocking staff in/out, logging completed work or absences, logging '+
-      'commodity received/issued, logging transport, and recording staff '+
-      'payments. Only call a tool when the user has clearly asked for that '+
+      'commodity received/issued, logging transport, recording staff '+
+      'payments, and (Admins only) moving a batch of existing work logs from '+
+      'one date to another. Only call a tool when the user has clearly asked for that '+
       'specific entry and given the details it needs (e.g. staff name, task '+
       'and quantity for work; batch and quantity for commodity movements; '+
       'vehicle and driver for transport; staff and amount for payments). '+
@@ -17380,6 +17381,80 @@ _registerAIAction('record_staff_payment', {
   updateData(d=>({...d,staffPayments:[...(d.staffPayments||[]),payload]}));
   logAuditEvent('CREATE','Staff Payment',`Staff ID:${action.staffId} · Amount:${action.amount} · Date:${action.date} · via Depot Assistant`);
   return { ok:true, msg:`Recorded payment of K${action.amount.toFixed(2)} to ${s.name}.` };
+}, true);
+
+// ═══ 9. Bulk-move work log dates ═══════════════════════════════════════
+// Edits an existing field (date) on possibly many staffLogs at once — e.g.
+// "move all stitching logs from 20 Aug to 19 Aug". Unlike the CREATE-only
+// actions above, this touches existing records, so it mirrors the manual
+// Edit Work Log flow exactly: Admin-only (requireAdmin gate in manual UI),
+// respects the per-record 24h edit window (isWithin24h), and is flagged
+// sensitive so confirmCopilotAction() re-checks the admin password before
+// execute() ever runs, same as record_staff_payment above.
+_registerAIAction('bulk_edit_log_date', {
+  type: 'function',
+  name: 'bulk_edit_log_date',
+  description: 'Move a group of existing work logs from one date to another — '+
+    'e.g. "change all stitching logs from 20 August to 19 August". Matches '+
+    'logs by date, optionally narrowed by task name and/or staff name. Only '+
+    'call this when the user has clearly given the date to move logs FROM '+
+    'and the date to move them TO — never guess either date. This only '+
+    'changes the date field; quantities, earnings and staff are untouched.',
+  parameters: { type:'object', properties: {
+    task: { type:'string', description:'Optional task name to filter by (e.g. "Stitching"). Leave blank to match logs for any task.' },
+    staffName: { type:'string', description:'Optional staff member name to filter by. Leave blank to match all staff.' },
+    fromDate: { type:'string', description:'The current date of the logs to move, in YYYY-MM-DD format.' },
+    toDate: { type:'string', description:'The new date to move the logs to, in YYYY-MM-DD format.' }
+  }, required:['fromDate','toDate'] }
+}, function resolveBulkEditLogDate(args){
+  if(!isAdmin()) return { error:'Editing existing work logs needs Admin access — this account can\'t do that.' };
+  const fromDate = _YMD_RE.test(args.fromDate||'') ? args.fromDate : '';
+  const toDate = _YMD_RE.test(args.toDate||'') ? args.toDate : '';
+  if(!fromDate || !toDate) return { error:'I need both dates in YYYY-MM-DD format — which date should I move logs from, and which date should they move to?' };
+  if(fromDate===toDate) return { error:'The "from" and "to" dates are the same — there\'s nothing to move.' };
+  let staffFilter = null;
+  if(args.staffName){
+    const matches = _findActiveStaffByName(args.staffName);
+    if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
+    if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
+    staffFilter = matches[0].id;
+  }
+  const taskQ = (args.task||'').trim().toLowerCase();
+  const candidates = (DATA.staffLogs||[]).filter(l=>
+    l.date===fromDate &&
+    (!staffFilter || String(l.staffId)===String(staffFilter)) &&
+    (!taskQ || (l.task||'').toLowerCase()===taskQ || (l.task||'').toLowerCase().includes(taskQ))
+  );
+  if(candidates.length===0) return { error:`I couldn't find any${args.task?' "'+args.task+'"':''} work logs on ${fromDate}${args.staffName?' for '+args.staffName:''} to move.` };
+  const editable = candidates.filter(l=>isWithin24h(l,true));
+  const blocked = candidates.length - editable.length;
+  if(editable.length===0) return { error:`Found ${candidates.length} matching log${candidates.length===1?'':'s'} on ${fromDate}, but all of them are outside the ${_editWindowLabel(true)} edit window and can no longer be edited.` };
+  const names = [...new Set(editable.map(l=>{
+    const st = DATA.staff.find(x=>String(x.id)===String(l.staffId));
+    return st ? st.name : 'Unknown';
+  }))];
+  const namesStr = names.length<=4 ? names.join(', ') : `${names.slice(0,4).join(', ')} and ${names.length-4} more`;
+  return {
+    description: `Move ${editable.length} work log${editable.length===1?'':'s'}${args.task?' ("'+args.task+'")':''} from ${fromDate} to ${toDate} — ${namesStr}?`+
+      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel(true)} edit window and will be skipped.)` : '')+
+      ` You'll be asked to confirm your admin password next. Save this?`,
+    action: { logIds: editable.map(l=>l.id), toDate }
+  };
+}, function executeBulkEditLogDate(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  if(!isAdmin()) return { ok:false, msg:'Admin access is required to edit work logs.' };
+  const idSet = new Set((action.logIds||[]).map(String));
+  let moved = 0;
+  updateData(d=>({...d, staffLogs:d.staffLogs.map(l=>{
+    if(idSet.has(String(l.id)) && isWithin24h(l,true)){
+      moved++;
+      return {...l, date:action.toDate};
+    }
+    return l;
+  })}));
+  if(moved===0) return { ok:false, msg:'None of those logs could be moved — they may have fallen outside the edit window while waiting for confirmation.' };
+  logAuditEvent('EDIT','Work Log (Bulk Date Change)',`${moved} log(s) moved to ${action.toDate} · via Depot Assistant`);
+  return { ok:true, msg:`Moved ${moved} work log${moved===1?'':'s'} to ${action.toDate}.` };
 }, true);
 
 
