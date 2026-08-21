@@ -946,6 +946,11 @@ const DB = {
     if(!this.data.contracts) this.data.contracts = [];
     if(!this.data.messages) this.data.messages = [];
     if(!this.data.notifications) this.data.notifications = [];
+    if(!Array.isArray(this.data.agentLinks)) this.data.agentLinks = [];
+    this.data.agentLinks.forEach(l=>{
+      if(!Array.isArray(l.advances)) l.advances = [];
+      if(typeof l.commissionRate === 'undefined' || l.commissionRate===null) l.commissionRate = 0;
+    });
     this.data.purchases.forEach(p=>{
       if(!p.paymentStatus){
         p.paymentStatus = p.status==='paid' ? (p.paidTo==='farmer' ? 'paid_to_farmer' : 'paid_to_agent') : 'unpaid';
@@ -1278,7 +1283,7 @@ const DB = {
     const totalQty = purchases.reduce((s,p)=>s+p.quantity,0);
     const totalValue = commissionablePurchases.reduce((s,p)=>s+this.purchaseValue(p),0);
     const commissionAccrued = totalValue * (link.commissionRate/100);
-    const advanceTotal = link.advances.reduce((s,a)=>s+Number(a.amount),0);
+    const advanceTotal = (Array.isArray(link.advances) ? link.advances : []).reduce((s,a)=>s+Number(a.amount),0);
     const netPayable = commissionAccrued - advanceTotal; // negative = still owes the advance back
     return { link, purchases, totalQty, totalValue, commissionAccrued, advanceTotal, netPayable };
   },
@@ -1641,6 +1646,15 @@ async function firebaseSignInAndBackfillUid(record, role, email, password){
 }
 
 let session = null; // {role, id}
+const SESSION_KEY = 'agribuy_session_v1';
+function setSession(s){
+  session = s;
+  try{ localStorage.setItem(SESSION_KEY, JSON.stringify(s)); }catch(e){ console.error('Could not persist session:', e); }
+}
+function clearSession(){
+  session = null;
+  try{ localStorage.removeItem(SESSION_KEY); }catch(e){}
+}
 let pendingRole = null;
 
 const roleMeta = {
@@ -1769,7 +1783,7 @@ async function attemptSignup(){
   }
   DB.save();
   toast('Account created' + (claimed ? ' — linked to your existing ' + code + ' ID' : ''));
-  session = { role, id: record.id };
+  setSession({ role, id: record.id });
   enterApp();
 }
 
@@ -1850,13 +1864,14 @@ async function attemptLogin(){
     firebaseSignInAndBackfillUid(found, 'farmer', authEmailFor('fm', found.id), 'fm-' + found.id);
   }
 
-  session = { role: pendingRole, id: found.id };
+  setSession({ role: pendingRole, id: found.id });
   enterApp();
 }
 
 function logout(){
+  if(!confirm('Log out of AgriBuy Connect?')) return;
   DB.detachInboxListener(); // stop this device's own messages/notifications listeners before the next login (possibly a different person) attaches its own
-  session = null;
+  clearSession();
   goLanding();
 }
 
@@ -3608,12 +3623,38 @@ function renderFarmer(view){
 /* =========================================================================
    INIT
    ========================================================================= */
-(function init(){
+(async function init(){
   wireConnectionState();
-  // No anonymous sign-in and no cloud read here — the public landing page
-  // needs neither. DB.ensureLoaded() (auth + cloud fetch) only fires once
-  // someone actually tries to sign in, from goLogin()/attemptLogin() below.
   const overlay = document.getElementById('cloud-loading-overlay');
+  // Restore a previous session across refreshes/reopens — session itself
+  // used to be in-memory only, so reloading the page always bounced
+  // straight back to the landing/login screen even for someone who was
+  // mid-session. This is the only case where the loading overlay stays up
+  // past page load: we need DB.ensureLoaded() (auth + cloud fetch) to
+  // confirm the account still exists and isn't suspended before letting
+  // them straight back in.
+  const stored = localStorage.getItem(SESSION_KEY);
+  let restored = false;
+  if(stored){
+    try{
+      const saved = JSON.parse(stored);
+      await DB.ensureLoaded();
+      const record = DB.recordFor(saved.role, saved.id);
+      if(record){
+        const gate = subscriptionGate(resolveOwnerAccount(saved.role, record));
+        if(gate.ok){
+          session = saved;
+          enterApp();
+          restored = true;
+        } else {
+          toast(gate.reason);
+        }
+      }
+    }catch(e){
+      console.error('Session restore failed:', e);
+    }
+    if(!restored) clearSession();
+  }
   if(overlay) overlay.style.display = 'none';
 })();
 document.getElementById('login-code') && document.getElementById('login-code').addEventListener('keydown', e=>{ if(e.key==='Enter') attemptLogin(); });
