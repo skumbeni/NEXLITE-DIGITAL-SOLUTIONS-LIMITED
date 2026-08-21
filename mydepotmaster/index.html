@@ -8436,28 +8436,124 @@ function renderGenItemNamesTab(){
   const items=DATA.inventoryItems||[];
   const listHtml=items.length>0
     ?`<div style="margin-bottom:12px">${items.map((item,i)=>`
-      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">
-        <span style="font-weight:700">${esc(item)}</span>
-        <button class="delbtn" onclick="removeInvItem(${i})">🗑</button>
+      <div style="padding:8px 0;border-bottom:1px solid var(--border)">
+        <span style="font-weight:700;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" onclick="openInvItemHistory(decodeURIComponent('${encodeURIComponent(_invItemName(item))}'))">${esc(_invItemName(item))}</span>
       </div>`).join('')}</div>`
     :`<div style="color:var(--muted);font-size:18px;margin-bottom:12px">No items defined yet. Add items below.</div>`;
   const atCap = isAtCap('inventoryItems', items.length);
+  // Items already recorded in actual stock activity (received/issued) but not yet
+  // formalised in the definitions list — these can be picked instead of retyped.
+  const definedNames=new Set(items.map(_invItemName).filter(Boolean));
+  const recordedNames=[...new Set([...DATA.generalInventory.map(x=>x.itemName),...DATA.generalIssued.map(x=>x.itemName)])].filter(Boolean);
+  const pickable=recordedNames.filter(n=>!definedNames.has(n)).sort();
   const addFormHtml = atCap
     ? `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center;margin-top:4px">
         <div style="font-size:15px;color:var(--muted);margin-bottom:10px">You've reached the ${currentCaps().inventoryItems} inventory-item limit on your <strong style="color:var(--text)">${esc(TIER_META[currentTier()].label)} plan</strong>.</div>
         <button class="btn bg" onclick="showCapReachedPrompt('inventoryItems','Inventory Items')">📈 See Upgrade Options</button>
       </div>`
-    : `<div style="display:flex;gap:8px;margin-top:4px">
-        <input class="fi" id="new-inv-item" placeholder="E.G. FERTILIZER, BAGS…" style="flex:1" oninput="this.value=this.value.toUpperCase()"/>
-        <button class="btn bg" style="width:auto;padding:10px 16px" onclick="addInvItem()">+ ADD</button>
-      </div>`;
+    : pickable.length>0
+      ? `<div style="margin-top:4px">
+          <select class="fi" id="new-inv-item" onchange="document.getElementById('new-inv-item-other').style.display=this.value==='__other__'?'block':'none'">
+            <option value="">— Select from recorded items —</option>
+            ${pickable.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('')}
+            <option value="__other__">OTHER (TYPE BELOW)</option>
+          </select>
+          <input class="fi" id="new-inv-item-other" placeholder="TYPE NEW ITEM NAME" style="display:none;margin-top:8px" oninput="this.value=this.value.toUpperCase()"/>
+          <button class="btn bg" style="width:100%;margin-top:8px" onclick="addInvItem()">+ ADD</button>
+        </div>`
+      : `<div style="display:flex;gap:8px;margin-top:4px">
+          <input class="fi" id="new-inv-item-other" placeholder="E.G. FERTILIZER, BAGS…" style="flex:1" oninput="this.value=this.value.toUpperCase()"/>
+          <button class="btn bg" style="width:auto;padding:10px 16px" onclick="addInvItem()">+ ADD</button>
+        </div>`;
   return `
     <div class="card">
       <div class="ctitle">📋 Inventory Item Names</div>
-      <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">Define item names that appear in the General Inventory dropdown. Ensures consistent naming across all entries and reports.</div>
+      <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">Define item names that appear in the General Inventory dropdown. Ensures consistent naming across all entries and reports.${pickable.length>0?' Pick from items already recorded in stock, or choose OTHER to type a brand-new one.':''} Tap an item name to see its full history.</div>
       ${listHtml}
       ${addFormHtml}
     </div>`;
+}
+
+// ── ITEM HISTORY (all Received / Issued / Stock-Count entries for one item) ──
+function openInvItemHistory(name){
+  if(!name)return;
+  const recRows=(DATA.generalInventory||[]).filter(x=>x.itemName===name).map(x=>({...x,_type:'rec'}));
+  const issRows=(DATA.generalIssued||[]).filter(x=>x.itemName===name).map(x=>({...x,_type:'iss'}));
+  const cntRows=(DATA.generalStockCounts||[]).filter(x=>x.itemName===name).map(x=>({...x,_type:'cnt'}));
+  const all=[...recRows,...issRows,...cntRows].sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.time||'').localeCompare(a.time||''));
+
+  const avail=itemAvail(name);
+  const latestPhys=itemPhysical(name);
+  const totalRec=approvedArr(recRows).reduce((a,b)=>a+Number(b.received||0),0);
+  const totalIss=approvedArr(issRows).reduce((a,b)=>a+Number(b.issued||0),0);
+  const invDef=(DATA.inventoryItems||[]).find(x=>_invItemName(x)===name);
+  const minStock=invDef?_invItemMin(invDef):0;
+
+  const summaryHtml=`
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:14px;color:var(--muted)">AVAILABLE NOW</div>
+        <div style="font-size:22px;font-weight:800;color:var(--blue)">${avail.toLocaleString()}</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:14px;color:var(--muted)">LATEST PHYSICAL COUNT</div>
+        <div style="font-size:22px;font-weight:800;color:var(--green)">${latestPhys?Number(latestPhys.physicalCount).toLocaleString():'—'}</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:14px;color:var(--muted)">TOTAL RECEIVED</div>
+        <div style="font-size:19px;font-weight:800;color:var(--text)">${totalRec.toLocaleString()}</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:14px;color:var(--muted)">TOTAL ISSUED</div>
+        <div style="font-size:19px;font-weight:800;color:var(--text)">${totalIss.toLocaleString()}</div>
+      </div>
+    </div>
+    ${minStock>0&&avail<=minStock?`<div class="warn" style="margin-bottom:12px">⚠️ Below minimum stock level (${minStock.toLocaleString()})</div>`:''}`;
+
+  const rowHtml=r=>{
+    if(r._type==='rec'){
+      const icon='📥',label='RECEIVED',qty=`+${Number(r.received||0).toLocaleString()}`,qtyColor='var(--blue)';
+      const detail=[
+        r.condition&&r.condition!=='good'?r.condition.toUpperCase().replace(/-/g,' '):'',
+        r.purchasePrice>0?`@ ${zm(r.purchasePrice)}/unit`:'',
+        r.supplierName?`Supplier: ${esc(r.supplierName)}`:''
+      ].filter(Boolean).join(' · ');
+      return {icon,label,qty,qtyColor,detail,notes:r.notes,rec:r};
+    }
+    if(r._type==='iss'){
+      const icon='📤',label='ISSUED',qty=`-${Number(r.issued||0).toLocaleString()}`,qtyColor='var(--amber)';
+      const detail=[
+        r.sellingPrice>0?`@ ${zm(r.sellingPrice)}/unit`:'',
+        r.customerName?`Customer: ${esc(r.customerName)}`:'',
+        r.creditStatus&&r.creditStatus!=='paid'?r.creditStatus.toUpperCase():''
+      ].filter(Boolean).join(' · ');
+      return {icon,label,qty,qtyColor,detail,notes:r.notes,rec:r};
+    }
+    const icon='⚖️',label='STOCK COUNT',qty=Number(r.physicalCount||0).toLocaleString(),qtyColor='var(--green)';
+    return {icon,label,qty,qtyColor,detail:'',notes:r.notes,rec:r};
+  };
+
+  const listHtml=all.length===0
+    ?`<div class="empty">No entries recorded for this item yet.</div>`
+    :all.map(r=>{
+      const v=rowHtml(r);
+      return `<div style="padding:10px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-weight:700">${v.icon} ${v.label}</div>
+          <div style="font-weight:800;color:${v.qtyColor}">${v.qty}</div>
+        </div>
+        <div style="font-size:15px;color:var(--muted);margin-top:2px">${fmtDate(r.date)}${r.time?' · '+esc(r.time):''}${v.detail?' · '+v.detail:''}</div>
+        ${v.notes?`<div style="font-size:15px;color:var(--muted);margin-top:2px">📝 ${esc(v.notes)}</div>`:''}
+        ${approvalBadge(v.rec)}
+      </div>`;
+    }).join('');
+
+  openModal(`
+    <div class="mtitle">${esc(name)}</div>
+    ${summaryHtml}
+    <div class="sh" style="margin-bottom:4px">All Entries (${all.length})</div>
+    <div style="max-height:50vh;overflow-y:auto">${listHtml}</div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Close</button></div>`);
 }
 
 // ── EDIT HELPERS ─────────────────────────────────────────────────────────────
@@ -9538,9 +9634,9 @@ function renderManageCommoditiesModal(){
     const hasData=(recCount+issCount+scCount)>0;
     return `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
-      <div style="display:flex;align-items:center;gap:10px">
+      <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="openCommodityHistory('${c.id}')">
         <span style="font-size:27px">${esc(c.icon)}</span>
-        <div><div style="font-weight:700">${esc(c.name)}</div><div style="font-size:16px;color:var(--muted)">Unit: ${esc(c.unit)} · ID: ${esc(c.id)}</div></div>
+        <div><div style="font-weight:700;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px">${esc(c.name)}</div><div style="font-size:16px;color:var(--muted)">Unit: ${esc(c.unit)} · ID: ${esc(c.id)}</div></div>
       </div>
       <div style="display:flex;gap:6px;align-items:center">
         <button class="delbtn" onclick="deleteCommodity('${c.id}')">🗑</button>
@@ -9561,6 +9657,88 @@ function renderManageCommoditiesModal(){
     <div style="margin-bottom:12px">${rows||'<div class="empty">No commodities yet.</div>'}</div>
     <div class="sh" style="margin-top:16px;margin-bottom:8px">Add New Commodity</div>
     ${addFormHtml}`);
+}
+
+// ── COMMODITY HISTORY (all Received / Issued / Stock-Count entries for one commodity, all batches) ──
+function openCommodityHistory(cid){
+  const com=getCom(cid);
+  const recRows=cRec(cid).map(x=>({...x,_type:'rec'}));
+  const issRows=cIss(cid).map(x=>({...x,_type:'iss'}));
+  const cntRows=cSC(cid).map(x=>({...x,_type:'cnt'}));
+  const all=[...recRows,...issRows,...cntRows].sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.time||'').localeCompare(a.time||''));
+
+  const totalRec=approvedArr(recRows).reduce((a,b)=>a+Number(b.received||0),0);
+  const totalIss=approvedArr(issRows).reduce((a,b)=>a+Number(b.issued||0),0);
+  const avail=totalRec-totalIss;
+  const cntSorted=approvedArr(cntRows).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.time||'').localeCompare(a.time||''));
+  const latestPhys=cntSorted[0]||null;
+
+  const summaryHtml=`
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px">
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:14px;color:var(--muted)">AVAILABLE NOW</div>
+        <div style="font-size:22px;font-weight:800;color:var(--blue)">${avail.toLocaleString()} ${esc(com.unit)}</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:14px;color:var(--muted)">LATEST PHYSICAL COUNT</div>
+        <div style="font-size:22px;font-weight:800;color:var(--green)">${latestPhys?Number(latestPhys.physicalCount).toLocaleString():'—'}</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:14px;color:var(--muted)">TOTAL RECEIVED</div>
+        <div style="font-size:19px;font-weight:800;color:var(--text)">${totalRec.toLocaleString()}</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center">
+        <div style="font-size:14px;color:var(--muted)">TOTAL ISSUED</div>
+        <div style="font-size:19px;font-weight:800;color:var(--text)">${totalIss.toLocaleString()}</div>
+      </div>
+    </div>`;
+
+  const rowHtml=r=>{
+    if(r._type==='rec'){
+      const icon='📥',label='RECEIVED',qty=`+${Number(r.received||0).toLocaleString()}`,qtyColor='var(--blue)';
+      const detail=[
+        r.batchName?`Batch: ${esc(r.batchName)}`:'',
+        r.unitPrice>0?`@ ${zm(r.unitPrice)}/unit`:'',
+        r.supplierName?`Supplier: ${esc(r.supplierName)}`:''
+      ].filter(Boolean).join(' · ');
+      return {icon,label,qty,qtyColor,detail,rec:r};
+    }
+    if(r._type==='iss'){
+      const icon='📤',label='ISSUED',qty=`-${Number(r.issued||0).toLocaleString()}`,qtyColor='var(--amber)';
+      const detail=[
+        r.batchName?`Batch: ${esc(r.batchName)}`:'',
+        r.transporter?`Transporter: ${esc(r.transporter)}`:'',
+        r.salePrice>0?`@ ${zm(r.salePrice)}/unit`:'',
+        r.creditStatus&&r.creditStatus!=='paid'?r.creditStatus.toUpperCase():''
+      ].filter(Boolean).join(' · ');
+      return {icon,label,qty,qtyColor,detail,rec:r};
+    }
+    const icon='⚖️',label='STOCK COUNT',qty=Number(r.physicalCount||0).toLocaleString(),qtyColor='var(--green)';
+    const detail=r.batchName?`Batch: ${esc(r.batchName)}`:'';
+    return {icon,label,qty,qtyColor,detail,rec:r};
+  };
+
+  const listHtml=all.length===0
+    ?`<div class="empty">No entries recorded for this commodity yet.</div>`
+    :all.map(r=>{
+      const v=rowHtml(r);
+      return `<div style="padding:10px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-weight:700">${v.icon} ${v.label}</div>
+          <div style="font-weight:800;color:${v.qtyColor}">${v.qty}</div>
+        </div>
+        <div style="font-size:15px;color:var(--muted);margin-top:2px">${fmtDate(r.date)}${r.time?' · '+esc(r.time):''}${v.detail?' · '+v.detail:''}</div>
+        ${r.notes?`<div style="font-size:15px;color:var(--muted);margin-top:2px">📝 ${esc(r.notes)}</div>`:''}
+        ${approvalBadge(v.rec)}
+      </div>`;
+    }).join('');
+
+  openModal(`
+    <div class="mtitle">${esc(com.icon)} ${esc(com.name)}</div>
+    ${summaryHtml}
+    <div class="sh" style="margin-bottom:4px">All Entries (${all.length})</div>
+    <div style="max-height:50vh;overflow-y:auto">${listHtml}</div>
+    <div class="mact"><button class="btn bo" onclick="renderManageCommoditiesModal()">← Back</button><button class="btn bo" onclick="closeModal()">Close</button></div>`);
 }
 function addCommodity(){
   if(!requireAdmin('add commodities'))return;
@@ -13038,15 +13216,14 @@ function removeUser(username){
 function addInvItem(){
   if(!requireAdmin('manage inventory items'))return;
   if (isAtCap('inventoryItems', (DATA.inventoryItems||[]).length)) { showCapReachedPrompt('inventoryItems', 'Inventory Items'); return; }
-  const val=uc(document.getElementById('new-inv-item')?.value);
-  if(!val){alert('Enter an item name.');return;}
-  if((DATA.inventoryItems||[]).includes(val)){alert('Item already exists.');return;}
-  updateData(d=>({...d,inventoryItems:[...(d.inventoryItems||[]),val]}));
-  document.getElementById('new-inv-item').value='';
-}
-function removeInvItem(idx){
-  if(!requireAdmin('remove inventory items'))return;
-  requireAdminPassword('remove this inventory item',()=>{updateData(d=>({...d,inventoryItems:(d.inventoryItems||[]).filter((_,i)=>i!==idx)}));});
+  const sel=document.getElementById('new-inv-item');
+  const otherInput=document.getElementById('new-inv-item-other');
+  const val=uc(sel?(sel.value==='__other__'?otherInput?.value:sel.value):otherInput?.value);
+  if(!val){alert(sel?'Select an item, or choose OTHER and type a new item name.':'Enter an item name.');return;}
+  if((DATA.inventoryItems||[]).some(x=>_invItemName(x)===val)){alert('Item already exists.');return;}
+  updateData(d=>({...d,inventoryItems:[...(d.inventoryItems||[]),{name:val,minStock:0,reservedQty:0}]}));
+  if(sel)sel.value='';
+  if(otherInput){otherInput.value='';otherInput.style.display='none';}
 }
 function exportJSON(){
   if(!requireAdmin('export data'))return;
