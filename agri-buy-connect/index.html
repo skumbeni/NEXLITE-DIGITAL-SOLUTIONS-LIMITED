@@ -1902,7 +1902,20 @@ function setView(appKey, view){
   if(view.endsWith('-messages')){ renderMessagesView(appKey, session.id); return; }
   if(view.endsWith('-notifications')){ renderNotificationsView(appKey, session.id); return; }
   const renderers = { company: renderCompany, agent: renderAgent, staff: renderStaff, farmer: renderFarmer };
-  renderers[appKey](view);
+  try{
+    renderers[appKey](view);
+  }catch(e){
+    // A rendering crash used to just leave the previous screen's content
+    // sitting there (or nothing at all, on first load) with zero clue why.
+    // Show the actual error on-screen instead — this is the only "console"
+    // available when debugging from a phone.
+    console.error('Render failed for', appKey, view, e);
+    const main = document.getElementById(appKey+'-main');
+    if(main){
+      main.innerHTML = `<div class="main-head"><div><h1>Something went wrong loading this page</h1><p class="desc">Screenshot this and send it over — it tells us exactly what broke.</p></div></div>
+        <div class="panel"><div class="panel-body pad"><pre style="white-space:pre-wrap;word-break:break-word;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--red);margin:0;">${escapeHTML(view + ': ' + (e && e.message || e))}</pre></div></div>`;
+    }
+  }
   updateNavBadges();
 }
 
@@ -2414,7 +2427,7 @@ function companyAgentsTable(companyId, withDetail){
 function removeStaleAgentLink(linkId, companyId){
   DB.data.agentLinks = DB.data.agentLinks.filter(l=>l.id!==linkId);
   DB.save(['agentLinks']);
-  toast('Removed stale link'); renderCompany('c-agents');
+  toast('Removed stale link'); setView('company','c-agents');
 }
 
 function purchasesTable(purchases, opts){
