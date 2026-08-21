@@ -745,6 +745,38 @@ function expectedWeightKg(quantity, unit){
   const factor = UNIT_KG[unit];
   return factor ? quantity * factor : null;
 }
+function purchaseMT(p){
+  const factor = UNIT_KG[p.unit];
+  return factor ? (p.quantity * factor) / 1000 : 0;
+}
+
+/* =========================================================================
+   AGRIBUY PARTNERSHIP MODELS
+   Three commercial structures AgriBuy Connect uses with each buying
+   company — separate from the agent<->company commission ledger above.
+   This is AgriBuy's own revenue, accrued on approved/paid purchases only
+   (never on rejected/pending volume — rejection-adjusted by construction,
+   since isCommissionable() already excludes those).
+   ========================================================================= */
+function defaultPartnership(){
+  return {
+    model: 'origination_commission',        // 'origination_commission' | 'managed_origination' | 'trading_margin'
+    originationRateType: 'pct',              // 'pct' of accepted value, or 'flat' ZMW/MT
+    originationRatePct: 4,                   // within recommended 3–6%
+    originationRateFlatPerMT: 100,           // within recommended ZMW 50–150/MT
+    retainerZMW: 20000,                      // monthly retainer, Managed Origination
+    managedRatePerMT: 50,                    // reduced per-MT fee on top of retainer
+    tradingMarginPct: 8,                     // gross buy/sell spread target, Trading Margin
+    financingCostPctPerAnnum: 30,            // cost of working capital — Zambian overdraft/commercial rate
+    avgCycleDays: 45                         // typical buy-to-resell holding period
+  };
+}
+const PARTNERSHIP_LABELS = {
+  origination_commission: 'Origination Commission',
+  managed_origination: 'Managed Origination',
+  trading_margin: 'Trading Margin'
+};
+function fmtNum(n){ return Number(n||0).toLocaleString('en-ZM',{maximumFractionDigits:0}); }
 
 function getGeo(){
   return new Promise((resolve) => {
@@ -1207,6 +1239,37 @@ const DB = {
   // regardless of whether the company ultimately pays the agent or the farmer directly.
   purchaseValue(p){ return p.quantity * p.price; },
   isCommissionable(p){ return p.status==='approved' || p.status==='paid'; },
+  // AgriBuy's own revenue from a buying company under its partnership model —
+  // separate from the agent<->company commission ledger below. Accrues only
+  // on approved/paid volume (isCommissionable), so it's rejection-adjusted
+  // by construction: rejected or pending lots never count.
+  agribuyRevenue(companyId, period){
+    const c = this.company(companyId);
+    const pt = (c && c.partnership) || defaultPartnership();
+    let purchases = this.purchasesFor({companyId}).filter(p=>this.isCommissionable(p));
+    if(period) purchases = purchases.filter(p=>p.date >= period.start && p.date <= period.end);
+    const totalMT = purchases.reduce((s,p)=>s+purchaseMT(p),0);
+    const totalValue = purchases.reduce((s,p)=>s+this.purchaseValue(p),0);
+
+    let revenue = 0, financingCost = 0, breakdown = '';
+    if(pt.model === 'origination_commission'){
+      revenue = pt.originationRateType==='pct' ? totalValue * (pt.originationRatePct/100) : totalMT * pt.originationRateFlatPerMT;
+      breakdown = pt.originationRateType==='pct'
+        ? `${pt.originationRatePct}% of accepted value (ZMW ${fmtNum(totalValue)})`
+        : `ZMW ${pt.originationRateFlatPerMT}/MT × ${totalMT.toFixed(1)} MT`;
+    } else if(pt.model === 'managed_origination'){
+      revenue = (pt.retainerZMW||0) + totalMT * (pt.managedRatePerMT||0);
+      breakdown = `Retainer ZMW ${fmtNum(pt.retainerZMW)} + ZMW ${pt.managedRatePerMT}/MT × ${totalMT.toFixed(1)} MT`;
+    } else if(pt.model === 'trading_margin'){
+      revenue = totalValue * (pt.tradingMarginPct/100);
+      // Financing cost eats into the spread: capital tied up for avgCycleDays
+      // at an annualised borrowing rate, charged against value carried.
+      financingCost = totalValue * (pt.financingCostPctPerAnnum/100) * (pt.avgCycleDays/365);
+      breakdown = `${pt.tradingMarginPct}% spread on ZMW ${fmtNum(totalValue)} − financing (${pt.financingCostPctPerAnnum}%/yr × ${pt.avgCycleDays}d)`;
+    }
+    const netRevenue = revenue - financingCost;
+    return { model: pt.model, totalMT, totalValue, revenue, financingCost, netRevenue, breakdown };
+  },
   linkLedger(agentId, companyId){
     const link = this.link(agentId, companyId);
     if(!link) return null;
@@ -1381,6 +1444,51 @@ async function verifySecret(record, secret){
   if(!record.authSalt || !record.authHash) return false;
   const candidate = await derivePinHash(secret, record.authSalt);
   return candidate === record.authHash;
+}
+
+/* =========================================================================
+   SUBSCRIPTIONS — managed from the separate agribuy-admin.html panel.
+   Every company and agent gets a `subscription` object on creation:
+     { status: 'trial'|'active'|'suspended'|'expired', plan, trialEndsAt,
+       expiresAt, notes }
+   Records with no `subscription` field at all (legacy data, or internal
+   record types like field staff/farmers) are always let through — this
+   only gates the account types the admin panel manages. Staff and
+   farmers inherit their parent company/agent's status, so suspending a
+   company also locks out its field staff and the farmers they registered.
+   ========================================================================= */
+const TRIAL_DAYS = 14;
+function defaultSubscription(){
+  const end = new Date(Date.now() + TRIAL_DAYS*24*60*60*1000).toISOString().slice(0,10);
+  return { status:'trial', plan:'trial', trialEndsAt:end, expiresAt:null, notes:'' };
+}
+function resolveOwnerAccount(role, record){
+  if(!record) return null;
+  if(role==='company' || role==='agent') return record;
+  if(role==='staff'){
+    if(record.companyId) return DB.company(record.companyId);
+    if(record.agentId) return DB.data.agents.find(a=>a.id===record.agentId);
+    return null;
+  }
+  if(role==='farmer'){
+    const staff = DB.fieldStaffById(record.registeredBy);
+    return staff ? resolveOwnerAccount('staff', staff) : null;
+  }
+  return null;
+}
+function subscriptionGate(ownerAccount){
+  if(!ownerAccount || !ownerAccount.subscription) return { ok:true };
+  const sub = ownerAccount.subscription;
+  const now = Date.now();
+  if(sub.status==='suspended') return { ok:false, reason:'This account has been suspended. Please contact NEXLITE support to resolve this.' };
+  if(sub.status==='expired') return { ok:false, reason:'This subscription has expired. Please contact NEXLITE support to renew.' };
+  if(sub.status==='trial' && sub.trialEndsAt && new Date(sub.trialEndsAt+'T23:59:59').getTime() < now){
+    return { ok:false, reason:'Your free trial has ended. Please contact NEXLITE support to activate a subscription.' };
+  }
+  if(sub.status==='active' && sub.expiresAt && new Date(sub.expiresAt+'T23:59:59').getTime() < now){
+    return { ok:false, reason:'This subscription has expired. Please contact NEXLITE support to renew.' };
+  }
+  return { ok:true };
 }
 
 /* =========================================================================
@@ -1649,13 +1757,14 @@ async function attemptSignup(){
     if(phone) existing.phone = phone;
     existing.authSalt = authSalt; existing.authHash = authHash;
     if(uid) existing.uid = uid;
+    if(!existing.subscription) existing.subscription = defaultSubscription();
     record = existing; claimed = true;
   } else if(role==='company'){
     const location = document.getElementById('su-location').value.trim();
-    record = { id: DB.uid('co'), name, location, phone, tpin:'', code, commodities:[], operatingMode:'direct', authSalt, authHash, uid: uid||null };
+    record = { id: DB.uid('co'), name, location, phone, tpin:'', code, commodities:[], operatingMode:'direct', authSalt, authHash, uid: uid||null, partnership: defaultPartnership(), subscription: defaultSubscription() };
     DB.data.companies.push(record);
   } else {
-    record = { id: DB.uid('ag'), name, phone, code, authSalt, authHash, uid: uid||null };
+    record = { id: DB.uid('ag'), name, phone, code, authSalt, authHash, uid: uid||null, subscription: defaultSubscription() };
     DB.data.agents.push(record);
   }
   DB.save();
@@ -1710,6 +1819,13 @@ async function attemptLogin(){
     }
   }
   if(!found){ err.textContent = "That wasn't recognized. Check with whoever issued it."; err.style.display='block'; return; }
+
+  // Subscription check — blocks sign-in if this account (or, for staff/
+  // farmers, the company/agent they belong to) is suspended, expired, or
+  // past its trial. Managed from the separate agribuy-admin.html panel.
+  const gate = subscriptionGate(resolveOwnerAccount(pendingRole, found));
+  if(!gate.ok){ err.textContent = gate.reason; err.style.display='block'; return; }
+
   if(found._needsPasswordSetup) toast('Signed in — set a password for this account in Settings.');
 
   // Ride the Firebase Auth sign-in (and, for legacy records, account
@@ -2045,6 +2161,7 @@ function renderCompany(view){
     const totalCommission = links.reduce((s,l)=>s+DB.linkLedger(l.agentId, companyId).commissionAccrued,0);
     const pendingCount = purchases.filter(p=>p.status==='pending').length;
     const flaggedCount = purchases.filter(p=>p.flags && p.flags.length && !p.flagResolved).length;
+    const agRev = DB.agribuyRevenue(companyId);
     main.innerHTML = syncBannerHTML() + `
       <div class="main-head"><div><h1>Overview</h1><p class="desc">${DB.company(companyId).name}</p></div></div>
       <div class="stat-grid">
@@ -2053,6 +2170,16 @@ function renderCompany(view){
         <div class="stat-card"><div class="lbl">Commission accrued</div><div class="val">${fmtK(totalCommission)}</div><div class="sub">owed to agents</div></div>
         <div class="stat-card"><div class="lbl">Awaiting inspection</div><div class="val">${pendingCount}</div><div class="sub">purchases pending</div></div>
         ${flaggedCount>0?`<div class="stat-card" style="border:1px solid #F3B7B4;"><div class="lbl">Flagged for review</div><div class="val" style="color:#B42318;">${flaggedCount}</div><div class="sub">possible fraud/error</div></div>`:''}
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>AgriBuy partnership — ${PARTNERSHIP_LABELS[agRev.model]}</h3><button class="action-btn ghost" onclick="setView('company','c-settings')">Configure</button></div>
+        <div class="panel-body pad">
+          <div class="stat-grid" style="margin-bottom:0;">
+            <div class="stat-card"><div class="lbl">AgriBuy revenue accrued</div><div class="val">${fmtK(agRev.revenue)}</div><div class="sub">${escapeHTML(agRev.breakdown)}</div></div>
+            ${agRev.model==='trading_margin' ? `<div class="stat-card"><div class="lbl">Financing cost</div><div class="val" style="color:#B42318;">${fmtK(agRev.financingCost)}</div><div class="sub">working-capital drag on spread</div></div>
+            <div class="stat-card"><div class="lbl">Net revenue</div><div class="val">${fmtK(agRev.netRevenue)}</div><div class="sub">after financing cost</div></div>` : ''}
+          </div>
+        </div>
       </div>
       <div class="panel">
         <div class="panel-head"><h3>Buying channels</h3></div>
@@ -2101,6 +2228,7 @@ function renderCompany(view){
   }
   if(view==='c-settings'){
     const c = DB.company(companyId);
+    const pt = c.partnership || defaultPartnership();
     main.innerHTML = syncBannerHTML() + `
       <div class="main-head"><div><h1>Settings</h1><p class="desc">Company profile, buying model and commodities. Agents are optional; your company can operate directly with its own field staff.</p></div></div>
       <div class="panel">
@@ -2130,6 +2258,21 @@ function renderCompany(view){
         </div>
       </div>
       <div class="panel">
+        <div class="panel-head"><h3>AgriBuy partnership</h3></div>
+        <div class="panel-body pad">
+          <p class="sub" style="margin:0 0 14px;">The commercial structure AgriBuy uses to earn from this account. Revenue only accrues on approved/paid purchases — never on rejected or pending volume.</p>
+          <div class="field"><label>Partnership model</label>
+            <select id="ps-model" onchange="renderPartnershipFields()">
+              <option value="origination_commission" ${pt.model==='origination_commission'?'selected':''}>Origination Commission</option>
+              <option value="managed_origination" ${pt.model==='managed_origination'?'selected':''}>Managed Origination</option>
+              <option value="trading_margin" ${pt.model==='trading_margin'?'selected':''}>Trading Margin</option>
+            </select>
+          </div>
+          <div id="ps-fields"></div>
+          <button class="action-btn" style="background:var(--gold-dark)" onclick="savePartnership('${companyId}')">Save partnership settings</button>
+        </div>
+      </div>
+      <div class="panel">
         <div class="panel-head"><h3>Login & security</h3></div>
         <div class="panel-body pad">
           <p class="sub" style="margin:0 0 14px;">Your company ID is <span class="mono" style="font-weight:600;">${c.code}</span>. ${c.authHash ? 'Change your password below.' : 'No password is set yet — set one so only your team can sign in.'}</p>
@@ -2140,7 +2283,60 @@ function renderCompany(view){
           <button class="action-btn ghost" onclick="changeCompanyPassword('${companyId}')">${c.authHash?'Change password':'Set password'}</button>
         </div>
       </div>`;
+    renderPartnershipFields(pt);
   }
+}
+
+/* ---- Partnership settings: dynamic fields per model ---- */
+function renderPartnershipFields(pt){
+  const model = document.getElementById('ps-model').value;
+  pt = pt || {};
+  const wrap = document.getElementById('ps-fields');
+  if(model === 'origination_commission'){
+    wrap.innerHTML = `
+      <div class="hint-box">Recommended: 3–6% of accepted value, or ZMW 50–150/MT flat. Percentage is safer against commodity price swings.</div>
+      <div class="field"><label>Rate type</label><select id="ps-orig-type"><option value="pct" ${pt.originationRateType!=='flat'?'selected':''}>% of accepted value</option><option value="flat" ${pt.originationRateType==='flat'?'selected':''}>Flat ZMW per MT</option></select></div>
+      <div class="two-col">
+        <div class="field"><label>Rate (%)</label><input id="ps-orig-pct" type="number" step="0.1" value="${pt.originationRatePct ?? 4}"></div>
+        <div class="field"><label>Flat rate (ZMW/MT)</label><input id="ps-orig-flat" type="number" step="1" value="${pt.originationRateFlatPerMT ?? 100}"></div>
+      </div>`;
+  } else if(model === 'managed_origination'){
+    wrap.innerHTML = `
+      <div class="hint-box">Retainer covers fixed field costs; per-MT fee is lower than pure commission since it's partly pre-funded. Pair with a minimum-volume/minimum-term commitment in the contract.</div>
+      <div class="two-col">
+        <div class="field"><label>Monthly retainer (ZMW)</label><input id="ps-retainer" type="number" step="500" value="${pt.retainerZMW ?? 20000}"></div>
+        <div class="field"><label>Per-MT fee on top (ZMW/MT)</label><input id="ps-managed-rate" type="number" step="1" value="${pt.managedRatePerMT ?? 50}"></div>
+      </div>`;
+  } else if(model === 'trading_margin'){
+    wrap.innerHTML = `
+      <div class="hint-box">Highest risk — AgriBuy owns the commodity briefly. Financing cost is modelled explicitly below and deducted from the headline spread; it's usually the single biggest line item, not an afterthought.</div>
+      <div class="two-col">
+        <div class="field"><label>Target spread (%)</label><input id="ps-margin-pct" type="number" step="0.5" value="${pt.tradingMarginPct ?? 8}"></div>
+        <div class="field"><label>Avg. buy-to-resell cycle (days)</label><input id="ps-cycle-days" type="number" step="1" value="${pt.avgCycleDays ?? 45}"></div>
+      </div>
+      <div class="field"><label>Cost of working capital (% per annum)</label><input id="ps-financing-pct" type="number" step="0.5" value="${pt.financingCostPctPerAnnum ?? 30}"></div>`;
+  }
+}
+function savePartnership(companyId){
+  const c = DB.company(companyId);
+  const model = document.getElementById('ps-model').value;
+  const pt = { model };
+  if(model === 'origination_commission'){
+    pt.originationRateType = document.getElementById('ps-orig-type').value;
+    pt.originationRatePct = Number(document.getElementById('ps-orig-pct').value) || 0;
+    pt.originationRateFlatPerMT = Number(document.getElementById('ps-orig-flat').value) || 0;
+  } else if(model === 'managed_origination'){
+    pt.retainerZMW = Number(document.getElementById('ps-retainer').value) || 0;
+    pt.managedRatePerMT = Number(document.getElementById('ps-managed-rate').value) || 0;
+  } else if(model === 'trading_margin'){
+    pt.tradingMarginPct = Number(document.getElementById('ps-margin-pct').value) || 0;
+    pt.avgCycleDays = Number(document.getElementById('ps-cycle-days').value) || 0;
+    pt.financingCostPctPerAnnum = Number(document.getElementById('ps-financing-pct').value) || 0;
+  }
+  c.partnership = Object.assign({}, defaultPartnership(), pt);
+  DB.save();
+  toast('Partnership settings saved');
+  setView('company','c-settings');
 }
 async function changeCompanyPassword(companyId){
   const c = DB.company(companyId);
