@@ -3,7 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#FAF7F1">
 <title>AgriBuy Connect</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="/icons/favicon-16.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
@@ -1747,6 +1752,117 @@ async function firebaseSignInAndBackfillUid(record, role, email, password){
   }
 }
 
+/* =========================================================================
+   MEDIAN.CO NATIVE APP INTEGRATION
+   ---------------------------------------------------------------------
+   AgriBuy Connect is wrapped as an Android app with Median.co. This block
+   covers everything controllable from in-page JS. Two things are NOT
+   controllable from here and must be set in the Median App Studio
+   dashboard for this app instead:
+     - Splash screen & status bar colors — App Studio → Branding. Use
+       soil #2B2318 (brand dark) for the splash background and paper
+       #FAF7F1 for the status bar to match the design here.
+     - Cookie/localStorage persistence across app updates — App Studio →
+       Web Overrides → Cookie Persistence. Turn this ON, since the app's
+       session (SESSION_KEY below) and offline queue both live in
+       localStorage; without it, an app update could sign everyone out
+       and drop anything queued for sync.
+   ========================================================================= */
+const IS_MEDIAN_APP = /median/i.test(navigator.userAgent);
+
+// Median injects the `median` bridge object into the page asynchronously.
+// median_library_ready() is called once it's available; guard every call
+// site with `window.median &&` too, since this file is also opened
+// directly in a normal mobile browser during development.
+function median_library_ready(){
+  if(!window.median) return;
+  // Re-associate push notifications with whoever is already signed in
+  // (e.g. app was killed and relaunched straight back into a session).
+  if(session) medianLinkPushIdentity(session.role, session.id);
+}
+
+// OneSignal calls this automatically once it has info for the current
+// device — this is how we learn the OneSignal user id/subscription
+// state without the app having to ask for it.
+function median_onesignal_info(info){
+  window.__lastOneSignalInfo = info || null;
+}
+
+// Ties push notifications to whichever AgriBuy account is signed in on
+// this device, so a company/agent can be targeted by role+id from the
+// OneSignal dashboard or REST API rather than only by raw device.
+function medianLinkPushIdentity(role, id){
+  if(!window.median || !window.median.onesignal) return;
+  try{
+    median.onesignal.login(role + ':' + id).catch(()=>{});
+    median.onesignal.setTag && median.onesignal.setTag('role', role).catch(()=>{});
+  }catch(e){ console.error('OneSignal identity link failed (non-blocking):', e); }
+}
+
+function medianUnlinkPushIdentity(){
+  if(!window.median || !window.median.onesignal) return;
+  try{ median.onesignal.logout().catch(()=>{}); }catch(e){}
+}
+
+// Called automatically by the native app whenever it's brought back to
+// the foreground (including after an Android permission prompt). Good
+// spot to re-check subscription status and refresh whatever's on screen
+// in case something changed while the app was backgrounded.
+function median_app_resumed(){
+  if(!session) return;
+  try{
+    const gate = subscriptionGate(resolveOwnerAccount(session.role, DB.recordFor(session.role, session.id)));
+    if(!gate.ok){ toast(gate.reason); logout(); return; }
+  }catch(e){ /* DB not loaded yet — nothing to re-check */ }
+  const activeNav = document.querySelector('#app-' + session.role + ' .nav-item.active');
+  if(activeNav) setView(session.role, activeNav.dataset.view, true);
+}
+if(window.median) median_library_ready();
+
+/* ---------- Back-button / native navigation history ---------- */
+// AgriBuy Connect switches screens by toggling CSS classes, not by real
+// page loads or URL changes — so out of the box the Android hardware
+// back button has no browser history to step through and just exits the
+// app from anywhere. NAV below pushes a lightweight history entry for
+// every screen/app-view/modal change so the back button steps back
+// through them one at a time instead, and falls through to the native
+// "exit app" behavior only once it's back at the very first screen.
+const NAV = {
+  current: null,
+  push(state){ this.current = state; try{ history.pushState(state, ''); }catch(e){} },
+  replace(state){ this.current = state; try{ history.replaceState(state, ''); }catch(e){} }
+};
+window.addEventListener('popstate', function(e){
+  const overlay = document.getElementById('overlay');
+  if(overlay && overlay.classList.contains('active')){
+    // A modal was the thing on top of the stack — just close it and
+    // leave whatever screen/app-view is underneath exactly as it was.
+    overlay.classList.remove('active');
+    return;
+  }
+  const state = e.state;
+  if(!state) return; // nothing left we manage — let the native app handle it (exits)
+  NAV.current = state;
+  if(state.screen==='landing') goLanding(true);
+  else if(state.screen==='login') goLogin(state.role, true);
+  else if(state.screen==='signup') goSignup(state.role, true);
+  else if(state.app) setView(state.app, state.view, true);
+});
+
+/* ---------- PWA service worker registration ---------- */
+// Registered unconditionally — it's a no-op with no ill effect inside the
+// Median WebView, and gives this app real offline app-shell loading and
+// "Add to Home Screen" installability when opened in a plain mobile
+// browser (Median wrapping and browser PWA installs are separate,
+// independent distribution paths for the same file).
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((err) => {
+      console.error('Service worker registration failed (non-blocking):', err);
+    });
+  });
+}
+
 let session = null; // {role, id}
 const SESSION_KEY = 'agribuy_session_v1';
 function setSession(s){
@@ -1779,8 +1895,8 @@ function selectPlan(id, label){
   setTimeout(()=>document.getElementById('roles-section').scrollIntoView({behavior:'smooth'}), 150);
 }
 
-function goLanding(){ show('screen-landing'); }
-function goLogin(role){
+function goLanding(silent){ show('screen-landing'); if(!silent) NAV.push({screen:'landing'}); }
+function goLogin(role, silent){
   pendingRole = role;
   const meta = roleMeta[role];
   document.getElementById('login-title').textContent = meta.title;
@@ -1796,6 +1912,7 @@ function goLogin(role){
   btn.textContent = 'Sign in';
   show('screen-login');
   document.getElementById('login-code').focus();
+  if(!silent) NAV.push({screen:'login', role});
   // The user is now actually trying to sign in — this is the trigger point
   // for anonymous auth + the initial cloud read. Kick it off in the
   // background so it's likely done by the time they submit; attemptLogin()
@@ -1803,7 +1920,7 @@ function goLogin(role){
   DB.ensureLoaded();
 }
 
-function goSignup(role){
+function goSignup(role, silent){
   if(role!=='company' && role!=='agent') return; // field staff and farmers are provisioned by whoever adds them, not self-signup
   pendingRole = role;
   const meta = signupMeta[role];
@@ -1834,6 +1951,7 @@ function goSignup(role){
   btn.textContent = 'Create account';
   show('screen-signup');
   document.getElementById('su-name').focus();
+  if(!silent) NAV.push({screen:'signup', role});
   DB.ensureLoaded();
 }
 
@@ -1973,6 +2091,7 @@ async function attemptLogin(){
 function logout(){
   if(!confirm('Log out of AgriBuy Connect?')) return;
   DB.detachInboxListener(); // stop this device's own messages/notifications listeners before the next login (possibly a different person) attaches its own
+  medianUnlinkPushIdentity();
   clearSession();
   goLanding();
 }
@@ -1986,6 +2105,7 @@ function show(id){
 
 function enterApp(){
   const {role, id} = session;
+  medianLinkPushIdentity(role, id);
   // Start pulling in this user's own messages/notifications from their
   // /inbox/{uid} node. Silently does nothing yet if the uid isn't on the
   // record — firebaseSignInAndBackfillUid() retries this once it lands
@@ -2014,7 +2134,8 @@ function enterApp(){
   }
 }
 
-function setView(appKey, view){
+function setView(appKey, view, silent){
+  if(!silent) NAV.push({app:appKey, view});
   document.querySelectorAll('#app-'+appKey+' .nav-item').forEach(n=>n.classList.toggle('active', n.dataset.view===view));
   if(view.endsWith('-messages')){ renderMessagesView(appKey, session.id); return; }
   if(view.endsWith('-notifications')){ renderNotificationsView(appKey, session.id); return; }
@@ -2048,8 +2169,20 @@ function toast(msg){
   t.textContent = msg; t.classList.add('show');
   setTimeout(()=>t.classList.remove('show'), 2400);
 }
-function closeModal(){ document.getElementById('overlay').classList.remove('active'); }
-function openModal(html){ document.getElementById('modal-body').innerHTML = html; document.getElementById('overlay').classList.add('active'); }
+function closeModal(){
+  const overlay = document.getElementById('overlay');
+  const wasTopOfHistory = overlay.classList.contains('active') && history.state && history.state.modal;
+  overlay.classList.remove('active');
+  // Consume the history entry the matching openModal() pushed, so a later
+  // hardware back press doesn't land on a stale "close the modal again"
+  // entry with nothing visibly left to close.
+  if(wasTopOfHistory) history.back();
+}
+function openModal(html){
+  document.getElementById('modal-body').innerHTML = html;
+  document.getElementById('overlay').classList.add('active');
+  NAV.push({modal:true});
+}
 
 /* =========================================================================
    IN-APP CHAT & NOTIFICATIONS
@@ -2847,9 +2980,23 @@ function printAgentLedger(agentId, companyId){
       <div class="total"><span>Net payable</span><span>${fmtK(led.netPayable)}</span></div>
     </div>`;
 
+  openPrintableDocument(buildPrintableDocument(company, 'Agent Ledger — ' + agent.name, body));
+}
+
+// window.open('', '_blank') reliably fails inside the Median WebView (and
+// in most in-app browsers generally) since there's no real popup window to
+// open — so print/statement documents show it in the existing modal
+// overlay instead, where the in-document "Print / Save as PDF" button
+// still works via window.print(). Plain mobile browsers still get a real
+// new tab, which is the nicer experience there.
+function openPrintableDocument(docHtml){
+  if(IS_MEDIAN_APP){
+    openModal(`<iframe title="Printable document" style="width:100%;height:74vh;border:0;border-radius:8px;background:#fff;" srcdoc="${docHtml.replace(/"/g,'&quot;')}"></iframe>`);
+    return;
+  }
   const win = window.open('', '_blank', 'width=850,height=1000');
   if(!win){ toast('Allow pop-ups to print this document'); return; }
-  win.document.write(buildPrintableDocument(company, 'Agent Ledger — ' + agent.name, body));
+  win.document.write(docHtml);
   win.document.close();
 }
 
@@ -3760,6 +3907,7 @@ function renderFarmer(view){
    ========================================================================= */
 (async function init(){
   wireConnectionState();
+  NAV.replace({screen:'landing'}); // establishes the base of the back-button history stack
   const overlay = document.getElementById('cloud-loading-overlay');
   // Restore a previous session across refreshes/reopens — session itself
   // used to be in-memory only, so reloading the page always bounced
