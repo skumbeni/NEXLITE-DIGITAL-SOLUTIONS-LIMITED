@@ -2392,6 +2392,12 @@ function companyAgentsTable(companyId, withDetail){
   if(!links.length) return `<table><tr class="empty-row"><td>No agents linked to this company yet.</td></tr></table>`;
   let rows = links.map(l=>{
     const agent = DB.agent(l.agentId);
+    if(!agent){
+      // The agent record behind this link no longer exists (e.g. deleted
+      // from the admin panel without unlinking first). Show it plainly
+      // rather than crashing the whole Overview/Agents view.
+      return `<tr><td colspan="${withDetail?7:6}" style="color:var(--soil-40);">Agent removed — link ID ${l.id}${withDetail?` <button class="mini-btn" onclick="removeStaleAgentLink('${l.id}','${companyId}')">Remove link</button>`:''}</td></tr>`;
+    }
     const led = DB.linkLedger(l.agentId, companyId);
     return `<tr>
       <td><strong>${agent.name}</strong><br><span style="color:var(--soil-40);font-size:12px;">${agent.phone}</span></td>
@@ -2404,6 +2410,11 @@ function companyAgentsTable(companyId, withDetail){
     </tr>`;
   }).join('');
   return `<table><tr><th>Agent</th><th>Rate</th><th>Qty bought</th><th>Commission accrued</th><th>Advance given</th><th>Net payable</th>${withDetail?'<th></th>':''}</tr>${rows}</table>`;
+}
+function removeStaleAgentLink(linkId, companyId){
+  DB.data.agentLinks = DB.data.agentLinks.filter(l=>l.id!==linkId);
+  DB.save(['agentLinks']);
+  toast('Removed stale link'); renderCompany('c-agents');
 }
 
 function purchasesTable(purchases, opts){
@@ -2874,6 +2885,9 @@ function agentLinksTable(agentId, withRequest){
   if(!links.length) return `<table><tr class="empty-row"><td>Not linked to any buying company yet.</td></tr></table>`;
   let rows = links.map(l=>{
     const company = DB.company(l.companyId);
+    if(!company){
+      return `<tr><td colspan="6" style="color:var(--soil-40);">Company removed — link ID ${l.id}</td></tr>`;
+    }
     const led = DB.linkLedger(agentId, l.companyId);
     return `<tr>
       <td><strong>${company.name}</strong></td>
