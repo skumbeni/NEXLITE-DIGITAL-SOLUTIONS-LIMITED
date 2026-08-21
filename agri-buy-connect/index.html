@@ -777,6 +777,23 @@ const PARTNERSHIP_LABELS = {
   trading_margin: 'Trading Margin'
 };
 function fmtNum(n){ return Number(n||0).toLocaleString('en-ZM',{maximumFractionDigits:0}); }
+// One-line human summary of a partnership terms object — used on the pending-approval
+// banner in company settings. Kept in sync with the equivalent formatter in the admin app.
+function partnershipSummary(pt){
+  if(!pt) return '';
+  if(pt.model === 'origination_commission'){
+    return pt.originationRateType==='flat'
+      ? `ZMW ${fmtNum(pt.originationRateFlatPerMT)}/MT flat`
+      : `${pt.originationRatePct}% of accepted value`;
+  }
+  if(pt.model === 'managed_origination'){
+    return `ZMW ${fmtNum(pt.retainerZMW)}/mo retainer + ZMW ${fmtNum(pt.managedRatePerMT)}/MT`;
+  }
+  if(pt.model === 'trading_margin'){
+    return `${pt.tradingMarginPct}% target spread, ${pt.avgCycleDays}d cycle, ${pt.financingCostPctPerAnnum}%/yr financing`;
+  }
+  return '';
+}
 
 function getGeo(){
   return new Promise((resolve) => {
@@ -932,7 +949,9 @@ function seedData(){
     contracts: [],
     payrollRuns: [],
     messages: [],
-    notifications: []
+    notifications: [],
+    partnershipTerms: null,   // AgriBuy-approved partnership terms for the signed-in company — lives at /partnership_terms/{uid}, not in this blob (see save())
+    partnershipRequest: null  // this company's own pending change request, if any — lives at /partnership_requests/{uid}
   };
 }
 
@@ -946,6 +965,8 @@ const DB = {
     if(!this.data.contracts) this.data.contracts = [];
     if(!this.data.messages) this.data.messages = [];
     if(!this.data.notifications) this.data.notifications = [];
+    if(typeof this.data.partnershipTerms === 'undefined') this.data.partnershipTerms = null;
+    if(typeof this.data.partnershipRequest === 'undefined') this.data.partnershipRequest = null;
     if(!Array.isArray(this.data.agentLinks)) this.data.agentLinks = [];
     this.data.agentLinks.forEach(l=>{
       if(!Array.isArray(l.advances)) l.advances = [];
@@ -1110,7 +1131,7 @@ const DB = {
     const fb = window.__firebase;
     if(!fb) return;
     if(dirtyCollections){
-      const cloudKeys = dirtyCollections.filter(k => k!=='messages' && k!=='notifications');
+      const cloudKeys = dirtyCollections.filter(k => k!=='messages' && k!=='notifications' && k!=='partnershipTerms' && k!=='partnershipRequest');
       if(!cloudKeys.length) return; // e.g. a messages-only save — nothing left to push to dataRef
       this._suppressNextRemoteApply = true;
       this._remoteWriteInFlight = true;
@@ -1119,7 +1140,7 @@ const DB = {
         .finally(() => { this._remoteWriteInFlight = false; });
       return;
     }
-    const { messages, notifications, ...blobData } = this.data;
+    const { messages, notifications, partnershipTerms, partnershipRequest, ...blobData } = this.data;
     this._suppressNextRemoteApply = true;
     this._remoteWriteInFlight = true;
     fb.set(fb.dataRef, blobData)
@@ -1161,6 +1182,7 @@ const DB = {
     // No uid yet (record predates phase 1/2, or the login-time backfill
     // hasn't finished) — firebaseSignInAndBackfillUid() calls this again
     // once it lands a uid, so this just quietly does nothing for now.
+    if(role==='company' && uid) this.attachPartnershipListener(uid);
   },
   attachInboxListener(uid){
     if(!uid || this._inboxUid === uid) return;
@@ -1187,6 +1209,7 @@ const DB = {
     this._inboxUnsubs = null;
     this._inboxUid = null;
     if(this.data){ this.data.messages = []; this.data.notifications = []; }
+    this.detachPartnershipListener();
   },
   // Best-effort fan-out write of one message/notification record into a
   // single participant's inbox node. Failures are non-blocking — the
@@ -1198,6 +1221,50 @@ const DB = {
     if(!fb || !fb.ref || !fb.set) return;
     fb.set(fb.ref(fb.rtdb, 'inbox/'+uid+'/'+kind+'/'+record.id), record)
       .catch(err => console.error('Inbox write failed (queued for retry when back online):', err));
+  },
+
+  // ---- partnership terms (company only), phase 4 ----
+  // Same reason as /inbox above: agribuy_data_v1 is one blob any signed-in
+  // device can write, so a field embedded in it (the old c.partnership /
+  // c.partnershipPending) can never actually be admin-only — the database
+  // rule granting the app broad write access to that blob would always
+  // cascade down and override a narrower rule underneath it. Moving this
+  // out to its own /partnership_terms/{uid} (admin-write-only) and
+  // /partnership_requests/{uid} (owner-write-only) node is what lets the
+  // rules genuinely enforce "only AgriBuy admin can set a company's rate".
+  _partnershipUid: null,
+  _partnershipUnsubs: null,
+  attachPartnershipListener(uid){
+    if(!uid || this._partnershipUid === uid) return;
+    this.detachPartnershipListener();
+    const fb = window.__firebase;
+    if(!fb || !fb.ref || !fb.onValue) return;
+    this._partnershipUid = uid;
+    const unsubTerms = fb.onValue(fb.ref(fb.rtdb, 'partnership_terms/'+uid), (snap) => {
+      this.data.partnershipTerms = snap.exists() ? snap.val() : null;
+      localStorage.setItem(DB_KEY, JSON.stringify(this.data));
+      refreshCurrentView();
+    });
+    const unsubReq = fb.onValue(fb.ref(fb.rtdb, 'partnership_requests/'+uid), (snap) => {
+      this.data.partnershipRequest = snap.exists() ? snap.val() : null;
+      localStorage.setItem(DB_KEY, JSON.stringify(this.data));
+      refreshCurrentView();
+    });
+    this._partnershipUnsubs = [unsubTerms, unsubReq];
+  },
+  detachPartnershipListener(){
+    if(this._partnershipUnsubs) this._partnershipUnsubs.forEach(fn => { try{ fn(); }catch(e){} });
+    this._partnershipUnsubs = null;
+    this._partnershipUid = null;
+    if(this.data){ this.data.partnershipTerms = null; this.data.partnershipRequest = null; }
+  },
+  // Companies can only ever write to their OWN /partnership_requests/{uid}
+  // (see rules) — this submits/updates/cancels that request. Approving it
+  // into live partnership_terms is admin-only, done from agribuy-admin.html.
+  writePartnershipRequest(uid, requestOrNull){
+    const fb = window.__firebase;
+    if(!fb || !fb.ref || !fb.set) return Promise.reject(new Error('Firebase not ready'));
+    return fb.set(fb.ref(fb.rtdb, 'partnership_requests/'+uid), requestOrNull);
   },
   link(agentId, companyId){ return this.data.agentLinks.find(l=>l.agentId===agentId && l.companyId===companyId); },
   linksForAgent(agentId){ return this.data.agentLinks.filter(l=>l.agentId===agentId); },
@@ -1249,8 +1316,7 @@ const DB = {
   // on approved/paid volume (isCommissionable), so it's rejection-adjusted
   // by construction: rejected or pending lots never count.
   agribuyRevenue(companyId, period){
-    const c = this.company(companyId);
-    const pt = (c && c.partnership) || defaultPartnership();
+    const pt = this.data.partnershipTerms || defaultPartnership();
     let purchases = this.purchasesFor({companyId}).filter(p=>this.isCommissionable(p));
     if(period) purchases = purchases.filter(p=>p.date >= period.start && p.date <= period.end);
     const totalMT = purchases.reduce((s,p)=>s+purchaseMT(p),0);
@@ -1565,13 +1631,19 @@ async function createAuxAuthAccount(email, password){
    Fire-and-forget: never awaited by the caller, so a slow or failing
    network never delays entering the app after a classic login. ------- */
 /* -------------------------------------------------------------------------
-   FIREBASE — RTDB SECURITY RULES (phase 3)
+   FIREBASE — RTDB SECURITY RULES (phase 4)
    ---------------------------------------------------------------------
    agribuy_data_v1 stays on the existing "any signed-in device can read
-   everything" rule for now (out of scope here) — but messages and
-   notifications have moved OFF of it entirely, onto /inbox/{uid}/...,
-   so they can be locked down per-user. Paste this into the Realtime
-   Database Rules tab:
+   everything" rule for now (out of scope here) — but messages,
+   notifications, and now partnership terms/requests have moved OFF of it
+   entirely, onto their own /inbox/{uid}/... and /partnership_.../{uid}
+   nodes, so THOSE specifically can be locked down per-user (or, for
+   partnership terms, to AgriBuy admin only). This is the only way to make
+   that restriction real: a rule granting broad write access to
+   agribuy_data_v1 always cascades down through everything nested inside
+   it, so a stricter rule on a field embedded in that same blob (e.g. the
+   old c.partnership) can never actually override it. Paste this into the
+   Realtime Database Rules tab:
 
    {
      "rules": {
@@ -1594,20 +1666,50 @@ async function createAuxAuthAccount(email, password){
            }
          }
        },
+       "partnership_requests": {
+         ".read": "auth != null && auth.uid === 'inV5mhOeHOh9QnlsRJeQU4Lsk6A3'",
+         "$uid": {
+           ".read": "auth != null && (auth.uid === $uid || auth.uid === 'inV5mhOeHOh9QnlsRJeQU4Lsk6A3')",
+           ".write": "auth != null && (auth.uid === $uid || auth.uid === 'inV5mhOeHOh9QnlsRJeQU4Lsk6A3')"
+         }
+       },
+       "partnership_terms": {
+         ".read": "auth != null && auth.uid === 'inV5mhOeHOh9QnlsRJeQU4Lsk6A3'",
+         "$uid": {
+           ".read": "auth != null && (auth.uid === $uid || auth.uid === 'inV5mhOeHOh9QnlsRJeQU4Lsk6A3')",
+           ".write": "auth != null && auth.uid === 'inV5mhOeHOh9QnlsRJeQU4Lsk6A3'"
+         }
+       },
        "$other": { ".read": false, ".write": false }
      }
    }
 
-   Why not a flat "auth.uid === $uid" write rule: that alone would block
-   fan-out entirely — the sender's uid never equals the RECIPIENT's uid,
-   so they'd be unable to write the recipient's copy of a message or
+   Why not a flat "auth.uid === $uid" write rule on inbox: that alone would
+   block fan-out entirely — the sender's uid never equals the RECIPIENT's
+   uid, so they'd be unable to write the recipient's copy of a message or
    notification at all. The extra clause lets a record be written into
    someone else's inbox ONLY by the party the record itself declares as
    the sender (fromUid/byUid), and ONLY into the inbox it declares as the
    recipient (toUid/uid) — so no one can write into, or forge a delivery
    into, an inbox they're not actually a participant of. Reads stay
-   strictly auth.uid === $uid either way — that's the actual privacy
-   boundary this phase exists for.
+   strictly auth.uid === $uid either way.
+
+   partnership_requests/{uid}: a company can only ever write (submit or
+   cancel) its OWN request, under its own uid — it cannot write anyone
+   else's, and it cannot write partnership_terms at all. Admin can also
+   write/clear a request as part of approving or rejecting it, and has a
+   standing read grant at the parent node so agribuy-admin.html can list
+   every pending request without needing to already know each uid.
+
+   partnership_terms/{uid}: only AgriBuy admin (the hardcoded uid above,
+   matching ADMIN_UID in agribuy-admin.html) can ever write here — this is
+   the live rate the app actually bills from (see DB.agribuyRevenue()). A
+   company can read its own terms but never set them, from any device, no
+   matter what the client-side JS does or doesn't enforce.
+
+   The literal uid above is AgriBuy's one authorized admin account (see
+   ADMIN_UID in agribuy-admin.html) — if that account is ever rotated,
+   update it in both places.
    ========================================================================= */
 async function firebaseSignInAndBackfillUid(record, role, email, password){
   try{
@@ -1775,7 +1877,7 @@ async function attemptSignup(){
     record = existing; claimed = true;
   } else if(role==='company'){
     const location = document.getElementById('su-location').value.trim();
-    record = { id: DB.uid('co'), name, location, phone, tpin:'', code, commodities:[], operatingMode:'direct', authSalt, authHash, uid: uid||null, partnership: defaultPartnership(), subscription: defaultSubscription() };
+    record = { id: DB.uid('co'), name, location, phone, tpin:'', code, commodities:[], operatingMode:'direct', authSalt, authHash, uid: uid||null, subscription: defaultSubscription() };
     DB.data.companies.push(record);
   } else {
     record = { id: DB.uid('ag'), name, phone, code, authSalt, authHash, uid: uid||null, subscription: defaultSubscription() };
@@ -2200,7 +2302,7 @@ function renderCompany(view){
         ${flaggedCount>0?`<div class="stat-card" style="border:1px solid #F3B7B4;"><div class="lbl">Flagged for review</div><div class="val" style="color:#B42318;">${flaggedCount}</div><div class="sub">possible fraud/error</div></div>`:''}
       </div>
       <div class="panel">
-        <div class="panel-head"><h3>AgriBuy partnership — ${PARTNERSHIP_LABELS[agRev.model]}</h3><button class="action-btn ghost" onclick="setView('company','c-settings')">Configure</button></div>
+        <div class="panel-head"><h3>AgriBuy partnership — ${PARTNERSHIP_LABELS[agRev.model]}${DB.data.partnershipRequest ? ' <span class="badge badge-pending" style="font-size:10.5px;vertical-align:middle;">Change pending approval</span>' : ''}</h3><button class="action-btn ghost" onclick="setView('company','c-settings')">Configure</button></div>
         <div class="panel-body pad">
           <div class="stat-grid" style="margin-bottom:0;">
             <div class="stat-card"><div class="lbl">AgriBuy revenue accrued</div><div class="val">${fmtK(agRev.revenue)}</div><div class="sub">${escapeHTML(agRev.breakdown)}</div></div>
@@ -2256,7 +2358,8 @@ function renderCompany(view){
   }
   if(view==='c-settings'){
     const c = DB.company(companyId);
-    const pt = c.partnership || defaultPartnership();
+    const pt = DB.data.partnershipTerms || defaultPartnership();
+    const pendingReq = DB.data.partnershipRequest;
     main.innerHTML = syncBannerHTML() + `
       <div class="main-head"><div><h1>Settings</h1><p class="desc">Company profile, buying model and commodities. Agents are optional; your company can operate directly with its own field staff.</p></div></div>
       <div class="panel">
@@ -2288,7 +2391,13 @@ function renderCompany(view){
       <div class="panel">
         <div class="panel-head"><h3>AgriBuy partnership</h3></div>
         <div class="panel-body pad">
-          <p class="sub" style="margin:0 0 14px;">The commercial structure AgriBuy uses to earn from this account. Revenue only accrues on approved/paid purchases — never on rejected or pending volume.</p>
+          <p class="sub" style="margin:0 0 14px;">The commercial structure AgriBuy uses to earn from this account. Revenue only accrues on approved/paid purchases — never on rejected or pending volume. Changes here are submitted to AgriBuy for admin approval and only take effect once approved — your current terms keep applying until then.</p>
+          ${pendingReq ? `<div class="hint-box" style="border:1px solid var(--gold-dark);background:var(--gold-tint);color:var(--soil);">
+            <strong>Change request pending AgriBuy approval</strong> — submitted ${escapeHTML((pendingReq.requestedAt||'').slice(0,10))}.<br>
+            Requested: ${PARTNERSHIP_LABELS[pendingReq.model]} — ${escapeHTML(partnershipSummary(pendingReq))}.<br>
+            Current terms (still active): ${PARTNERSHIP_LABELS[pt.model]} — ${escapeHTML(partnershipSummary(pt))}.
+            <div style="margin-top:8px;"><button class="action-btn ghost" onclick="cancelPartnershipRequest('${companyId}')">Cancel request</button></div>
+          </div>` : ''}
           <div class="field"><label>Partnership model</label>
             <select id="ps-model" onchange="renderPartnershipFields()">
               <option value="origination_commission" ${pt.model==='origination_commission'?'selected':''}>Origination Commission</option>
@@ -2297,7 +2406,7 @@ function renderCompany(view){
             </select>
           </div>
           <div id="ps-fields"></div>
-          <button class="action-btn" style="background:var(--gold-dark)" onclick="savePartnership('${companyId}')">Save partnership settings</button>
+          <button class="action-btn" style="background:var(--gold-dark)" onclick="savePartnership('${companyId}')">${pendingReq ? 'Resubmit for approval' : 'Submit for approval'}</button>
         </div>
       </div>
       <div class="panel">
@@ -2345,8 +2454,15 @@ function renderPartnershipFields(pt){
       <div class="field"><label>Cost of working capital (% per annum)</label><input id="ps-financing-pct" type="number" step="0.5" value="${pt.financingCostPctPerAnnum ?? 30}"></div>`;
   }
 }
-function savePartnership(companyId){
-  const c = DB.company(companyId);
+// Company-side change requests never write partnership terms directly — they
+// write to /partnership_requests/{uid}, a node only that company's own uid
+// (or AgriBuy admin) can write to. Only agribuy-admin.html can copy a
+// request into /partnership_terms/{uid}, the node the app actually reads
+// revenue/rates from — see DB.attachPartnershipListener(). The currently-
+// approved terms keep applying (and keep accruing revenue) until then.
+async function savePartnership(companyId){
+  const uid = DB.uidFor('company', companyId);
+  if(!uid){ toast("Can't submit yet — please sign out and back in, then try again"); return; }
   const model = document.getElementById('ps-model').value;
   const pt = { model };
   if(model === 'origination_commission'){
@@ -2361,9 +2477,28 @@ function savePartnership(companyId){
     pt.avgCycleDays = Number(document.getElementById('ps-cycle-days').value) || 0;
     pt.financingCostPctPerAnnum = Number(document.getElementById('ps-financing-pct').value) || 0;
   }
-  c.partnership = Object.assign({}, defaultPartnership(), pt);
-  DB.save();
-  toast('Partnership settings saved');
+  const request = Object.assign({}, defaultPartnership(), pt, { companyId, requestedAt: new Date().toISOString() });
+  try{
+    await DB.writePartnershipRequest(uid, request);
+    DB.data.partnershipRequest = request; // optimistic — the listener will confirm it right after
+    toast('Submitted — waiting for AgriBuy admin approval');
+  }catch(e){
+    console.error('Failed to submit partnership request:', e);
+    toast('Submit failed — check your connection');
+  }
+  setView('company','c-settings');
+}
+async function cancelPartnershipRequest(companyId){
+  const uid = DB.uidFor('company', companyId);
+  if(!uid) return;
+  try{
+    await DB.writePartnershipRequest(uid, null);
+    DB.data.partnershipRequest = null;
+    toast('Request cancelled');
+  }catch(e){
+    console.error('Failed to cancel partnership request:', e);
+    toast('Cancel failed — check your connection');
+  }
   setView('company','c-settings');
 }
 async function changeCompanyPassword(companyId){
