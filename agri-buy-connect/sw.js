@@ -10,15 +10,15 @@
  * Bump CACHE_NAME on every deploy so returning users pick up the new
  * shell instead of a stale cached copy.
  */
-const CACHE_NAME = 'agribuy-shell-v1';
+const CACHE_NAME = 'agribuy-shell-v2';
 const APP_SHELL = [
-  '/',
-  '/index.html',
-  '/manifest.webmanifest',
-  '/icons/icon-192.png',
-  '/icons/icon-512.png',
-  '/icons/icon-maskable-192.png',
-  '/icons/icon-maskable-512.png'
+  './',
+  './index.html',
+  './manifest.webmanifest',
+  'icons/icon-192.png',
+  'icons/icon-512.png',
+  'icons/icon-maskable-192.png',
+  'icons/icon-maskable-512.png'
 ];
 
 self.addEventListener('install', (event) => {
@@ -57,8 +57,9 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if(isDataRequest(url)) return; // let Firebase traffic pass straight through
 
+  const scopePath = self.registration.scope.replace(url.origin, '');
   const isAppShellDoc = url.origin === self.location.origin &&
-    (url.pathname === '/' || url.pathname.endsWith('/index.html'));
+    (url.pathname === scopePath || url.pathname.endsWith('/index.html'));
 
   if(isAppShellDoc){
     // Network-first for the app itself: always try to get the latest
@@ -69,7 +70,7 @@ self.addEventListener('fetch', (event) => {
         const copy = res.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
         return res;
-      }).catch(() => caches.match('/index.html'))
+      }).catch(() => caches.match('./index.html'))
     );
     return;
   }
