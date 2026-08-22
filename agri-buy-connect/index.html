@@ -497,6 +497,7 @@ window.__firebaseReadyPromise = new Promise((resolve) => { window.__firebaseRead
     <button class="nav-item" data-view="c-contracts" onclick="setView('company','c-contracts')">Contracts</button>
     <button class="nav-item" data-view="c-payroll" onclick="setView('company','c-payroll')">Payroll</button>
     <button class="nav-item" data-view="c-settings" onclick="setView('company','c-settings')">Settings</button>
+    <button class="nav-item" data-view="c-billing" onclick="setView('company','c-billing')">Billing</button>
     <button class="nav-item" data-view="c-messages" onclick="setView('company','c-messages')"><span class="nav-item-label">💬 Messages</span><span class="nav-badge" id="badge-msg-company" style="display:none;"></span></button>
     <button class="nav-item" data-view="c-notifications" onclick="setView('company','c-notifications')"><span class="nav-item-label">🔔 Notifications</span><span class="nav-badge" id="badge-notif-company" style="display:none;"></span></button>
     <div class="sidebar-spacer"></div>
@@ -1538,6 +1539,25 @@ function defaultSubscription(){
   const end = new Date(Date.now() + TRIAL_DAYS*24*60*60*1000).toISOString().slice(0,10);
   return { status:'trial', plan:'trial', trialEndsAt:end, expiresAt:null, notes:'' };
 }
+/* -------------------------------------------------------------------------
+   PAID PLAN TIERS — only relevant to companies buying DIRECT (no agent).
+   A company that has AgriBuy's own agent network linked to its account
+   pays nothing (the agent relationship is where AgriBuy earns instead).
+   These tiers are never shown on the public landing page — only inside
+   the authenticated company app (Settings → Billing), and in the
+   subscription-blocked message if a direct-buying trial has lapsed.
+   ------------------------------------------------------------------------- */
+const PLAN_TIERS = [
+  { id:'starter', name:'Starter', priceZMW:200, unit:'/month', blurb:'Small buying desks, occasional purchases.' },
+  { id:'growth', name:'Growth', priceZMW:350, unit:'/month', blurb:'Regular seasonal buying across several field staff.' },
+  { id:'enterprise', name:'Enterprise', priceZMW:500, unit:'/month', blurb:'High-volume, year-round direct buying.' },
+  { id:'payperpurchase', name:'Pay-per-purchase', priceZMW:3500, unit:'/purchase', blurb:'No monthly commitment — pay only when you log a purchase.' }
+];
+function companyIsAgentAssisted(companyId){
+  // "Chose us as their buying agent" = has at least one AgriBuy agent
+  // linked to the account, regardless of what the Buying model label says.
+  return DB.linksForCompany(companyId).length > 0;
+}
 function resolveOwnerAccount(role, record){
   if(!record) return null;
   if(role==='company' || role==='agent') return record;
@@ -1554,12 +1574,17 @@ function resolveOwnerAccount(role, record){
 }
 function subscriptionGate(ownerAccount){
   if(!ownerAccount || !ownerAccount.subscription) return { ok:true };
+  // Free if this is a company buying through an AgriBuy-linked agent —
+  // billing only applies to companies buying direct with no agent.
+  if(DB.data.companies.some(c=>c.id===ownerAccount.id) && companyIsAgentAssisted(ownerAccount.id)){
+    return { ok:true };
+  }
   const sub = ownerAccount.subscription;
   const now = Date.now();
   if(sub.status==='suspended') return { ok:false, reason:'This account has been suspended. Please contact NEXLITE support to resolve this.' };
   if(sub.status==='expired') return { ok:false, reason:'This subscription has expired. Please contact NEXLITE support to renew.' };
   if(sub.status==='trial' && sub.trialEndsAt && new Date(sub.trialEndsAt+'T23:59:59').getTime() < now){
-    return { ok:false, reason:'Your free trial has ended. Please contact NEXLITE support to activate a subscription.' };
+    return { ok:false, reason:'Your free trial for direct buying has ended. Plans run from K200–K500/month, or K3500 per purchase with no monthly commitment — contact NEXLITE support to activate one. (Buying through an AgriBuy agent is always free.)' };
   }
   if(sub.status==='active' && sub.expiresAt && new Date(sub.expiresAt+'T23:59:59').getTime() < now){
     return { ok:false, reason:'This subscription has expired. Please contact NEXLITE support to renew.' };
@@ -2506,7 +2531,9 @@ function renderCompany(view){
             <div class="field"><label>Phone</label><input id="cs-phone" value="${c.phone||''}"></div>
             <div class="field"><label>TPIN / registration number</label><input id="cs-tpin" value="${c.tpin||''}" placeholder="e.g. 1003456789"></div>
           </div>
-          <div class="field"><label>Buying model</label><select id="cs-mode"><option value="direct" ${c.operatingMode==='direct'?'selected':''}>Direct company buying — no agent required</option><option value="agent" ${c.operatingMode==='agent'?'selected':''}>Agent-assisted buying</option><option value="hybrid" ${c.operatingMode==='hybrid'?'selected':''}>Hybrid — direct staff + agents</option></select></div>
+          <div class="field"><label>Buying model</label><select id="cs-mode"><option value="direct" ${c.operatingMode==='direct'?'selected':''}>Direct company buying — no agent required</option><option value="agent" ${c.operatingMode==='agent'?'selected':''}>Agent-assisted buying</option><option value="hybrid" ${c.operatingMode==='hybrid'?'selected':''}>Hybrid — direct staff + agents</option></select>
+            <p class="sub" style="margin:6px 0 0;">${companyIsAgentAssisted(companyId) ? 'Free — buying through an AgriBuy-linked agent.' : 'No agent linked — this account is billed. <a href="#" onclick="event.preventDefault();setView(\'company\',\'c-billing\')">View plans</a>.'}</p>
+          </div>
           <button class="action-btn" style="background:var(--navy)" onclick="saveCompanyProfile('${companyId}')">Save profile</button>
         </div>
       </div>
@@ -2554,6 +2581,32 @@ function renderCompany(view){
         </div>
       </div>`;
     renderPartnershipFields(pt);
+  }
+  if(view==='c-billing'){
+    const c = DB.company(companyId);
+    const agentAssisted = companyIsAgentAssisted(companyId);
+    const sub = c.subscription || defaultSubscription();
+    main.innerHTML = syncBannerHTML() + `
+      <div class="main-head"><div><h1>Billing</h1><p class="desc">AgriBuy is free when an agent handles origination for you — direct buying (no agent) is a paid subscription.</p></div></div>
+      ${agentAssisted ? `
+      <div class="panel"><div class="panel-body pad">
+        <div class="hint-box" style="border:1px solid var(--olive);background:#f6faf0;">
+          <strong>You're on the free plan.</strong> Your account is linked to an AgriBuy agent, so there's no subscription charge while that link is active. If you unlink all agents and switch to direct buying, you'll be moved to a paid plan below.
+        </div>
+      </div></div>` : `
+      <div class="panel"><div class="panel-body pad">
+        <p class="sub" style="margin:0 0 4px;">Current status: <strong>${sub.status==='trial'?'Free trial':sub.status}</strong>${sub.plan && sub.plan!=='trial' ? ` — ${PLAN_TIERS.find(p=>p.id===sub.plan)?.name || sub.plan}` : ''}${sub.status==='trial' && sub.trialEndsAt ? ` (ends ${sub.trialEndsAt})` : ''}</p>
+        <p class="sub" style="margin:0;">Selecting a plan below records your request — a NEXLITE team member will confirm and activate it once payment is received.</p>
+      </div></div>
+      <div class="pricing-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">
+        ${PLAN_TIERS.map(p=>`
+          <div class="price-card${sub.plan===p.id?' featured':''}" style="border:1px solid var(--line);border-radius:14px;padding:16px;">
+            <div style="font-weight:800;font-size:15px;">${p.name}</div>
+            <div class="price" style="font-size:22px;font-weight:800;margin:6px 0;">${fmtK(p.priceZMW)}<small style="font-size:12px;font-weight:600;color:var(--soil-40);">${p.unit}</small></div>
+            <p class="sub" style="min-height:34px;">${p.blurb}</p>
+            <button class="plan-btn" style="width:100%;border:none;border-radius:10px;padding:11px;font-weight:800;color:#fff;background:${sub.plan===p.id?'var(--rust)':'var(--navy)'};" onclick="selectBillingPlan('${companyId}','${p.id}')">${sub.plan===p.id?'Selected':'Choose '+p.name}</button>
+          </div>`).join('')}
+      </div>`}`;
   }
 }
 
@@ -2674,13 +2727,35 @@ function saveCompanyProfile(companyId){
   const location = document.getElementById('cs-location').value.trim();
   const phone = document.getElementById('cs-phone').value.trim();
   const tpin = document.getElementById('cs-tpin').value.trim();
+  const newMode = document.getElementById('cs-mode').value;
   if(!name){ toast('Company name cannot be empty'); return; }
   const c = DB.company(companyId);
-  c.name = name; c.location = location; c.phone = phone; c.tpin = tpin;
+  const switchedToDirect = newMode==='direct' && c.operatingMode!=='direct';
+  c.name = name; c.location = location; c.phone = phone; c.tpin = tpin; c.operatingMode = newMode;
   DB.save();
   document.getElementById('company-who-name').textContent = name;
+  // Switching to direct buying (no agent) with no agent link left on the
+  // account means billing now applies — take them straight to the plan
+  // tiers instead of quietly leaving them on Settings.
+  if(switchedToDirect && !companyIsAgentAssisted(companyId)){
+    toast('Switched to direct buying — choose a plan below');
+    setView('company','c-billing');
+    return;
+  }
   toast('Company profile updated');
   setView('company','c-settings');
+}
+
+function selectBillingPlan(companyId, planId){
+  const c = DB.company(companyId);
+  const plan = PLAN_TIERS.find(p=>p.id===planId);
+  if(!c || !plan) return;
+  if(!c.subscription) c.subscription = defaultSubscription();
+  c.subscription.plan = planId;
+  c.subscription.notes = (c.subscription.notes||'') + `\nRequested ${plan.name} plan on ${new Date().toISOString().slice(0,10)} — pending NEXLITE activation.`;
+  DB.save();
+  toast('Plan selected — contact NEXLITE support to activate it');
+  setView('company','c-billing');
 }
 
 function companyAgentsTable(companyId, withDetail){
