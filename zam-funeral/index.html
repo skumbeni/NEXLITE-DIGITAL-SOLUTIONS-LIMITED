@@ -1416,7 +1416,10 @@
     const t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show');
     clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove('show'), 2200);
   }
-  function openModal(id){ document.getElementById(id).classList.add('show'); }
+  function openModal(id){
+    document.getElementById(id).classList.add('show');
+    zfPushState({kind:'modal', id});
+  }
   function closeModal(id){ document.getElementById(id).classList.remove('show'); }
 
   document.querySelectorAll('[data-close]').forEach(b=>{
@@ -1426,6 +1429,66 @@
     o.addEventListener('click', e=>{ if(e.target===o) o.classList.remove('show'); });
   });
 
+  /* ---------- In-app back navigation ----------
+     Wrapped (Median) and mobile-browser installs route the hardware/gesture
+     "back" action through the History API. Without any history entries of our
+     own, that back action has nowhere to go and closes the app instead of
+     stepping back through the UI. We push one history entry per navigation
+     (section switch, modal open, member-portal login) and restore the right
+     screen on popstate — so back walks the user through the app first, and
+     only exits once there's truly nothing left to go back to. */
+  let zfApplyingHistory = false;
+  function zfPushState(state){
+    if(zfApplyingHistory) return;
+    const cur = history.state;
+    if(cur && cur.kind === state.kind && cur.id === state.id && cur.page === state.page) return;
+    history.pushState(Object.assign({zf:true}, state), '');
+  }
+  function zfShowPage(page){
+    const targetBtn = document.querySelector(`.nav-btn[data-page="${page}"]`);
+    const finalPage = (targetBtn && targetBtn.style.display !== 'none') ? page : 'dashboard';
+    document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+    const activeBtn = document.querySelector(`.nav-btn[data-page="${finalPage}"]`);
+    if(activeBtn) activeBtn.classList.add('active');
+    document.querySelectorAll('.page').forEach(p=>p.style.display='none');
+    const pageEl = document.getElementById('page-'+finalPage);
+    if(pageEl) pageEl.style.display = 'block';
+  }
+  window.addEventListener('popstate', (e)=>{
+    zfApplyingHistory = true;
+    try{
+      document.querySelectorAll('.overlay.show').forEach(o=>o.classList.remove('show'));
+      const state = e.state;
+      if(state && state.kind === 'modal'){
+        const el = document.getElementById(state.id);
+        if(el) el.classList.add('show');
+        return;
+      }
+      if(state && state.kind === 'page'){
+        if(document.getElementById('mainApp').style.display !== 'none') zfShowPage(state.page);
+        return;
+      }
+      if(state && state.kind === 'portalResults'){
+        if(document.getElementById('memberPortal').style.display !== 'none' && currentPortalMember){
+          document.getElementById('portalResults').style.display = 'block';
+          document.getElementById('portalLookupPanel').style.display = 'none';
+        }
+        return;
+      }
+      // Back past everything we've pushed: fall back to the natural "home" for
+      // whichever top-level screen is showing. One more back from here exits,
+      // same as pressing back on any app's home screen.
+      if(document.getElementById('mainApp').style.display !== 'none'){
+        zfShowPage('dashboard');
+      } else if(document.getElementById('memberPortal').style.display !== 'none'){
+        document.getElementById('portalResults').style.display = 'none';
+        document.getElementById('portalLookupPanel').style.display = 'block';
+      }
+    } finally {
+      zfApplyingHistory = false;
+    }
+  });
+
   /* ---------- Navigation ---------- */
   document.querySelectorAll('.nav-btn').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -1433,10 +1496,8 @@
         toast('Only the Chairperson can access this.');
         return;
       }
-      document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
-      btn.classList.add('active');
-      document.querySelectorAll('.page').forEach(p=>p.style.display='none');
-      document.getElementById('page-'+btn.dataset.page).style.display='block';
+      zfShowPage(btn.dataset.page);
+      zfPushState({kind:'page', page: btn.dataset.page});
     });
   });
 
@@ -2386,6 +2447,7 @@
       localStorage.setItem(MEMBER_SESSION_KEY, JSON.stringify({ memberId: member.id }));
     }
     renderMemberPortal(member);
+    zfPushState({kind:'portalResults'});
   }
 
   document.getElementById('btnPortalLookup').addEventListener('click', ()=>{
