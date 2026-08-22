@@ -1537,7 +1537,17 @@ async function verifySecret(record, secret){
 const TRIAL_DAYS = 14;
 function defaultSubscription(){
   const end = new Date(Date.now() + TRIAL_DAYS*24*60*60*1000).toISOString().slice(0,10);
-  return { status:'trial', plan:'trial', trialEndsAt:end, expiresAt:null, notes:'' };
+  return { status:'trial', plan:'trial', trialEndsAt:end, expiresAt:null, graceEndsAt:null, notes:'' };
+}
+/* -------------------------------------------------------------------------
+   Billing audit log — a plain, admin-visible trail of every time a
+   company's free/paid status changed (agent linked, unlink requested,
+   unlink approved/denied by NEXLITE). Lives on the company record so it
+   shows up wherever the company record is viewed/exported.
+   ------------------------------------------------------------------------- */
+function logBillingEvent(company, event, detail){
+  if(!Array.isArray(company.billingLog)) company.billingLog = [];
+  company.billingLog.push({ date: new Date().toISOString(), event, detail });
 }
 /* -------------------------------------------------------------------------
    PAID PLAN TIERS — only relevant to companies buying DIRECT (no agent).
@@ -1582,6 +1592,12 @@ function subscriptionGate(ownerAccount){
   const sub = ownerAccount.subscription;
   const now = Date.now();
   if(sub.status==='suspended') return { ok:false, reason:'This account has been suspended. Please contact NEXLITE support to resolve this.' };
+  // A recently-unlinked-from-agent company gets a grace window before
+  // billing bites, even if its trial/plan had already lapsed while it
+  // was shielded by the agent link — see requestUnlinkAgent/admin approval.
+  if(sub.graceEndsAt && new Date(sub.graceEndsAt+'T23:59:59').getTime() >= now){
+    return { ok:true };
+  }
   if(sub.status==='expired') return { ok:false, reason:'This subscription has expired. Please contact NEXLITE support to renew.' };
   if(sub.status==='trial' && sub.trialEndsAt && new Date(sub.trialEndsAt+'T23:59:59').getTime() < now){
     return { ok:false, reason:'Your free trial for direct buying has ended. Plans run from K200–K500/month, or K3500 per purchase with no monthly commitment — contact NEXLITE support to activate one. (Buying through an AgriBuy agent is always free.)' };
@@ -2532,7 +2548,13 @@ function renderCompany(view){
             <div class="field"><label>TPIN / registration number</label><input id="cs-tpin" value="${c.tpin||''}" placeholder="e.g. 1003456789"></div>
           </div>
           <div class="field"><label>Buying model</label><select id="cs-mode"><option value="direct" ${c.operatingMode==='direct'?'selected':''}>Direct company buying — no agent required</option><option value="agent" ${c.operatingMode==='agent'?'selected':''}>Agent-assisted buying</option><option value="hybrid" ${c.operatingMode==='hybrid'?'selected':''}>Hybrid — direct staff + agents</option></select>
-            <p class="sub" style="margin:6px 0 0;">${companyIsAgentAssisted(companyId) ? 'Free — buying through an AgriBuy-linked agent.' : 'No agent linked — this account is billed. <a href="#" onclick="event.preventDefault();setView(\'company\',\'c-billing\')">View plans</a>.'}</p>
+            <p class="sub" style="margin:6px 0 0;">${
+              companyIsAgentAssisted(companyId)
+                ? (c.operatingMode==='direct'
+                    ? `Set to "Direct" but still linked to an agent — you'll stay on the free plan until that link is removed. <a href="#" onclick="event.preventDefault();setView('company','c-agents')">View agents</a>.`
+                    : `Free — buying through an AgriBuy-linked agent.`)
+                : `No agent linked — this account is billed. <a href="#" onclick="event.preventDefault();setView('company','c-billing')">View plans</a>.`
+            }</p>
           </div>
           <button class="action-btn" style="background:var(--navy)" onclick="saveCompanyProfile('${companyId}')">Save profile</button>
         </div>
@@ -2597,6 +2619,10 @@ function renderCompany(view){
       <div class="panel"><div class="panel-body pad">
         <p class="sub" style="margin:0 0 4px;">Current status: <strong>${sub.status==='trial'?'Free trial':sub.status}</strong>${sub.plan && sub.plan!=='trial' ? ` — ${PLAN_TIERS.find(p=>p.id===sub.plan)?.name || sub.plan}` : ''}${sub.status==='trial' && sub.trialEndsAt ? ` (ends ${sub.trialEndsAt})` : ''}</p>
         <p class="sub" style="margin:0;">Selecting a plan below records your request — a NEXLITE team member will confirm and activate it once payment is received.</p>
+        ${sub.graceEndsAt && new Date(sub.graceEndsAt+'T23:59:59').getTime() >= Date.now() ? `
+        <div class="hint-box" style="border:1px solid var(--rust);background:#fdf3ec;margin-top:10px;">
+          <strong>Your agent link was recently removed.</strong> You have until <strong>${sub.graceEndsAt}</strong> to choose a plan below before purchases are blocked.
+        </div>` : ''}
       </div></div>
       <div class="pricing-grid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;">
         ${PLAN_TIERS.map(p=>`
@@ -2742,6 +2768,15 @@ function saveCompanyProfile(companyId){
     setView('company','c-billing');
     return;
   }
+  // They picked "Direct" but an agent is still linked — the free plan
+  // still applies (billing follows the real link, not the label), so
+  // say so plainly instead of a generic success toast that implies
+  // nothing else needs doing.
+  if(switchedToDirect && companyIsAgentAssisted(companyId)){
+    toast("Saved. You're still linked to an agent though, so you'll stay on the free plan until that's removed.");
+    setView('company','c-settings');
+    return;
+  }
   toast('Company profile updated');
   setView('company','c-settings');
 }
@@ -2777,10 +2812,33 @@ function companyAgentsTable(companyId, withDetail){
       <td>${fmtK(led.commissionAccrued)}</td>
       <td>${fmtK(led.advanceTotal)}</td>
       <td style="font-weight:600;color:${led.netPayable<0?'var(--red)':'var(--green-ok)'}">${fmtK(led.netPayable)}</td>
-      ${withDetail?`<td><button class="mini-btn" onclick="openAdvanceModal('${l.agentId}','${companyId}')">Give advance</button><button class="mini-btn" onclick="openRateModal('${l.agentId}','${companyId}')">Set rate</button><button class="mini-btn" onclick="openEditAgentModal('${l.agentId}')">Edit</button><button class="mini-btn" onclick="printAgentLedger('${l.agentId}','${companyId}')">🖨 Print ledger</button></td>`:''}
+      ${withDetail?`<td><button class="mini-btn" onclick="openAdvanceModal('${l.agentId}','${companyId}')">Give advance</button><button class="mini-btn" onclick="openRateModal('${l.agentId}','${companyId}')">Set rate</button><button class="mini-btn" onclick="openEditAgentModal('${l.agentId}')">Edit</button><button class="mini-btn" onclick="printAgentLedger('${l.agentId}','${companyId}')">🖨 Print ledger</button>${
+        l.unlinkRequestedAt
+          ? `<span style="display:inline-block;font-size:11px;color:var(--soil-40);margin-left:6px;">Unlink pending approval <a href="#" onclick="event.preventDefault();cancelUnlinkRequest('${l.id}','${companyId}')">Cancel</a></span>`
+          : `<button class="mini-btn" style="color:var(--red);" onclick="requestUnlinkAgent('${l.id}','${companyId}')">Request unlink</button>`
+      }</td>`:''}
     </tr>`;
   }).join('');
   return `<table><tr><th>Agent</th><th>Rate</th><th>Qty bought</th><th>Commission accrued</th><th>Advance given</th><th>Net payable</th>${withDetail?'<th></th>':''}</tr>${rows}</table>`;
+}
+function requestUnlinkAgent(linkId, companyId){
+  const link = DB.data.agentLinks.find(l=>l.id===linkId);
+  if(!link) return;
+  const agent = DB.agent(link.agentId);
+  link.unlinkRequestedAt = new Date().toISOString();
+  const c = DB.company(companyId);
+  logBillingEvent(c, 'unlink_requested', `Requested to unlink agent ${agent?agent.name:link.agentId} — awaiting NEXLITE approval.`);
+  DB.save();
+  toast('Unlink requested — NEXLITE will review and confirm.');
+  setView('company','c-agents');
+}
+function cancelUnlinkRequest(linkId, companyId){
+  const link = DB.data.agentLinks.find(l=>l.id===linkId);
+  if(!link) return;
+  delete link.unlinkRequestedAt;
+  DB.save();
+  toast('Unlink request cancelled');
+  setView('company','c-agents');
 }
 function removeStaleAgentLink(linkId, companyId){
   DB.data.agentLinks = DB.data.agentLinks.filter(l=>l.id!==linkId);
@@ -2955,7 +3013,10 @@ function confirmAddAgent(companyId){
     DB.data.agents.push(agent);
   }
   if(DB.link(agent.id, companyId)){ toast(agent.name + ' is already linked to your company'); return; }
+  const wasAgentAssisted = companyIsAgentAssisted(companyId);
   DB.data.agentLinks.push({ id: DB.uid('l'), agentId: agent.id, companyId, commissionRate: rate, advances: [] });
+  const c = DB.company(companyId);
+  if(!wasAgentAssisted) logBillingEvent(c, 'agent_linked', `Linked agent ${agent.name} — account moved to the free (agent-assisted) plan.`);
   DB.save(); closeModal();
   toast(agent.name + ' added' + (code?'':' — share ID ' + agent.code + ' so they can create their own login'));
   setView('company','c-agents');
