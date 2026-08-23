@@ -11787,23 +11787,35 @@ function _afterStaffModalAction(id,fromModal){
 function setStaffStatus(id,status,fromModal=false){
   if(!requireAdmin('change staff status'))return;
   const labels={suspended:'Suspend this staff member? They will remain in all records.',terminated:'Terminate this staff member? They will remain in all records.',resigned:'Mark this staff member as resigned? They will remain in all records.',expelled:'Mark this staff member as terminated? They will remain in all records.',active:'Reinstate this staff member?'};
+  // Reinstating clears the status date (staff is active again), so there's
+  // nothing to backdate — only ask for date/time when actually setting a
+  // dated status like suspended.
+  const showDate=status!=='active';
   openModal(`
     <div class="mtitle">Confirm Status Change</div>
     <div style="font-size:18px;color:var(--muted);margin-bottom:16px;line-height:1.7;text-align:center">
       ${esc(labels[status]||'Change staff status?')}
     </div>
+    ${showDate?`<div class="twobox">
+      <div class="fw"><div class="fl">Date</div><input class="fi" id="setstat-date" type="date" value="${today()}"/></div>
+      <div class="fw"><div class="fl">Time</div><input class="fi" id="setstat-time" type="time" value="${nowTime()}"/></div>
+    </div>`:''}
     <div class="mact">
       <button class="btn bo" onclick="closeModal()">Cancel</button>
       <button class="btn bg" onclick="_confirmSetStaffStatus('${id}','${status}',${fromModal})">✅ Confirm</button>
     </div>`);
 }
 function _confirmSetStaffStatus(id,status,fromModal){
+  const dateEl=document.getElementById('setstat-date'),timeEl=document.getElementById('setstat-time');
+  if(dateEl&&!dateEl.value){showToast('⚠️ Date is required.');return;}
+  const chosenDate=dateEl?dateEl.value:today();
+  const chosenTime=timeEl?(timeEl.value||nowTime()):nowTime();
   closeModal();
   requireAdminPassword(status==='active'?'reinstate this staff member':`mark this staff member as ${status}`,()=>{
     const effectiveStatus=status==='expelled'?'terminated':status;
-    const statusDate=status!=='active'?today():null;
-    const statusTime=status!=='active'?nowTime():null;
-    const histEntry={id:uid(),status:effectiveStatus,date:today(),time:nowTime(),reason:'',by:(USER||{}).username||'—'};
+    const statusDate=status!=='active'?chosenDate:null;
+    const statusTime=status!=='active'?chosenTime:null;
+    const histEntry={id:uid(),status:effectiveStatus,date:status!=='active'?chosenDate:today(),time:status!=='active'?chosenTime:nowTime(),reason:'',by:(USER||{}).username||'—'};
     updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,status:effectiveStatus,statusDate,statusTime,statusReason:'',statusHistory:[...(s.statusHistory||[]),histEntry]}:s)}));
     showToast(status==='active'?'↩ Staff member reinstated.':`Staff member marked as ${status}.`);
     _afterStaffModalAction(id,fromModal);
@@ -11814,6 +11826,10 @@ function setStaffStatusReason(id,status,fromModal=false){
   const label=status==='resigned'?'Resignation':'Termination';
   openModal(`
     <div class="mtitle">${label}</div>
+    <div class="twobox">
+      <div class="fw"><div class="fl">Date</div><input class="fi" id="setstat-date" type="date" value="${today()}"/></div>
+      <div class="fw"><div class="fl">Time</div><input class="fi" id="setstat-time" type="time" value="${nowTime()}"/></div>
+    </div>
     <div class="fw">
       <div class="fl">${label} reason (optional)</div>
       <input class="fi" id="staffstatus-reason-input" type="text" placeholder="Reason (optional)"/>
@@ -11829,11 +11845,13 @@ function setStaffStatusReason(id,status,fromModal=false){
 }
 function _confirmSetStaffStatusReason(id,status,fromModal){
   const reason=(document.getElementById('staffstatus-reason-input')?.value||'').trim();
+  const dateEl=document.getElementById('setstat-date'),timeEl=document.getElementById('setstat-time');
+  if(!dateEl||!dateEl.value){showToast('⚠️ Date is required.');return;}
+  const statusDate=dateEl.value;
+  const statusTime=timeEl&&timeEl.value?timeEl.value:nowTime();
   closeModal();
   requireAdminPassword(`mark this staff member as ${status}`,()=>{
     const effectiveStatus=status;
-    const statusDate=today();
-    const statusTime=nowTime();
     const histEntry={id:uid(),status:effectiveStatus,date:statusDate,time:statusTime,reason,by:(USER||{}).username||'—'};
     updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,status:effectiveStatus,statusDate,statusTime,statusReason:reason,statusHistory:[...(s.statusHistory||[]),histEntry]}:s)}));
     showToast(`Staff member marked as ${status}.`);
