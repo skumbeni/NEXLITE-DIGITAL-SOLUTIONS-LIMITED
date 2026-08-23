@@ -3713,7 +3713,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v3.3';
+const SW_VERSION  = 'v3.4';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -4149,6 +4149,7 @@ let ONLINE=navigator.onLine;
 let PERIOD={dashboard:'monthly',general:'monthly',maize:'monthly',staff:'monthly'};
 let DATE_RANGE={general:{from:'',to:''},maize:{from:'',to:''},staff:{from:'',to:''},dashboard:{from:'',to:''}};
 let STAB='logs'; // staff subtab
+let STAFF_LOG_TASK_FILTER='all'; // work logs task filter: 'all' or a specific task name
 let MTAB='received'; // commodity subtab
 let CCOM=''; // currently selected commodity id — resolved dynamically to first defined commodity
 let GTAB='inventory'; // general subtab: inventory|issued|stockcount|summary|itemnames|pl
@@ -10060,12 +10061,23 @@ function renderStaff(){
     ${STAB==='logs'?renderStaffLogs():STAB==='roster'?renderRoster():STAB==='earnings'?renderEarnings():STAB==='payments'?renderPayments():STAB==='leave'?renderLeave():STAB==='rolesrates'?renderRolesRatesTab():renderStaffList()}`;
 }
 
+function setStaffLogTaskFilter(t){STAFF_LOG_TASK_FILTER=t;render();}
+
 function renderStaffLogs(){
   const _sIds=scopedStaffIds();
   const logs=filterPeriod(DATA.staffLogs.filter(l=>_sIds.has(String(l.staffId))), PERIOD.staff, 'date', 'staff');
   const staffById=Object.fromEntries(DATA.staff.map(s=>[s.id,s]));
-  const totQty=approvedArr(logs).filter(l=>l.status!=='open').reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
-  const totNet=approvedArr(logs).filter(l=>l.status!=='open').reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
+
+  // Task breakdown for this period (work entries only)
+  const _taskCounts={};
+  logs.forEach(l=>{if(!l.entryType||l.entryType==='work'){const t=l.task||'—';_taskCounts[t]=(_taskCounts[t]||0)+1;}});
+  const _taskList=Object.keys(_taskCounts).sort((a,b)=>a.localeCompare(b));
+  if(STAFF_LOG_TASK_FILTER!=='all'&&!_taskList.includes(STAFF_LOG_TASK_FILTER)) STAFF_LOG_TASK_FILTER='all';
+  const _workCount=logs.filter(l=>!l.entryType||l.entryType==='work').length;
+  const taskFilteredLogs=STAFF_LOG_TASK_FILTER==='all'?logs:logs.filter(l=>(!l.entryType||l.entryType==='work')&&(l.task||'—')===STAFF_LOG_TASK_FILTER);
+
+  const totQty=approvedArr(taskFilteredLogs).filter(l=>l.status!=='open').reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
+  const totNet=approvedArr(taskFilteredLogs).filter(l=>l.status!=='open').reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
   // Open shifts across ALL time (not period-filtered)
   const allOpenShifts=(DATA.staffLogs||[]).filter(l=>l.status==='open'&&!isRejected(l)&&(!l.entryType||l.entryType==='work')&&_sIds.has(String(l.staffId)));
 
@@ -10083,7 +10095,7 @@ function renderStaffLogs(){
     cumMap[log.id]={cumQty:runQty[sid], cumNet:runNet[sid], cumUnit:logUnit};
   });
 
-  const rows=logs.slice().sort((a,b)=>b.date.localeCompare(a.date)||String(b.id).localeCompare(String(a.id))).map(log=>{
+  const rows=taskFilteredLogs.slice().sort((a,b)=>b.date.localeCompare(a.date)||String(b.id).localeCompare(String(a.id))).map(log=>{
     const s=staffById[log.staffId];
     // Absence / leave entries
     if(log.entryType&&log.entryType!=='work'){
@@ -10141,12 +10153,16 @@ function renderStaffLogs(){
       ${USER.role==='admin'&&allOpenShifts.length===1?`<button class="clockout-btn" onclick="openClockOutForm('${allOpenShifts[0].id}')">⏹ Clock Out</button>`:''}
     </div>`:''}
     <div class="srow">
-      <div class="sbox"><div class="sv">${totQty.toLocaleString()}</div><div class="sl">Total Qty (Period)</div></div>
-      <div class="sbox bl"><div class="sv">${cur()} ${totNet.toFixed(0)}</div><div class="sl">Net (Period)</div></div>
+      <div class="sbox"><div class="sv">${totQty.toLocaleString()}</div><div class="sl">Total Qty (Period)${STAFF_LOG_TASK_FILTER!=='all'?' · '+esc(STAFF_LOG_TASK_FILTER):''}</div></div>
+      <div class="sbox bl"><div class="sv">${cur()} ${totNet.toFixed(0)}</div><div class="sl">Net (Period)${STAFF_LOG_TASK_FILTER!=='all'?' · '+esc(STAFF_LOG_TASK_FILTER):''}</div></div>
     </div>
     <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:17px;color:var(--muted)">
       🔵 <span style="color:var(--blue);font-weight:700">Cum. Qty</span> &amp; 🟣 <span style="color:var(--purple);font-weight:700">Cum. Net</span> = running career total per staff up to that day (qty in task's own unit)
     </div>
+    ${_taskList.length>1?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <button class="tag" style="cursor:pointer;padding:6px 12px;font-size:16px;${STAFF_LOG_TASK_FILTER==='all'?'background:var(--blue);color:#fff;border-color:var(--blue);font-weight:700':''}" onclick="setStaffLogTaskFilter('all')">All Tasks (${_workCount})</button>
+      ${_taskList.map(t=>`<button class="tag" style="cursor:pointer;padding:6px 12px;font-size:16px;${STAFF_LOG_TASK_FILTER===t?'background:var(--blue);color:#fff;border-color:var(--blue);font-weight:700':''}" onclick="setStaffLogTaskFilter(decodeURIComponent('${encodeURIComponent(t)}'))">${esc(t)} (${_taskCounts[t]})</button>`).join('')}
+    </div>`:''}
     <div style="margin-bottom:10px">
       <input class="fi" id="staff-log-search" placeholder="🔍 Search by name, role, or task…" oninput="filterStaffLogTable(this.value)" style="font-size:18px"/>
     </div>
@@ -10162,7 +10178,7 @@ function renderStaffLogs(){
         <th style="text-align:right;color:var(--purple)">Cum.Net</th>
         ${USER.role==='admin'?'<th></th>':''}
       </tr></thead>
-      <tbody>${logs.length===0?`<tr><td colspan="12" class="empty">No logs for this period</td></tr>`:rows}</tbody>
+      <tbody>${taskFilteredLogs.length===0?`<tr><td colspan="12" class="empty">${STAFF_LOG_TASK_FILTER==='all'?'No logs for this period':'No logs for "'+esc(STAFF_LOG_TASK_FILTER)+'" in this period'}</td></tr>`:rows}</tbody>
     </table></div></div>`;
 }
 
