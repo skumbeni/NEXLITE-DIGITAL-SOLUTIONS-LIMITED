@@ -11536,10 +11536,18 @@ function delStaffWarning(wid,staffId){
 function openPayForm(){
   if(isStaffRole()){alert('⛔ Staff logins cannot record payments. Ask your Admin.');return;}
   if(DATA.staff.length===0){alert('Register staff members first.');return;}
-  const opts=DATA.staff.map(s=>{
+  // Suspended/Resigned/Terminated staff are excluded here too — except when
+  // they still have an unpaid balance, since a depot still needs to be able
+  // to settle someone's final wages after they've left.
+  const opts=DATA.staff.filter(s=>{
+    if(!s.status||s.status==='active')return true;
     const earned=DATA.staffLogs.filter(l=>String(l.staffId)===String(s.id)).reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
     const paid=(DATA.staffPayments||[]).filter(p=>String(p.staffId)===String(s.id)).reduce((a,b)=>a+Number(b.amount||0),0);
-    return `<option value="${s.id}">${esc(s.name)} (${esc(staffRoleLabel(s))}) — Balance: ${zm(earned-paid)}</option>`;
+    return (earned-paid)>0;
+  }).map(s=>{
+    const earned=DATA.staffLogs.filter(l=>String(l.staffId)===String(s.id)).reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
+    const paid=(DATA.staffPayments||[]).filter(p=>String(p.staffId)===String(s.id)).reduce((a,b)=>a+Number(b.amount||0),0);
+    return `<option value="${s.id}">${esc(s.name)} (${esc(staffRoleLabel(s))}${s.status&&s.status!=='active'?' — '+s.status.toUpperCase():''}) — Balance: ${zm(earned-paid)}</option>`;
   }).join('');
   openModal(`
     <div class="mtitle">💳 Record Payment</div>
@@ -11695,7 +11703,15 @@ function _doOpenEditLog(id){
   const log=DATA.staffLogs.find(x=>String(x.id)===String(id));
   if(!log){alert('Record not found.');return;}
   const activeStaff=DATA.staff.filter(s=>!s.status||s.status==='active');
-  const staffOpts=activeStaff.map(s=>`<option value="${s.id}"${String(s.id)===String(log.staffId)?' selected':''}>${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('');
+  // Editing an EXISTING log must never silently reassign it — if the staff
+  // member this log belongs to has since been suspended/resigned/terminated,
+  // they're excluded from new selections everywhere else, but they still
+  // need to appear here (clearly marked) so the dropdown doesn't default to
+  // someone else the moment you open this record.
+  const staffRec0=DATA.staff.find(s=>String(s.id)===String(log.staffId));
+  const currentInactive=staffRec0&&staffRec0.status&&staffRec0.status!=='active';
+  const staffOpts=activeStaff.map(s=>`<option value="${s.id}"${String(s.id)===String(log.staffId)?' selected':''}>${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('')
+    + (currentInactive?`<option value="${staffRec0.id}" selected>${esc(staffRec0.name)} (${esc(staffRoleLabel(staffRec0))} — ${staffRec0.status.toUpperCase()})</option>`:'');
   const staffRec=DATA.staff.find(s=>String(s.id)===String(log.staffId));
   // Preserve the role the log was actually recorded under — a multi-role
   // staff member's current primary role may differ from the role used here.
