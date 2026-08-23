@@ -384,7 +384,7 @@ body.light .clockout-btn{border-color:var(--amber);color:var(--amber);}
 
 /* Modal */
 .movl{position:fixed;inset:0;background:var(--movl-bg);z-index:1000;display:flex;align-items:flex-end;justify-content:center;}
-.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:24px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;box-shadow:var(--shadow-lg);}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:24px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;overflow-x:hidden;box-sizing:border-box;box-shadow:var(--shadow-lg);}
 .mtitle{font-family:var(--fh);font-size:24px;font-weight:800;color:var(--white);margin-bottom:18px;letter-spacing:-0.3px;}
 .mact{display:flex;gap:10px;margin-top:20px;}
 .twobox{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
@@ -11117,12 +11117,20 @@ function openStaffDetail(id){
       </div>
     </div>`;
   }).join('');
+  // NOTE: these action buttons sit inside the staff profile modal, which is
+  // capped at max-width:480px with 24px padding (~430px usable). The default
+  // .btn size (12px 20px padding, 20px font) needs way more than 1/3 of that
+  // per button, so 2–3 of them side by side overflowed the modal width and
+  // pushed the whole page into horizontal scroll — cutting content off the
+  // left edge of the screen. Using .bsm (small button) plus min-width:0 (so
+  // flex items can actually shrink below their content size) keeps everything
+  // inside the modal/app width, same as the compact buttons on the roster list.
   const actionBtns=USER.role==='admin'?(
     (s.status==='terminated'||s.status==='resigned'||s.status==='expelled')
       ?`<button class="btn bg" onclick="staffModalAction('${s.id}',()=>setStaffStatus('${s.id}','active'))">↩ Reinstate</button>`
       :s.status==='suspended'
-        ?`<div style="display:flex;gap:8px"><button class="btn bg" style="flex:1" onclick="staffModalAction('${s.id}',()=>setStaffStatus('${s.id}','active'))">↩ Reinstate</button><button class="btn br" style="flex:1" onclick="staffModalAction('${s.id}',()=>setStaffStatusReason('${s.id}','terminated'))">⛔ Terminate</button></div>`
-        :`<div style="display:flex;gap:8px"><button class="btn ba" style="flex:1" onclick="staffModalAction('${s.id}',()=>setStaffStatus('${s.id}','suspended'))">⏸ Suspend</button><button class="btn bo" style="flex:1" onclick="staffModalAction('${s.id}',()=>setStaffStatusReason('${s.id}','resigned'))">🚪 Resigned</button><button class="btn br" style="flex:1" onclick="staffModalAction('${s.id}',()=>setStaffStatusReason('${s.id}','terminated'))">⛔ Terminate</button></div>`
+        ?`<div style="display:flex;gap:8px"><button class="btn bg bsm" style="flex:1;min-width:0;padding:10px 8px;font-size:16px" onclick="staffModalAction('${s.id}',()=>setStaffStatus('${s.id}','active'))">↩ Reinstate</button><button class="btn br bsm" style="flex:1;min-width:0;padding:10px 8px;font-size:16px" onclick="staffModalAction('${s.id}',()=>setStaffStatusReason('${s.id}','terminated'))">⛔ Terminate</button></div>`
+        :`<div style="display:flex;gap:6px"><button class="btn ba bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="staffModalAction('${s.id}',()=>setStaffStatus('${s.id}','suspended'))">⏸ Suspend</button><button class="btn bo bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="staffModalAction('${s.id}',()=>setStaffStatusReason('${s.id}','resigned'))">🚪 Resigned</button><button class="btn br bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="staffModalAction('${s.id}',()=>setStaffStatusReason('${s.id}','terminated'))">⛔ Terminate</button></div>`
   ):'';
   const editDetailsBtn=USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px" onclick="closeModal();setTimeout(()=>openEditStaffDetails('${s.id}'),50)">✏️ Edit Details</button>`:'';
   const removePhotoBtn=(USER.role==='admin'&&s.photoDataUrl)?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--red);border-color:rgba(192,57,43,.4)" onclick="removeStaffPhoto('${s.id}')">🗑 Remove Photo</button>`:'';
@@ -11749,25 +11757,61 @@ function saveEditLog(id){
   logAuditEvent('EDIT','Work Log',`ID:${id} · Staff:${sid} · Task:${task} · Qty:${qty}`,before);
   closeModal();
 }
+// NOTE: native window.confirm()/prompt() are unreliable inside the Median.co
+// Android WebView wrapper (many WebViews never implement onJsConfirm/onJsPrompt,
+// so the call just returns false/null immediately with no dialog shown at all).
+// That made these buttons look like they did nothing: the onclick fired,
+// requireAdmin() passed, but confirm()/prompt() silently short-circuited the
+// function before it ever reached updateData(). Using the app's own openModal()
+// (same mechanism requireAdminPassword already uses successfully) fixes this.
 function setStaffStatus(id,status){
   if(!requireAdmin('change staff status'))return;
   const labels={suspended:'Suspend this staff member? They will remain in all records.',terminated:'Terminate this staff member? They will remain in all records.',resigned:'Mark this staff member as resigned? They will remain in all records.',expelled:'Mark this staff member as terminated? They will remain in all records.',active:'Reinstate this staff member?'};
-  if(!confirm(labels[status]||'Change staff status?'))return;
+  openModal(`
+    <div class="mtitle">Confirm Status Change</div>
+    <div style="font-size:18px;color:var(--muted);margin-bottom:16px;line-height:1.7;text-align:center">
+      ${esc(labels[status]||'Change staff status?')}
+    </div>
+    <div class="mact">
+      <button class="btn bo" onclick="closeModal()">Cancel</button>
+      <button class="btn bg" onclick="_confirmSetStaffStatus('${id}','${status}')">✅ Confirm</button>
+    </div>`);
+}
+function _confirmSetStaffStatus(id,status){
+  closeModal();
   requireAdminPassword(status==='active'?'reinstate this staff member':`mark this staff member as ${status}`,()=>{
     const effectiveStatus=status==='expelled'?'terminated':status;
     const statusDate=status!=='active'?today():null;
     updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,status:effectiveStatus,statusDate,statusReason:''}:s)}));
+    showToast(status==='active'?'↩ Staff member reinstated.':`Staff member marked as ${status}.`);
   });
 }
 function setStaffStatusReason(id,status){
   if(!requireAdmin('change staff status'))return;
   const label=status==='resigned'?'Resignation':'Termination';
-  const reason=prompt(`${label} reason (optional):`)||'';
-  if(reason===null)return; // cancelled
+  openModal(`
+    <div class="mtitle">${label}</div>
+    <div class="fw">
+      <div class="fl">${label} reason (optional)</div>
+      <input class="fi" id="staffstatus-reason-input" type="text" placeholder="Reason (optional)"/>
+    </div>
+    <div class="mact">
+      <button class="btn bo" onclick="closeModal()">Cancel</button>
+      <button class="btn bg" onclick="_confirmSetStaffStatusReason('${id}','${status}')">✅ Confirm</button>
+    </div>`);
+  document.getElementById('staffstatus-reason-input').addEventListener('keydown', e=>{
+    if(e.key==='Enter') _confirmSetStaffStatusReason(id,status);
+  });
+  document.getElementById('staffstatus-reason-input').focus();
+}
+function _confirmSetStaffStatusReason(id,status){
+  const reason=(document.getElementById('staffstatus-reason-input')?.value||'').trim();
+  closeModal();
   requireAdminPassword(`mark this staff member as ${status}`,()=>{
     const effectiveStatus=status;
     const statusDate=today();
     updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,status:effectiveStatus,statusDate,statusReason:reason}:s)}));
+    showToast(`Staff member marked as ${status}.`);
   });
 }
 function delStaff(id){requireAdminPassword('delete this staff member',()=>{updateData(d=>({...d,staff:d.staff.filter(s=>String(s.id)!==String(id))}));showToast('🗑 Staff member deleted.');});}
