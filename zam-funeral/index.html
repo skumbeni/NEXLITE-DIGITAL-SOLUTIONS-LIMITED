@@ -1218,10 +1218,18 @@
       if(raw) return JSON.parse(raw);
     }catch(e){}
     return {
-      settings:{ orgName:'', fundNumber:'', defaultRate:150, defaultPayoutBasis:'fixed', defaultPayout:5000, defaultPayoutPercent:0, treasurerEmail:'', treasurerAccess:{}, treasurerInvites:{} },
+      settings:{ orgName:'', fundNumber:'', defaultRate:150, defaultPayoutBasis:'fixed', defaultPayout:5000, defaultPayoutPercent:0, treasurerEmail:'' },
+      access:{ treasurerAccess:{} }, invites:{},
       members:[], contributions:[], cases:[], subscriptionPayments:[]
     };
   }
+  // Migrate any old cached copy (from before treasurerAccess/treasurerInvites moved to
+  // their own top-level nodes) into the new shape, and strip the stale keys so nothing
+  // still reads or writes them from inside "settings".
+  if(!data.access) data.access = { treasurerAccess: (data.settings && data.settings.treasurerAccess) || {} };
+  if(!data.access.treasurerAccess) data.access.treasurerAccess = {};
+  if(!data.invites) data.invites = (data.settings && data.settings.treasurerInvites) || {};
+  if(data.settings){ delete data.settings.treasurerAccess; delete data.settings.treasurerInvites; }
   function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(data)); renderAll(); fbPush(); }
 
   /* ---------- Firebase (auth-gated sync, offline-cache) ---------- */
@@ -1238,6 +1246,12 @@
   const db = firebase.database();
   const auth = firebase.auth();
   const fbRef = db.ref('fundData');
+  // treasurerAccess and treasurerInvites live under their own top-level nodes (not inside
+  // fundData) so their read rules can be scoped to treasurers only — see the rules file.
+  // fundData/settings/members/contributions/cases stay broadly readable by any signed-in
+  // client (anonymous members included), which the self-service portal relies on.
+  const dbAccessRef = db.ref('access');
+  const dbInvitesRef = db.ref('invites');
 
   let fbReady = false;       // becomes true once the first remote snapshot arrives
   let suppressEcho = false;  // true while we're writing our own change, to ignore the echo
@@ -1251,7 +1265,7 @@
   // login form) — that's the case that silently fails writes below.
   function isAuthorizedTreasurer(){
     const u = auth.currentUser;
-    return !!(u && !u.isAnonymous && data.settings.treasurerAccess && data.settings.treasurerAccess[u.uid]);
+    return !!(u && !u.isAnonymous && data.access.treasurerAccess && data.access.treasurerAccess[u.uid]);
   }
 
   // Chairperson = the founding account (created via createChairmanAccount, flagged
@@ -1260,32 +1274,68 @@
   // other managers' access.
   function isChairperson(){
     const u = auth.currentUser;
-    if(!u || u.isAnonymous || !data.settings.treasurerAccess) return false;
-    const entry = data.settings.treasurerAccess[u.uid];
+    if(!u || u.isAnonymous || !data.access.treasurerAccess) return false;
+    const entry = data.access.treasurerAccess[u.uid];
     return !!(entry && entry.bootstrap);
   }
 
   function fbPush(){
     if(saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(()=>{
-      // password lives only in Firebase Auth — it's never part of the synced data at all
-      const payload = JSON.parse(JSON.stringify(data));
-      suppressEcho = true;
-      fbRef.set(payload)
-        .catch((err)=>{
-          if(err && err.code === 'PERMISSION_DENIED'){
-            toast('Not signed in as Chairperson in this session — log in again to save changes online.');
-            if(document.getElementById('mainApp') && document.getElementById('mainApp').style.display !== 'none'){
-              openModal('loginModal');
-            }
-          } else if(typeof navigator !== 'undefined' && navigator.onLine === false){
-            toast('You\u2019re offline — saved on this device only.');
-          } else {
-            toast('Could not sync to the cloud — saved on this device only.');
+    saveTimer = setTimeout(()=> fbPushNow(false), 400); // debounce rapid successive saves
+  }
+  // Split out from fbPush so a denied write can retry itself once — see the
+  // PERMISSION_DENIED branch below for why that retry exists.
+  function fbPushNow(isRetry){
+    // password lives only in Firebase Auth — it's never part of the synced data at all.
+    // Only the fundData-shaped fields go here — treasurerAccess/invites live under their
+    // own top-level nodes now and are synced separately (fbSaveAccess/fbSaveInvites),
+    // so a stray copy of them never gets written back under this broadly-readable path.
+    const payload = JSON.parse(JSON.stringify({
+      settings: data.settings, members: data.members, contributions: data.contributions,
+      cases: data.cases, subscriptionPayments: data.subscriptionPayments
+    }));
+    suppressEcho = true;
+    fbRef.set(payload)
+      .catch((err)=>{
+        if(err && err.code === 'PERMISSION_DENIED'){
+          const u = auth.currentUser;
+          // Right after a fresh sign-in, the Realtime Database connection can take a
+          // moment to pick up the new auth token — a write that lands in that gap is
+          // rejected even though the user really is signed in as treasurer. Retry once,
+          // after giving the connection a beat to catch up, before concluding they're
+          // actually logged out and popping the login screen back over the dashboard.
+          if(u && !u.isAnonymous && !isRetry){
+            setTimeout(()=> fbPushNow(true), 800);
+            return;
           }
-        })
-        .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
-    }, 400); // debounce rapid successive saves
+          toast('Not signed in as Chairperson in this session — log in again to save changes online.');
+          if(document.getElementById('mainApp') && document.getElementById('mainApp').style.display !== 'none'){
+            openModal('loginModal');
+          }
+        } else if(typeof navigator !== 'undefined' && navigator.onLine === false){
+          toast('You\u2019re offline — saved on this device only.');
+        } else {
+          toast('Could not sync to the cloud — saved on this device only.');
+        }
+      })
+      .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
+  }
+
+  // Targeted writes for the treasurer roster and pending invites — these live outside
+  // fundData now, so they don't ride along with fbPush()'s fundData-only write.
+  function fbSaveAccess(){
+    suppressEcho = true;
+    localStorage.setItem(STORE_KEY, JSON.stringify(data));
+    return dbAccessRef.child('treasurerAccess').set(data.access.treasurerAccess || {})
+      .catch(()=>{ toast('Could not sync access changes online.'); })
+      .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
+  }
+  function fbSaveInvites(){
+    suppressEcho = true;
+    localStorage.setItem(STORE_KEY, JSON.stringify(data));
+    return dbInvitesRef.set(data.invites || {})
+      .catch(()=>{ toast('Could not sync invite changes online.'); })
+      .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
   }
 
   // Targeted write for member-initiated PIN changes: members are signed in anonymously and
@@ -1305,8 +1355,8 @@
   // rules scoped to exactly these two leaves.
   function fbRedeemTreasurerInvite(uid, entry, code){
     suppressEcho = true;
-    return fbRef.child('settings/treasurerAccess/'+uid).set(entry)
-      .then(()=> fbRef.child('settings/treasurerInvites/'+code).remove())
+    return dbAccessRef.child('treasurerAccess/'+uid).set(entry)
+      .then(()=> dbInvitesRef.child(code).remove())
       .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
   }
 
@@ -1314,7 +1364,7 @@
   // the rules allow this only while treasurerAccess is still completely empty).
   function fbBootstrapChairman(uid, entry){
     suppressEcho = true;
-    return fbRef.child('settings/treasurerAccess/'+uid).set(entry)
+    return dbAccessRef.child('treasurerAccess/'+uid).set(entry)
       .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
   }
 
@@ -1325,11 +1375,11 @@
       const remote = snap.val();
       if(suppressEcho) return; // this is the echo of our own write, ignore it
       if(remote){
-        data = remote;
-        if(!data.settings) data.settings = {};
-        if(!data.subscriptionPayments) data.subscriptionPayments = [];
-        if(!data.settings.treasurerAccess) data.settings.treasurerAccess = {};
-        if(!data.settings.treasurerInvites) data.settings.treasurerInvites = {};
+        data.settings = remote.settings || {};
+        data.members = remote.members || [];
+        data.contributions = remote.contributions || [];
+        data.cases = remote.cases || [];
+        data.subscriptionPayments = remote.subscriptionPayments || [];
         localStorage.setItem(STORE_KEY, JSON.stringify(data));
         if(fbReady) renderAll(); // don't double-render on the very first load
       } else if(fbReady === false){
@@ -1340,6 +1390,27 @@
     }, (err)=>{
       toast('Sync error — working offline from last saved data.');
     });
+
+    // Only readable by uids already in the treasurer roster — anonymous member-portal
+    // sessions and not-yet-redeemed signups will get a permission error here, which is
+    // expected and silently ignored (they simply never see this data).
+    dbAccessRef.on('value', (snap)=>{
+      if(suppressEcho) return;
+      const remote = snap.val();
+      data.access = { treasurerAccess: (remote && remote.treasurerAccess) || {} };
+      localStorage.setItem(STORE_KEY, JSON.stringify(data));
+      if(fbReady) renderAll();
+    }, ()=>{ /* not a treasurer in this session — nothing to show, no error toast */ });
+
+    // Listing the whole node is treasurer-only; a specific invite code is still readable
+    // directly by anyone (see treasurerSignInOrCreate), which is how redemption works
+    // without needing this listener to succeed for a brand-new signup.
+    dbInvitesRef.on('value', (snap)=>{
+      if(suppressEcho) return;
+      data.invites = snap.val() || {};
+      localStorage.setItem(STORE_KEY, JSON.stringify(data));
+      if(fbReady) renderAll();
+    }, ()=>{ /* not a treasurer in this session — nothing to show, no error toast */ });
   }
 
   // Every visitor needs to be authenticated to read (rules require auth != null).
@@ -1366,17 +1437,23 @@
     return auth.signInWithEmailAndPassword(email, password).catch((err)=>{
       if(err.code === 'auth/user-not-found'){
         const code = (inviteCode||'').trim().toUpperCase();
-        const invite = code && data.settings.treasurerInvites ? data.settings.treasurerInvites[code] : null;
-        if(!invite){
-          return Promise.reject({ code: 'auth/invite-required' });
-        }
-        return auth.createUserWithEmailAndPassword(email, password).then((cred)=>{
-          const entry = { email: email.toLowerCase(), memberId: invite.memberId||null, name: invite.name||'', inviteCode: code, grantedAt: new Date().toISOString().slice(0,10) };
-          return fbRedeemTreasurerInvite(cred.user.uid, entry, code).then(()=>{
-            data.settings.treasurerAccess[cred.user.uid] = entry;
-            delete data.settings.treasurerInvites[code];
-            localStorage.setItem(STORE_KEY, JSON.stringify(data));
-            return cred;
+        if(!code) return Promise.reject({ code: 'auth/invite-required' });
+        // A not-yet-treasurer session can't list all invites (that'd let anyone browse
+        // active codes), but it CAN look up one exact code directly — that's how a
+        // legitimate invite gets verified before the account is even created.
+        return dbInvitesRef.child(code).once('value').then((snap)=>{
+          const invite = snap.val();
+          if(!invite){
+            return Promise.reject({ code: 'auth/invite-required' });
+          }
+          return auth.createUserWithEmailAndPassword(email, password).then((cred)=>{
+            const entry = { email: email.toLowerCase(), memberId: invite.memberId||null, name: invite.name||'', inviteCode: code, grantedAt: new Date().toISOString().slice(0,10) };
+            return fbRedeemTreasurerInvite(cred.user.uid, entry, code).then(()=>{
+              data.access.treasurerAccess[cred.user.uid] = entry;
+              if(data.invites) delete data.invites[code];
+              localStorage.setItem(STORE_KEY, JSON.stringify(data));
+              return cred;
+            });
           });
         });
       }
@@ -1392,7 +1469,7 @@
     return auth.createUserWithEmailAndPassword(details.email, details.password).then((cred)=>{
       const entry = { email: details.email.toLowerCase(), memberId: null, name: details.chairName||'', grantedAt: new Date().toISOString().slice(0,10), bootstrap: true };
       return fbBootstrapChairman(cred.user.uid, entry).then(()=>{
-        data.settings.treasurerAccess[cred.user.uid] = entry;
+        data.access.treasurerAccess[cred.user.uid] = entry;
         data.settings.orgName = details.orgName;
         data.settings.fundNumber = details.fundNumber;
         data.settings.treasurerEmail = details.email;
@@ -2132,7 +2209,7 @@
     const accessBody = document.getElementById('treasurerAccessBody');
     const invitesBody = document.getElementById('treasurerInvitesBody');
     if(!accessBody || !invitesBody) return; // section not present in an older cached page
-    const access = data.settings.treasurerAccess || {};
+    const access = data.access.treasurerAccess || {};
     const uids = Object.keys(access);
     accessBody.innerHTML = uids.length ? uids.map(uid => `
       <tr>
@@ -2143,7 +2220,7 @@
       </tr>
     `).join('') : '<tr class="empty-row"><td colspan="4">Just the chairman so far.</td></tr>';
 
-    const invites = data.settings.treasurerInvites || {};
+    const invites = data.invites || {};
     const codes = Object.keys(invites);
     invitesBody.innerHTML = codes.length ? codes.map(code => `
       <tr>
@@ -2159,16 +2236,18 @@
         const uid = btn.getAttribute('data-revoke-uid');
         const name = (access[uid] && access[uid].name) || 'this person';
         if(!confirm(`Revoke treasurer access for ${name}? They'll immediately lose the ability to save changes.`)) return;
-        delete data.settings.treasurerAccess[uid];
-        save();
+        delete data.access.treasurerAccess[uid];
+        renderAll();
+        fbSaveAccess();
         toast('Access revoked.');
       });
     });
     invitesBody.querySelectorAll('[data-cancel-invite]').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         const code = btn.getAttribute('data-cancel-invite');
-        delete data.settings.treasurerInvites[code];
-        save();
+        delete data.invites[code];
+        renderAll();
+        fbSaveInvites();
         toast('Invite cancelled.');
       });
     });
@@ -2188,9 +2267,9 @@
     const name = document.getElementById('inviteTreasurerName').value.trim() || (member ? member.name : '');
     if(!name){ toast('Pick a member or enter a name first.'); return; }
     const code = inviteCode();
-    if(!data.settings.treasurerInvites) data.settings.treasurerInvites = {};
-    data.settings.treasurerInvites[code] = { memberId: memberId || null, name, createdAt: new Date().toISOString().slice(0,10) };
-    save();
+    if(!data.invites) data.invites = {};
+    data.invites[code] = { memberId: memberId || null, name, createdAt: new Date().toISOString().slice(0,10) };
+    fbSaveInvites();
     document.getElementById('inviteCodeValue').textContent = code;
     document.getElementById('inviteCodeResult').style.display = 'block';
   });
@@ -2407,7 +2486,7 @@
   document.getElementById('btnCreateAccountSubmit').addEventListener('click', ()=>{
     const errEl = document.getElementById('createAccountError');
     errEl.style.display = 'none';
-    const existingChair = data.settings.treasurerAccess && Object.keys(data.settings.treasurerAccess).length > 0;
+    const existingChair = data.access.treasurerAccess && Object.keys(data.access.treasurerAccess).length > 0;
     if(existingChair){
       errEl.textContent = 'A chairman account already exists for this fund. Please log in instead, or ask them to invite you.';
       errEl.style.display = 'block';
