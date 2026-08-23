@@ -3699,7 +3699,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v2.7';
+const SW_VERSION  = 'v2.8';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -11188,6 +11188,7 @@ function openStaffDetail(id){
     ${removePhotoBtn}
     ${loginAccountBtn}
     <button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--green);border-color:rgba(0,214,143,.4)" onclick="printStaffIdCard('${s.id}')">🪪 Print ID Card</button>
+    ${USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--blue);border-color:rgba(59,130,246,.4)" onclick="printStaffProfile('${s.id}')">📄 Download Profile PDF</button>`:''}
     ${USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px" onclick="closeModal();setTimeout(()=>openStaffWarnings('${s.id}'),50)">⚠️ Disciplinary / Warnings</button>`:''}
     ${actionBtns?`<div style="margin-top:14px">${actionBtns}</div>`:''}
     <div style="display:flex;align-items:center;gap:8px;margin-top:14px;padding:8px 2px">
@@ -11475,6 +11476,104 @@ function _printStaffIdCard(id) {
   showToast('🪪 ID card opened — click Print Now');
 }
 // ══ END FIX 29 ════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════
+// STAFF PROFILE SUMMARY PDF — reuses the existing _pdfPrint /
+// _getBrandedHeader engine (same one used by payslips, audit
+// logs, and book exports). One-tap export of everything shown
+// in the staff detail modal: personal info, earnings/payment
+// summary, task breakdown, status history and recent sessions.
+// ══════════════════════════════════════════════════════════
+function printStaffProfile(id){
+  if(!requireAdmin('download staff profile PDF'))return;
+  requireAdminPassword('download staff profile PDF', ()=>_printStaffProfile(id));
+}
+function _printStaffProfile(id){
+  const s=DATA.staff.find(x=>String(x.id)===String(id));
+  if(!s){alert('Staff member not found.');return;}
+  const di=DATA.depotInfo||{};
+  const sLogs=DATA.staffLogs.filter(l=>String(l.staffId)===String(s.id)).sort((a,b)=>b.date.localeCompare(a.date));
+  const sPays=(DATA.staffPayments||[]).filter(p=>String(p.staffId)===String(s.id)).sort((a,b)=>b.date.localeCompare(a.date));
+  const totBags=sLogs.reduce((a,b)=>a+Number(b.bags||0),0);
+  const gross=sLogs.reduce((a,b)=>a+Number(b.earnings||0),0);
+  const ded=sLogs.reduce((a,b)=>a+Number(b.deduction||0),0);
+  const net=gross-ded;
+  const paid=sPays.reduce((a,b)=>a+Number(b.amount||0),0);
+  const unpaid=net-paid;
+  const statusLabels={active:'ACTIVE',suspended:'SUSPENDED',resigned:'RESIGNED',terminated:'TERMINATED'};
+  const stLabel=statusLabels[s.status||'active']||'ACTIVE';
+
+  // Personal / employment details table
+  const infoRows=[
+    ['Full Name',esc(s.name)],
+    ['Job Role(s)',esc(staffRoleLabel(s))],
+    ['Status',stLabel],
+    ['Contract Type',(s.contractType||'permanent').toUpperCase()],
+    ['Phone',esc(s.phone||'—')],
+    ['Date Joined',s.dateJoined?fmtDate(s.dateJoined):'—'],
+    ['Date of Birth',s.dateOfBirth?fmtDate(s.dateOfBirth):'—'],
+    ['Employee ID / NRC',esc(s.employeeId||'—')],
+    ['Emergency Contact',s.emergencyContactName?`${esc(s.emergencyContactName)}${s.emergencyContactPhone?' · '+esc(s.emergencyContactPhone):''}`:'—'],
+  ];
+  if(s.statusDate&&s.status!=='active'){
+    infoRows.push([s.status==='resigned'?'Resigned':'Left On',`${fmtDateTime(s.statusDate,s.statusTime)}${s.statusReason?' — '+esc(s.statusReason):''}`]);
+  }
+  const infoTable=`<table><tbody>${infoRows.map(([k,v])=>`<tr><th style="width:38%">${k}</th><td>${v}</td></tr>`).join('')}</tbody></table>`;
+
+  // Task breakdown
+  const _allTasksForStaff=[...new Map(staffRoleList(s).flatMap(r=>tasksForRole(r).map(t=>[t.name,{...t,_role:r}]))).values()];
+  const taskRows=_allTasksForStaff.map(tObj=>{
+    const task=tObj.name;
+    const tLogs=sLogs.filter(l=>l.task===task);
+    if(tLogs.length===0)return null;
+    const tQty=tLogs.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
+    const tNet=tLogs.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
+    const ul=taskRateUnitLabel(tObj._role,task);
+    return[task,`${tQty.toLocaleString()} ${ul}s`,zm(tNet)];
+  }).filter(Boolean);
+
+  // Status history
+  const statusHistHtml=(s.statusHistory&&s.statusHistory.length)?_pdfTable(
+    ['Status','Date','Reason / By'],
+    s.statusHistory.slice().reverse().map(h=>[
+      ({active:'Reinstated',suspended:'Suspended',resigned:'Resigned',terminated:'Terminated'})[h.status]||h.status,
+      fmtDateTime(h.date,h.time),
+      [h.reason,h.by?'by '+h.by:''].filter(Boolean).join(' · ')||'—'
+    ])
+  ):'';
+
+  // Recent sessions (most recent 30 — keeps the PDF a sane length for
+  // long-tenured staff while still covering a full month's activity)
+  const sessionRows=sLogs.slice(0,30).map(l=>{
+    const q=l.qty!=null?l.qty:l.bags;
+    const ul=l.rateUnit&&l.rateUnit!=='bag'?taskRateUnitLabel(l.role||'',l.task||''):'bags';
+    return[fmtDate(l.date),l.task||'—',`${Number(q||0).toLocaleString()} ${ul}`,zm(Number(l.earnings||0)-Number(l.deduction||0))];
+  });
+  const sessionsNote=sLogs.length>30?` (most recent 30 of ${sLogs.length})`:'';
+
+  const html=`
+${_getBrandedHeader('Staff Profile — '+s.name)}
+${infoTable}
+<div class="pay-section-title">Summary</div>
+<table>
+  <tbody>
+    <tr><th>Total Earned</th><td class="num">${zm(net)}</td></tr>
+    <tr><th>Total Paid</th><td class="num">${zm(paid)}</td></tr>
+    <tr class="net-row"><th>${unpaid>0?'Unpaid Balance':'Fully Paid'}</th><td class="num">${zm(Math.abs(unpaid))}</td></tr>
+    <tr><th>Total Bags / Units</th><td class="num">${totBags.toLocaleString()}</td></tr>
+    <tr><th>Total Sessions</th><td class="num">${sLogs.length}</td></tr>
+  </tbody>
+</table>
+${taskRows.length?`<div class="pay-section-title">Task Breakdown</div>${_pdfTable(['Task','Quantity','Net Pay (ZMW)'],taskRows)}`:''}
+${statusHistHtml?`<div class="pay-section-title">Status History</div>${statusHistHtml}`:''}
+${sessionRows.length?`<div class="pay-section-title">Recent Sessions${sessionsNote}</div>${_pdfTable(['Date','Task','Quantity','Net (ZMW)'],sessionRows)}`:''}
+${_pdfFooter('Staff Profile Summary')}
+`;
+  _pdfPrint(html, 'Staff Profile — '+s.name);
+  showToast('📄 Opening staff profile PDF for '+s.name);
+}
+// ══ END STAFF PROFILE SUMMARY PDF ═══════════════════════════
+
 function openStaffWarnings(id){
   if(!hasFeature('staff_warnings')){ showUpgradePrompt('staff_warnings'); return; }
   if(!requireAdmin('view disciplinary records'))return;
