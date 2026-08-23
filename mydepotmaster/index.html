@@ -3713,7 +3713,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v2.9';
+const SW_VERSION  = 'v3.2';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -17323,7 +17323,7 @@ function openCopilot(){
       <button onclick="runReconciliation()">🔍 Run reconciliation</button>
     </div>
     <div style="display:flex;gap:8px">
-      <input id="cop-input" placeholder="Ask about your depot…" style="flex:1;margin-bottom:0"
+      <input id="cop-input" class="fi" placeholder="Ask about your depot…" autocomplete="off" spellcheck="false" style="flex:1;margin-bottom:0;text-transform:none"
         onkeydown="if(event.key==='Enter'){event.preventDefault();const v=this.value;this.value='';askCopilot(v);}"/>
       <button class="btn bg" style="width:auto;padding:0 16px" onclick="const el=document.getElementById('cop-input');const v=el.value;el.value='';askCopilot(v)">Send</button>
     </div>
@@ -17411,8 +17411,9 @@ function _copilotSystemPrompt(mode){
       '\n\nYou may also perform data entry using the tools available to you — '+
       'clocking staff in/out, logging completed work or absences, logging '+
       'commodity received/issued, logging transport, recording staff '+
-      'payments, and (Admins only) moving a batch of existing work logs from '+
-      'one date to another. Only call a tool when the user has clearly asked for that '+
+      'payments, and (Admins only) moving or deleting a batch of existing '+
+      'work logs, commodity received/issued records, transport log entries, '+
+      'or staff payments. Only call a tool when the user has clearly asked for that '+
       'specific entry and given the details it needs (e.g. staff name, task '+
       'and quantity for work; batch and quantity for commodity movements; '+
       'vehicle and driver for transport; staff and amount for payments). '+
@@ -17973,6 +17974,464 @@ _registerAIAction('bulk_edit_log_date', {
   return { ok:true, msg:`Moved ${moved} work log${moved===1?'':'s'} to ${action.toDate}.` };
 }, true);
 
+// ═══ 10. Bulk-delete work logs ═════════════════════════════════════════
+// Deletes a group of existing work logs — e.g. "delete the first 10
+// stitching logs for 22 August" or "delete all loader logs for John on
+// 20 Aug". Mirrors the manual delLog() flow exactly (same isWithin24h
+// gate, same requireAdminPassword prompt, same 'DELETE','Work Log' audit
+// event per record) so this can never remove more, or bypass more, than
+// tapping the 🗑 button on each log manually would. Admin-only, sensitive
+// (re-checks admin password before execute() runs), and irreversible —
+// so resolve() always shows exactly which logs matched before confirming.
+_registerAIAction('bulk_delete_work_logs', {
+  type: 'function',
+  name: 'bulk_delete_work_logs',
+  description: 'Delete a group of existing work logs — e.g. "delete the '+
+    'first 10 stitching logs for 22 August" or "delete John\'s loader logs '+
+    'from yesterday". Matches logs by date, optionally narrowed by task '+
+    'name and/or staff name, and optionally capped to the first N matches '+
+    'in the order they were created. Only call this when the user has '+
+    'clearly asked to delete work logs and given at least a date to match '+
+    'on — never guess the date. This permanently removes the logs '+
+    '(earnings, pay totals and payroll all update accordingly) — it '+
+    'cannot be undone.',
+  parameters: { type:'object', properties: {
+    task: { type:'string', description:'Optional task name to filter by (e.g. "Stitching"). Leave blank to match logs for any task.' },
+    staffName: { type:'string', description:'Optional staff member name to filter by. Leave blank to match all staff.' },
+    date: { type:'string', description:'The date of the logs to delete, in YYYY-MM-DD format.' },
+    limit: { type:'number', description:'Optional — only delete the first N matching logs (in creation order), e.g. "the first 10". Leave blank to delete all matches.' }
+  }, required:['date'] }
+}, function resolveBulkDeleteLogs(args){
+  if(!isAdmin()) return { error:'Deleting work logs needs Admin access — this account can\'t do that.' };
+  const date = _YMD_RE.test(args.date||'') ? args.date : '';
+  if(!date) return { error:'I need a date in YYYY-MM-DD format — which date\'s logs should I delete?' };
+  let staffFilter = null;
+  if(args.staffName){
+    const matches = _findActiveStaffByName(args.staffName);
+    if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
+    if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
+    staffFilter = matches[0].id;
+  }
+  const taskQ = (args.task||'').trim().toLowerCase();
+  let candidates = (DATA.staffLogs||[]).filter(l=>
+    l.date===date &&
+    (!staffFilter || String(l.staffId)===String(staffFilter)) &&
+    (!taskQ || (l.task||'').toLowerCase()===taskQ || (l.task||'').toLowerCase().includes(taskQ))
+  );
+  if(candidates.length===0) return { error:`I couldn't find any${args.task?' "'+args.task+'"':''} work logs on ${date}${args.staffName?' for '+args.staffName:''} to delete.` };
+  const limit = Number(args.limit||0);
+  const capped = (limit>0) ? candidates.slice(0, limit) : candidates;
+  const skippedByLimit = candidates.length - capped.length;
+  const editable = capped.filter(l=>isWithin24h(l,true));
+  const blocked = capped.length - editable.length;
+  if(editable.length===0) return { error:`Found ${capped.length} matching log${capped.length===1?'':'s'} on ${date}, but all of them are outside the ${_editWindowLabel(true)} edit window and can no longer be deleted.` };
+  const names = [...new Set(editable.map(l=>{
+    const st = DATA.staff.find(x=>String(x.id)===String(l.staffId));
+    return st ? st.name : 'Unknown';
+  }))];
+  const namesStr = names.length<=4 ? names.join(', ') : `${names.slice(0,4).join(', ')} and ${names.length-4} more`;
+  const totalQty = editable.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
+  return {
+    description: `Permanently delete ${editable.length} work log${editable.length===1?'':'s'}${args.task?' ("'+args.task+'")':''} on ${date} (${namesStr}, ${totalQty.toLocaleString()} total qty) — this cannot be undone.`+
+      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel(true)} edit window and will be skipped.)` : '')+
+      (skippedByLimit>0 ? ` (${skippedByLimit} more matched the filter but were beyond the requested limit of ${limit}.)` : '')+
+      ` You'll be asked to confirm your admin password next. Delete these?`,
+    action: { logIds: editable.map(l=>l.id) }
+  };
+}, function executeBulkDeleteLogs(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  if(!isAdmin()) return { ok:false, msg:'Admin access is required to delete work logs.' };
+  const idSet = new Set((action.logIds||[]).map(String));
+  const toDelete = (DATA.staffLogs||[]).filter(l=>idSet.has(String(l.id)) && isWithin24h(l,true));
+  if(toDelete.length===0) return { ok:false, msg:'None of those logs could be deleted — they may have fallen outside the edit window while waiting for confirmation.' };
+  toDelete.forEach(l=>{
+    logAuditEvent('DELETE','Work Log',`ID:${l.id} · Staff:${l.staffId} · Task:${l.task} · via Depot Assistant`, l);
+  });
+  const deletedIds = new Set(toDelete.map(l=>String(l.id)));
+  updateData(d=>({...d, staffLogs:d.staffLogs.filter(l=>!deletedIds.has(String(l.id)))}));
+  return { ok:true, msg:`Deleted ${toDelete.length} work log${toDelete.length===1?'':'s'}.` };
+}, true);
+
+// ═══ 11. Bulk-edit commodity received dates ════════════════════════════
+_registerAIAction('bulk_edit_commodity_received_date', {
+  type: 'function',
+  name: 'bulk_edit_commodity_received_date',
+  description: 'Move a group of existing commodity RECEIVED entries from one '+
+    'date to another — e.g. "move maize receipts from 20 Aug to 19 Aug". '+
+    'Matches by date, optionally narrowed by commodity and/or batch name. '+
+    'Only call this when the user has clearly given both dates — never guess.',
+  parameters: { type:'object', properties: {
+    commodityName: { type:'string', description:'Optional commodity name. Leave blank if the depot only tracks one.' },
+    batchName: { type:'string', description:'Optional batch name to filter by.' },
+    fromDate: { type:'string', description:'Current date of the entries to move, YYYY-MM-DD.' },
+    toDate: { type:'string', description:'New date to move them to, YYYY-MM-DD.' }
+  }, required:['fromDate','toDate'] }
+}, function resolveBulkEditRecDate(args){
+  if(!isAdmin()) return { error:'Editing received records needs Admin access — this account can\'t do that.' };
+  const comMatches = _findCommodityByName(args.commodityName);
+  if(comMatches.length===0){ const names=(DATA.commodities||[]).map(c=>c.name).join(', ')||'none defined yet'; return { error:`I couldn't tell which commodity — this depot tracks: ${names}. Which one?` }; }
+  if(comMatches.length>1) return { error:`A few commodities match: ${comMatches.map(c=>c.name).join(', ')}. Which one?` };
+  const com = comMatches[0];
+  const fromDate = _YMD_RE.test(args.fromDate||'') ? args.fromDate : '';
+  const toDate = _YMD_RE.test(args.toDate||'') ? args.toDate : '';
+  if(!fromDate || !toDate) return { error:'I need both dates in YYYY-MM-DD format — which date should I move receipts from, and which to?' };
+  if(fromDate===toDate) return { error:'The "from" and "to" dates are the same — there\'s nothing to move.' };
+  const batchQ = (args.batchName||'').trim().toLowerCase();
+  const candidates = cRec(com.id).filter(r=>r.date===fromDate && (!batchQ || (r.batchName||'').toLowerCase().includes(batchQ)));
+  if(candidates.length===0) return { error:`I couldn't find any ${com.name} receipts${args.batchName?' for batch "'+args.batchName+'"':''} on ${fromDate} to move.` };
+  const editable = candidates.filter(r=>isWithin24h(r));
+  const blocked = candidates.length - editable.length;
+  if(editable.length===0) return { error:`Found ${candidates.length} matching receipt${candidates.length===1?'':'s'} on ${fromDate}, but all are outside the ${_editWindowLabel()} edit window.` };
+  const batches = [...new Set(editable.map(r=>r.batchName))];
+  return {
+    description: `Move ${editable.length} ${com.name} receipt${editable.length===1?'':'s'} (batches: ${batches.join(', ')}) from ${fromDate} to ${toDate}?`+
+      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel()} edit window and will be skipped.)` : '')+
+      ` You'll be asked to confirm your admin password next. Save this?`,
+    action: { cid:com.id, ids: editable.map(r=>r.id), toDate }
+  };
+}, function executeBulkEditRecDate(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  if(!isAdmin()) return { ok:false, msg:'Admin access is required to edit received records.' };
+  const idSet = new Set((action.ids||[]).map(String));
+  let moved = 0;
+  updateData(d=>{ const cr={...(d.commodityReceived||{})}; cr[action.cid]=(cr[action.cid]||[]).map(r=>{
+    if(idSet.has(String(r.id)) && isWithin24h(r)){ moved++; return {...r, date:action.toDate}; }
+    return r;
+  }); return {...d, commodityReceived:cr}; });
+  if(moved===0) return { ok:false, msg:'None of those receipts could be moved — they may have fallen outside the edit window.' };
+  logAuditEvent('EDIT',`${getCom(action.cid).name} Received (Bulk Date Change)`,`${moved} record(s) moved to ${action.toDate} · via Depot Assistant`);
+  return { ok:true, msg:`Moved ${moved} receipt${moved===1?'':'s'} to ${action.toDate}.` };
+}, true);
+
+// ═══ 12. Bulk-delete commodity received entries ════════════════════════
+_registerAIAction('bulk_delete_commodity_received', {
+  type: 'function',
+  name: 'bulk_delete_commodity_received',
+  description: 'Delete a group of existing commodity RECEIVED entries — e.g. '+
+    '"delete the maize receipt for batch LOT-2 on 22 August". Matches by '+
+    'date, optionally narrowed by commodity, batch name, and/or a limit '+
+    '("the first N"). Only call this when the user has clearly asked to '+
+    'delete and given at least a date. This permanently removes the '+
+    'record(s) and cannot be undone.',
+  parameters: { type:'object', properties: {
+    commodityName: { type:'string', description:'Optional commodity name. Leave blank if the depot only tracks one.' },
+    batchName: { type:'string', description:'Optional batch name to filter by.' },
+    date: { type:'string', description:'The date of the receipts to delete, YYYY-MM-DD.' },
+    limit: { type:'number', description:'Optional — only delete the first N matches. Leave blank to delete all matches.' }
+  }, required:['date'] }
+}, function resolveBulkDeleteRec(args){
+  if(!isAdmin()) return { error:'Deleting received records needs Admin access — this account can\'t do that.' };
+  const comMatches = _findCommodityByName(args.commodityName);
+  if(comMatches.length===0){ const names=(DATA.commodities||[]).map(c=>c.name).join(', ')||'none defined yet'; return { error:`I couldn't tell which commodity — this depot tracks: ${names}. Which one?` }; }
+  if(comMatches.length>1) return { error:`A few commodities match: ${comMatches.map(c=>c.name).join(', ')}. Which one?` };
+  const com = comMatches[0];
+  const date = _YMD_RE.test(args.date||'') ? args.date : '';
+  if(!date) return { error:'I need a date in YYYY-MM-DD format — which date\'s receipts should I delete?' };
+  const batchQ = (args.batchName||'').trim().toLowerCase();
+  let candidates = cRec(com.id).filter(r=>r.date===date && (!batchQ || (r.batchName||'').toLowerCase().includes(batchQ)));
+  if(candidates.length===0) return { error:`I couldn't find any ${com.name} receipts${args.batchName?' for batch "'+args.batchName+'"':''} on ${date} to delete.` };
+  const limit = Number(args.limit||0);
+  const capped = (limit>0) ? candidates.slice(0, limit) : candidates;
+  const skippedByLimit = candidates.length - capped.length;
+  const editable = capped.filter(r=>isWithin24h(r));
+  const blocked = capped.length - editable.length;
+  if(editable.length===0) return { error:`Found ${capped.length} matching receipt${capped.length===1?'':'s'} on ${date}, but all are outside the ${_editWindowLabel()} edit window and can no longer be deleted.` };
+  const totalQty = editable.reduce((a,b)=>a+Number(b.received||0),0);
+  const batches = [...new Set(editable.map(r=>r.batchName))];
+  return {
+    description: `Permanently delete ${editable.length} ${com.name} receipt${editable.length===1?'':'s'} on ${date} (batches: ${batches.join(', ')}, ${totalQty.toLocaleString()} ${com.unit} total) — this cannot be undone.`+
+      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel()} edit window and will be skipped.)` : '')+
+      (skippedByLimit>0 ? ` (${skippedByLimit} more matched the filter but were beyond the requested limit of ${limit}.)` : '')+
+      ` You'll be asked to confirm your admin password next. Delete these?`,
+    action: { cid:com.id, ids: editable.map(r=>r.id) }
+  };
+}, function executeBulkDeleteRec(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  if(!isAdmin()) return { ok:false, msg:'Admin access is required to delete received records.' };
+  const idSet = new Set((action.ids||[]).map(String));
+  const all = cRec(action.cid);
+  const toDelete = all.filter(r=>idSet.has(String(r.id)) && isWithin24h(r));
+  if(toDelete.length===0) return { ok:false, msg:'None of those records could be deleted — they may have fallen outside the edit window while waiting for confirmation.' };
+  const com = getCom(action.cid);
+  toDelete.forEach(r=>{
+    logAuditEvent('DELETE',`${com.name} Received`,`ID:${r.id} · Batch:${r.batchName} · Qty:${r.received} · via Depot Assistant`, r);
+  });
+  const deletedIds = new Set(toDelete.map(r=>String(r.id)));
+  updateData(d=>{ const cr={...(d.commodityReceived||{})}; cr[action.cid]=(cr[action.cid]||[]).filter(r=>!deletedIds.has(String(r.id))); return {...d, commodityReceived:cr}; });
+  return { ok:true, msg:`Deleted ${toDelete.length} ${com.name} receipt${toDelete.length===1?'':'s'}.` };
+}, true);
+
+// ═══ 13. Bulk-edit commodity issued dates ══════════════════════════════
+_registerAIAction('bulk_edit_commodity_issued_date', {
+  type: 'function',
+  name: 'bulk_edit_commodity_issued_date',
+  description: 'Move a group of existing commodity ISSUED entries from one '+
+    'date to another. Matches by date, optionally narrowed by commodity '+
+    'and/or batch name. Only call this when the user has clearly given '+
+    'both dates — never guess.',
+  parameters: { type:'object', properties: {
+    commodityName: { type:'string', description:'Optional commodity name. Leave blank if the depot only tracks one.' },
+    batchName: { type:'string', description:'Optional batch name to filter by.' },
+    fromDate: { type:'string', description:'Current date of the entries to move, YYYY-MM-DD.' },
+    toDate: { type:'string', description:'New date to move them to, YYYY-MM-DD.' }
+  }, required:['fromDate','toDate'] }
+}, function resolveBulkEditIssDate(args){
+  if(!isAdmin()) return { error:'Editing issued records needs Admin access — this account can\'t do that.' };
+  const comMatches = _findCommodityByName(args.commodityName);
+  if(comMatches.length===0){ const names=(DATA.commodities||[]).map(c=>c.name).join(', ')||'none defined yet'; return { error:`I couldn't tell which commodity — this depot tracks: ${names}. Which one?` }; }
+  if(comMatches.length>1) return { error:`A few commodities match: ${comMatches.map(c=>c.name).join(', ')}. Which one?` };
+  const com = comMatches[0];
+  const fromDate = _YMD_RE.test(args.fromDate||'') ? args.fromDate : '';
+  const toDate = _YMD_RE.test(args.toDate||'') ? args.toDate : '';
+  if(!fromDate || !toDate) return { error:'I need both dates in YYYY-MM-DD format — which date should I move issues from, and which to?' };
+  if(fromDate===toDate) return { error:'The "from" and "to" dates are the same — there\'s nothing to move.' };
+  const batchQ = (args.batchName||'').trim().toLowerCase();
+  const candidates = cIss(com.id).filter(i=>i.date===fromDate && (!batchQ || (i.batchName||'').toLowerCase().includes(batchQ)));
+  if(candidates.length===0) return { error:`I couldn't find any ${com.name} issues${args.batchName?' for batch "'+args.batchName+'"':''} on ${fromDate} to move.` };
+  const editable = candidates.filter(i=>isWithin24h(i));
+  const blocked = candidates.length - editable.length;
+  if(editable.length===0) return { error:`Found ${candidates.length} matching issue${candidates.length===1?'':'s'} on ${fromDate}, but all are outside the ${_editWindowLabel()} edit window.` };
+  const batches = [...new Set(editable.map(i=>i.batchName))];
+  return {
+    description: `Move ${editable.length} ${com.name} issue${editable.length===1?'':'s'} (batches: ${batches.join(', ')}) from ${fromDate} to ${toDate}?`+
+      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel()} edit window and will be skipped.)` : '')+
+      ` You'll be asked to confirm your admin password next. Save this?`,
+    action: { cid:com.id, ids: editable.map(i=>i.id), toDate }
+  };
+}, function executeBulkEditIssDate(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  if(!isAdmin()) return { ok:false, msg:'Admin access is required to edit issued records.' };
+  const idSet = new Set((action.ids||[]).map(String));
+  let moved = 0;
+  updateData(d=>{ const ci={...(d.commodityIssued||{})}; ci[action.cid]=(ci[action.cid]||[]).map(i=>{
+    if(idSet.has(String(i.id)) && isWithin24h(i)){ moved++; return {...i, date:action.toDate}; }
+    return i;
+  }); return {...d, commodityIssued:ci}; });
+  if(moved===0) return { ok:false, msg:'None of those issues could be moved — they may have fallen outside the edit window.' };
+  logAuditEvent('EDIT',`${getCom(action.cid).name} Issued (Bulk Date Change)`,`${moved} record(s) moved to ${action.toDate} · via Depot Assistant`);
+  return { ok:true, msg:`Moved ${moved} issue${moved===1?'':'s'} to ${action.toDate}.` };
+}, true);
+
+// ═══ 14. Bulk-delete commodity issued entries ══════════════════════════
+_registerAIAction('bulk_delete_commodity_issued', {
+  type: 'function',
+  name: 'bulk_delete_commodity_issued',
+  description: 'Delete a group of existing commodity ISSUED entries. Matches '+
+    'by date, optionally narrowed by commodity, batch name, and/or a limit '+
+    '("the first N"). Only call this when the user has clearly asked to '+
+    'delete and given at least a date. This permanently removes the '+
+    'record(s) and cannot be undone.',
+  parameters: { type:'object', properties: {
+    commodityName: { type:'string', description:'Optional commodity name. Leave blank if the depot only tracks one.' },
+    batchName: { type:'string', description:'Optional batch name to filter by.' },
+    date: { type:'string', description:'The date of the issues to delete, YYYY-MM-DD.' },
+    limit: { type:'number', description:'Optional — only delete the first N matches. Leave blank to delete all matches.' }
+  }, required:['date'] }
+}, function resolveBulkDeleteIss(args){
+  if(!isAdmin()) return { error:'Deleting issued records needs Admin access — this account can\'t do that.' };
+  const comMatches = _findCommodityByName(args.commodityName);
+  if(comMatches.length===0){ const names=(DATA.commodities||[]).map(c=>c.name).join(', ')||'none defined yet'; return { error:`I couldn't tell which commodity — this depot tracks: ${names}. Which one?` }; }
+  if(comMatches.length>1) return { error:`A few commodities match: ${comMatches.map(c=>c.name).join(', ')}. Which one?` };
+  const com = comMatches[0];
+  const date = _YMD_RE.test(args.date||'') ? args.date : '';
+  if(!date) return { error:'I need a date in YYYY-MM-DD format — which date\'s issues should I delete?' };
+  const batchQ = (args.batchName||'').trim().toLowerCase();
+  let candidates = cIss(com.id).filter(i=>i.date===date && (!batchQ || (i.batchName||'').toLowerCase().includes(batchQ)));
+  if(candidates.length===0) return { error:`I couldn't find any ${com.name} issues${args.batchName?' for batch "'+args.batchName+'"':''} on ${date} to delete.` };
+  const limit = Number(args.limit||0);
+  const capped = (limit>0) ? candidates.slice(0, limit) : candidates;
+  const skippedByLimit = candidates.length - capped.length;
+  const editable = capped.filter(i=>isWithin24h(i));
+  const blocked = capped.length - editable.length;
+  if(editable.length===0) return { error:`Found ${capped.length} matching issue${capped.length===1?'':'s'} on ${date}, but all are outside the ${_editWindowLabel()} edit window and can no longer be deleted.` };
+  const totalQty = editable.reduce((a,b)=>a+Number(b.issued||0),0);
+  const batches = [...new Set(editable.map(i=>i.batchName))];
+  return {
+    description: `Permanently delete ${editable.length} ${com.name} issue${editable.length===1?'':'s'} on ${date} (batches: ${batches.join(', ')}, ${totalQty.toLocaleString()} ${com.unit} total) — this cannot be undone.`+
+      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel()} edit window and will be skipped.)` : '')+
+      (skippedByLimit>0 ? ` (${skippedByLimit} more matched the filter but were beyond the requested limit of ${limit}.)` : '')+
+      ` You'll be asked to confirm your admin password next. Delete these?`,
+    action: { cid:com.id, ids: editable.map(i=>i.id) }
+  };
+}, function executeBulkDeleteIss(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  if(!isAdmin()) return { ok:false, msg:'Admin access is required to delete issued records.' };
+  const idSet = new Set((action.ids||[]).map(String));
+  const all = cIss(action.cid);
+  const toDelete = all.filter(i=>idSet.has(String(i.id)) && isWithin24h(i));
+  if(toDelete.length===0) return { ok:false, msg:'None of those records could be deleted — they may have fallen outside the edit window while waiting for confirmation.' };
+  const com = getCom(action.cid);
+  toDelete.forEach(i=>{
+    logAuditEvent('DELETE',`${com.name} Issued`,`ID:${i.id} · Batch:${i.batchName} · Qty:${i.issued} · via Depot Assistant`, i);
+  });
+  const deletedIds = new Set(toDelete.map(i=>String(i.id)));
+  updateData(d=>{ const ci={...(d.commodityIssued||{})}; ci[action.cid]=(ci[action.cid]||[]).filter(i=>!deletedIds.has(String(i.id))); return {...d, commodityIssued:ci}; });
+  return { ok:true, msg:`Deleted ${toDelete.length} ${com.name} issue${toDelete.length===1?'':'s'}.` };
+}, true);
+
+// ═══ 15. Bulk-edit transport log dates ═════════════════════════════════
+_registerAIAction('bulk_edit_transport_date', {
+  type: 'function',
+  name: 'bulk_edit_transport_date',
+  description: 'Move a group of existing transport log entries from one date '+
+    'to another. Matches by date, optionally narrowed by vehicle registration '+
+    'and/or driver name. Only call this when the user has clearly given '+
+    'both dates — never guess.',
+  parameters: { type:'object', properties: {
+    vehicleReg: { type:'string', description:'Optional vehicle registration to filter by.' },
+    driverName: { type:'string', description:'Optional driver name to filter by.' },
+    fromDate: { type:'string', description:'Current date of the entries to move, YYYY-MM-DD.' },
+    toDate: { type:'string', description:'New date to move them to, YYYY-MM-DD.' }
+  }, required:['fromDate','toDate'] }
+}, function resolveBulkEditTransDate(args){
+  if(!isAdmin()) return { error:'Editing transport records needs Admin access — this account can\'t do that.' };
+  const fromDate = _YMD_RE.test(args.fromDate||'') ? args.fromDate : '';
+  const toDate = _YMD_RE.test(args.toDate||'') ? args.toDate : '';
+  if(!fromDate || !toDate) return { error:'I need both dates in YYYY-MM-DD format — which date should I move transport entries from, and which to?' };
+  if(fromDate===toDate) return { error:'The "from" and "to" dates are the same — there\'s nothing to move.' };
+  const vehQ = (args.vehicleReg||'').trim().toLowerCase();
+  const drvQ = (args.driverName||'').trim().toLowerCase();
+  const candidates = (DATA.transportLog||[]).filter(t=>t.date===fromDate &&
+    (!vehQ || (t.vehicleReg||'').toLowerCase().includes(vehQ)) &&
+    (!drvQ || (t.driverName||'').toLowerCase().includes(drvQ)));
+  if(candidates.length===0) return { error:`I couldn't find any transport entries matching those filters on ${fromDate} to move.` };
+  const editable = candidates.filter(t=>isWithin24h(t));
+  const blocked = candidates.length - editable.length;
+  if(editable.length===0) return { error:`Found ${candidates.length} matching entr${candidates.length===1?'y':'ies'} on ${fromDate}, but all are outside the ${_editWindowLabel()} edit window.` };
+  const vehicles = [...new Set(editable.map(t=>t.vehicleReg))];
+  return {
+    description: `Move ${editable.length} transport entr${editable.length===1?'y':'ies'} (${vehicles.join(', ')}) from ${fromDate} to ${toDate}?`+
+      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel()} edit window and will be skipped.)` : '')+
+      ` You'll be asked to confirm your admin password next. Save this?`,
+    action: { ids: editable.map(t=>t.id), toDate }
+  };
+}, function executeBulkEditTransDate(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  if(!isAdmin()) return { ok:false, msg:'Admin access is required to edit transport records.' };
+  const idSet = new Set((action.ids||[]).map(String));
+  let moved = 0;
+  updateData(d=>({...d, transportLog:(d.transportLog||[]).map(t=>{
+    if(idSet.has(String(t.id)) && isWithin24h(t)){ moved++; return {...t, date:action.toDate}; }
+    return t;
+  })}));
+  if(moved===0) return { ok:false, msg:'None of those entries could be moved — they may have fallen outside the edit window.' };
+  logAuditEvent('EDIT','Transport Log (Bulk Date Change)',`${moved} record(s) moved to ${action.toDate} · via Depot Assistant`);
+  return { ok:true, msg:`Moved ${moved} transport entr${moved===1?'y':'ies'} to ${action.toDate}.` };
+}, true);
+
+// ═══ 16. Bulk-delete transport log entries ═════════════════════════════
+_registerAIAction('bulk_delete_transport_logs', {
+  type: 'function',
+  name: 'bulk_delete_transport_logs',
+  description: 'Delete a group of existing transport log entries. Matches by '+
+    'date, optionally narrowed by vehicle registration, driver name, and/or '+
+    'a limit ("the first N"). Only call this when the user has clearly '+
+    'asked to delete and given at least a date. This permanently removes '+
+    'the record(s) and cannot be undone.',
+  parameters: { type:'object', properties: {
+    vehicleReg: { type:'string', description:'Optional vehicle registration to filter by.' },
+    driverName: { type:'string', description:'Optional driver name to filter by.' },
+    date: { type:'string', description:'The date of the entries to delete, YYYY-MM-DD.' },
+    limit: { type:'number', description:'Optional — only delete the first N matches. Leave blank to delete all matches.' }
+  }, required:['date'] }
+}, function resolveBulkDeleteTrans(args){
+  if(!isAdmin()) return { error:'Deleting transport records needs Admin access — this account can\'t do that.' };
+  const date = _YMD_RE.test(args.date||'') ? args.date : '';
+  if(!date) return { error:'I need a date in YYYY-MM-DD format — which date\'s transport entries should I delete?' };
+  const vehQ = (args.vehicleReg||'').trim().toLowerCase();
+  const drvQ = (args.driverName||'').trim().toLowerCase();
+  let candidates = (DATA.transportLog||[]).filter(t=>t.date===date &&
+    (!vehQ || (t.vehicleReg||'').toLowerCase().includes(vehQ)) &&
+    (!drvQ || (t.driverName||'').toLowerCase().includes(drvQ)));
+  if(candidates.length===0) return { error:`I couldn't find any transport entries matching those filters on ${date} to delete.` };
+  const limit = Number(args.limit||0);
+  const capped = (limit>0) ? candidates.slice(0, limit) : candidates;
+  const skippedByLimit = candidates.length - capped.length;
+  const editable = capped.filter(t=>isWithin24h(t));
+  const blocked = capped.length - editable.length;
+  if(editable.length===0) return { error:`Found ${capped.length} matching entr${capped.length===1?'y':'ies'} on ${date}, but all are outside the ${_editWindowLabel()} edit window and can no longer be deleted.` };
+  const vehicles = [...new Set(editable.map(t=>t.vehicleReg))];
+  return {
+    description: `Permanently delete ${editable.length} transport entr${editable.length===1?'y':'ies'} on ${date} (${vehicles.join(', ')}) — this cannot be undone.`+
+      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel()} edit window and will be skipped.)` : '')+
+      (skippedByLimit>0 ? ` (${skippedByLimit} more matched the filter but were beyond the requested limit of ${limit}.)` : '')+
+      ` You'll be asked to confirm your admin password next. Delete these?`,
+    action: { ids: editable.map(t=>t.id) }
+  };
+}, function executeBulkDeleteTrans(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  if(!isAdmin()) return { ok:false, msg:'Admin access is required to delete transport records.' };
+  const idSet = new Set((action.ids||[]).map(String));
+  const toDelete = (DATA.transportLog||[]).filter(t=>idSet.has(String(t.id)) && isWithin24h(t));
+  if(toDelete.length===0) return { ok:false, msg:'None of those entries could be deleted — they may have fallen outside the edit window while waiting for confirmation.' };
+  toDelete.forEach(t=>{
+    logAuditEvent('DELETE','Transport Log',`ID:${t.id} · Vehicle:${t.vehicleReg||''} · Batch:${t.batchName||''} · via Depot Assistant`, t);
+  });
+  const deletedIds = new Set(toDelete.map(t=>String(t.id)));
+  updateData(d=>({...d, transportLog:(d.transportLog||[]).filter(t=>!deletedIds.has(String(t.id)))}));
+  return { ok:true, msg:`Deleted ${toDelete.length} transport entr${toDelete.length===1?'y':'ies'}.` };
+}, true);
+
+// ═══ 17. Bulk-delete staff payments ════════════════════════════════════
+// Deletes money-movement records, so this is doubly sensitive: Admin-only
+// AND the `sensitive` flag re-checks the admin password before execute()
+// runs, exactly like record_staff_payment above.
+_registerAIAction('bulk_delete_staff_payments', {
+  type: 'function',
+  name: 'bulk_delete_staff_payments',
+  description: 'Delete a group of existing staff payment records — e.g. '+
+    '"delete the payment I recorded for John today". Matches by date, '+
+    'optionally narrowed by staff name and/or a limit ("the first N"). '+
+    'Only call this when the user has clearly asked to delete a payment '+
+    'and given at least a date. This permanently removes the record(s) '+
+    'and cannot be undone.',
+  parameters: { type:'object', properties: {
+    staffName: { type:'string', description:'Optional staff member name to filter by.' },
+    date: { type:'string', description:'The date of the payments to delete, YYYY-MM-DD.' },
+    limit: { type:'number', description:'Optional — only delete the first N matches. Leave blank to delete all matches.' }
+  }, required:['date'] }
+}, function resolveBulkDeletePayments(args){
+  if(!isAdmin()) return { error:'Deleting payment records needs Admin access — this account can\'t do that.' };
+  const date = _YMD_RE.test(args.date||'') ? args.date : '';
+  if(!date) return { error:'I need a date in YYYY-MM-DD format — which date\'s payments should I delete?' };
+  let staffFilter = null;
+  if(args.staffName){
+    const matches = _findActiveStaffByName(args.staffName);
+    if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
+    if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
+    staffFilter = matches[0].id;
+  }
+  let candidates = (DATA.staffPayments||[]).filter(p=>p.date===date && (!staffFilter || String(p.staffId)===String(staffFilter)));
+  if(candidates.length===0) return { error:`I couldn't find any payments${args.staffName?' for '+args.staffName:''} on ${date} to delete.` };
+  const limit = Number(args.limit||0);
+  const capped = (limit>0) ? candidates.slice(0, limit) : candidates;
+  const skippedByLimit = candidates.length - capped.length;
+  const editable = capped.filter(p=>isWithin24h(p,true));
+  const blocked = capped.length - editable.length;
+  if(editable.length===0) return { error:`Found ${capped.length} matching payment${capped.length===1?'':'s'} on ${date}, but all are outside the ${_editWindowLabel(true)} edit window and can no longer be deleted.` };
+  const names = [...new Set(editable.map(p=>{ const st=DATA.staff.find(x=>String(x.id)===String(p.staffId)); return st?st.name:'Unknown'; }))];
+  const namesStr = names.length<=4 ? names.join(', ') : `${names.slice(0,4).join(', ')} and ${names.length-4} more`;
+  const totalAmt = editable.reduce((a,b)=>a+Number(b.amount||0),0);
+  return {
+    description: `Permanently delete ${editable.length} payment${editable.length===1?'':'s'} on ${date} (${namesStr}, K${totalAmt.toFixed(2)} total) — this cannot be undone.`+
+      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel(true)} edit window and will be skipped.)` : '')+
+      (skippedByLimit>0 ? ` (${skippedByLimit} more matched the filter but were beyond the requested limit of ${limit}.)` : '')+
+      ` You'll be asked to confirm your admin password next. Delete these?`,
+    action: { ids: editable.map(p=>p.id) }
+  };
+}, function executeBulkDeletePayments(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  if(!isAdmin()) return { ok:false, msg:'Admin access is required to delete payment records.' };
+  const idSet = new Set((action.ids||[]).map(String));
+  const toDelete = (DATA.staffPayments||[]).filter(p=>idSet.has(String(p.id)) && isWithin24h(p,true));
+  if(toDelete.length===0) return { ok:false, msg:'None of those payments could be deleted — they may have fallen outside the edit window while waiting for confirmation.' };
+  toDelete.forEach(p=>{
+    logAuditEvent('DELETE','Staff Payment',`ID:${p.id} · Amount:${p.amount} · Staff:${p.staffId} · via Depot Assistant`, p);
+  });
+  const deletedIds = new Set(toDelete.map(p=>String(p.id)));
+  updateData(d=>({...d, staffPayments:(d.staffPayments||[]).filter(p=>!deletedIds.has(String(p.id)))}));
+  return { ok:true, msg:`Deleted ${toDelete.length} payment${toDelete.length===1?'':'s'}.` };
+}, true);
 
 // ── Client-side rate limiter ────────────────────────────────────────────────
 // Google's free tier for gemini-3.5-flash allows only 5 requests/minute,
