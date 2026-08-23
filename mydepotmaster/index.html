@@ -4223,6 +4223,8 @@ function resetDashWidgets(){
 // ── END FIX 30 HELPERS ────────────────────────────────────────────────────────
 function today(){return new Date().toISOString().split('T')[0];}
 function fmtDate(d){if(!d)return'—';try{return new Date(d+'T00:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});}catch{return d;}}
+// Formats a "YYYY-MM-DD" date plus an "HH:MM" time together, e.g. "23 Aug 2026, 14:21".
+function fmtDateTime(d,t){if(!d)return'—';return fmtDate(d)+(t?`, ${t}`:'');}
 function cur(){return(DATA&&DATA.currency)||'';}
 function zm(n){const c=cur();return(c?c+' ':'')+Number(n||0).toFixed(2);}
 function zmFull(n){const c=cur()||'—';return c+' '+Number(n||0).toFixed(2);}
@@ -11150,9 +11152,22 @@ function openStaffDetail(id){
         ${s.dateJoined?`<div style="font-size:16px;color:var(--muted)">Joined: <strong style="color:var(--text)">${fmtDate(s.dateJoined)}</strong></div>`:''}
         ${s.dateOfBirth?`<div style="font-size:16px;color:var(--muted)">DOB: <strong style="color:var(--text)">${fmtDate(s.dateOfBirth)}</strong></div>`:''}
         ${s.employeeId&&isAdmin()?`<div style="font-size:16px;color:var(--muted)">ID: <strong style="color:var(--blue)">${esc(s.employeeId)}</strong></div>`:''}
-        ${s.statusDate&&s.status!=='active'?`<div style="font-size:16px;color:var(--amber)">${s.status==='resigned'?'Resigned':'Left'}: ${fmtDate(s.statusDate)}${s.statusReason?` — ${esc(s.statusReason)}`:''}</div>`:''}
+        ${s.statusDate&&s.status!=='active'?`<div style="font-size:16px;color:var(--amber)">${s.status==='resigned'?'Resigned':'Left'}: ${fmtDateTime(s.statusDate,s.statusTime)}${s.statusReason?` — ${esc(s.statusReason)}`:''}</div>`:''}
       </div>
     </div>
+    ${(s.statusHistory&&s.statusHistory.length)?`<div style="margin-bottom:14px"><div style="font-size:16px;font-weight:700;color:var(--muted);letter-spacing:.8px;margin-bottom:4px">STATUS HISTORY</div>${s.statusHistory.slice().map((h,i)=>({h,i})).reverse().map(({h,i})=>{
+      const statusLabels={active:'↩ Reinstated',suspended:'⏸ Suspended',resigned:'🚪 Resigned',terminated:'⛔ Terminated'};
+      return`<div style="padding:6px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:17px;font-weight:700">${statusLabels[h.status]||h.status}</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:15px;color:var(--muted)">${fmtDateTime(h.date,h.time)}</span>
+            ${USER.role==='admin'?`<button class="editbtn" title="Edit" onclick="editStatusHistoryEntry('${s.id}',${h.id?`'${h.id}'`:'null'},${i})">✏️</button>`:''}
+          </div>
+        </div>
+        ${h.reason||h.by?`<div style="font-size:15px;color:var(--muted);margin-top:2px">${h.reason?esc(h.reason):''}${h.reason&&h.by?' · ':''}${h.by?'by '+esc(h.by):''}</div>`:''}
+      </div>`;
+    }).join('')}</div>`:''}
     ${s.emergencyContactName?`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:17px"><span style="color:var(--muted)">🆘 Emergency Contact: </span><strong>${esc(s.emergencyContactName)}</strong>${s.emergencyContactPhone?` · ${esc(s.emergencyContactPhone)}`:''}</div>`:''}
     ${s.notes?`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:17px;color:var(--muted)">📝 ${esc(s.notes)}</div>`:''}
     <div class="srow">
@@ -11787,7 +11802,9 @@ function _confirmSetStaffStatus(id,status,fromModal){
   requireAdminPassword(status==='active'?'reinstate this staff member':`mark this staff member as ${status}`,()=>{
     const effectiveStatus=status==='expelled'?'terminated':status;
     const statusDate=status!=='active'?today():null;
-    updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,status:effectiveStatus,statusDate,statusReason:''}:s)}));
+    const statusTime=status!=='active'?nowTime():null;
+    const histEntry={id:uid(),status:effectiveStatus,date:today(),time:nowTime(),reason:'',by:(USER||{}).username||'—'};
+    updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,status:effectiveStatus,statusDate,statusTime,statusReason:'',statusHistory:[...(s.statusHistory||[]),histEntry]}:s)}));
     showToast(status==='active'?'↩ Staff member reinstated.':`Staff member marked as ${status}.`);
     _afterStaffModalAction(id,fromModal);
   });
@@ -11816,12 +11833,71 @@ function _confirmSetStaffStatusReason(id,status,fromModal){
   requireAdminPassword(`mark this staff member as ${status}`,()=>{
     const effectiveStatus=status;
     const statusDate=today();
-    updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,status:effectiveStatus,statusDate,statusReason:reason}:s)}));
+    const statusTime=nowTime();
+    const histEntry={id:uid(),status:effectiveStatus,date:statusDate,time:statusTime,reason,by:(USER||{}).username||'—'};
+    updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,status:effectiveStatus,statusDate,statusTime,statusReason:reason,statusHistory:[...(s.statusHistory||[]),histEntry]}:s)}));
     showToast(`Staff member marked as ${status}.`);
     _afterStaffModalAction(id,fromModal);
   });
 }
 function delStaff(id){requireAdminPassword('delete this staff member',()=>{updateData(d=>({...d,staff:d.staff.filter(s=>String(s.id)!==String(id))}));showToast('🗑 Staff member deleted.');});}
+
+// ── EDIT A STATUS HISTORY ENTRY ─────────────────────────────────────────────
+// Lets an admin correct a past Suspend/Resigned/Terminate/Reinstate entry —
+// its date, time, status type, or reason — e.g. to fix a backdated action or
+// a typo in the reason. Older entries (created before this field existed)
+// won't have an `id`, so we fall back to matching by array index.
+function editStatusHistoryEntry(staffId,entryId,idx){
+  if(!requireAdmin('edit staff status history'))return;
+  const s=(DATA.staff||[]).find(x=>String(x.id)===String(staffId));
+  if(!s||!s.statusHistory)return;
+  const h=entryId!=null?s.statusHistory.find(e=>e.id===entryId):s.statusHistory[idx];
+  if(!h){showToast('⚠️ Entry not found — it may have changed. Reopen the profile and try again.');return;}
+  const statusOptions=[['suspended','⏸ Suspended'],['resigned','🚪 Resigned'],['terminated','⛔ Terminated'],['active','↩ Reinstated']];
+  openModal(`
+    <div class="mtitle">✏️ Edit Status Entry</div>
+    <div class="fw">
+      <div class="fl">Status</div>
+      <select class="fi" id="edith-status">${statusOptions.map(([v,l])=>`<option value="${v}" ${h.status===v?'selected':''}>${l}</option>`).join('')}</select>
+    </div>
+    <div class="twobox">
+      <div class="fw"><div class="fl">Date</div><input class="fi" id="edith-date" type="date" value="${h.date||''}"/></div>
+      <div class="fw"><div class="fl">Time</div><input class="fi" id="edith-time" type="time" value="${h.time||''}"/></div>
+    </div>
+    <div class="fw">
+      <div class="fl">Reason (optional)</div>
+      <input class="fi" id="edith-reason" type="text" value="${esc(h.reason||'')}" placeholder="Reason (optional)"/>
+    </div>
+    <div class="mact">
+      <button class="btn bo" onclick="closeModal()">Cancel</button>
+      <button class="btn bg" onclick="_confirmEditStatusHistoryEntry('${staffId}',${entryId!=null?`'${entryId}'`:'null'},${idx})">✅ Save</button>
+    </div>`);
+}
+function _confirmEditStatusHistoryEntry(staffId,entryId,idx){
+  const status=document.getElementById('edith-status').value;
+  const date=document.getElementById('edith-date').value;
+  const time=document.getElementById('edith-time').value;
+  const reason=(document.getElementById('edith-reason').value||'').trim();
+  if(!date){showToast('⚠️ Date is required.');return;}
+  closeModal();
+  requireAdminPassword('edit this status history entry',()=>{
+    updateData(d=>({...d,staff:d.staff.map(s=>{
+      if(String(s.id)!==String(staffId))return s;
+      const hist=s.statusHistory||[];
+      const i=entryId!=null?hist.findIndex(e=>e.id===entryId):idx;
+      if(i<0||i>=hist.length)return s;
+      const updatedHist=hist.map((e,j)=>j===i?{...e,status,date,time,reason}:e);
+      // If we just edited the most recent entry, keep the staff's live status
+      // fields (badge, active-staff filters, etc.) in sync with the edit.
+      const isLatest=i===hist.length-1;
+      return isLatest
+        ? {...s,statusHistory:updatedHist,status,statusDate:status!=='active'?date:null,statusTime:status!=='active'?time:null,statusReason:status!=='active'?reason:''}
+        : {...s,statusHistory:updatedHist};
+    })}));
+    showToast('✅ Status entry updated.');
+    setTimeout(()=>openStaffDetail(staffId),50);
+  });
+}
 
 // ── ROLES & RATES SUBTAB (Staff tab) ─────────────────────────────────────────
 
