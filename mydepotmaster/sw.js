@@ -25,6 +25,76 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v100 (2026-08-23)
+//
+// v100 changes (2026-08-23) — Role Work History: show tasks with no logs:
+//   - A task under a role (e.g. "Loader" under the Loading role) with zero
+//     logged entries so far was silently dropped from its role's Role
+//     History section — admins had no way to see it existed as a defined
+//     sub-role until someone logged work under it.
+//   - Every task defined on a role now always shows as its own sub-role
+//     section, even with zero entries — it just shows "No entries logged
+//     under this task yet." when expanded, instead of not appearing at all.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// Current version: v99 (2026-08-23)
+//
+// v99 changes (2026-08-23) — Role Work History: nest tasks as sub-roles:
+//   - A role can define more than one task at different pay rates (e.g.
+//     role "Loading" → tasks "Loader" @K1.70/bag and "Stacking"
+//     @K0.90/bag). The Role History report previously merged every task
+//     under a role into one combined role-level total, with per-task
+//     figures only visible as a flat BY TASK list inside.
+//   - Each task under a role is now its own separate sub-role accordion,
+//     nested inside the parent role's section, with its own independent
+//     BY STAFF, BY DATE, and RECENT ENTRIES breakdown — fully separate
+//     from other tasks under the same role rather than folded together.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// Current version: v98 (2026-08-23)
+//
+// v98 changes (2026-08-23) — Job Role(s) picker: flat list:
+//   - "Job Role(s)" in Register Staff and Edit Staff Details was a
+//     flex-wrapped grid of checkbox pills, which gets cramped and hard to
+//     scan once several roles are defined (e.g. splitting a combined
+//     "Loading" role into separate Loading and Stacking roles). Both
+//     pickers now render as a plain flat vertical list — one role per
+//     full-width row — instead of wrapped pills. No change to the
+//     underlying multi-role selection logic, just the layout.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// Current version: v97 (2026-08-23)
+//
+// v97 changes (2026-08-23) — Role Work History: accordion + by-date:
+//   - Each role in the "📋 Role History" report (Staff tab) is now its own
+//     collapsed accordion section — tap a role's header to expand/collapse
+//     it, instead of every role's full breakdown being shown at once in one
+//     long combined scroll.
+//   - Added a BY DATE breakdown inside each role section: combined totals
+//     (entries, quantity, net) per calendar date across all staff logged
+//     under that role. Deliberately excludes staff names — it's a pure
+//     day-by-day activity total, unlike BY STAFF / RECENT ENTRIES.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// Current version: v96 (2026-08-23)
+//
+// v96 changes (2026-08-23) — Combined Role Work History (admin):
+//   - Added a "📋 Role History" button to the Staff tab (admin only) that
+//     opens a company-wide report grouping every staff member's work log
+//     entries by job role (sub-role) instead of by individual staff member.
+//     Each role section shows total entries/quantity/net, a per-staff
+//     contribution breakdown within that role, a per-task breakdown, and
+//     the 10 most recent entries across all staff for that role.
+//   - This is separate from the existing per-role section inside an
+//     individual staff member's own profile, which only covers that one
+//     person's logs across their assigned roles.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v95 (2026-08-19)
 //
 // v95 changes (2026-08-19) — Hamburger menu + Global Search role scoping:
@@ -775,7 +845,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v3.7';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v3.13';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

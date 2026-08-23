@@ -3713,7 +3713,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v3.2';
+const SW_VERSION  = 'v3.3';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -10054,7 +10054,8 @@ function renderStaff(){
       <button class="stab${STAB==='payments'?' act':''}" id="stab-payments">💳 ${staffOnly?'My Payments':'Payments'}</button>
       <button class="stab${STAB==='leave'?' act':''}" id="stab-leave">🏖 ${staffOnly?'My Leave':'Leave'}</button>
       ${!staffOnly?`<button class="stab${STAB==='stafflist'?' act':''}" id="stab-stafflist">👥 Staff List</button>
-      <button class="stab${STAB==='rolesrates'?' act':''}" id="stab-rolesrates">⚙️ Roles & Rates</button>`:''}
+      <button class="stab${STAB==='rolesrates'?' act':''}" id="stab-rolesrates">⚙️ Roles & Rates</button>
+      ${USER.role==='admin'?`<button class="stab" id="btn-role-history">📋 Role History</button>`:''}`:''}
     </div>
     ${STAB==='logs'?renderStaffLogs():STAB==='roster'?renderRoster():STAB==='earnings'?renderEarnings():STAB==='payments'?renderPayments():STAB==='leave'?renderLeave():STAB==='rolesrates'?renderRolesRatesTab():renderStaffList()}`;
 }
@@ -10273,13 +10274,13 @@ function openStaffForm(){
   if(isStaffRole()){alert('⛔ Staff logins cannot register staff.');return;}
   if (isAtCap('staff', (DATA.staff||[]).length)) { showCapReachedPrompt('staff', 'Staff Profiles'); return; }
   const roleNames=allRoleNames();
-  const roleCbs=roleNames.map((r,i)=>`<label style="display:flex;align-items:center;gap:6px;background:var(--surface);border:1.5px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:16px"><input type="checkbox" class="sf-role-cb" value="${esc(r)}"${i===0?' checked':''}> ${esc(r)}</label>`).join('');
+  const roleCbs=roleNames.map((r,i)=>`<label style="display:flex;align-items:center;gap:10px;background:var(--surface);border:1.5px solid var(--border);border-radius:8px;padding:10px 12px;cursor:pointer;font-size:17px"><input type="checkbox" class="sf-role-cb" value="${esc(r)}"${i===0?' checked':''}> ${esc(r)}</label>`).join('');
   openModal(`
     <div class="mtitle">👤 Register Staff</div>
     <div class="fw"><div class="fl">Full Name <span style="color:var(--red)">*</span></div><input class="fi" id="sf-name" placeholder="E.G. JOHN BANDA"/></div>
     <div class="fw"><div class="fl">Profile Photo (optional)</div><input type="file" class="fi" id="sf-photo" accept="image/png,image/jpeg,image/webp" style="padding:9px"></div>
     <div class="fw"><div class="fl">Job Role(s) <span style="color:var(--red)">*</span></div>
-      <div id="sf-roles" style="display:flex;flex-wrap:wrap;gap:8px">${roleCbs||'<div style="color:var(--muted)">No roles defined</div>'}</div>
+      <div id="sf-roles" style="display:flex;flex-direction:column;gap:8px">${roleCbs||'<div style="color:var(--muted)">No roles defined</div>'}</div>
       <div style="font-size:14px;color:var(--muted);margin-top:5px">Check every role this staff member can perform. The topmost checked role is used as their primary role in lists and reports.</div>
     </div>
     <div class="fw"><div class="fl">Contract Type</div><select class="fi" id="sf-contract"><option value="permanent">PERMANENT</option><option value="casual">CASUAL</option><option value="seasonal">SEASONAL</option><option value="probation">PROBATION</option></select></div>
@@ -11083,6 +11084,131 @@ function renderStaffList(){
     ${DATA.staff.length===0?`<div class="card"><div class="empty">No staff registered yet.<br>Use "+ Add Staff" to register.</div></div>`:sections}`;
 }
 
+// ── ROLE WORK HISTORY (admin) ────────────────────────────────────────────
+// Combines every staff member's work logs, grouped by job role, into one
+// admin-facing view. A role can define more than one task at different pay
+// rates (e.g. role "Loading" → tasks "Loader" @K1.70/bag and "Stacking"
+// @K0.90/bag) — each task is treated as its own sub-role here, with its
+// own full breakdown (by staff, by date, recent entries), nested inside
+// the parent role's accordion, rather than being merged into one combined
+// role-level total. This is deliberately separate from the per-role
+// section inside an individual staff member's profile (openStaffDetail),
+// which only covers that one person's own logs across their roles; this
+// view instead covers all staff, combined, one role/task at a time.
+function openRoleWorkHistory(){
+  if(!isAdmin())return;
+  const staffById=Object.fromEntries(DATA.staff.map(s=>[s.id,s]));
+  const roles=allRoleNames();
+  const sections=roles.map((role,ri)=>{
+    const rLogs=(DATA.staffLogs||[]).filter(l=>l.role===role&&l.entryType==='work');
+    if(rLogs.length===0)return'';
+    const rQty=rLogs.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
+    const rNet=rLogs.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
+    // Each task under this role is its own sub-role sub-section, with its
+    // own independent BY STAFF / BY DATE / RECENT ENTRIES breakdown — kept
+    // fully separate from every other task under the same role, since
+    // different tasks under one role commonly carry different pay rates.
+    const taskSections=tasksForRole(role).map((tObj,ti)=>{
+      const tLogs=rLogs.filter(l=>l.task===tObj.name);
+      const tQty=tLogs.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
+      const tNet=tLogs.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
+      const ul=taskRateUnitLabel(role,tObj.name);
+      // Per-staff contribution within this task
+      const byStaff={};
+      tLogs.forEach(l=>{
+        const sid=String(l.staffId);
+        if(!byStaff[sid])byStaff[sid]={count:0,qty:0,net:0};
+        byStaff[sid].count++;
+        byStaff[sid].qty+=Number(l.qty!=null?l.qty:l.bags||0);
+        byStaff[sid].net+=(Number(l.earnings||0)-Number(l.deduction||0));
+      });
+      const staffRows=Object.entries(byStaff).sort((a,b)=>b[1].net-a[1].net).map(([sid,v])=>{
+        const s=staffById[sid];
+        return`<div style="display:flex;justify-content:space-between;padding:5px 0;padding-left:10px;border-bottom:1px solid var(--border)">
+          <span style="font-size:15px;color:var(--muted)">${esc(s?.name||'Unknown Staff')}</span>
+          <span style="font-size:15px;font-weight:700">${v.count} · ${v.qty.toLocaleString()} · ${zm(v.net)}</span>
+        </div>`;
+      }).join('');
+      // Per-date breakdown within this task — combined totals across every
+      // staff member logged that day under this task. Deliberately
+      // excludes staff names (unlike BY STAFF / RECENT ENTRIES): a pure
+      // day-by-day activity total, capped at 30 most recent dates.
+      const byDate={};
+      tLogs.forEach(l=>{
+        const d=l.date;
+        if(!byDate[d])byDate[d]={count:0,qty:0,net:0};
+        byDate[d].count++;
+        byDate[d].qty+=Number(l.qty!=null?l.qty:l.bags||0);
+        byDate[d].net+=(Number(l.earnings||0)-Number(l.deduction||0));
+      });
+      const dateEntries=Object.entries(byDate).sort((a,b)=>b[0].localeCompare(a[0]));
+      const dateRows=dateEntries.slice(0,30).map(([d,v])=>{
+        return`<div style="display:flex;justify-content:space-between;padding:5px 0;padding-left:10px;border-bottom:1px solid var(--border)">
+          <span style="font-size:15px;color:var(--muted)">${fmtDate(d)}</span>
+          <span style="font-size:15px;font-weight:700">${v.count} · ${v.qty.toLocaleString()} · ${zm(v.net)}</span>
+        </div>`;
+      }).join('');
+      const moreDates=dateEntries.length-30;
+      // Recent entries across all staff for this task
+      const sortedLogs=tLogs.slice().sort((a,b)=>b.date.localeCompare(a.date)||String(b.id).localeCompare(String(a.id)));
+      const recent=sortedLogs.slice(0,10).map(l=>{
+        const s=staffById[String(l.staffId)];
+        const q=l.qty!=null?l.qty:l.bags;
+        return`<div style="display:flex;justify-content:space-between;padding:5px 0;padding-left:10px;border-bottom:1px solid var(--border)">
+          <span style="font-size:14px;color:var(--muted)">${fmtDate(l.date)} · ${esc(s?.name||'Unknown')}</span>
+          <span style="font-size:14px">${Number(q||0).toLocaleString()} ${ul} · ${zm(Number(l.earnings||0)-Number(l.deduction||0))}</span>
+        </div>`;
+      }).join('');
+      const moreCount=sortedLogs.length-10;
+      return`<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;overflow:hidden">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:9px 11px;gap:6px;flex-wrap:wrap;cursor:pointer" onclick="toggleRoleHistorySection('t-${ri}-${ti}')">
+          <span class="tag" style="font-size:15px">${esc(tObj.name)}</span>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="font-size:14px;color:var(--muted)">${tLogs.length} · ${tQty.toLocaleString()} ${ul}s · ${zm(tNet)}</span>
+            <span id="rwh-arrow-t-${ri}-${ti}" style="color:var(--muted);font-size:12px">▼</span>
+          </div>
+        </div>
+        <div id="rwh-body-t-${ri}-${ti}" style="display:none;padding:0 11px 10px">
+          ${tLogs.length===0?`<div style="font-size:14px;color:var(--muted);padding:6px 0">No entries logged under this task yet.</div>`:`
+          ${staffRows?`<div style="font-size:12px;color:var(--muted);margin:5px 0 2px;letter-spacing:.5px">BY STAFF</div>${staffRows}`:''}
+          ${dateRows?`<div style="font-size:12px;color:var(--muted);margin:7px 0 2px;letter-spacing:.5px">BY DATE</div>${dateRows}${moreDates>0?`<div style="font-size:13px;color:var(--muted);padding-top:4px">+${moreDates} more date${moreDates===1?'':'s'}</div>`:''}`:''}
+          ${recent?`<div style="font-size:12px;color:var(--muted);margin:7px 0 2px;letter-spacing:.5px">RECENT ENTRIES</div>${recent}`:''}
+          ${moreCount>0?`<div style="font-size:13px;color:var(--muted);padding-top:4px">+${moreCount} more entr${moreCount===1?'y':'ies'}</div>`:''}
+          `}
+        </div>
+      </div>`;
+    }).join('');
+    // The role itself is the outer accordion — kept fully separate from
+    // every other role — and its body simply lists each task's own
+    // sub-accordion (taskSections) rather than one merged breakdown.
+    return`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;margin-bottom:12px;overflow:hidden">
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 14px;gap:6px;flex-wrap:wrap;cursor:pointer" onclick="toggleRoleHistorySection('${ri}')">
+        <span class="tag" style="font-size:16px">${esc(role)}</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-size:15px;color:var(--muted)">${rLogs.length} entr${rLogs.length===1?'y':'ies'} · ${rQty.toLocaleString()} total · ${zm(rNet)}</span>
+          <span id="rwh-arrow-${ri}" style="color:var(--muted);font-size:13px">▼</span>
+        </div>
+      </div>
+      <div id="rwh-body-${ri}" style="display:none;padding:0 14px 12px">
+        ${taskSections||`<div class="empty" style="padding:8px 0">No tasks defined for this role.</div>`}
+      </div>
+    </div>`;
+  }).join('');
+  openModal(`
+    <div style="font-family:var(--fh);font-size:22px;font-weight:800;margin-bottom:4px">📋 Work History by Role</div>
+    <div style="font-size:16px;color:var(--muted);margin-bottom:14px">Combined work logs from every staff member, grouped by role. Roles with more than one task (e.g. Loading → Loader / Stacking) show each task as its own separate sub-role. Tap to expand.</div>
+    ${sections||`<div class="empty">No work log entries recorded yet.</div>`}
+  `);
+}
+function toggleRoleHistorySection(key){
+  const el=document.getElementById('rwh-body-'+key);
+  const arrow=document.getElementById('rwh-arrow-'+key);
+  if(!el)return;
+  const opening=el.style.display==='none';
+  el.style.display=opening?'block':'none';
+  if(arrow)arrow.textContent=opening?'▲':'▼';
+}
+
 function toggleStaffModalPin(id,checked){
   STAFF_MODAL_PIN=checked;
   const ovl=document.getElementById('modal-ovl');
@@ -11101,10 +11227,16 @@ function openStaffDetail(id){
   const unpaid=net-paid;
   const isInactive=s.status==='terminated'||s.status==='resigned'||s.status==='expelled';
   const statusBadge=isInactive?(s.status==='resigned'?`<span class="bdg br2">RESIGNED</span>`:`<span class="bdg br2">TERMINATED</span>`):s.status==='suspended'?`<span class="bdg ba2">SUSPENDED</span>`:`<span class="bdg bg2">ACTIVE</span>`;
-  const _allTasksForStaff=[...new Map(staffRoleList(s).flatMap(r=>tasksForRole(r).map(t=>[t.name,{...t,_role:r}]))).values()];
+  // Task Breakdown here is only used for single-role staff — for
+  // multi-role staff, the per-role WORK HISTORY BY ROLE section below
+  // supersedes it (it correctly separates same-named tasks belonging to
+  // different roles, instead of merging them the way a flat breakdown
+  // keyed by task name alone would).
+  const _staffRolesForBreakdown=staffRoleList(s);
+  const _allTasksForStaff=_staffRolesForBreakdown.length>1?[]:_staffRolesForBreakdown.flatMap(r=>tasksForRole(r).map(t=>({...t,_role:r})));
   const taskBreakdown=_allTasksForStaff.map(tObj=>{
     const task=tObj.name;
-    const tLogs=sLogs.filter(l=>l.task===task);
+    const tLogs=sLogs.filter(l=>l.task===task&&l.role===tObj._role);
     if(tLogs.length===0)return'';
     const tQty=tLogs.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
     const tNet=tLogs.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
@@ -11126,6 +11258,49 @@ function openStaffDetail(id){
       </div>
     </div>`;
   }).join('');
+  // Per-role (sub-role) work log history — only meaningful when a staff
+  // member is assigned more than one job role, since with a single role
+  // it would just repeat the Task Breakdown/Recent Sessions above. Groups
+  // this staff member's own work logs by which role they were logged
+  // under (l.role, stamped on every work-type log at creation) so e.g. a
+  // Loader+Stacking staff member can see each role's totals and sessions
+  // separately instead of them being merged together.
+  const staffRoles=staffRoleList(s);
+  const roleHistorySection=staffRoles.length>1?staffRoles.map(r=>{
+    const rLogs=sLogs.filter(l=>l.role===r&&l.entryType==='work');
+    if(rLogs.length===0)return'';
+    const rQty=rLogs.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
+    const rNet=rLogs.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
+    const rTaskRows=tasksForRole(r).map(tObj=>{
+      const tLogs=rLogs.filter(l=>l.task===tObj.name);
+      if(tLogs.length===0)return'';
+      const tQty=tLogs.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
+      const tNet=tLogs.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
+      const ul=taskRateUnitLabel(r,tObj.name);
+      return`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;padding-left:10px;border-bottom:1px solid var(--border)">
+        <span style="font-size:16px;color:var(--muted)">${tObj.name}</span>
+        <span style="font-size:16px;font-weight:700">${tQty.toLocaleString()} ${ul}s · ${zm(tNet)}</span>
+      </div>`;
+    }).join('');
+    const rRecent=rLogs.slice(0,5).map(l=>{
+      const q=l.qty!=null?l.qty:l.bags;
+      const ul=l.rateUnit&&l.rateUnit!=='bag'?taskRateUnitLabel(r,l.task||''):'bags';
+      return`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;padding-left:10px;border-bottom:1px solid var(--border)">
+        <span style="font-size:15px;color:var(--muted)">${fmtDate(l.date)} · ${l.task}</span>
+        <span style="font-size:15px">${Number(q||0).toLocaleString()} ${ul} · ${zm(Number(l.earnings||0)-Number(l.deduction||0))}</span>
+      </div>`;
+    }).join('');
+    const rMore=rLogs.length>5?`<div style="font-size:14px;color:var(--muted);padding:4px 0 0 10px">+${rLogs.length-5} more session${rLogs.length-5===1?'':'s'} as ${r}</div>`:'';
+    return`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <span class="tag" style="font-size:15px">${esc(r)}</span>
+        <span style="font-size:15px;color:var(--muted)">${rLogs.length} session${rLogs.length===1?'':'s'} · ${rQty.toLocaleString()} total · ${zm(rNet)}</span>
+      </div>
+      ${rTaskRows}
+      ${rRecent}
+      ${rMore}
+    </div>`;
+  }).join(''):'';
   // NOTE: these action buttons sit inside the staff profile modal, which is
   // capped at max-width:480px with 24px padding (~430px usable). The default
   // .btn size (12px 20px padding, 20px font) needs way more than 1/3 of that
@@ -11198,6 +11373,7 @@ function openStaffDetail(id){
     </div>
     ${taskBreakdown?`<div style="margin-bottom:14px"><div style="font-size:16px;font-weight:700;color:var(--muted);letter-spacing:.8px;margin-bottom:4px">TASK BREAKDOWN</div>${taskBreakdown}</div>`:''}
     ${recentLogs?`<div style="margin-bottom:14px"><div style="font-size:16px;font-weight:700;color:var(--muted);letter-spacing:.8px;margin-bottom:4px">RECENT SESSIONS</div>${recentLogs}</div>`:''}
+    ${roleHistorySection?`<div style="margin-bottom:14px"><div style="font-size:16px;font-weight:700;color:var(--muted);letter-spacing:.8px;margin-bottom:4px">WORK HISTORY BY ROLE</div>${roleHistorySection}</div>`:''}
     ${editDetailsBtn}
     ${removePhotoBtn}
     ${loginAccountBtn}
@@ -11222,12 +11398,12 @@ function _openEditStaffDetails(id){
   if(!s){alert('Staff member not found.');return;}
   const roleNames=allRoleNames();
   const curRoles=staffRoleList(s);
-  const roleCbs=roleNames.map(r=>`<label style="display:flex;align-items:center;gap:6px;background:var(--surface);border:1.5px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:16px"><input type="checkbox" class="esd-role-cb" value="${esc(r)}"${curRoles.includes(r)?' checked':''}> ${esc(r)}</label>`).join('');
+  const roleCbs=roleNames.map(r=>`<label style="display:flex;align-items:center;gap:10px;background:var(--surface);border:1.5px solid var(--border);border-radius:8px;padding:10px 12px;cursor:pointer;font-size:17px"><input type="checkbox" class="esd-role-cb" value="${esc(r)}"${curRoles.includes(r)?' checked':''}> ${esc(r)}</label>`).join('');
   openModal(`
     <div class="mtitle">✏️ Edit Staff Details</div>
     <div class="fw"><div class="fl">Full Name <span style="color:var(--red)">*</span></div><input class="fi" id="esd-name" value="${esc(s.name)}" placeholder="FULL NAME"/></div>
     <div class="fw"><div class="fl">Job Role(s) <span style="color:var(--red)">*</span></div>
-      <div id="esd-roles" style="display:flex;flex-wrap:wrap;gap:8px">${roleCbs||'<div style="color:var(--muted)">No roles defined</div>'}</div>
+      <div id="esd-roles" style="display:flex;flex-direction:column;gap:8px">${roleCbs||'<div style="color:var(--muted)">No roles defined</div>'}</div>
       <div style="font-size:14px;color:var(--muted);margin-top:5px">Check every role this staff member can perform. The topmost checked role is used as their primary role in lists and reports.</div>
     </div>
     <div class="fw"><div class="fl">Contract Type</div><select class="fi" id="esd-contract"><option value="permanent"${(s.contractType||'permanent')==='permanent'?' selected':''}>PERMANENT</option><option value="casual"${s.contractType==='casual'?' selected':''}>CASUAL</option><option value="seasonal"${s.contractType==='seasonal'?' selected':''}>SEASONAL</option><option value="probation"${s.contractType==='probation'?' selected':''}>PROBATION</option></select></div>
@@ -11534,16 +11710,19 @@ function _printStaffProfile(id){
   }
   const infoTable=`<table><tbody>${infoRows.map(([k,v])=>`<tr><th style="width:38%">${k}</th><td>${v}</td></tr>`).join('')}</tbody></table>`;
 
-  // Task breakdown
-  const _allTasksForStaff=[...new Map(staffRoleList(s).flatMap(r=>tasksForRole(r).map(t=>[t.name,{...t,_role:r}]))).values()];
+  // Task breakdown — keyed by role+task (not task name alone) so two roles
+  // that happen to define a same-named task are never merged together.
+  const staffRoles=staffRoleList(s);
+  const isMultiRole=staffRoles.length>1;
+  const _allTasksForStaff=staffRoles.flatMap(r=>tasksForRole(r).map(t=>({...t,_role:r})));
   const taskRows=_allTasksForStaff.map(tObj=>{
     const task=tObj.name;
-    const tLogs=sLogs.filter(l=>l.task===task);
+    const tLogs=sLogs.filter(l=>l.task===task&&l.role===tObj._role);
     if(tLogs.length===0)return null;
     const tQty=tLogs.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
     const tNet=tLogs.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
     const ul=taskRateUnitLabel(tObj._role,task);
-    return[task,`${tQty.toLocaleString()} ${ul}s`,zm(tNet)];
+    return isMultiRole?[tObj._role,task,`${tQty.toLocaleString()} ${ul}s`,zm(tNet)]:[task,`${tQty.toLocaleString()} ${ul}s`,zm(tNet)];
   }).filter(Boolean);
 
   // Status history
@@ -11561,9 +11740,32 @@ function _printStaffProfile(id){
   const sessionRows=sLogs.slice(0,30).map(l=>{
     const q=l.qty!=null?l.qty:l.bags;
     const ul=l.rateUnit&&l.rateUnit!=='bag'?taskRateUnitLabel(l.role||'',l.task||''):'bags';
-    return[fmtDate(l.date),l.task||'—',`${Number(q||0).toLocaleString()} ${ul}`,zm(Number(l.earnings||0)-Number(l.deduction||0))];
+    return isMultiRole
+      ?[fmtDate(l.date),l.role||'—',l.task||'—',`${Number(q||0).toLocaleString()} ${ul}`,zm(Number(l.earnings||0)-Number(l.deduction||0))]
+      :[fmtDate(l.date),l.task||'—',`${Number(q||0).toLocaleString()} ${ul}`,zm(Number(l.earnings||0)-Number(l.deduction||0))];
   });
   const sessionsNote=sLogs.length>30?` (most recent 30 of ${sLogs.length})`:'';
+  const sessionHeaders=isMultiRole?['Date','Role','Task','Quantity','Net (ZMW)']:['Date','Task','Quantity','Net (ZMW)'];
+
+  // Per-role (sub-role) history — same grouping as the in-app staff detail
+  // view: each assigned role's own totals, task breakdown and sessions,
+  // kept separate so cross-role task-name collisions never blend together.
+  const roleHistoryHtml=isMultiRole?staffRoles.map(r=>{
+    const rLogs=sLogs.filter(l=>l.role===r&&l.entryType==='work');
+    if(rLogs.length===0)return'';
+    const rQty=rLogs.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
+    const rNet=rLogs.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
+    const rTaskRows=tasksForRole(r).map(tObj=>{
+      const tLogs=rLogs.filter(l=>l.task===tObj.name);
+      if(tLogs.length===0)return null;
+      const tQty=tLogs.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
+      const tNet=tLogs.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
+      const ul=taskRateUnitLabel(r,tObj.name);
+      return[tObj.name,`${tQty.toLocaleString()} ${ul}s`,zm(tNet)];
+    }).filter(Boolean);
+    return `<div class="pay-section-title">${esc(r)} — ${rLogs.length} session${rLogs.length===1?'':'s'} · ${rQty.toLocaleString()} total · ${zm(rNet)}</div>`+
+      (rTaskRows.length?_pdfTable(['Task','Quantity','Net Pay (ZMW)'],rTaskRows):'');
+  }).join(''):'';
 
   const html=`
 ${_getBrandedHeader('Staff Profile — '+s.name)}
@@ -11578,9 +11780,10 @@ ${infoTable}
     <tr><th>Total Sessions</th><td class="num">${sLogs.length}</td></tr>
   </tbody>
 </table>
-${taskRows.length?`<div class="pay-section-title">Task Breakdown</div>${_pdfTable(['Task','Quantity','Net Pay (ZMW)'],taskRows)}`:''}
+${taskRows.length?`<div class="pay-section-title">Task Breakdown</div>${_pdfTable(isMultiRole?['Role','Task','Quantity','Net Pay (ZMW)']:['Task','Quantity','Net Pay (ZMW)'],taskRows)}`:''}
 ${statusHistHtml?`<div class="pay-section-title">Status History</div>${statusHistHtml}`:''}
-${sessionRows.length?`<div class="pay-section-title">Recent Sessions${sessionsNote}</div>${_pdfTable(['Date','Task','Quantity','Net (ZMW)'],sessionRows)}`:''}
+${sessionRows.length?`<div class="pay-section-title">Recent Sessions${sessionsNote}</div>${_pdfTable(sessionHeaders,sessionRows)}`:''}
+${roleHistoryHtml?`<div class="pay-section-title" style="margin-top:10px">Work History by Role</div>${roleHistoryHtml}`:''}
 ${_pdfFooter('Staff Profile Summary')}
 `;
   _pdfPrint(html, 'Staff Profile — '+s.name);
@@ -14546,6 +14749,8 @@ function attachTabListeners(){
   if(logWork)logWork.addEventListener('click',openLogForm);
   if(bulkLog)bulkLog.addEventListener('click',openBulkLogForm);
   if(payStaff)payStaff.addEventListener('click',openPayForm);
+  const roleHistoryBtn=document.getElementById('btn-role-history');
+  if(roleHistoryBtn)roleHistoryBtn.addEventListener('click',openRoleWorkHistory);
   ['logs','roster','earnings','payments','leave','stafflist','rolesrates'].forEach(t=>{
     const el=document.getElementById('stab-'+t);
     if(el)el.addEventListener('click',()=>{STAB=t;render();});
