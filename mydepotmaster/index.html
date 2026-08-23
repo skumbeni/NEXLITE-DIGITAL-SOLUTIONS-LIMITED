@@ -11072,13 +11072,6 @@ function toggleStaffModalPin(id,checked){
   const ovl=document.getElementById('modal-ovl');
   if(ovl)ovl.onclick=checked?null:e=>{if(e.target===ovl)closeModal();};
 }
-// Runs a staff action; if the "keep window open" pin is on, the modal stays open and
-// refreshes to show the updated status instead of closing.
-function staffModalAction(id,fn){
-  fn();
-  if(STAFF_MODAL_PIN){setTimeout(()=>openStaffDetail(id),50);}
-  else{closeModal();}
-}
 function openStaffDetail(id){
   const s=DATA.staff.find(x=>String(x.id)===String(id));
   if(!s)return;
@@ -11127,10 +11120,10 @@ function openStaffDetail(id){
   // inside the modal/app width, same as the compact buttons on the roster list.
   const actionBtns=USER.role==='admin'?(
     (s.status==='terminated'||s.status==='resigned'||s.status==='expelled')
-      ?`<button class="btn bg" onclick="staffModalAction('${s.id}',()=>setStaffStatus('${s.id}','active'))">↩ Reinstate</button>`
+      ?`<button class="btn bg" onclick="setStaffStatus('${s.id}','active',true)">↩ Reinstate</button>`
       :s.status==='suspended'
-        ?`<div style="display:flex;gap:8px"><button class="btn bg bsm" style="flex:1;min-width:0;padding:10px 8px;font-size:16px" onclick="staffModalAction('${s.id}',()=>setStaffStatus('${s.id}','active'))">↩ Reinstate</button><button class="btn br bsm" style="flex:1;min-width:0;padding:10px 8px;font-size:16px" onclick="staffModalAction('${s.id}',()=>setStaffStatusReason('${s.id}','terminated'))">⛔ Terminate</button></div>`
-        :`<div style="display:flex;gap:6px"><button class="btn ba bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="staffModalAction('${s.id}',()=>setStaffStatus('${s.id}','suspended'))">⏸ Suspend</button><button class="btn bo bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="staffModalAction('${s.id}',()=>setStaffStatusReason('${s.id}','resigned'))">🚪 Resigned</button><button class="btn br bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="staffModalAction('${s.id}',()=>setStaffStatusReason('${s.id}','terminated'))">⛔ Terminate</button></div>`
+        ?`<div style="display:flex;gap:8px"><button class="btn bg bsm" style="flex:1;min-width:0;padding:10px 8px;font-size:16px" onclick="setStaffStatus('${s.id}','active',true)">↩ Reinstate</button><button class="btn br bsm" style="flex:1;min-width:0;padding:10px 8px;font-size:16px" onclick="setStaffStatusReason('${s.id}','terminated',true)">⛔ Terminate</button></div>`
+        :`<div style="display:flex;gap:6px"><button class="btn ba bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="setStaffStatus('${s.id}','suspended',true)">⏸ Suspend</button><button class="btn bo bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="setStaffStatusReason('${s.id}','resigned',true)">🚪 Resigned</button><button class="btn br bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="setStaffStatusReason('${s.id}','terminated',true)">⛔ Terminate</button></div>`
   ):'';
   const editDetailsBtn=USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px" onclick="closeModal();setTimeout(()=>openEditStaffDetails('${s.id}'),50)">✏️ Edit Details</button>`:'';
   const removePhotoBtn=(USER.role==='admin'&&s.photoDataUrl)?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--red);border-color:rgba(192,57,43,.4)" onclick="removeStaffPhoto('${s.id}')">🗑 Remove Photo</button>`:'';
@@ -11764,7 +11757,19 @@ function saveEditLog(id){
 // requireAdmin() passed, but confirm()/prompt() silently short-circuited the
 // function before it ever reached updateData(). Using the app's own openModal()
 // (same mechanism requireAdminPassword already uses successfully) fixes this.
-function setStaffStatus(id,status){
+// fromModal=true means this was triggered from inside the staff profile modal
+// (via the Suspend/Resigned/Terminate/Reinstate row). In that case, once the
+// status change is actually saved we either reopen the profile modal (if the
+// "keep window open" pin is on) or close it — this replaces what
+// staffModalAction() used to try to do, which was closing the modal
+// immediately after firing setStaffStatus/setStaffStatusReason, before the
+// user ever got to see or tap the confirmation dialog those functions open.
+function _afterStaffModalAction(id,fromModal){
+  if(!fromModal)return;
+  if(STAFF_MODAL_PIN){setTimeout(()=>openStaffDetail(id),50);}
+  else{closeModal();}
+}
+function setStaffStatus(id,status,fromModal=false){
   if(!requireAdmin('change staff status'))return;
   const labels={suspended:'Suspend this staff member? They will remain in all records.',terminated:'Terminate this staff member? They will remain in all records.',resigned:'Mark this staff member as resigned? They will remain in all records.',expelled:'Mark this staff member as terminated? They will remain in all records.',active:'Reinstate this staff member?'};
   openModal(`
@@ -11774,19 +11779,20 @@ function setStaffStatus(id,status){
     </div>
     <div class="mact">
       <button class="btn bo" onclick="closeModal()">Cancel</button>
-      <button class="btn bg" onclick="_confirmSetStaffStatus('${id}','${status}')">✅ Confirm</button>
+      <button class="btn bg" onclick="_confirmSetStaffStatus('${id}','${status}',${fromModal})">✅ Confirm</button>
     </div>`);
 }
-function _confirmSetStaffStatus(id,status){
+function _confirmSetStaffStatus(id,status,fromModal){
   closeModal();
   requireAdminPassword(status==='active'?'reinstate this staff member':`mark this staff member as ${status}`,()=>{
     const effectiveStatus=status==='expelled'?'terminated':status;
     const statusDate=status!=='active'?today():null;
     updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,status:effectiveStatus,statusDate,statusReason:''}:s)}));
     showToast(status==='active'?'↩ Staff member reinstated.':`Staff member marked as ${status}.`);
+    _afterStaffModalAction(id,fromModal);
   });
 }
-function setStaffStatusReason(id,status){
+function setStaffStatusReason(id,status,fromModal=false){
   if(!requireAdmin('change staff status'))return;
   const label=status==='resigned'?'Resignation':'Termination';
   openModal(`
@@ -11797,14 +11803,14 @@ function setStaffStatusReason(id,status){
     </div>
     <div class="mact">
       <button class="btn bo" onclick="closeModal()">Cancel</button>
-      <button class="btn bg" onclick="_confirmSetStaffStatusReason('${id}','${status}')">✅ Confirm</button>
+      <button class="btn bg" onclick="_confirmSetStaffStatusReason('${id}','${status}',${fromModal})">✅ Confirm</button>
     </div>`);
   document.getElementById('staffstatus-reason-input').addEventListener('keydown', e=>{
-    if(e.key==='Enter') _confirmSetStaffStatusReason(id,status);
+    if(e.key==='Enter') _confirmSetStaffStatusReason(id,status,fromModal);
   });
   document.getElementById('staffstatus-reason-input').focus();
 }
-function _confirmSetStaffStatusReason(id,status){
+function _confirmSetStaffStatusReason(id,status,fromModal){
   const reason=(document.getElementById('staffstatus-reason-input')?.value||'').trim();
   closeModal();
   requireAdminPassword(`mark this staff member as ${status}`,()=>{
@@ -11812,6 +11818,7 @@ function _confirmSetStaffStatusReason(id,status){
     const statusDate=today();
     updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,status:effectiveStatus,statusDate,statusReason:reason}:s)}));
     showToast(`Staff member marked as ${status}.`);
+    _afterStaffModalAction(id,fromModal);
   });
 }
 function delStaff(id){requireAdminPassword('delete this staff member',()=>{updateData(d=>({...d,staff:d.staff.filter(s=>String(s.id)!==String(id))}));showToast('🗑 Staff member deleted.');});}
