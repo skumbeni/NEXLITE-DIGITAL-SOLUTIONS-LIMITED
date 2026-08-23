@@ -1440,8 +1440,22 @@ function _pdfHeader(title){
 
 // Convert rows array (first row = headers) into an HTML table
 function _pdfTable(headers, rows){
-  const ths = headers.map(h=>`<th>${esc(String(h))}</th>`).join('');
-  const trs = rows.map(r=>`<tr>${r.map((c,i)=>`<td class="${typeof c==='number'||(!isNaN(parseFloat(c))&&i>0)?'num':''}">${esc(String(c??''))}</td>`).join('')}</tr>`).join('');
+  // Decide alignment per COLUMN (not per cell) so the heading always matches
+  // its data below it. A column counts as numeric only if every non-empty
+  // cell in it looks like a number (parseFloat handles values with a unit
+  // suffix, e.g. "70 bags", "1,290.015" — those still right-align). Column 0
+  // is left as the label/date column and never right-aligned.
+  const colCount = headers.length;
+  const numCol = Array.from({length: colCount}, (_, i) => {
+    if (i === 0) return false;
+    return rows.length > 0 && rows.every(r => {
+      const c = r[i];
+      if (c === null || c === undefined || c === '') return true;
+      return typeof c === 'number' || !isNaN(parseFloat(c));
+    });
+  });
+  const ths = headers.map((h,i)=>`<th class="${numCol[i]?'num':''}">${esc(String(h))}</th>`).join('');
+  const trs = rows.map(r=>`<tr>${r.map((c,i)=>`<td class="${numCol[i]?'num':''}">${esc(String(c??''))}</td>`).join('')}</tr>`).join('');
   return `<table><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
 }
 
@@ -3699,7 +3713,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v2.8';
+const SW_VERSION  = 'v2.9';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
