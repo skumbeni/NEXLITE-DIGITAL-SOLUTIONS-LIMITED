@@ -925,6 +925,16 @@
           <p>Defaults used across the fund.</p>
         </div>
       </div>
+      <div class="panel" id="settingsAccessDeniedNote" style="display:none; border-color:var(--rose);">
+        <div style="padding:16px 20px; display:flex; flex-direction:column; gap:8px;">
+          <div style="display:flex; gap:10px; align-items:flex-start;">
+            <span class="badge" style="background:var(--rose-soft); color:var(--rose-bright); flex-shrink:0;">No fund access</span>
+            <span class="helper" id="settingsAccessDeniedText" style="margin:0;">This account is signed in, but isn't granted access to this fund yet.</span>
+          </div>
+          <div class="helper" style="margin:0;">Your account ID (share this with whoever manages fund access, or add it to <span class="mono">access/treasurerAccess</span> in Firebase yourself):</div>
+          <div class="mono" id="settingsAccessDeniedUid" style="user-select:all; background:rgba(255,255,255,0.03); border:1px solid var(--line); border-radius:6px; padding:8px 10px; font-size:12px; word-break:break-all;"></div>
+        </div>
+      </div>
       <div class="panel" id="settingsManagerNote" style="display:none; border-color:var(--blue);">
         <div style="padding:16px 20px; display:flex; gap:10px; align-items:flex-start;">
           <span class="badge" style="background:var(--blue-soft); color:var(--blue-bright); flex-shrink:0;">Manager</span>
@@ -1603,6 +1613,13 @@
               if(data.invites) delete data.invites[code];
               localStorage.setItem(STORE_KEY, JSON.stringify(data));
               return cred;
+            }).catch((grantErr)=>{
+              // The Auth account exists but never got the access grant — left alone, this
+              // becomes a "signed in, permission denied, forever" ghost account with no
+              // way back in. Roll it back so the invite can be retried cleanly instead.
+              return cred.user.delete().catch(()=>{}).then(()=>{
+                throw { code: 'auth/grant-failed', message: 'Account was created but access could not be granted. Please try again.' };
+              });
             });
           });
         });
@@ -1625,6 +1642,13 @@
         data.settings.treasurerEmail = details.email;
         save();
         return cred;
+      }).catch((grantErr)=>{
+        // Same ghost-account risk as the invite path above: if the bootstrap write is
+        // denied (e.g. someone else's bootstrap already landed first) or fails for any
+        // other reason, don't leave a signed-in account with no grant and no way out.
+        return cred.user.delete().catch(()=>{}).then(()=>{
+          throw { code: 'auth/grant-failed', message: 'Account was created but access could not be granted. This fund may already have a Chairperson — please try again or contact them for an invite.' };
+        });
       });
     });
   }
@@ -1732,7 +1756,7 @@
         toast('Only the Chairperson can access this.');
         return;
       }
-      if(page==='settings' && !isAuthorizedTreasurer()){
+      if(page==='settings' && !isAuthorizedTreasurer() && !(auth.currentUser && !auth.currentUser.isAnonymous)){
         toast('Only the Chairperson or a Manager can access this.');
         return;
       }
@@ -1747,8 +1771,13 @@
   function applyRoleNavVisibility(){
     const authed = isAuthorizedTreasurer();
     const chair = isChairperson();
+    // Settings must stay reachable for ANY real signed-in account, even one that isn't
+    // (or isn't yet) on the treasurer roster — otherwise a denied/orphaned account has no
+    // way to reach Cloud Sync status or the Log Out button and gets stuck permanently.
+    const u = auth.currentUser;
+    const canReachSettings = authed || (u && !u.isAnonymous);
     document.querySelectorAll('.nav-btn[data-page="settings"]').forEach(b=>{
-      b.style.display = authed ? '' : 'none';
+      b.style.display = canReachSettings ? '' : 'none';
     });
     document.querySelectorAll('.nav-btn[data-page="subscription"]').forEach(b=>{
       b.style.display = chair ? '' : 'none';
@@ -1773,13 +1802,34 @@
   // to a manager too, so those stay visible to any signed-in treasurer/manager.
   function applySettingsRoleAccess(){
     const chair = isChairperson();
+    const authed = isAuthorizedTreasurer();
+    const u = auth.currentUser;
+    const deniedRealUser = !authed && u && !u.isAnonymous;
     const chairOnlyPanelIds = ['fundConfigPanel', 'managerAccessPanel', 'dangerZonePanel'];
     chairOnlyPanelIds.forEach(id=>{
       const el = document.getElementById(id);
-      if(el) el.style.display = chair ? '' : 'none';
+      // Hide these entirely for anyone who isn't on the roster at all, not just non-chairs —
+      // a denied account has no business seeing (or trying to save into) fund configuration.
+      if(el) el.style.display = (chair && authed) ? '' : 'none';
     });
     const note = document.getElementById('settingsManagerNote');
-    if(note) note.style.display = chair ? 'none' : 'block';
+    if(note) note.style.display = (authed && !chair) ? 'block' : 'none';
+
+    const deniedNote = document.getElementById('settingsAccessDeniedNote');
+    if(deniedNote){
+      deniedNote.style.display = deniedRealUser ? 'block' : 'none';
+      if(deniedRealUser){
+        const dbg = window.zfAccessDebug || { state: 'pending' };
+        const textEl = document.getElementById('settingsAccessDeniedText');
+        const uidEl = document.getElementById('settingsAccessDeniedUid');
+        if(textEl){
+          textEl.textContent = dbg.state === 'denied'
+            ? 'Database rules blocked reading this fund\u2019s access list for this account — it\u2019s either not granted yet, or the grant never completed.'
+            : (dbg.state === 'pending' ? 'Checking access…' : `Signed in, but not on this fund's manager list (${dbg.totalAccounts||0} account(s) found).`);
+        }
+        if(uidEl) uidEl.textContent = u.uid + (u.email ? '  \u2022  ' + u.email : '');
+      }
+    }
   }
 
   /* ---------- Derived calculations ---------- */
@@ -2644,7 +2694,9 @@
         ? 'Password must be at least 6 characters.'
         : err.code === 'auth/invite-required'
           ? 'New manager accounts need a valid invite code from the chairperson (Settings \u2192 Manager Access). First time setting up this fund? Use "Create your fund account" below instead.'
-          : 'Incorrect email or password.';
+          : err.code === 'auth/grant-failed'
+            ? (err.message || 'Account was created but access could not be granted. Please try again.')
+            : 'Incorrect email or password.';
       document.getElementById('loginError').style.display = 'block';
     });
   });
@@ -2706,7 +2758,9 @@
           ? 'Password must be at least 6 characters.'
           : err.code === 'PERMISSION_DENIED'
             ? 'Setup was blocked by the database rules. Either a chairman account already exists, or the Firebase security rules haven\u2019t been updated yet — check the Rules tab in the Firebase console.'
-            : 'Could not create the account. Check your connection and try again.';
+            : err.code === 'auth/grant-failed'
+              ? (err.message || 'Account was created but access could not be granted. Please try again.')
+              : 'Could not create the account. Check your connection and try again.';
       errEl.style.display = 'block';
     });
   });
