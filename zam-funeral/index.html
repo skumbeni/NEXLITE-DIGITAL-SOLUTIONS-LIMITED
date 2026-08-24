@@ -878,7 +878,7 @@
           <button class="btn secondary" id="btnExportData">Export Backup (JSON)</button>
           <button class="btn secondary" id="btnImportData">Import Backup</button>
           <input type="file" id="importFile" accept=".json" style="display:none">
-          <span class="helper">All data lives only on this device's browser storage. Export regularly to keep a safe copy.</span>
+          <span class="helper">Data syncs to the cloud automatically while you're signed in and online (see Settings → Cloud Sync). Export a backup regularly anyway, as an extra safety copy.</span>
         </div>
       </div>
     </section>
@@ -937,6 +937,19 @@
           <div>
             <button class="btn" id="btnSaveSettings">Save Settings</button>
           </div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Cloud Sync</h3></div>
+        <div style="padding:20px; display:flex; flex-direction:column; gap:14px; max-width:460px;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span id="syncStatusDot" style="width:10px;height:10px;border-radius:50%;background:var(--ink-dim); flex-shrink:0;"></span>
+            <span id="syncStatusText" class="helper" style="margin:0;">Checking connection…</span>
+          </div>
+          <div>
+            <button class="btn secondary small" id="btnForceSync">Force Resync Now</button>
+          </div>
+          <span class="helper">If other members or managers aren't seeing your changes, this usually means your login session expired and changes only saved to this phone. Tap "Force Resync Now" to check, or log out and back in from the sidebar.</span>
         </div>
       </div>
       <div class="panel">
@@ -1318,6 +1331,7 @@
           toast('Could not sync to the cloud — saved on this device only.');
         }
       })
+      .then(()=>{ updateSyncStatus(); })
       .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
   }
 
@@ -1419,6 +1433,7 @@
   auth.onAuthStateChanged((user)=>{
     if(!user){
       auth.signInAnonymously().catch(()=>{ toast('Could not connect — working offline.'); });
+      updateSyncStatus();
       return; // this will fire again once anonymous sign-in completes
     }
     attachFbListenerOnce();
@@ -1426,6 +1441,44 @@
     // previous visit — skip straight into the Treasurer / Manager side.
     if(!user.isAnonymous && document.getElementById('memberPortal').style.display === 'none'){
       try{ enterMainApp(); }catch(e){ console.error('Auto-login enterMainApp failed:', e); }
+    }
+    updateSyncStatus();
+  });
+
+  // ---- Visible sync status (Settings > Cloud Sync) ----
+  // This exists because the old failure mode was silent: a login session would quietly
+  // expire, every subsequent edit would fail to reach Firebase, and nothing on-screen told
+  // the chairman/manager that changes weren't going anywhere. Now the state is always visible,
+  // and there's a manual way to check/retry instead of just waiting for a toast.
+  function updateSyncStatus(){
+    const dot = document.getElementById('syncStatusDot');
+    const text = document.getElementById('syncStatusText');
+    if(!dot || !text) return; // Settings page not in the DOM yet on first load — fine
+    const u = auth.currentUser;
+    if(typeof navigator !== 'undefined' && navigator.onLine === false){
+      dot.style.background = 'var(--rose)';
+      text.textContent = 'Offline — changes are saved on this phone only until you\u2019re back online.';
+    } else if(u && !u.isAnonymous && isAuthorizedTreasurer()){
+      dot.style.background = 'var(--teal)';
+      text.textContent = 'Connected and syncing as ' + (isChairperson() ? 'Chairperson' : 'Manager') + '.';
+    } else if(u && !u.isAnonymous){
+      dot.style.background = 'var(--rose)';
+      text.textContent = 'Signed in, but this account no longer has manager access — changes will not sync. Log out and back in.';
+    } else {
+      dot.style.background = 'var(--gold)';
+      text.textContent = 'Not signed in as Chairperson/Manager in this session — your edits will only save to this phone. Log in again from the sidebar.';
+    }
+  }
+  window.addEventListener('online', updateSyncStatus);
+  window.addEventListener('offline', updateSyncStatus);
+  document.getElementById('btnForceSync').addEventListener('click', ()=>{
+    updateSyncStatus();
+    const u = auth.currentUser;
+    if(u && !u.isAnonymous && isAuthorizedTreasurer()){
+      fbPushNow(false);
+      toast('Resyncing…');
+    } else {
+      toast('You need to log in as Chairperson/Manager first — see the sidebar.');
     }
   });
 
@@ -1530,6 +1583,7 @@
     document.querySelectorAll('.page').forEach(p=>p.style.display='none');
     const pageEl = document.getElementById('page-'+finalPage);
     if(pageEl) pageEl.style.display = 'block';
+    if(finalPage === 'settings') updateSyncStatus();
   }
   window.addEventListener('popstate', (e)=>{
     zfApplyingHistory = true;
@@ -2411,7 +2465,12 @@
     document.getElementById('loginEmailInput').value = data.settings.treasurerEmail || '';
     document.getElementById('loginPasswordInput').value = '';
     document.getElementById('loginInviteCode').value = '';
-    document.getElementById('loginStaySignedIn').checked = false;
+    // Defaults to checked: this app runs on the chairman/manager's own phone, not a shared
+    // kiosk, so a login that quietly expires the moment the app is closed (SESSION
+    // persistence) does more harm than good — it silently drops writes to "local only" and
+    // pops the login screen back up on every reopen. Unchecking is still available for the
+    // rare shared-device case.
+    document.getElementById('loginStaySignedIn').checked = true;
     document.getElementById('loginError').style.display = 'none';
     const titleEl = document.getElementById('loginModalTitle');
     const inviteWrap = document.getElementById('loginInviteCodeWrap');
