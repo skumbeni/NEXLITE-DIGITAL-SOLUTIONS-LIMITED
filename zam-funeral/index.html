@@ -735,12 +735,6 @@
     <div class="side-foot">
       <div class="balance-label">Fund Balance</div>
       <div class="balance-amt mono" id="sideBalance">K0.00</div>
-      <div style="display:flex; align-items:center; gap:7px; margin-top:14px;">
-        <span id="sidebarSyncDot" style="width:8px;height:8px;border-radius:50%;background:var(--ink-dim); flex-shrink:0;"></span>
-        <span id="sidebarSyncText" style="font-size:11px; color:var(--ink-dim);">Checking…</span>
-      </div>
-      <button class="btn secondary small" id="btnInstallApp" style="width:100%; margin-top:10px; display:none;">Install App</button>
-      <button class="icon-btn" id="btnSwitchToGate" style="width:100%; margin-top:10px; text-align:center; display:block;">Log Out</button>
     </div>
   </aside>
 
@@ -992,10 +986,11 @@
             <span id="syncStatusDot" style="width:10px;height:10px;border-radius:50%;background:var(--ink-dim); flex-shrink:0;"></span>
             <span id="syncStatusText" class="helper" style="margin:0;">Checking connection…</span>
           </div>
-          <div>
+          <div style="display:flex; gap:10px; flex-wrap:wrap;">
             <button class="btn secondary small" id="btnForceSync">Force Resync Now</button>
+            <button class="btn secondary small" id="btnSwitchToGate">Log Out</button>
           </div>
-          <span class="helper">If other members or managers aren't seeing your changes, this usually means your login session expired and changes only saved to this phone. Tap "Force Resync Now" to check, or log out and back in from the sidebar.</span>
+          <span class="helper">If other members or managers aren't seeing your changes, this usually means your login session expired and changes only saved to this phone. Tap "Force Resync Now" to check, or log out and back in.</span>
         </div>
       </div>
       <div class="panel" id="managerAccessPanel">
@@ -1453,15 +1448,32 @@
 
     // Only readable by uids already in the treasurer roster — anonymous member-portal
     // sessions and not-yet-redeemed signups will get a permission error here, which is
-    // expected and silently ignored (they simply never see this data).
+    // expected. We still record *why* it failed (zfAccessDebug) so the badge below can
+    // show a real reason instead of just staying blank when a genuine chairperson/manager
+    // account unexpectedly isn't recognized.
+    window.zfAccessDebug = { state: 'pending' };
     dbAccessRef.on('value', (snap)=>{
       if(suppressEcho) return;
       const remote = snap.val();
       data.access = { treasurerAccess: (remote && remote.treasurerAccess) || {} };
       localStorage.setItem(STORE_KEY, JSON.stringify(data));
+      const u = auth.currentUser;
+      window.zfAccessDebug = {
+        state: 'ok',
+        uidPresent: !!(u && data.access.treasurerAccess[u.uid]),
+        totalAccounts: Object.keys(data.access.treasurerAccess).length
+      };
       if(fbReady) renderAll();
+      // This is the one place role data actually arrives from the cloud (it comes in
+      // slightly after login/auth resolves), so the Settings nav visibility and role
+      // badge have to be re-applied here too — not just once at login — or they can
+      // stay stuck showing whatever was true before this data loaded.
       updateRoleBadge(auth.currentUser);
-    }, ()=>{ /* not a treasurer in this session — nothing to show, no error toast */ });
+      if(document.getElementById('mainApp').style.display !== 'none') applyRoleNavVisibility();
+    }, (err)=>{
+      window.zfAccessDebug = { state: 'denied', code: err && err.code, message: err && err.message };
+      updateRoleBadge(auth.currentUser);
+    });
 
     // Listing the whole node is treasurer-only; a specific invite code is still readable
     // directly by anyone (see treasurerSignInOrCreate), which is how redemption works
@@ -1514,9 +1526,6 @@
       color = 'var(--gold)';
       msg = 'Not signed in — changes stay on this phone';
     }
-    const sideDot = document.getElementById('sidebarSyncDot');
-    const sideText = document.getElementById('sidebarSyncText');
-    if(sideDot && sideText){ sideDot.style.background = color; sideText.textContent = msg; }
     const dot = document.getElementById('syncStatusDot');
     const text = document.getElementById('syncStatusText');
     if(dot && text){ dot.style.background = color; text.textContent = msg; }
@@ -1524,8 +1533,10 @@
   }
 
   // Shows who's currently signed in — Chairperson (gold) or Manager (blue) plus their
-  // name — right under the logo, so it's obvious at a glance which account is active
-  // without having to open Settings (which Managers can't see anyway).
+  // name — right under the logo, so it's obvious at a glance which account is active.
+  // If they're genuinely signed in but not recognized as Chairperson/Manager, this now
+  // shows why instead of just disappearing — that state used to be indistinguishable
+  // from "not logged in yet", which made it impossible to tell the two apart from the UI.
   function updateRoleBadge(u){
     const badge = document.getElementById('roleBadge');
     if(!badge) return;
@@ -1536,6 +1547,21 @@
       badge.style.background = chair ? 'var(--gold-soft)' : 'var(--blue-soft)';
       badge.style.color = chair ? 'var(--gold-bright)' : 'var(--blue-bright)';
       badge.textContent = (chair ? 'Chairperson' : 'Manager') + (entry.name ? ' · ' + entry.name : '');
+    } else if(u && !u.isAnonymous){
+      // Signed in with a real account, but this uid isn't in the treasurer roster.
+      const dbg = window.zfAccessDebug || { state: 'pending' };
+      badge.style.display = 'block';
+      badge.style.background = 'var(--rose-soft)';
+      badge.style.color = 'var(--rose-bright)';
+      if(dbg.state === 'denied'){
+        badge.textContent = 'No fund access (permission denied)';
+        badge.title = 'Database rules blocked reading /access for uid ' + u.uid + '. Code: ' + (dbg.code||'unknown');
+      } else if(dbg.state === 'pending'){
+        badge.textContent = 'Checking access…';
+      } else {
+        badge.textContent = 'Signed in, not on manager list (' + dbg.totalAccounts + ' account(s) found)';
+        badge.title = 'uid ' + u.uid + ' — email: ' + (u.email||'n/a');
+      }
     } else {
       badge.style.display = 'none';
     }
@@ -2497,6 +2523,7 @@
     document.getElementById('memberPortal').style.display = 'none';
     document.getElementById('mainApp').style.display = 'flex';
     applyRoleNavVisibility();
+    updateRoleBadge(auth.currentUser);
     try{ maybePromptFundDetails(); }catch(e){ console.error('maybePromptFundDetails failed:', e); }
   }
 
@@ -2850,7 +2877,6 @@
   let deferredInstallPrompt = null;
   const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
   const isStandalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
-  const btnInstallSidebar = document.getElementById('btnInstallApp');
   const btnInstallSettings = document.getElementById('btnInstallAppSettings');
   const installStatusNote = document.getElementById('installStatusNote');
   const iosInstallHelp = document.getElementById('iosInstallHelp');
@@ -2861,7 +2887,6 @@
       return;
     }
     if(deferredInstallPrompt){
-      btnInstallSidebar.style.display = 'block';
       installStatusNote.textContent = '';
     } else if(isIOS){
       iosInstallHelp.style.display = 'block';
@@ -2885,11 +2910,9 @@
     const choice = await deferredInstallPrompt.userChoice;
     if(choice && choice.outcome === 'accepted') toast('App installed.');
     deferredInstallPrompt = null;
-    btnInstallSidebar.style.display = 'none';
   }
-  btnInstallSidebar.addEventListener('click', triggerInstall);
   btnInstallSettings.addEventListener('click', triggerInstall);
-  window.addEventListener('appinstalled', ()=>{ toast('App installed.'); btnInstallSidebar.style.display = 'none'; });
+  window.addEventListener('appinstalled', ()=>{ toast('App installed.'); });
 
   // --- Median.co native wrapper detection ---
   // When this PWA is wrapped by Median, it injects `window.median` into the page
@@ -2901,7 +2924,6 @@
   const landingDownloadWrap = document.getElementById('landingDownloadWrap');
   const settingsDownloadWrap = document.getElementById('settingsDownloadWrap');
   if(window.isMedianApp || isStandalone){
-    btnInstallSidebar.style.display = 'none';
     if(btnInstallSettings) btnInstallSettings.style.display = 'none';
     if(iosInstallHelp) iosInstallHelp.style.display = 'none';
     if(landingDownloadWrap) landingDownloadWrap.style.display = 'none';
