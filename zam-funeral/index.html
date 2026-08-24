@@ -278,6 +278,10 @@
     .side-foot{ border:none; padding:0 0 0 14px; margin:0; white-space:nowrap;}
     main{ padding:24px 18px 50px; }
     .field-row{ grid-template-columns:1fr; }
+    /* Keep the status badge/settings button clear of the horizontally-scrolling
+       mobile nav strip by anchoring them to the bottom-right instead of the top. */
+    #topStatusBar{ top:auto; bottom:16px; right:14px; flex-direction:column-reverse; align-items:flex-end; }
+    #loggedInBadge{ max-width:52vw; }
   }
   :focus-visible{ outline:2px solid var(--gold); outline-offset:2px; }
 </style>
@@ -606,50 +610,15 @@
   </div>
 </div>
 
-<!-- Member Settings Modal -->
-<div class="overlay" id="memberSettingsModal">
-  <div class="modal" style="max-width:380px;">
-    <div class="modal-head"><h3>Settings</h3><button class="close-x" data-close="memberSettingsModal">&times;</button></div>
-    <div class="modal-body">
-      <div class="field">
-        <label>Name</label>
-        <input type="text" id="memberSetName" readonly>
-      </div>
-      <div class="field">
-        <label>Phone Number</label>
-        <input type="text" id="memberSetPhone" readonly>
-      </div>
-      <div class="field">
-        <label>Department</label>
-        <input type="text" id="memberSetDept" readonly>
-      </div>
-      <div class="field">
-        <label>Monthly Contribution</label>
-        <input type="text" id="memberSetRate" readonly>
-      </div>
-      <div class="helper">Only the Chairperson or a Manager can change these details — ask them if anything here is wrong.</div>
-      <div style="border-top:1px solid var(--line); padding-top:14px; display:flex; flex-direction:column; gap:10px;">
-        <button class="btn secondary" id="btnMemberSetChangePin" style="width:100%;">Change PIN</button>
-        <button class="btn secondary" id="btnMemberSetInstall" style="width:100%; display:none;">Install App</button>
-        <span class="helper" id="memberSetInstallNote" style="margin:0;"></span>
-      </div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn secondary" data-close="memberSettingsModal">Close</button>
-    </div>
-  </div>
-</div>
-
 <!-- Member Portal -->
 <section id="memberPortal" style="display:none; max-width:760px; margin:0 auto; padding:40px 20px 60px;">
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px; flex-wrap:wrap; gap:12px;">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:24px;">
     <div>
       <h2 style="font-family:'Fraunces',serif; font-weight:600; font-size:24px; margin:0 0 4px;">My Contributions</h2>
       <p class="helper" style="margin:0;">Enter your phone number and PIN to view your own contribution history.</p>
-      <div id="memberRoleBadge" style="display:none; margin-top:8px; padding:5px 10px; border-radius:20px; font-size:11px; font-weight:600; letter-spacing:.2px; width:fit-content; background:var(--teal-soft); color:var(--teal-bright);"></div>
     </div>
     <div style="display:flex; gap:8px;">
-      <button class="btn secondary small" id="btnPortalSettings" style="display:none;">Settings</button>
+      <button class="btn secondary small" id="btnPortalChangePin" style="display:none;">Change PIN</button>
       <button class="btn secondary small" id="btnPortalLogout" style="display:none;">Log Out</button>
       <button class="btn secondary small" id="btnPortalBack">Switch View</button>
     </div>
@@ -715,12 +684,15 @@
 </section>
 
 <div class="app" id="mainApp" style="display:none;">
+  <div id="topStatusBar" style="position:fixed; top:10px; right:12px; z-index:40; display:flex; align-items:center; gap:8px;">
+    <div id="loggedInBadge" class="mono" style="background:var(--panel-raised); border:1px solid var(--line); border-radius:999px; padding:6px 12px 6px 14px; font-size:12px; color:var(--ink-dim); display:none; max-width:60vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; box-shadow:var(--shadow);"></div>
+    <button class="icon-btn" id="btnQuickSettings" title="Settings" aria-label="Settings" style="background:var(--panel-raised); border:1px solid var(--line); border-radius:999px; width:32px; height:32px; display:flex; align-items:center; justify-content:center; box-shadow:var(--shadow); font-size:15px;">&#9881;</button>
+  </div>
   <aside class="sidebar">
     <div class="brand">
       <div class="brand-mark"></div>
       <h1>ZamFuneral</h1>
       <p>Fund Manager</p>
-      <div id="roleBadge" style="display:none; margin-top:12px; padding:5px 10px; border-radius:20px; font-size:11px; font-weight:600; letter-spacing:.2px; width:fit-content;"></div>
     </div>
     <nav id="navList">
       <button class="nav-btn active" data-page="dashboard"><span class="num">01</span>Dashboard</button>
@@ -735,6 +707,8 @@
     <div class="side-foot">
       <div class="balance-label">Fund Balance</div>
       <div class="balance-amt mono" id="sideBalance">K0.00</div>
+      <button class="btn secondary small" id="btnInstallApp" style="width:100%; margin-top:14px; display:none;">Install App</button>
+      <button class="icon-btn" id="btnSwitchToGate" style="width:100%; margin-top:10px; text-align:center; display:block;">Log Out</button>
     </div>
   </aside>
 
@@ -912,7 +886,7 @@
           <button class="btn secondary" id="btnExportData">Export Backup (JSON)</button>
           <button class="btn secondary" id="btnImportData">Import Backup</button>
           <input type="file" id="importFile" accept=".json" style="display:none">
-          <span class="helper">Data syncs to the cloud automatically while you're signed in and online (see Settings → Cloud Sync). Export a backup regularly anyway, as an extra safety copy.</span>
+          <span class="helper">All data lives only on this device's browser storage. Export regularly to keep a safe copy.</span>
         </div>
       </div>
     </section>
@@ -925,23 +899,7 @@
           <p>Defaults used across the fund.</p>
         </div>
       </div>
-      <div class="panel" id="settingsAccessDeniedNote" style="display:none; border-color:var(--rose);">
-        <div style="padding:16px 20px; display:flex; flex-direction:column; gap:8px;">
-          <div style="display:flex; gap:10px; align-items:flex-start;">
-            <span class="badge" style="background:var(--rose-soft); color:var(--rose-bright); flex-shrink:0;">No fund access</span>
-            <span class="helper" id="settingsAccessDeniedText" style="margin:0;">This account is signed in, but isn't granted access to this fund yet.</span>
-          </div>
-          <div class="helper" style="margin:0;">Your account ID (share this with whoever manages fund access, or add it to <span class="mono">access/treasurerAccess</span> in Firebase yourself):</div>
-          <div class="mono" id="settingsAccessDeniedUid" style="user-select:all; background:rgba(255,255,255,0.03); border:1px solid var(--line); border-radius:6px; padding:8px 10px; font-size:12px; word-break:break-all;"></div>
-        </div>
-      </div>
-      <div class="panel" id="settingsManagerNote" style="display:none; border-color:var(--blue);">
-        <div style="padding:16px 20px; display:flex; gap:10px; align-items:flex-start;">
-          <span class="badge" style="background:var(--blue-soft); color:var(--blue-bright); flex-shrink:0;">Manager</span>
-          <span class="helper" style="margin:0;">Fund configuration, other managers' access, and data erasure are Chairperson-only. You can still check sync status, and install the app below.</span>
-        </div>
-      </div>
-      <div class="panel" id="fundConfigPanel">
+      <div class="panel">
         <div class="panel-head"><h3>Fund Configuration</h3></div>
         <div style="padding:20px; display:flex; flex-direction:column; gap:16px; max-width:460px;">
           <div class="field">
@@ -990,20 +948,6 @@
         </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h3>Cloud Sync</h3></div>
-        <div style="padding:20px; display:flex; flex-direction:column; gap:14px; max-width:460px;">
-          <div style="display:flex; align-items:center; gap:10px;">
-            <span id="syncStatusDot" style="width:10px;height:10px;border-radius:50%;background:var(--ink-dim); flex-shrink:0;"></span>
-            <span id="syncStatusText" class="helper" style="margin:0;">Checking connection…</span>
-          </div>
-          <div style="display:flex; gap:10px; flex-wrap:wrap;">
-            <button class="btn secondary small" id="btnForceSync">Force Resync Now</button>
-            <button class="btn secondary small" id="btnSwitchToGate">Log Out</button>
-          </div>
-          <span class="helper">If other members or managers aren't seeing your changes, this usually means your login session expired and changes only saved to this phone. Tap "Force Resync Now" to check, or log out and back in.</span>
-        </div>
-      </div>
-      <div class="panel" id="managerAccessPanel">
         <div class="panel-head"><h3>Manager Access</h3></div>
         <div style="padding:20px; display:flex; flex-direction:column; gap:16px;">
           <span class="helper">Grant a member real login access to manage the fund, with full access just like you. They'll sign in with their own email and password using a one-time invite code you share with them.</span>
@@ -1047,7 +991,7 @@
           </div>
         </div>
       </div>
-      <div class="panel" id="dangerZonePanel">
+      <div class="panel">
         <div class="panel-head"><h3>Danger Zone</h3></div>
         <div style="padding:20px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
           <span class="helper">Permanently erase all members, contributions and cases from this device.</span>
@@ -1345,45 +1289,39 @@
 
   function fbPush(){
     if(saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(()=> fbPushNow(false), 400); // debounce rapid successive saves
-  }
-  // Split out from fbPush so a denied write can retry itself once — see the
-  // PERMISSION_DENIED branch below for why that retry exists.
-  function fbPushNow(isRetry){
-    // password lives only in Firebase Auth — it's never part of the synced data at all.
-    // Only the fundData-shaped fields go here — treasurerAccess/invites live under their
-    // own top-level nodes now and are synced separately (fbSaveAccess/fbSaveInvites),
-    // so a stray copy of them never gets written back under this broadly-readable path.
-    const payload = JSON.parse(JSON.stringify({
-      settings: data.settings, members: data.members, contributions: data.contributions,
-      cases: data.cases, subscriptionPayments: data.subscriptionPayments
-    }));
-    suppressEcho = true;
-    fbRef.set(payload)
-      .catch((err)=>{
-        if(err && err.code === 'PERMISSION_DENIED'){
-          const u = auth.currentUser;
-          // Right after a fresh sign-in, the Realtime Database connection can take a
-          // moment to pick up the new auth token — a write that lands in that gap is
-          // rejected even though the user really is signed in as treasurer. Retry once,
-          // after giving the connection a beat to catch up, before concluding they're
-          // actually logged out and popping the login screen back over the dashboard.
-          if(u && !u.isAnonymous && !isRetry){
-            setTimeout(()=> fbPushNow(true), 800);
-            return;
+    saveTimer = setTimeout(()=>{
+      // password lives only in Firebase Auth — it's never part of the synced data at all.
+      // Only the fundData-shaped fields go here — treasurerAccess/invites live under their
+      // own top-level nodes now and are synced separately (fbSaveAccess/fbSaveInvites),
+      // so a stray copy of them never gets written back under this broadly-readable path.
+      const payload = JSON.parse(JSON.stringify({
+        settings: data.settings, members: data.members, contributions: data.contributions,
+        cases: data.cases, subscriptionPayments: data.subscriptionPayments
+      }));
+      suppressEcho = true;
+      fbRef.set(payload)
+        .catch((err)=>{
+          if(err && err.code === 'PERMISSION_DENIED'){
+            if(auth.currentUser && !auth.currentUser.isAnonymous){
+              // Already signed in as a real (non-anonymous) account — re-showing the login
+              // box here would just be confusing/"stale", since logging in again with the
+              // same credentials won't fix a server-side access problem. Say what's actually
+              // wrong instead.
+              toast('Signed in, but this account doesn\u2019t currently have write access to this fund.');
+            } else {
+              toast('Not signed in as Chairperson in this session — log in again to save changes online.');
+              if(document.getElementById('mainApp') && document.getElementById('mainApp').style.display !== 'none'){
+                openModal('loginModal');
+              }
+            }
+          } else if(typeof navigator !== 'undefined' && navigator.onLine === false){
+            toast('You\u2019re offline — saved on this device only.');
+          } else {
+            toast('Could not sync to the cloud — saved on this device only.');
           }
-          toast('Not signed in as Chairperson in this session — log in again to save changes online.');
-          if(document.getElementById('mainApp') && document.getElementById('mainApp').style.display !== 'none'){
-            openModal('loginModal');
-          }
-        } else if(typeof navigator !== 'undefined' && navigator.onLine === false){
-          toast('You\u2019re offline — saved on this device only.');
-        } else {
-          toast('Could not sync to the cloud — saved on this device only.');
-        }
-      })
-      .then(()=>{ updateSyncStatus(); })
-      .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
+        })
+        .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
+    }, 400); // debounce rapid successive saves
   }
 
   // Targeted writes for the treasurer roster and pending invites — these live outside
@@ -1458,32 +1396,14 @@
 
     // Only readable by uids already in the treasurer roster — anonymous member-portal
     // sessions and not-yet-redeemed signups will get a permission error here, which is
-    // expected. We still record *why* it failed (zfAccessDebug) so the badge below can
-    // show a real reason instead of just staying blank when a genuine chairperson/manager
-    // account unexpectedly isn't recognized.
-    window.zfAccessDebug = { state: 'pending' };
+    // expected and silently ignored (they simply never see this data).
     dbAccessRef.on('value', (snap)=>{
       if(suppressEcho) return;
       const remote = snap.val();
       data.access = { treasurerAccess: (remote && remote.treasurerAccess) || {} };
       localStorage.setItem(STORE_KEY, JSON.stringify(data));
-      const u = auth.currentUser;
-      window.zfAccessDebug = {
-        state: 'ok',
-        uidPresent: !!(u && data.access.treasurerAccess[u.uid]),
-        totalAccounts: Object.keys(data.access.treasurerAccess).length
-      };
       if(fbReady) renderAll();
-      // This is the one place role data actually arrives from the cloud (it comes in
-      // slightly after login/auth resolves), so the Settings nav visibility and role
-      // badge have to be re-applied here too — not just once at login — or they can
-      // stay stuck showing whatever was true before this data loaded.
-      updateRoleBadge(auth.currentUser);
-      if(document.getElementById('mainApp').style.display !== 'none') applyRoleNavVisibility();
-    }, (err)=>{
-      window.zfAccessDebug = { state: 'denied', code: err && err.code, message: err && err.message };
-      updateRoleBadge(auth.currentUser);
-    });
+    }, ()=>{ /* not a treasurer in this session — nothing to show, no error toast */ });
 
     // Listing the whole node is treasurer-only; a specific invite code is still readable
     // directly by anyone (see treasurerSignInOrCreate), which is how redemption works
@@ -1502,7 +1422,6 @@
   auth.onAuthStateChanged((user)=>{
     if(!user){
       auth.signInAnonymously().catch(()=>{ toast('Could not connect — working offline.'); });
-      updateSyncStatus();
       return; // this will fire again once anonymous sign-in completes
     }
     attachFbListenerOnce();
@@ -1510,82 +1429,6 @@
     // previous visit — skip straight into the Treasurer / Manager side.
     if(!user.isAnonymous && document.getElementById('memberPortal').style.display === 'none'){
       try{ enterMainApp(); }catch(e){ console.error('Auto-login enterMainApp failed:', e); }
-    }
-    updateSyncStatus();
-  });
-
-  // ---- Visible sync status (sidebar, all roles + Settings > Cloud Sync, chairperson only) ----
-  // This exists because the old failure mode was silent: a login session would quietly
-  // expire, every subsequent edit would fail to reach Firebase, and nothing on-screen told
-  // the chairman/manager that changes weren't going anywhere. The sidebar copy is shown to
-  // Chairperson AND Manager alike (Settings itself is chairperson-only), so a manager who
-  // can't open Settings still has a way to see sync is broken.
-  function updateSyncStatus(){
-    const u = auth.currentUser;
-    let color, msg;
-    if(typeof navigator !== 'undefined' && navigator.onLine === false){
-      color = 'var(--rose)';
-      msg = 'Offline — saved on this phone only';
-    } else if(u && !u.isAnonymous && isAuthorizedTreasurer()){
-      color = 'var(--teal)';
-      msg = 'Synced (' + (isChairperson() ? 'Chairperson' : 'Manager') + ')';
-    } else if(u && !u.isAnonymous){
-      color = 'var(--rose)';
-      msg = 'No sync access — log out & back in';
-    } else {
-      color = 'var(--gold)';
-      msg = 'Not signed in — changes stay on this phone';
-    }
-    const dot = document.getElementById('syncStatusDot');
-    const text = document.getElementById('syncStatusText');
-    if(dot && text){ dot.style.background = color; text.textContent = msg; }
-    updateRoleBadge(u);
-  }
-
-  // Shows who's currently signed in — Chairperson (gold) or Manager (blue) plus their
-  // name — right under the logo, so it's obvious at a glance which account is active.
-  // If they're genuinely signed in but not recognized as Chairperson/Manager, this now
-  // shows why instead of just disappearing — that state used to be indistinguishable
-  // from "not logged in yet", which made it impossible to tell the two apart from the UI.
-  function updateRoleBadge(u){
-    const badge = document.getElementById('roleBadge');
-    if(!badge) return;
-    if(u && !u.isAnonymous && isAuthorizedTreasurer()){
-      const entry = (data.access.treasurerAccess || {})[u.uid] || {};
-      const chair = isChairperson();
-      badge.style.display = 'block';
-      badge.style.background = chair ? 'var(--gold-soft)' : 'var(--blue-soft)';
-      badge.style.color = chair ? 'var(--gold-bright)' : 'var(--blue-bright)';
-      badge.textContent = (chair ? 'Chairperson' : 'Manager') + (entry.name ? ' · ' + entry.name : '');
-    } else if(u && !u.isAnonymous){
-      // Signed in with a real account, but this uid isn't in the treasurer roster.
-      const dbg = window.zfAccessDebug || { state: 'pending' };
-      badge.style.display = 'block';
-      badge.style.background = 'var(--rose-soft)';
-      badge.style.color = 'var(--rose-bright)';
-      if(dbg.state === 'denied'){
-        badge.textContent = 'No fund access (permission denied)';
-        badge.title = 'Database rules blocked reading /access for uid ' + u.uid + '. Code: ' + (dbg.code||'unknown');
-      } else if(dbg.state === 'pending'){
-        badge.textContent = 'Checking access…';
-      } else {
-        badge.textContent = 'Signed in, not on manager list (' + dbg.totalAccounts + ' account(s) found)';
-        badge.title = 'uid ' + u.uid + ' — email: ' + (u.email||'n/a');
-      }
-    } else {
-      badge.style.display = 'none';
-    }
-  }
-  window.addEventListener('online', updateSyncStatus);
-  window.addEventListener('offline', updateSyncStatus);
-  document.getElementById('btnForceSync').addEventListener('click', ()=>{
-    updateSyncStatus();
-    const u = auth.currentUser;
-    if(u && !u.isAnonymous && isAuthorizedTreasurer()){
-      fbPushNow(false);
-      toast('Resyncing…');
-    } else {
-      toast('You need to log in as Chairperson/Manager first — see the sidebar.');
     }
   });
 
@@ -1613,13 +1456,6 @@
               if(data.invites) delete data.invites[code];
               localStorage.setItem(STORE_KEY, JSON.stringify(data));
               return cred;
-            }).catch((grantErr)=>{
-              // The Auth account exists but never got the access grant — left alone, this
-              // becomes a "signed in, permission denied, forever" ghost account with no
-              // way back in. Roll it back so the invite can be retried cleanly instead.
-              return cred.user.delete().catch(()=>{}).then(()=>{
-                throw { code: 'auth/grant-failed', message: 'Account was created but access could not be granted. Please try again.' };
-              });
             });
           });
         });
@@ -1642,13 +1478,6 @@
         data.settings.treasurerEmail = details.email;
         save();
         return cred;
-      }).catch((grantErr)=>{
-        // Same ghost-account risk as the invite path above: if the bootstrap write is
-        // denied (e.g. someone else's bootstrap already landed first) or fails for any
-        // other reason, don't leave a signed-in account with no grant and no way out.
-        return cred.user.delete().catch(()=>{}).then(()=>{
-          throw { code: 'auth/grant-failed', message: 'Account was created but access could not be granted. This fund may already have a Chairperson — please try again or contact them for an invite.' };
-        });
       });
     });
   }
@@ -1671,7 +1500,18 @@
     document.getElementById(id).classList.add('show');
     zfPushState({kind:'modal', id});
   }
-  function closeModal(id){ document.getElementById(id).classList.remove('show'); }
+  function closeModal(id){
+    document.getElementById(id).classList.remove('show');
+    // If this modal's own history entry is still the current one (i.e. the user closed it
+    // by tapping X/Cancel/outside — or, as here, it was closed programmatically after a
+    // successful action — rather than by pressing back), neutralize that entry in place.
+    // Otherwise a later back-press would "go back" straight into this now-irrelevant modal
+    // and reopen it on top of whatever's actually on screen (e.g. a stale login box over
+    // an already-loaded dashboard).
+    if(!zfApplyingHistory && history.state && history.state.kind === 'modal' && history.state.id === id){
+      history.replaceState(Object.assign({}, history.state, {kind:'consumed'}), '');
+    }
+  }
 
   document.querySelectorAll('[data-close]').forEach(b=>{
     b.addEventListener('click', ()=>closeModal(b.getAttribute('data-close')));
@@ -1704,7 +1544,6 @@
     document.querySelectorAll('.page').forEach(p=>p.style.display='none');
     const pageEl = document.getElementById('page-'+finalPage);
     if(pageEl) pageEl.style.display = 'block';
-    if(finalPage === 'settings'){ updateSyncStatus(); applySettingsRoleAccess(); }
   }
   window.addEventListener('popstate', (e)=>{
     zfApplyingHistory = true;
@@ -1751,42 +1590,34 @@
   /* ---------- Navigation ---------- */
   document.querySelectorAll('.nav-btn').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      const page = btn.dataset.page;
-      if(page==='subscription' && !isChairperson()){
+      if((btn.dataset.page==='settings' || btn.dataset.page==='subscription') && !isChairperson()){
         toast('Only the Chairperson can access this.');
         return;
       }
-      if(page==='settings' && !isAuthorizedTreasurer() && !(auth.currentUser && !auth.currentUser.isAnonymous)){
-        toast('Only the Chairperson or a Manager can access this.');
-        return;
-      }
-      zfShowPage(page);
-      zfPushState({kind:'page', page: page});
+      zfShowPage(btn.dataset.page);
+      zfPushState({kind:'page', page: btn.dataset.page});
     });
   });
+  document.getElementById('btnQuickSettings').addEventListener('click', ()=>{
+    if(!isChairperson()){ toast('Only the Chairperson can access this.'); return; }
+    zfShowPage('settings');
+    zfPushState({kind:'page', page:'settings'});
+  });
 
-  // Settings is open to both Chairperson and Manager now — individual panels inside it
-  // (Fund Configuration, Manager Access, Danger Zone) are still chairperson-only, gated by
-  // applySettingsRoleAccess(). Subscription (billing) stays chairperson-only in the nav.
+  // Managers (non-chairperson accounts) don't get Settings or Subscription in the nav at
+  // all — call this after login and whenever access might have changed.
   function applyRoleNavVisibility(){
-    const authed = isAuthorizedTreasurer();
     const chair = isChairperson();
-    // Settings must stay reachable for ANY real signed-in account, even one that isn't
-    // (or isn't yet) on the treasurer roster — otherwise a denied/orphaned account has no
-    // way to reach Cloud Sync status or the Log Out button and gets stuck permanently.
-    const u = auth.currentUser;
-    const canReachSettings = authed || (u && !u.isAnonymous);
-    document.querySelectorAll('.nav-btn[data-page="settings"]').forEach(b=>{
-      b.style.display = canReachSettings ? '' : 'none';
-    });
-    document.querySelectorAll('.nav-btn[data-page="subscription"]').forEach(b=>{
+    document.querySelectorAll('.nav-btn[data-page="settings"], .nav-btn[data-page="subscription"]').forEach(b=>{
       b.style.display = chair ? '' : 'none';
     });
-    applySettingsRoleAccess();
-    // If a manager was viewing Subscription when access changed, bounce them home.
+    const qs = document.getElementById('btnQuickSettings');
+    if(qs) qs.style.display = chair ? 'flex' : 'none';
+    // If a manager was viewing one of those pages when access changed, bounce them home.
     if(!chair){
+      const settingsPage = document.getElementById('page-settings');
       const subPage = document.getElementById('page-subscription');
-      if(subPage && subPage.style.display!=='none'){
+      if((settingsPage && settingsPage.style.display!=='none') || (subPage && subPage.style.display!=='none')){
         document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
         document.querySelector('.nav-btn[data-page="dashboard"]').classList.add('active');
         document.querySelectorAll('.page').forEach(p=>p.style.display='none');
@@ -1795,41 +1626,21 @@
     }
   }
 
-  // Within Settings, Fund Configuration / Manager Access / Danger Zone stay chairperson-only
-  // (the underlying save/delete/invite handlers already refuse a manager — see isChairperson()
-  // checks elsewhere — this just makes that visible up front instead of letting a manager
-  // fill in a form and get an error toast). Cloud Sync and Install-on-this-Phone are useful
-  // to a manager too, so those stay visible to any signed-in treasurer/manager.
-  function applySettingsRoleAccess(){
-    const chair = isChairperson();
-    const authed = isAuthorizedTreasurer();
+  // Shows who's currently signed in (name/role) in the fixed top-right badge — mainly so
+  // it's obvious which account is active when a fund has more than one treasurer/manager,
+  // and so a permission problem (wrong account) is visible at a glance rather than only
+  // showing up as a mysterious failed save.
+  function updateLoggedInBadge(){
+    const badge = document.getElementById('loggedInBadge');
+    if(!badge) return;
     const u = auth.currentUser;
-    const deniedRealUser = !authed && u && !u.isAnonymous;
-    const chairOnlyPanelIds = ['fundConfigPanel', 'managerAccessPanel', 'dangerZonePanel'];
-    chairOnlyPanelIds.forEach(id=>{
-      const el = document.getElementById(id);
-      // Hide these entirely for anyone who isn't on the roster at all, not just non-chairs —
-      // a denied account has no business seeing (or trying to save into) fund configuration.
-      if(el) el.style.display = (chair && authed) ? '' : 'none';
-    });
-    const note = document.getElementById('settingsManagerNote');
-    if(note) note.style.display = (authed && !chair) ? 'block' : 'none';
-
-    const deniedNote = document.getElementById('settingsAccessDeniedNote');
-    if(deniedNote){
-      deniedNote.style.display = deniedRealUser ? 'block' : 'none';
-      if(deniedRealUser){
-        const dbg = window.zfAccessDebug || { state: 'pending' };
-        const textEl = document.getElementById('settingsAccessDeniedText');
-        const uidEl = document.getElementById('settingsAccessDeniedUid');
-        if(textEl){
-          textEl.textContent = dbg.state === 'denied'
-            ? 'Database rules blocked reading this fund\u2019s access list for this account — it\u2019s either not granted yet, or the grant never completed.'
-            : (dbg.state === 'pending' ? 'Checking access…' : `Signed in, but not on this fund's manager list (${dbg.totalAccounts||0} account(s) found).`);
-        }
-        if(uidEl) uidEl.textContent = u.uid + (u.email ? '  \u2022  ' + u.email : '');
-      }
-    }
+    if(!u || u.isAnonymous){ badge.style.display = 'none'; return; }
+    const entry = data.access.treasurerAccess ? data.access.treasurerAccess[u.uid] : null;
+    const name = (entry && entry.name) || (u.email||'').split('@')[0];
+    const role = entry && entry.bootstrap ? 'Chairperson' : 'Manager';
+    badge.textContent = `${role} \u00b7 ${name}`;
+    badge.title = u.email || '';
+    badge.style.display = 'block';
   }
 
   /* ---------- Derived calculations ---------- */
@@ -2514,6 +2325,8 @@
     loadSettingsForm();
     renderSubscription();
     renderTreasurerAccess();
+    applyRoleNavVisibility();
+    updateLoggedInBadge();
   }
 
   /* ---------- Subscription ---------- */
@@ -2573,7 +2386,7 @@
     document.getElementById('memberPortal').style.display = 'none';
     document.getElementById('mainApp').style.display = 'flex';
     applyRoleNavVisibility();
-    updateRoleBadge(auth.currentUser);
+    updateLoggedInBadge();
     try{ maybePromptFundDetails(); }catch(e){ console.error('maybePromptFundDetails failed:', e); }
   }
 
@@ -2618,13 +2431,11 @@
     document.getElementById('portalLookupPanel').style.display = 'block';
     document.getElementById('portalLookupError').style.display = 'none';
     document.getElementById('btnPortalLogout').style.display = 'none';
-    document.getElementById('btnPortalSettings').style.display = 'none';
+    document.getElementById('btnPortalChangePin').style.display = 'none';
     document.getElementById('portalPhoneInput').value = '';
     document.getElementById('portalPinInput').value = '';
     document.getElementById('portalStaySignedIn').checked = false;
     currentPortalMember = null;
-    const badge = document.getElementById('memberRoleBadge');
-    if(badge) badge.style.display = 'none';
   }
   function showGate(){
     const wasTreasurer = document.getElementById('mainApp').style.display !== 'none';
@@ -2641,12 +2452,7 @@
     document.getElementById('loginEmailInput').value = data.settings.treasurerEmail || '';
     document.getElementById('loginPasswordInput').value = '';
     document.getElementById('loginInviteCode').value = '';
-    // Defaults to checked: this app runs on the chairman/manager's own phone, not a shared
-    // kiosk, so a login that quietly expires the moment the app is closed (SESSION
-    // persistence) does more harm than good — it silently drops writes to "local only" and
-    // pops the login screen back up on every reopen. Unchecking is still available for the
-    // rare shared-device case.
-    document.getElementById('loginStaySignedIn').checked = true;
+    document.getElementById('loginStaySignedIn').checked = false;
     document.getElementById('loginError').style.display = 'none';
     const titleEl = document.getElementById('loginModalTitle');
     const inviteWrap = document.getElementById('loginInviteCodeWrap');
@@ -2694,9 +2500,7 @@
         ? 'Password must be at least 6 characters.'
         : err.code === 'auth/invite-required'
           ? 'New manager accounts need a valid invite code from the chairperson (Settings \u2192 Manager Access). First time setting up this fund? Use "Create your fund account" below instead.'
-          : err.code === 'auth/grant-failed'
-            ? (err.message || 'Account was created but access could not be granted. Please try again.')
-            : 'Incorrect email or password.';
+          : 'Incorrect email or password.';
       document.getElementById('loginError').style.display = 'block';
     });
   });
@@ -2758,9 +2562,7 @@
           ? 'Password must be at least 6 characters.'
           : err.code === 'PERMISSION_DENIED'
             ? 'Setup was blocked by the database rules. Either a chairman account already exists, or the Firebase security rules haven\u2019t been updated yet — check the Rules tab in the Firebase console.'
-            : err.code === 'auth/grant-failed'
-              ? (err.message || 'Account was created but access could not be granted. Please try again.')
-              : 'Could not create the account. Check your connection and try again.';
+            : 'Could not create the account. Check your connection and try again.';
       errEl.style.display = 'block';
     });
   });
@@ -2769,13 +2571,11 @@
     document.getElementById('portalLookupError').style.display = 'none';
     document.getElementById('portalLookupPanel').style.display = 'none';
     document.getElementById('btnPortalLogout').style.display = 'inline-flex';
-    document.getElementById('btnPortalSettings').style.display = 'inline-flex';
+    document.getElementById('btnPortalChangePin').style.display = 'inline-flex';
     currentPortalMember = member;
     if(staySignedIn){
       localStorage.setItem(MEMBER_SESSION_KEY, JSON.stringify({ memberId: member.id }));
     }
-    const badge = document.getElementById('memberRoleBadge');
-    if(badge){ badge.style.display = 'block'; badge.textContent = 'Member · ' + member.name; }
     renderMemberPortal(member);
     zfPushState({kind:'portalResults'});
   }
@@ -2800,43 +2600,17 @@
   });
   document.getElementById('btnPortalLogout').addEventListener('click', ()=>{
     localStorage.removeItem(MEMBER_SESSION_KEY);
-    const badge = document.getElementById('memberRoleBadge');
-    if(badge) badge.style.display = 'none';
     showGate();
   });
 
-  function openChangePinModal(){
+  document.getElementById('btnPortalChangePin').addEventListener('click', ()=>{
     if(!currentPortalMember) return;
     document.getElementById('changePinCurrent').value = '';
     document.getElementById('changePinNew').value = '';
     document.getElementById('changePinConfirm').value = '';
     document.getElementById('changePinError').style.display = 'none';
     openModal('changePinModal');
-  }
-
-  document.getElementById('btnPortalSettings').addEventListener('click', ()=>{
-    if(!currentPortalMember) return;
-    const m = currentPortalMember;
-    document.getElementById('memberSetName').value = m.name || '';
-    document.getElementById('memberSetPhone').value = m.phone || '';
-    document.getElementById('memberSetDept').value = m.department || '—';
-    document.getElementById('memberSetRate').value = m.monthlyRate != null ? fmtK(m.monthlyRate) : '—';
-    const installBtn = document.getElementById('btnMemberSetInstall');
-    const installNote = document.getElementById('memberSetInstallNote');
-    if(window.isMedianApp || isStandalone){
-      installBtn.style.display = 'none';
-      installNote.textContent = 'This app is already installed on this device.';
-    } else {
-      installBtn.style.display = 'inline-flex';
-      installNote.textContent = isIOS ? 'Use Safari\u2019s Share menu \u2192 Add to Home Screen.' : '';
-    }
-    openModal('memberSettingsModal');
   });
-  document.getElementById('btnMemberSetChangePin').addEventListener('click', ()=>{
-    closeModal('memberSettingsModal');
-    openChangePinModal();
-  });
-  document.getElementById('btnMemberSetInstall').addEventListener('click', ()=> triggerInstall());
   document.getElementById('btnChangePinSubmit').addEventListener('click', ()=>{
     const errEl = document.getElementById('changePinError');
     errEl.style.display = 'none';
@@ -2931,6 +2705,7 @@
   let deferredInstallPrompt = null;
   const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
   const isStandalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+  const btnInstallSidebar = document.getElementById('btnInstallApp');
   const btnInstallSettings = document.getElementById('btnInstallAppSettings');
   const installStatusNote = document.getElementById('installStatusNote');
   const iosInstallHelp = document.getElementById('iosInstallHelp');
@@ -2941,6 +2716,7 @@
       return;
     }
     if(deferredInstallPrompt){
+      btnInstallSidebar.style.display = 'block';
       installStatusNote.textContent = '';
     } else if(isIOS){
       iosInstallHelp.style.display = 'block';
@@ -2964,9 +2740,11 @@
     const choice = await deferredInstallPrompt.userChoice;
     if(choice && choice.outcome === 'accepted') toast('App installed.');
     deferredInstallPrompt = null;
+    btnInstallSidebar.style.display = 'none';
   }
+  btnInstallSidebar.addEventListener('click', triggerInstall);
   btnInstallSettings.addEventListener('click', triggerInstall);
-  window.addEventListener('appinstalled', ()=>{ toast('App installed.'); });
+  window.addEventListener('appinstalled', ()=>{ toast('App installed.'); btnInstallSidebar.style.display = 'none'; });
 
   // --- Median.co native wrapper detection ---
   // When this PWA is wrapped by Median, it injects `window.median` into the page
@@ -2978,6 +2756,7 @@
   const landingDownloadWrap = document.getElementById('landingDownloadWrap');
   const settingsDownloadWrap = document.getElementById('settingsDownloadWrap');
   if(window.isMedianApp || isStandalone){
+    btnInstallSidebar.style.display = 'none';
     if(btnInstallSettings) btnInstallSettings.style.display = 'none';
     if(iosInstallHelp) iosInstallHelp.style.display = 'none';
     if(landingDownloadWrap) landingDownloadWrap.style.display = 'none';
