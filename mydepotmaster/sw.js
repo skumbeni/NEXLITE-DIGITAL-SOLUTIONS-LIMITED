@@ -25,6 +25,25 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.7 (2026-08-24)
+//
+// v0.7 changes (2026-08-24) — Depot Assistant can now bulk-edit log quantities:
+//   - New AI_ACTIONS tool bulk_edit_log_quantity — e.g. "edit 20 August
+//     stacking logs to 77 bags each". Previously the Assistant could only
+//     bulk-move dates or bulk-delete work logs, so a quantity change request
+//     like this got refused with "I don't have a tool for that."
+//   - Matches logs the same way bulk_edit_log_date does (date required,
+//     optional task/staff filters, same 24h-edit-window gate, Admin-only,
+//     admin-password-confirm before executing).
+//   - Recalculates earnings per log using getEarnings() — same formula the
+//     manual "Edit Work Log" modal's saveEditLog() uses — so each log prices
+//     off its OWN task rate, not a single assumed rate across the batch.
+//     rateUnit/bags are recomputed the same way too, in case a task's rate
+//     unit changed since the log was created. The confirmation preview shows
+//     the new total gross earnings so Admin can sanity-check before saving.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v0.6 (2026-08-24)
 //
 // v0.6 changes (2026-08-24) — Depot Assistant input: Enter now makes a new line:
@@ -900,7 +919,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.6';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v0.7';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

@@ -3720,7 +3720,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.6';
+const SW_VERSION  = 'v0.7';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -18761,6 +18761,95 @@ _registerAIAction('bulk_delete_staff_payments', {
   const deletedIds = new Set(toDelete.map(p=>String(p.id)));
   updateData(d=>({...d, staffPayments:(d.staffPayments||[]).filter(p=>!deletedIds.has(String(p.id)))}));
   return { ok:true, msg:`Deleted ${toDelete.length} payment${toDelete.length===1?'':'s'}.` };
+}, true);
+
+// ═══ 18. Bulk-edit work log quantity ═══════════════════════════════════
+// Sets a group of existing work logs to the SAME new quantity — e.g. "edit
+// 20 August stacking logs to 77 bags each". Matches logs the same way
+// bulk_edit_log_date does (date + optional task/staff filters, same
+// isWithin24h edit-window gate). Unlike the date tool, quantity is not
+// unaffected here: earnings must be recalculated per log using getEarnings(),
+// exactly the way the manual "Edit Work Log" modal's saveEditLog() does —
+// each log's OWN role/task decides its rate, not the filter args, so mixed
+// filters (e.g. no task filter) still price correctly per log. rateUnit/bags
+// are also recomputed per log the same way saveEditLog() does, in case a
+// task's configured rate unit has changed since the log was created.
+_registerAIAction('bulk_edit_log_quantity', {
+  type: 'function',
+  name: 'bulk_edit_log_quantity',
+  description: 'Set a group of existing work logs to the SAME new quantity — '+
+    'e.g. "edit 20 August stacking logs to 77 bags each" or "change John\'s '+
+    'loading logs on 22 Aug to 50 each". Matches logs by date, optionally '+
+    'narrowed by task name and/or staff name. Only call this when the user '+
+    'has clearly given the date AND the single new quantity to set every '+
+    'matched log to — never guess either. Earnings are recalculated for each '+
+    'log from its own task rate; this is not for changing individual logs to '+
+    'DIFFERENT quantities each — for that, ask the user to edit them one at '+
+    'a time in the app instead.',
+  parameters: { type:'object', properties: {
+    task: { type:'string', description:'Optional task name to filter by (e.g. "Stacking"). Leave blank to match logs for any task.' },
+    staffName: { type:'string', description:'Optional staff member name to filter by. Leave blank to match all staff.' },
+    date: { type:'string', description:'The date of the logs to edit, in YYYY-MM-DD format.' },
+    qty: { type:'number', description:'The new quantity to set every matched log to (e.g. 77). Must be a positive number.' }
+  }, required:['date','qty'] }
+}, function resolveBulkEditLogQty(args){
+  if(!isAdmin()) return { error:'Editing existing work logs needs Admin access — this account can\'t do that.' };
+  const date = _YMD_RE.test(args.date||'') ? args.date : '';
+  if(!date) return { error:'I need a date in YYYY-MM-DD format — which date\'s logs should I edit?' };
+  const qty = Number(args.qty);
+  if(!qty || qty<=0) return { error:'I need a positive quantity to set these logs to — what should the new quantity be?' };
+  let staffFilter = null;
+  if(args.staffName){
+    const matches = _findActiveStaffByName(args.staffName);
+    if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
+    if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
+    staffFilter = matches[0].id;
+  }
+  const taskQ = (args.task||'').trim().toLowerCase();
+  const candidates = (DATA.staffLogs||[]).filter(l=>
+    l.date===date &&
+    (!staffFilter || String(l.staffId)===String(staffFilter)) &&
+    (!taskQ || (l.task||'').toLowerCase()===taskQ || (l.task||'').toLowerCase().includes(taskQ))
+  );
+  if(candidates.length===0) return { error:`I couldn't find any${args.task?' "'+args.task+'"':''} work logs on ${date}${args.staffName?' for '+args.staffName:''} to edit.` };
+  const editable = candidates.filter(l=>isWithin24h(l,true));
+  const blocked = candidates.length - editable.length;
+  if(editable.length===0) return { error:`Found ${candidates.length} matching log${candidates.length===1?'':'s'} on ${date}, but all of them are outside the ${_editWindowLabel(true)} edit window and can no longer be edited.` };
+  const names = [...new Set(editable.map(l=>{
+    const st = DATA.staff.find(x=>String(x.id)===String(l.staffId));
+    return st ? st.name : 'Unknown';
+  }))];
+  const namesStr = names.length<=4 ? names.join(', ') : `${names.slice(0,4).join(', ')} and ${names.length-4} more`;
+  // Preview the recalculated total so Admin can sanity-check before confirming.
+  const newTotal = editable.reduce((a,l)=>a+getEarnings(qty, l.role||'', l.task||''), 0);
+  const unitLabels = [...new Set(editable.map(l=>taskRateUnitLabel(l.role||'', l.task||'')))];
+  const unitStr = unitLabels.length===1 ? unitLabels[0]+(qty!==1?'s':'') : 'unit(s)';
+  return {
+    description: `Set ${editable.length} work log${editable.length===1?'':'s'}${args.task?' ("'+args.task+'")':''} on ${date} to ${qty} ${unitStr} each — ${namesStr}? `+
+      `Earnings will be recalculated from each log's task rate (new total: K${newTotal.toFixed(2)} gross, before deductions).`+
+      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel(true)} edit window and will be skipped.)` : '')+
+      ` You'll be asked to confirm your admin password next. Save this?`,
+    action: { logIds: editable.map(l=>l.id), qty }
+  };
+}, function executeBulkEditLogQty(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  if(!isAdmin()) return { ok:false, msg:'Admin access is required to edit work logs.' };
+  const idSet = new Set((action.logIds||[]).map(String));
+  const qty = Number(action.qty);
+  let edited = 0;
+  updateData(d=>({...d, staffLogs:d.staffLogs.map(l=>{
+    if(idSet.has(String(l.id)) && isWithin24h(l,true)){
+      edited++;
+      const ru = taskRateUnit(l.role||'', l.task||'');
+      const earnings = getEarnings(qty, l.role||'', l.task||'');
+      const bagsVal = ru==='bag' ? qty : 0;
+      return {...l, qty, bags:bagsVal, rateUnit:ru, earnings};
+    }
+    return l;
+  })}));
+  if(edited===0) return { ok:false, msg:'None of those logs could be edited — they may have fallen outside the edit window while waiting for confirmation.' };
+  logAuditEvent('EDIT','Work Log (Bulk Quantity Change)',`${edited} log(s) set to ${qty} each · via Depot Assistant`);
+  return { ok:true, msg:`Updated ${edited} work log${edited===1?'':'s'} to ${qty} each — earnings recalculated.` };
 }, true);
 
 // ── Client-side rate limiter ────────────────────────────────────────────────
