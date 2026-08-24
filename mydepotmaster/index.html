@@ -410,10 +410,17 @@ body.light .clockout-btn{border-color:var(--amber);color:var(--amber);}
 #gsearch-fab:active{transform:scale(.92);}
 #copilot-fab{position:fixed;bottom:130px;right:16px;width:48px;height:48px;border-radius:50%;background:var(--purple);border:none;color:#fff;font-size:22px;cursor:pointer;z-index:700;box-shadow:0 4px 18px rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;touch-action:manipulation;transition:transform .15s;}
 #copilot-fab:active{transform:scale(.92);}
-.cop-msg{max-width:88%;padding:10px 13px;border-radius:14px;margin-bottom:10px;font-size:16px;line-height:1.5;white-space:pre-wrap;}
+.cop-msg{max-width:88%;padding:10px 13px;border-radius:14px;margin-bottom:4px;font-size:16px;line-height:1.5;white-space:pre-wrap;}
 .cop-msg.user{background:var(--green);color:var(--bg);margin-left:auto;border-bottom-right-radius:4px;}
 .cop-msg.bot{background:var(--overlay-light-5);border:1px solid var(--border);margin-right:auto;border-bottom-left-radius:4px;}
 .cop-msg.sys{background:none;color:var(--muted);font-size:13px;text-align:center;margin:6px auto;max-width:100%;}
+.cop-row{display:flex;flex-direction:column;margin-bottom:10px;max-width:100%;}
+.cop-row.user{align-items:flex-end;}
+.cop-row.bot{align-items:flex-start;}
+.cop-row .cop-msg{margin-bottom:0;}
+.cop-actions{display:flex;gap:12px;padding:0 4px;margin-top:3px;}
+.cop-actions button{background:none;border:none;padding:0;margin:0;color:var(--muted);font-size:12px;cursor:pointer;display:flex;align-items:center;gap:3px;touch-action:manipulation;}
+.cop-actions button:active{color:var(--text);}
 #cop-log{display:flex;flex-direction:column;max-height:50vh;overflow-y:auto;padding:4px 2px;margin-bottom:10px;}
 .cop-quick{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
 .cop-quick button{font-size:14px;padding:6px 10px;border-radius:20px;border:1px solid var(--border);background:var(--overlay-light-3);color:var(--text);cursor:pointer;}
@@ -3713,7 +3720,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.2';
+const SW_VERSION  = 'v0.3';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -13021,7 +13028,7 @@ function _renderAdminSettings(){
         <div class="fl">Record Edit Window ${mdmTip('After saving a record, admins can edit or delete it only within this time window. Once the window closes the record becomes permanent, protecting the integrity of your records.')}</div>
         <div style="display:flex;gap:8px;align-items:center">
           <select class="fi" id="edit-window-input" style="flex:1">
-            ${[6,12,24,48,72].map(h=>`<option value="${h}"${Number((DATA.depotInfo||{}).editWindowHours||24)===h?' selected':''}>${h<24?h+'h':(h/24)+' day'+(h>24?'s':'')}</option>`).join('')}
+            ${[6,12,24,48,72,168,240].map(h=>`<option value="${h}"${Number((DATA.depotInfo||{}).editWindowHours||24)===h?' selected':''}>${h<24?h+'h':(h/24)+' day'+(h>24?'s':'')}</option>`).join('')}
           </select>
           <button class="btn bg bsm" style="width:auto" onclick="saveEditWindow()">Save</button>
         </div>
@@ -13034,7 +13041,7 @@ function _renderAdminSettings(){
         <div style="display:flex;gap:8px;align-items:center">
           <select class="fi" id="staff-edit-window-input" style="flex:1">
             <option value="use-global"${((DATA.depotInfo||{}).staffEditWindowHours==null)?' selected':''}>Use general setting (${_editWindowLabel()})</option>
-            ${[6,12,24,48,72,168].map(h=>`<option value="${h}"${Number((DATA.depotInfo||{}).staffEditWindowHours)===h?' selected':''}>${h<24?h+'h':(h/24)+' day'+(h>24?'s':'')}</option>`).join('')}
+            ${[6,12,24,48,72,168,240].map(h=>`<option value="${h}"${Number((DATA.depotInfo||{}).staffEditWindowHours)===h?' selected':''}>${h<24?h+'h':(h/24)+' day'+(h>24?'s':'')}</option>`).join('')}
             <option value="0"${Number((DATA.depotInfo||{}).staffEditWindowHours)===0?' selected':''}>Never lock (always editable)</option>
           </select>
           <button class="btn bg bsm" style="width:auto" onclick="saveStaffEditWindow()">Save</button>
@@ -14591,7 +14598,7 @@ function saveEditWindow(){
   if(!requireAdmin('change edit window'))return;
   const val=Number(document.getElementById('edit-window-input')?.value||24);
   const msg=document.getElementById('edit-window-msg');
-  const valid=[6,12,24,48,72];
+  const valid=[6,12,24,48,72,168,240];
   if(!valid.includes(val)){if(msg)msg.innerHTML='<div class="err-box">Invalid selection.</div>';return;}
   updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),editWindowHours:val}}));
   const label=val<24?val+'h':(val/24)+' day'+(val>24?'s':'');
@@ -14602,7 +14609,7 @@ function saveStaffEditWindow(){
   if(!requireAdmin('change staff edit window'))return;
   const raw=document.getElementById('staff-edit-window-input')?.value;
   const msg=document.getElementById('staff-edit-window-msg');
-  const valid=['use-global',0,6,12,24,48,72,168].map(String);
+  const valid=['use-global',0,6,12,24,48,72,168,240].map(String);
   if(!valid.includes(String(raw))){if(msg)msg.innerHTML='<div class="err-box">Invalid selection.</div>';return;}
   const val=raw==='use-global'?null:Number(raw);
   updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),staffEditWindowHours:val}}));
@@ -17553,7 +17560,7 @@ function openCopilot(){
 }
 
 function _renderCopilotLog(){
-  return _copilotHistory.map(m=>{
+  return _copilotHistory.map((m,i)=>{
     if(m.type==='action'){
       return `<div class="cop-msg bot cop-action">
         <div>${esc(m.content)}</div>
@@ -17563,7 +17570,17 @@ function _renderCopilotLog(){
         </div>
       </div>`;
     }
-    return `<div class="cop-msg ${m.role==='user'?'user':'bot'}">${esc(m.content)}</div>`;
+    if(m.type==='sys' || m.role==='sys'){
+      return `<div class="cop-msg sys">${esc(m.content)}</div>`;
+    }
+    const isUser = m.role==='user';
+    const actions = isUser
+      ? `<button onclick="copyCopilotMsg(${i})" title="Copy">📋 Copy</button><button onclick="editCopilotMsg(${i})" title="Edit &amp; resend">✏️ Edit</button>`
+      : `<button onclick="copyCopilotMsg(${i})" title="Copy">📋 Copy</button><button onclick="shareCopilotMsg(${i})" title="Share">↗ Share</button>`;
+    return `<div class="cop-row ${isUser?'user':'bot'}">
+      <div class="cop-msg ${isUser?'user':'bot'}">${esc(m.content)}</div>
+      <div class="cop-actions">${actions}</div>
+    </div>`;
   }).join('');
 }
 
@@ -17571,6 +17588,54 @@ function _copilotAppend(role, content){
   _copilotHistory.push({role, content});
   const log = document.getElementById('cop-log');
   if(log){ log.innerHTML = _renderCopilotLog(); log.scrollTop = log.scrollHeight; }
+}
+
+// ── Per-message actions: copy / share (assistant) / edit & resend (user) ───
+function copyCopilotMsg(i){
+  const m = _copilotHistory[i];
+  if(!m) return;
+  const text = m.content || '';
+  const done = ()=>showToast('✅ Copied to clipboard');
+  const fail = ()=>showToast('⚠️ Could not copy — long-press the message to select it manually');
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done).catch(fail);
+  } else {
+    try{
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      ok ? done() : fail();
+    }catch(e){ fail(); }
+  }
+}
+
+function shareCopilotMsg(i){
+  const m = _copilotHistory[i];
+  if(!m) return;
+  const text = m.content || '';
+  if(navigator.share){
+    navigator.share({ text }).catch(()=>{ /* user cancelled — not an error */ });
+  } else if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text)
+      .then(()=>showToast('Sharing isn\'t supported here — copied instead'))
+      .catch(()=>showToast('⚠️ Could not share or copy'));
+  } else {
+    showToast('⚠️ Sharing isn\'t supported on this device');
+  }
+}
+
+function editCopilotMsg(i){
+  const m = _copilotHistory[i];
+  if(!m || m.role!=='user') return;
+  const input = document.getElementById('cop-input');
+  if(!input) return;
+  input.value = m.content || '';
+  input.focus();
+  const len = input.value.length;
+  if(input.setSelectionRange) input.setSelectionRange(len, len);
+  showToast('Edit your message, then tap Send to resend it');
 }
 
 // ── System prompts per mode ──────────────────────────────────────────────

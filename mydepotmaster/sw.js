@@ -25,6 +25,19 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.3 (2026-08-24)
+//
+// v0.3 changes (2026-08-24) — Depot Assistant message actions + longer edit windows:
+//   - Depot Assistant chat: each message now has an action row under it —
+//     assistant replies get Copy + Share (native share sheet, falls back to
+//     clipboard copy), your own messages get Copy + Edit (drops the text
+//     back into the input box to tweak and resend).
+//   - Settings → Staff & Records Policy: Record Edit Window and Staff
+//     Records Edit Window dropdowns now offer 7 days and 10 days in
+//     addition to the existing 6h/12h/24h/48h/72h options.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v100 (2026-08-23)
 //
 // v100 changes (2026-08-23) — Role Work History: show tasks with no logs:
@@ -845,7 +858,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.2';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v0.3';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
