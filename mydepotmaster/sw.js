@@ -25,6 +25,19 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.6 (2026-08-24)
+//
+// v0.6 changes (2026-08-24) — Depot Assistant input: Enter now makes a new line:
+//   - cop-input was a single-line <input> where Enter immediately sent the
+//     message. It's now a multi-line, auto-growing <textarea> (up to ~120px
+//     tall, then scrolls) — Enter inserts a line break instead.
+//   - To send: tap Send, or Ctrl+Enter (⌘+Enter on Mac) as a keyboard
+//     shortcut. Hint text added under the input to make this discoverable.
+//   - editCopilotMsg() (Edit & resend on your own messages) now also resizes
+//     the textarea to fit the restored text.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v0.5 (2026-08-24)
 //
 // v0.5 changes (2026-08-24) — Depot Assistant now has real conversation memory:
@@ -887,7 +900,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.5';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v0.6';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
