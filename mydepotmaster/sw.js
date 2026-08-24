@@ -25,6 +25,23 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.5 (2026-08-24)
+//
+// v0.5 changes (2026-08-24) — Depot Assistant now has real conversation memory:
+//   - Previously every chat question was answered in isolation — only that
+//     single question plus the current depot data was sent to the model, so
+//     follow-ups like "what about last week?" or "and for John Banda?" had
+//     nothing to resolve against.
+//   - askCopilot() now snapshots the last COPILOT_CONTEXT_TURNS (12) chat-log
+//     entries and sends them as a short "Recent conversation so far"
+//     transcript ahead of the new question on every call. The depot JSON
+//     stays the current live snapshot regardless — the system prompt tells
+//     the model to trust the JSON over the transcript if the two conflict.
+//   - Reconciliation mode is unaffected (still a single-shot analysis job,
+//     no conversation transcript sent).
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v0.4 (2026-08-24)
 //
 // v0.4 changes (2026-08-24) — Depot Assistant chat log capped at 50:
@@ -870,7 +887,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.4';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v0.5';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

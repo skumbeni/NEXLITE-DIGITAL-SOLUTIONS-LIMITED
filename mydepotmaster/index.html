@@ -3720,7 +3720,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.4';
+const SW_VERSION  = 'v0.5';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -17437,6 +17437,29 @@ function _copilotTrimHistory(){
   }
 }
 
+// How many of the most recent chat-log entries (user + assistant messages
+// combined, not pairs) get sent to the model as conversation context on each
+// new question — separate from COPILOT_HISTORY_CAP, which only bounds what's
+// kept on screen. Kept small since the full depot JSON is already resent on
+// every call; this just gives the model enough of the recent back-and-forth
+// to resolve follow-ups like "what about last week?" or "and for John Banda?".
+const COPILOT_CONTEXT_TURNS = 12;
+
+// Plain-text transcript of the last few turns, oldest first, for the model —
+// not the DOM/markup version. Skips the transient "…thinking" placeholder
+// (never present in _copilotHistory at the point this is called — askCopilot
+// snapshots turns before adding it) and anything without real text content.
+// Action cards are included using whatever text they currently hold: while
+// still pending that's the proposal description, and once the user has
+// tapped Confirm/Cancel it's already been replaced with the outcome text —
+// either way it's a faithful record of what happened in the conversation.
+function _copilotRecentTurns(maxTurns){
+  return _copilotHistory
+    .filter(m => (m.role==='user' || m.role==='assistant') && m.content)
+    .slice(-maxTurns)
+    .map(m => (m.role==='user' ? 'User: ' : 'Assistant: ') + m.content);
+}
+
 // ── Build a full snapshot of the depot's data for the assistant ────────────
 // Full information access: sends the whole operational dataset (not just
 // summaries/counts), so the assistant can actually check specifics rather
@@ -17695,6 +17718,11 @@ function _copilotSystemPrompt(mode){
     'commodities, stock movements, clock logs, transport, and finances — '+
     'scoped to what this account can access. '+
     scopeNote+
+    'You may also be given a short "Recent conversation so far" transcript of the '+
+    'last few turns — use it only to resolve follow-up questions (e.g. "what about '+
+    'last week?", "and for John Banda?"), never as a source of depot facts. The '+
+    'JSON data is always the current, authoritative snapshot; if something in the '+
+    'transcript conflicts with it (e.g. a figure has since changed), trust the JSON.\n\n'+
     'Answer the user\'s question '+
     'using only the data you\'re given. Be concise and use plain language, '+
     'not code. If the data doesn\'t contain what\'s needed to answer, say so '+
@@ -18771,7 +18799,7 @@ function _parseGoogleRetryDelaySeconds(body){
   return null;
 }
 
-async function _callCopilot(mode, userText, context){
+async function _callCopilot(mode, userText, context, priorTurns){
   if(!navigator.onLine){ showToast('❌ Depot Assistant needs an internet connection'); return null; }
   if(_copilotUsageToday() >= COPILOT_DAILY_SOFT_CAP){ showToast('⚠️ Daily Assistant limit reached — resets tomorrow'); return null; }
   // Proactive throttle — stops us from firing straight into Google's shared
@@ -18780,7 +18808,18 @@ async function _callCopilot(mode, userText, context){
   if(waitMs > 0){
     throw new Error(`Depot Assistant is getting a lot of use right now — please wait ${Math.ceil(waitMs/1000)}s and try again.`);
   }
-  const promptText = (userText?('Question: '+userText+'\n\n'):'Run the reconciliation described above.\n\n')
+  // Each call is otherwise stateless (no server-side session) — this app is
+  // what gives the model dialogue memory, by replaying the last few turns as
+  // plain text ahead of the new question. The depot data below is always the
+  // CURRENT snapshot, not a historical one from when an earlier turn was asked.
+  const transcriptBlock = (priorTurns && priorTurns.length)
+    ? 'Recent conversation so far (oldest first — for context on follow-up '+
+      'questions like "what about last week?" or "and for X?"; the depot data '+
+      'below is the current snapshot, not from when those turns were asked):\n'+
+      priorTurns.join('\n') + '\n\n'
+    : '';
+  const promptText = transcriptBlock
+    + (userText?('Question: '+userText+'\n\n'):'Run the reconciliation described above.\n\n')
     + 'Depot data (JSON):\n' + JSON.stringify(context);
   // Actions (tool calling) are only offered in normal chat mode — the
   // reconciliation job is read-only analysis and shouldn't be able to
@@ -18862,11 +18901,15 @@ async function askCopilot(question){
   question = (question||'').trim();
   if(!question || _copilotBusy) return;
   _copilotBusy = true;
+  // Snapshot recent turns BEFORE this question is added to the log — the
+  // current question is sent separately as `userText`, so it shouldn't also
+  // appear inside the transcript block.
+  const priorTurns = _copilotRecentTurns(COPILOT_CONTEXT_TURNS);
   _copilotAppend('user', question);
   _copilotAppend('assistant', '…thinking');
   try {
     const context = buildCopilotContext(7, false);
-    const data = await _callCopilot('chat', question, context);
+    const data = await _callCopilot('chat', question, context, priorTurns);
     _copilotHistory.pop(); // remove the "…thinking" placeholder
     if(data){
       const call = (data.functionCalls||[])[0];
