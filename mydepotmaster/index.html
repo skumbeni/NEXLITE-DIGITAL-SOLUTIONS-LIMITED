@@ -3720,7 +3720,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3';
+const SW_VERSION  = 'v0.4';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -17426,6 +17426,17 @@ function _copilotBumpUsage(){ localStorage.setItem(_copilotUsageKey(), String(_c
 let _copilotHistory = []; // [{role:'user'|'assistant', content:'...'}]
 let _copilotBusy = false;
 
+// On-screen chat log only keeps the most recent COPILOT_HISTORY_CAP entries —
+// older turns are dropped as new ones come in. This is purely a display/memory
+// cap: each request to the Assistant is already stateless (see _callCopilot),
+// so trimming the visible log never changes what the model sees or answers.
+const COPILOT_HISTORY_CAP = 50;
+function _copilotTrimHistory(){
+  if(_copilotHistory.length > COPILOT_HISTORY_CAP){
+    _copilotHistory.splice(0, _copilotHistory.length - COPILOT_HISTORY_CAP);
+  }
+}
+
 // ── Build a full snapshot of the depot's data for the assistant ────────────
 // Full information access: sends the whole operational dataset (not just
 // summaries/counts), so the assistant can actually check specifics rather
@@ -17586,6 +17597,7 @@ function _renderCopilotLog(){
 
 function _copilotAppend(role, content){
   _copilotHistory.push({role, content});
+  _copilotTrimHistory();
   const log = document.getElementById('cop-log');
   if(log){ log.innerHTML = _renderCopilotLog(); log.scrollTop = log.scrollHeight; }
 }
@@ -18905,6 +18917,7 @@ function _handleAIActionCall(name, args){
 function _copilotAppendAction(description, action){
   const actionId = 'act_'+Date.now()+'_'+Math.floor(Math.random()*1000);
   _copilotHistory.push({ role:'assistant', type:'action', content:description, actionId, action });
+  _copilotTrimHistory();
   const log = document.getElementById('cop-log');
   if(log){ log.innerHTML=_renderCopilotLog(); log.scrollTop=log.scrollHeight; }
 }

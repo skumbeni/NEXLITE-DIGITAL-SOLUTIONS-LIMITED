@@ -25,6 +25,18 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.4 (2026-08-24)
+//
+// v0.4 changes (2026-08-24) — Depot Assistant chat log capped at 50:
+//   - The on-screen Depot Assistant chat log now keeps only the most recent
+//     50 entries — older turns drop off the top as new ones come in, instead
+//     of growing unbounded for the rest of the session.
+//   - Purely a display/memory cap: each request to the Assistant was already
+//     stateless (full depot context + the single question, no prior chat
+//     history sent), so this doesn't change what the Assistant sees or answers.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v0.3 (2026-08-24)
 //
 // v0.3 changes (2026-08-24) — Depot Assistant message actions + longer edit windows:
@@ -858,7 +870,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v0.4';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
