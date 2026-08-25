@@ -1701,6 +1701,10 @@ function esc(str) {
 //         "notifications": {
 //           ".read": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || (auth.uid != null && root.child('depots').child($depotKey).child('authorizedUids').child(auth.uid).exists())",
 //           ".write": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || (auth.uid != null && root.child('depots').child($depotKey).child('authorizedUids').child(auth.uid).exists())"
+//         },
+//         "copilotChats": {
+//           ".read": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || (auth.uid != null && root.child('depots').child($depotKey).child('authorizedUids').child(auth.uid).exists())",
+//           ".write": "auth.uid === '0LtuB8qMQdgXxnKWVQysgZyBoEC2' || (auth.uid != null && root.child('depots').child($depotKey).child('authorizedUids').child(auth.uid).exists())"
 //         }
 //       }
 //     },
@@ -6287,6 +6291,7 @@ async function doLogin(){
       if(restored){ render(); showToast('☁ Data restored from cloud'); }
     }).catch(()=>{});
     fetchNotifications();
+    _copilotHydrate();
     checkLicense(async ()=>{
       if(!(DATA.depotInfo&&DATA.depotInfo.setupDone)){
         if(USER.role==='admin'){
@@ -6320,6 +6325,7 @@ function _doLogoutNow(){
   _idleClear(); // stop idle timers on explicit logout
   fbAuthSignOutSilently(); // Phase 2: clear the Auth SDK session too — fire-and-forget, non-blocking
   NOTIFS=[]; _refreshNotifBadge(); // clear notifications cache/badge — next account starts fresh
+  clearTimeout(_copilotSaveTimer); _copilotHistory=[]; _copilotHistoryLoaded=false; // next account's Assistant chat starts fresh (their own gets hydrated on their login)
   _hideMainUI();
   document.getElementById('login-err').style.display='none';
   document.getElementById('l-user').value='';
@@ -14549,6 +14555,8 @@ async function startBioLogin(){
     applyDepotInfo();
     initFirebase();
     fbRestoreData().then(r=>{if(r){render();showToast('☁ Data restored from cloud');}}).catch(()=>{});
+    fetchNotifications();
+    _copilotHydrate();
     checkLicense(async ()=>{
       if(!(DATA.depotInfo&&DATA.depotInfo.setupDone)){
         if(USER.role==='admin') showDepotSetupModal();
@@ -15480,6 +15488,7 @@ setTimeout(async ()=>{
           if(restored){ render(); showToast('☁ Data restored from cloud'); }
         }).catch(()=>{});
         fetchNotifications();
+        _copilotHydrate();
         checkLicense(async ()=>{
           if(!(DATA.depotInfo&&DATA.depotInfo.setupDone)){
             if(USER.role==='admin'){ showDepotSetupModal(); }
@@ -17767,6 +17776,71 @@ function _copilotBumpUsage(){ localStorage.setItem(_copilotUsageKey(), String(_c
 
 let _copilotHistory = []; // [{role:'user'|'assistant', content:'...'}]
 let _copilotBusy = false;
+let _copilotHistoryLoaded = false; // true once this user's chat has been hydrated on this device
+let _copilotSaveTimer = null;
+
+// ── ASSISTANT CHAT PERSISTENCE ───────────────────────────────────────────
+// _copilotHistory used to live in a plain JS variable only — closing the
+// app (or even just a page reload) wiped it. Fix: cache it on-device under
+// a per-depot, per-user localStorage key (instant, survives reopen even
+// offline) and mirror it to Firebase under the same depots/{installId}
+// namespace already used for DATA/notifications (syncs across a user's
+// devices). Keyed by username, not shared like the team notifications —
+// each person's Assistant conversation is their own.
+function _copilotStorageKey(){
+  const depotKey = DATA.installId || _loadPersistedInstallId() || 'nodepot';
+  const uname = (USER && USER.username || 'anon').toLowerCase();
+  return 'mdm_copilot_history_' + depotKey + '_' + uname;
+}
+function _copilotSaveLocal(){
+  try {
+    localStorage.setItem(_copilotStorageKey(), JSON.stringify({ history: _copilotHistory, updatedAt: Date.now() }));
+  } catch(e) { console.warn('[MDM] copilot local save failed:', e); }
+}
+function _copilotLoadLocal(){
+  try {
+    const raw = localStorage.getItem(_copilotStorageKey());
+    if(!raw) return null;
+    const parsed = JSON.parse(raw);
+    return (parsed && Array.isArray(parsed.history)) ? parsed : null;
+  } catch(e) { return null; }
+}
+// Debounced, best-effort cloud sync — never blocks the chat UI, same
+// fire-and-forget spirit as sendNotification()/scheduleFbSync().
+function _copilotScheduleRemoteSave(){
+  clearTimeout(_copilotSaveTimer);
+  _copilotSaveTimer = setTimeout(_copilotSaveRemoteNow, 1500);
+}
+async function _copilotSaveRemoteNow(){
+  const key = DATA.installId || _loadPersistedInstallId();
+  const uname = (USER && USER.username || '').toLowerCase();
+  if(!key || !uname || !navigator.onLine) return;
+  try {
+    await fbSet('depots/' + key + '/copilotChats/' + uname, { history: _copilotHistory, updatedAt: {'.sv':'timestamp'} });
+  } catch(e) { console.warn('[MDM] copilot cloud sync failed:', e); }
+}
+// Called once per login (and defensively on each openCopilot()): restores
+// this device's cached chat instantly, then reconciles with Firebase in the
+// background so a conversation started on one phone shows up on another —
+// whichever copy has the newer updatedAt wins.
+async function _copilotHydrate(){
+  const local = _copilotLoadLocal();
+  if(local && local.history.length){ _copilotHistory = local.history; _copilotTrimHistory(); }
+  _copilotHistoryLoaded = true;
+  const key = DATA.installId || _loadPersistedInstallId();
+  const uname = (USER && USER.username || '').toLowerCase();
+  if(!key || !uname || !navigator.onLine) return;
+  try {
+    const remote = await fbGet('depots/' + key + '/copilotChats/' + uname);
+    if(remote && Array.isArray(remote.history) && (!local || (remote.updatedAt||0) >= (local.updatedAt||0))){
+      _copilotHistory = remote.history;
+      _copilotTrimHistory();
+      _copilotSaveLocal();
+      const log = document.getElementById('cop-log');
+      if(log){ log.innerHTML = _renderCopilotLog(); log.scrollTop = log.scrollHeight; }
+    }
+  } catch(e) { console.warn('[MDM] copilot cloud fetch failed:', e); }
+}
 
 // On-screen chat log only keeps the most recent COPILOT_HISTORY_CAP entries —
 // older turns are dropped as new ones come in. This is purely a display/memory
@@ -17918,6 +17992,10 @@ function openCopilot(){
     showToast('⚠️ Depot Assistant needs the Cloudflare Worker URL set — see the code comments.');
     return;
   }
+  // Defensive: normally already hydrated at login, but covers any path that
+  // reaches here without one (and pulls in anything a second device saved
+  // since the last hydrate on this one).
+  if(!_copilotHistoryLoaded) _copilotHydrate();
   openModal(`
     <div class="ctitle">✨ Depot Assistant</div>
     <div id="cop-log">${_copilotHistory.length? _renderCopilotLog() : '<div class="cop-msg sys">Ask about stock, staff, or run an end-of-day reconciliation — or ask it to do data entry: clock in/out, log work, log commodity received/issued, log transport, log an absence, or record a payment. E.g. "Log 12 bags of Loading for John Banda today" or "Received 50 bags of maize, batch B1". You\'ll always confirm before anything is saved. Powered by Gemini.</div>'}</div>
@@ -17938,6 +18016,12 @@ function openCopilot(){
 }
 
 function _renderCopilotLog(){
+  // Every code path that changes _copilotHistory (append, pop a "…thinking"
+  // placeholder, confirm/cancel an action) re-renders the log right after —
+  // so persisting here, once, catches every mutation site without having to
+  // remember to call it separately at each one.
+  _copilotSaveLocal();
+  _copilotScheduleRemoteSave();
   return _copilotHistory.map((m,i)=>{
     if(m.type==='action'){
       return `<div class="cop-msg bot cop-action">
