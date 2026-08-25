@@ -3720,7 +3720,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.12';
+const SW_VERSION  = 'v0.13';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -16185,7 +16185,13 @@ function exportCSV_CommodityVariance(){
   _csvDownload(rows,_csvFilename(com.name+'_Variance'));
 }
 function exportCSV_StaffLogs(){
-  const logs=filterPeriod(DATA.staffLogs,PERIOD.staff,'date','staff').slice().sort((a,b)=>b.date.localeCompare(a.date));
+  // Fix: a 'staff' login's on-screen table (renderStaffLogs) is scoped to
+  // scopedStaffIds() (their own linked staff profile only), but this export
+  // was reading DATA.staffLogs directly — so the PDF/CSV "My Logs" export
+  // dumped every staff member's logs across the whole company regardless of
+  // who was signed in. Scope it the same way the screen is scoped.
+  const _sIds=scopedStaffIds();
+  const logs=filterPeriod(DATA.staffLogs.filter(l=>_sIds.has(String(l.staffId))),PERIOD.staff,'date','staff').slice().sort((a,b)=>b.date.localeCompare(a.date));
   const rows=[_csvRow(['Date','Staff','Role','Task','Qty','Unit','Earnings','Deduction','Deduction Reason','Net Earnings','Time In','Time Out'])];
   logs.forEach(l=>{
     const net=Number(l.earnings||0)-Number(l.deduction||0);
@@ -16195,22 +16201,29 @@ function exportCSV_StaffLogs(){
   _csvDownload(rows,_csvFilename('Staff_WorkLogs'));
 }
 function exportCSV_StaffPayments(){
-  const pays=filterPeriod(DATA.staffPayments||[],PERIOD.staff,'date','staff').slice().sort((a,b)=>b.date.localeCompare(a.date));
+  // Fix: same self-scope leak as exportCSV_StaffLogs — a staff login should
+  // only ever export their own payment history.
+  const _sIds=scopedStaffIds();
+  const pays=filterPeriod((DATA.staffPayments||[]).filter(p=>_sIds.has(String(p.staffId))),PERIOD.staff,'date','staff').slice().sort((a,b)=>b.date.localeCompare(a.date));
   const rows=[_csvRow(['Date','Staff','Amount','Notes'])];
   pays.forEach(p=>rows.push(_csvRow([p.date,_staffName(p.staffId),p.amount||0,p.notes||''])));
   _csvDownload(rows,_csvFilename('Staff_Payments'));
 }
 function exportCSV_LeaveLog(){
-  const leaves=filterPeriod(DATA.leaveLog||[],PERIOD.staff,'date','staff').slice().sort((a,b)=>b.date.localeCompare(a.date));
+  // Fix: same self-scope leak — a staff login should only export their own leave log.
+  const _sIds=scopedStaffIds();
+  const leaves=filterPeriod((DATA.leaveLog||[]).filter(l=>_sIds.has(String(l.staffId))),PERIOD.staff,'date','staff').slice().sort((a,b)=>b.date.localeCompare(a.date));
   const rows=[_csvRow(['Date','Staff','Leave Type','Days','Note'])];
   leaves.forEach(l=>rows.push(_csvRow([l.date,_staffName(l.staffId),l.type||'',l.days||0,l.note||''])));
   _csvDownload(rows,_csvFilename('Staff_LeaveLog'));
 }
 function exportCSV_StaffEarnings(){
-  const logs=filterPeriod(DATA.staffLogs,PERIOD.staff,'date','staff');
-  const pays=filterPeriod(DATA.staffPayments||[],PERIOD.staff,'date','staff');
+  // Fix: same self-scope leak — a staff login should only see/export their own earnings row.
+  const _sIds=scopedStaffIds();
+  const logs=filterPeriod(DATA.staffLogs.filter(l=>_sIds.has(String(l.staffId))),PERIOD.staff,'date','staff');
+  const pays=filterPeriod((DATA.staffPayments||[]).filter(p=>_sIds.has(String(p.staffId))),PERIOD.staff,'date','staff');
   const rows=[_csvRow(['Staff','Role','Total Earned','Total Paid','Balance Owed'])];
-  DATA.staff.forEach(s=>{
+  scopedStaff().forEach(s=>{
     const earned=logs.filter(l=>String(l.staffId)===String(s.id)).reduce((a,l)=>a+(Number(l.earnings||0)-Number(l.deduction||0)),0);
     const paid=pays.filter(p=>String(p.staffId)===String(s.id)).reduce((a,p)=>a+Number(p.amount||0),0);
     rows.push(_csvRow([s.name,staffRoleLabel(s),earned.toFixed(2),paid.toFixed(2),(earned-paid).toFixed(2)]));
@@ -16218,8 +16231,11 @@ function exportCSV_StaffEarnings(){
   _csvDownload(rows,_csvFilename('Staff_Earnings'));
 }
 function exportCSV_StaffRoster(){
+  // Fix: defense-in-depth — a staff login can't normally reach this sub-tab
+  // (STAFF_BLOCKED_STAB), but scope it too in case the dispatcher's default
+  // fallback is ever hit from a staff session.
   const rows=[_csvRow(['Name','Role','Phone','Status','Contract Type','Emergency Contact','Emergency Phone','Date of Hire','Date of Birth'])];
-  DATA.staff.forEach(s=>rows.push(_csvRow([s.name,staffRoleLabel(s),s.phone||'',s.status||'active',s.contractType||'',s.emergencyContactName||'',s.emergencyContactPhone||'',s.dateJoined||'',s.dateOfBirth||''])));
+  scopedStaff().forEach(s=>rows.push(_csvRow([s.name,staffRoleLabel(s),s.phone||'',s.status||'active',s.contractType||'',s.emergencyContactName||'',s.emergencyContactPhone||'',s.dateJoined||'',s.dateOfBirth||''])));
   _csvDownload(rows,_csvFilename('Staff_Roster'));
 }
 
