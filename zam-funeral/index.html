@@ -1397,11 +1397,21 @@
     // Only readable by uids already in the treasurer roster — anonymous member-portal
     // sessions and not-yet-redeemed signups will get a permission error here, which is
     // expected and silently ignored (they simply never see this data).
+    // Only readable by uids already in the treasurer roster — anonymous member-portal
+    // sessions and not-yet-redeemed signups will get a permission error here, which is
+    // expected and silently ignored (they simply never see this data).
+    // NOTE: this is a separate listener from fundData above, so it must NOT gate its
+    // re-render on fbReady (that flag belongs to fundData's own first-load timing) —
+    // doing so previously meant that if this listener resolved before fundData's first
+    // snapshot, the update was silently dropped and the settings button/badge never
+    // appeared until some unrelated save happened to trigger a re-render.
     dbAccessRef.on('value', (snap)=>{
       if(suppressEcho) return;
       const remote = snap.val();
       data.access = { treasurerAccess: (remote && remote.treasurerAccess) || {} };
       localStorage.setItem(STORE_KEY, JSON.stringify(data));
+      applyRoleNavVisibility();
+      updateLoggedInBadge();
       if(fbReady) renderAll();
     }, ()=>{ /* not a treasurer in this session — nothing to show, no error toast */ });
 
@@ -1413,6 +1423,7 @@
       data.invites = snap.val() || {};
       localStorage.setItem(STORE_KEY, JSON.stringify(data));
       if(fbReady) renderAll();
+      else renderTreasurerAccess();
     }, ()=>{ /* not a treasurer in this session — nothing to show, no error toast */ });
   }
 
