@@ -24,7 +24,7 @@
      COPILOT_PROXY_ENDPOINT further down in this file (search for
      "DEPOT ASSISTANT"). Do not put the raw Gemini key back in this file —
      it's public source and gets scraped/revoked within minutes. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' blob: https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.gstatic.com/; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; connect-src https://*.firebaseio.com https://firebaseinstallations.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://firebaseappcheck.googleapis.com https://fonts.googleapis.com https://fonts.gstatic.com https://www.google.com/recaptcha/ https://recaptcha.google.com https://mdm-copilot-proxy.chongogoodson0.workers.dev https://open.er-api.com; img-src 'self' data: blob: https:; worker-src 'self' blob:; manifest-src 'self' blob:; frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com; frame-ancestors 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' blob: https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.gstatic.com/; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; connect-src https://*.firebaseio.com https://firebaseinstallations.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://firebaseappcheck.googleapis.com https://fonts.googleapis.com https://fonts.gstatic.com https://www.google.com/recaptcha/ https://recaptcha.google.com https://mdm-copilot-proxy.chongogoodson0.workers.dev https://open.er-api.com https://api.ipify.org; img-src 'self' data: blob: https:; worker-src 'self' blob:; manifest-src 'self' blob:; frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com; frame-ancestors 'none';">
 <!-- ──────────────────────────────────────────────────────────────────────── -->
 <!-- OpenGraph / Social sharing -->
 <meta property="og:title" content="My Depot Master"/>
@@ -3720,7 +3720,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.7';
+const SW_VERSION  = 'v0.10';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -4153,8 +4153,8 @@ let STAFF_MODAL_PIN=false; // when true, staff profile modal stays open across a
 let TAB='dashboard';
 let SETTINGS_VIEW='menu'; // 'menu' or a category id — which Settings sub-page is showing
 let ONLINE=navigator.onLine;
-let PERIOD={dashboard:'monthly',general:'monthly',maize:'monthly',staff:'monthly'};
-let DATE_RANGE={general:{from:'',to:''},maize:{from:'',to:''},staff:{from:'',to:''},dashboard:{from:'',to:''}};
+let PERIOD={dashboard:'monthly',general:'monthly',maize:'monthly',staff:'monthly',roleHistory:'all'};
+let DATE_RANGE={general:{from:'',to:''},maize:{from:'',to:''},staff:{from:'',to:''},dashboard:{from:'',to:''},roleHistory:{from:'',to:''}};
 let STAB='logs'; // staff subtab
 let STAFF_LOG_TASK_FILTER='all'; // work logs task filter: 'all' or a specific task name
 let MTAB='received'; // commodity subtab
@@ -4207,6 +4207,45 @@ function logAuditEvent(action, entity, detail, before){
     const log=[...(d.auditLog||[]),entry];
     return{...d, auditLog: log.length>2000 ? log.slice(log.length-2000) : log};
   });
+}
+// ── LOGIN HISTORY ─────────────────────────────────────────────────────────────
+// Records each successful sign-in (timestamp + IP address) so a user can review
+// their last 3 sessions from Settings → Account & Security and spot anything
+// unfamiliar. Called fire-and-forget right after USER is set at every login
+// entry point (password, fingerprint, silent "Stay Signed In" restore) — it is
+// never awaited there, so a slow/blocked IP lookup can't delay sign-in.
+async function _recordLoginSession(username, method){
+  if(!username) return;
+  const entry={
+    id:uid(), ts:new Date().toISOString(),
+    date:today(), time:nowTime(),
+    user:username, method:method||'password', ip:'—'
+  };
+  try{
+    if(navigator.onLine){
+      const ctrl=new AbortController();
+      const t=setTimeout(()=>ctrl.abort(), 5000);
+      const res=await fetch('https://api.ipify.org?format=json', {signal:ctrl.signal});
+      clearTimeout(t);
+      if(res.ok){
+        const j=await res.json();
+        if(j&&j.ip) entry.ip=j.ip;
+      }
+    }
+  } catch(e){ /* offline, blocked, or timed out — entry keeps ip:'—' */ }
+  // Global cap (not per-user) — plenty of headroom since display only ever
+  // shows the 3 most recent entries for the current user, filtered below.
+  updateData(d=>{
+    const log=[...(d.loginHistory||[]), entry];
+    return{...d, loginHistory: log.length>300 ? log.slice(log.length-300) : log};
+  });
+}
+// Returns the 3 most recent login sessions for a username, newest first.
+function _recentLoginSessions(username){
+  return (DATA.loginHistory||[])
+    .filter(e=>e.user===username)
+    .slice().sort((a,b)=>b.ts.localeCompare(a.ts))
+    .slice(0,3);
 }
 // ── FIX 30: DASHBOARD WIDGET VISIBILITY ──────────────────────────────────────
 // Widget visibility is stored in localStorage (not DATA) so it is per-device
@@ -4643,10 +4682,18 @@ function pBtns(tab){
     return `<button class="pb${PERIOD[tab]===p?' act':''}" onclick="setPeriod('${tab}','${p}')">${label}</button>`;
   }).join('')+rangeInputs;
 }
-function setPeriod(tab,p){PERIOD[tab]=p;render();}
+function setPeriod(tab,p){
+  PERIOD[tab]=p;
+  render();
+  // render() only touches #content — the Role History period selector lives
+  // inside an openModal() overlay, so refresh that separately when it's the
+  // one that changed.
+  if(tab==='roleHistory') openRoleWorkHistory();
+}
 function setDateRange(tab,key,val){
   DATE_RANGE[tab]=Object.assign({},DATE_RANGE[tab]||{},{[key]:val});
   render();
+  if(tab==='roleHistory') openRoleWorkHistory();
 }
 
 function updateData(fn){DATA=fn(DATA);DATA._v=(DATA._v||0)+1;sv(DATA);render();scheduleFbSync();}
@@ -6229,6 +6276,7 @@ async function doLogin(){
     _savedUsersAdd(userObj.username); // remember this username on this device
     _applyStaySignedIn(userObj.username); // honour device's "stay signed in" preference
     _idleReset(); // start inactivity watchdog
+    _recordLoginSession(userObj.username, 'password'); // fire-and-forget — see def.
     showMainUI();
     updPill();
     applyDepotInfo();
@@ -11123,7 +11171,7 @@ function openRoleWorkHistory(){
   const staffById=Object.fromEntries(DATA.staff.map(s=>[s.id,s]));
   const roles=allRoleNames();
   const sections=roles.map((role,ri)=>{
-    const rLogs=(DATA.staffLogs||[]).filter(l=>l.role===role&&l.entryType==='work');
+    const rLogs=filterPeriod((DATA.staffLogs||[]).filter(l=>l.role===role&&l.entryType==='work'), PERIOD.roleHistory, 'date', 'roleHistory');
     if(rLogs.length===0)return'';
     const rQty=rLogs.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
     const rNet=rLogs.reduce((a,b)=>a+(Number(b.earnings||0)-Number(b.deduction||0)),0);
@@ -11220,7 +11268,8 @@ function openRoleWorkHistory(){
   openModal(`
     <div style="font-family:var(--fh);font-size:22px;font-weight:800;margin-bottom:4px">📋 Work History by Role</div>
     <div style="font-size:16px;color:var(--muted);margin-bottom:14px">Combined work logs from every staff member, grouped by role. Roles with more than one task (e.g. Loading → Loader / Stacking) show each task as its own separate sub-role. Tap to expand.</div>
-    ${sections||`<div class="empty">No work log entries recorded yet.</div>`}
+    <div class="prow" style="margin-bottom:14px">${pBtns('roleHistory')}</div>
+    ${sections||`<div class="empty">No work log entries recorded for this period.</div>`}
   `);
 }
 function toggleRoleHistorySection(key){
@@ -12640,6 +12689,58 @@ function _renderChangePasswordCard(){
     </div>`;
 }
 
+// Settings helper — Login History. Read-only. Non-admins see their own last
+// 3 sessions. Admins see every account's last 3 sessions, grouped by user,
+// since Admin already manages passwords/roles for the whole team elsewhere
+// in Settings — this just extends that same oversight to sign-in activity.
+function _renderLoginHistoryCard(){
+  const methodLabel=m=>m==='fingerprint'?'👆 Fingerprint':m==='auto'?'🔓 Stay Signed In':'🔑 Password';
+  const fmtWhen=s=>{
+    const dt=new Date(s.ts);
+    return isNaN(dt) ? `${s.date||''} ${s.time||''}`.trim() : dt.toLocaleString();
+  };
+  const sessionRow=s=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);gap:10px">
+      <div>
+        <div style="font-weight:700">${esc(fmtWhen(s))}</div>
+        <div style="font-size:14px;color:var(--muted)">${methodLabel(s.method)}</div>
+      </div>
+      <div style="font-family:var(--fm);font-size:15px;color:var(--text);text-align:right">${esc(s.ip||'—')}</div>
+    </div>`;
+
+  if(USER.role!=='admin'){
+    const sessions=_recentLoginSessions(USER.username);
+    const rows=sessions.length ? sessions.map(sessionRow).join('')
+      : `<div style="font-size:16px;color:var(--muted);padding:6px 0">No login sessions recorded yet.</div>`;
+    return `
+      <div class="sh">Login History</div>
+      <div class="card">
+        <div style="font-size:16px;color:var(--muted);margin-bottom:10px;line-height:1.6">Your last 3 sign-ins on this account, with the IP address each one came from. Don't recognise one? Update your password right away.</div>
+        ${rows}
+      </div>`;
+  }
+
+  // Admin view — every account, each with its own last-3-sessions block.
+  const users=(DATA.users||[]);
+  const blocks=users.map(u=>{
+    const sessions=_recentLoginSessions(u.username);
+    const rows=sessions.length ? sessions.map(sessionRow).join('')
+      : `<div style="font-size:15px;color:var(--muted);padding:4px 0">No login sessions recorded yet.</div>`;
+    return `<div style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px">
+        <span style="font-weight:700">${esc(u.username)}</span>
+        <span class="bdg ${u.role==='admin'?'bg2':(u.role==='staff'?'br2':'ba2')}">${roleLabel(u.role)}</span>
+      </div>
+      ${rows}
+    </div>`;
+  }).join('');
+  return `
+    <div class="sh">Login History — All Accounts</div>
+    <div class="card">
+      <div style="font-size:16px;color:var(--muted);margin-bottom:10px;line-height:1.6">Last 3 sign-ins for every account on this depot, with the IP address each came from. As Admin, use this to spot sign-ins that don't look right.</div>
+      ${blocks || `<div style="font-size:16px;color:var(--muted);padding:6px 0">No accounts found.</div>`}
+    </div>`;
+}
+
 // Settings helper — Help & Documentation. Same for every role.
 // Settings helper — Install App. Button visibility is driven by
 // isAppInstallable()/_refreshInstallButton() (see beforeinstallprompt listener),
@@ -12729,7 +12830,7 @@ function _renderCompanyInfoCard(){
 const SETTINGS_CATS = {
   admin: [
     {id:'account-security', icon:'🔐', label:'Account & Security', desc:'Password, recovery, users & permissions',
-      match:['Change Password','Recovery PIN','Recovery Email','User Accounts','Role Permissions','Fingerprint Login','Stay Signed In']},
+      match:['Change Password','Login History','Recovery PIN','Recovery Email','User Accounts','Role Permissions','Fingerprint Login','Stay Signed In']},
     {id:'company-billing', icon:'🏢', label:'Company & Billing', desc:'Plan, license, company info, branding & policies',
       match:['My Plan','License & Connection','Company Information','Branding','Staff & Records Policy']},
     {id:'appearance', icon:'🎨', label:'Appearance', desc:'Theme, text size, currency & dashboard widgets',
@@ -12743,7 +12844,7 @@ const SETTINGS_CATS = {
     {id:'preferences', icon:'🎨', label:'Preferences', desc:'Text size, theme, currency & dashboard',
       match:['Company Information','Display Preferences','Dashboard Widgets']},
     {id:'account-help', icon:'🔐', label:'Account & Help', desc:'Password, fingerprint, install, support & legal',
-      match:['Fingerprint Login','Stay Signed In','Change Password','Install on This Phone','Help & Documentation','Contact & Support','Legal']},
+      match:['Fingerprint Login','Stay Signed In','Change Password','Login History','Install on This Phone','Help & Documentation','Contact & Support','Legal']},
   ],
 };
 
@@ -12867,6 +12968,7 @@ function _renderStaffSettings(){
     ${_renderBioSection()}
     ${_renderStaySignedInSection()}
     ${_renderChangePasswordCard()}
+    ${_renderLoginHistoryCard()}
     ${_renderInstallAppCard()}
     ${_renderHelpDocsCard()}
     ${_renderContactSupportCard()}
@@ -13094,6 +13196,8 @@ function _renderAdminSettings(){
       <div class="fw"><div class="fl">Confirm Password</div><input class="fi" type="password" id="pw-conf"/></div>
       <button class="btn ba" onclick="changePw()">🔒 Update Password</button>
     </div>
+
+    ${_renderLoginHistoryCard()}
 
     <div class="sh">Recovery PIN</div>
     <div class="card">
@@ -14219,6 +14323,7 @@ async function startBioLogin(){
     USER=Object.freeze({...userObj}); // freeze to prevent console mutation — matches password login
     _applyStaySignedIn(userObj.username); // honour device's "stay signed in" preference
     _idleReset(); // start inactivity watchdog
+    _recordLoginSession(userObj.username, 'fingerprint'); // fire-and-forget — see def.
     showMainUI();
     updPill();
     applyDepotInfo();
@@ -15133,6 +15238,7 @@ setTimeout(async ()=>{
       if (_userObj) {
         USER = Object.freeze({..._userObj});
         _idleReset();
+        _recordLoginSession(_userObj.username, 'auto'); // fire-and-forget — see def.
         showMainUI();
         updPill();
         applyDepotInfo();

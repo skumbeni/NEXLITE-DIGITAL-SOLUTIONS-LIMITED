@@ -25,7 +25,31 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.7 (2026-08-24)
+// Current version: v0.10 (2026-08-25)
+//
+// v0.10 changes (2026-08-25) — Time range added to Work History by Role:
+//   - The Role History modal (Staff → Role History) now has its own
+//     Daily/Weekly/Monthly/Yearly/All/Range period selector, reusing the
+//     same filterPeriod/pBtns pattern as the rest of the app.
+//   - Defaults to "All" so existing behaviour (everything, unfiltered) is
+//     unchanged until the admin picks a narrower range.
+//
+// v0.9 changes (2026-08-25) — Login History now visible to Admin for every
+// account, not just their own:
+//   - Non-admin accounts still see only their own last 3 sessions.
+//   - Admin's "Login History" card now lists every account on the depot,
+//     each with its own last 3 sessions (timestamp + IP), so Admin can spot
+//     an unfamiliar sign-in on ANY account, not just their own.
+//
+// v0.8 changes (2026-08-25) — Login History in Settings → Account & Security:
+//   - Every sign-in (password, fingerprint, or silent "Stay Signed In"
+//     restore) now records a session entry: timestamp + the IP address it
+//     came from (via api.ipify.org, added to CSP connect-src). Recorded
+//     fire-and-forget right after login so a slow/blocked IP lookup never
+//     delays sign-in.
+//   - New "Login History" card shows each account's own last 3 sessions —
+//     nothing is shown across accounts. Read-only, so an unfamiliar sign-in
+//     is easy to spot; no delete/clear control.
 //
 // v0.7 changes (2026-08-24) — Depot Assistant can now bulk-edit log quantities:
 //   - New AI_ACTIONS tool bulk_edit_log_quantity — e.g. "edit 20 August
@@ -919,7 +943,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.7';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v0.10';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
