@@ -1,7 +1,7 @@
 // ZamFuneral Fund Manager — service worker
 // Bump CACHE_NAME whenever index.html (or any cached asset) changes, so returning
 // visitors get the new version instead of a stale cached copy.
-const CACHE_NAME = 'zamfuneral-v10';
+const CACHE_NAME = 'zamfuneral-v12';
 
 const APP_SHELL = [
   './',

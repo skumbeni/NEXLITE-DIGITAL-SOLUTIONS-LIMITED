@@ -584,6 +584,41 @@
   </div>
 </div>
 
+<!-- Member Settings Modal -->
+<div class="overlay" id="memberSettingsModal">
+  <div class="modal" style="max-width:460px;">
+    <div class="modal-head"><h3>Your Settings</h3><button class="close-x" data-close="memberSettingsModal">&times;</button></div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Phone Number</label>
+        <input type="text" id="settingsPhoneInput" placeholder="e.g. 0977 000 000">
+      </div>
+      <div class="helper">This is also what you use to log in — let your chairperson know if you change it.</div>
+
+      <label style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--ink-dim); cursor:pointer; margin-top:14px;">
+        <input type="checkbox" id="settingsNotifyReminders" style="width:auto;"> Send me contribution reminders
+      </label>
+
+      <div style="border-top:1px solid var(--line); margin-top:18px; padding-top:14px;">
+        <label>Beneficiaries</label>
+        <div class="helper" style="margin:2px 0 10px;">Who should be paid out if a claim is made on your behalf.</div>
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="settingsNewBeneficiaryName" placeholder="Beneficiary full name" style="flex:1;">
+          <button type="button" class="btn small" id="btnSettingsQuickAddBeneficiary">Add</button>
+        </div>
+        <div id="settingsBeneficiaryRows" style="display:flex; flex-direction:column; gap:10px; margin-top:14px;"></div>
+        <div class="helper" id="settingsBeneficiaryLimitNote" style="margin-top:4px;"></div>
+      </div>
+
+      <div class="helper" id="memberSettingsError" style="color:var(--rose); display:none; margin-top:12px;"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn secondary" data-close="memberSettingsModal">Cancel</button>
+      <button class="btn" id="btnSaveMemberSettings">Save Settings</button>
+    </div>
+  </div>
+</div>
+
 <!-- Invite Manager Modal -->
 <div class="overlay" id="inviteTreasurerModal">
   <div class="modal" style="max-width:380px;">
@@ -617,6 +652,7 @@
       <p class="helper" style="margin:0;">Enter your phone number and PIN to view your own contribution history.</p>
     </div>
     <div style="display:flex; gap:8px;">
+      <button class="btn secondary small" id="btnPortalSettings" style="display:none;">Settings</button>
       <button class="btn secondary small" id="btnPortalChangePin" style="display:none;">Change PIN</button>
       <button class="btn secondary small" id="btnPortalLogout" style="display:none;">Log Out</button>
       <button class="btn secondary small" id="btnPortalBack">Switch View</button>
@@ -902,6 +938,7 @@
       </div>
       <div class="panel">
         <div class="panel-head"><h3>Fund Configuration</h3></div>
+        <div class="helper" id="settingsReadOnlyNote" style="display:none; padding:0 20px 14px;">You have view-only access here — only the Chairperson can change fund settings.</div>
         <div style="padding:20px; display:flex; flex-direction:column; gap:16px; max-width:460px;">
           <div class="field">
             <div class="field-label-row">
@@ -948,7 +985,7 @@
           </div>
         </div>
       </div>
-      <div class="panel">
+      <div class="panel" id="managerAccessPanel">
         <div class="panel-head"><h3>Manager Access</h3></div>
         <div style="padding:20px; display:flex; flex-direction:column; gap:16px;">
           <span class="helper">Grant a member real login access to manage the fund, with full access just like you. They'll sign in with their own email and password using a one-time invite code you share with them.</span>
@@ -1279,8 +1316,9 @@
 
   // Chairperson = the founding account (created via createChairmanAccount, flagged
   // "bootstrap" in treasurerAccess). Managers are invited later via invite code and get
-  // full day-to-day access, but not Settings, Subscription, or the ability to manage
-  // other managers' access.
+  // full day-to-day access, plus view-only Settings — but not Subscription, editing fund
+  // settings, or managing other managers' access (enforced here in the UI and again
+  // server-side in the rules).
   function isChairperson(){
     const u = auth.currentUser;
     if(!u || u.isAnonymous || !data.access.treasurerAccess) return false;
@@ -1350,6 +1388,16 @@
     suppressEcho = true;
     return fbRef.child('members/'+memberId+'/pin').set(newPin)
       .catch((err)=>{ toast('PIN saved on this device, but could not sync online — try again when connected.'); throw err; })
+      .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
+  }
+
+  // Same narrow-leaf pattern as fbPushMemberPin above, for the fields members can edit
+  // themselves from the self-service Settings modal: phone, reminder preference, and
+  // beneficiaries. Security rules grant these individually, same as pin.
+  function fbPushMemberSelfField(memberId, field, value){
+    suppressEcho = true;
+    return fbRef.child('members/'+memberId+'/'+field).set(value)
+      .catch((err)=>{ toast('Saved on this device, but could not sync online — try again when connected.'); throw err; })
       .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
   }
 
@@ -1602,7 +1650,11 @@
   /* ---------- Navigation ---------- */
   document.querySelectorAll('.nav-btn').forEach(btn=>{
     btn.addEventListener('click', ()=>{
-      if((btn.dataset.page==='settings' || btn.dataset.page==='subscription') && !isChairperson()){
+      if(btn.dataset.page==='settings' && !isAuthorizedTreasurer()){
+        toast('Only signed-in fund managers can access Settings.');
+        return;
+      }
+      if(btn.dataset.page==='subscription' && !isChairperson()){
         toast('Only the Chairperson can access this.');
         return;
       }
@@ -1611,25 +1663,27 @@
     });
   });
   document.getElementById('btnQuickSettings').addEventListener('click', ()=>{
-    if(!isChairperson()){ toast('Only the Chairperson can access this.'); return; }
+    if(!isAuthorizedTreasurer()){ toast('Only signed-in fund managers can access Settings.'); return; }
     zfShowPage('settings');
     zfPushState({kind:'page', page:'settings'});
   });
 
-  // Managers (non-chairperson accounts) don't get Settings or Subscription in the nav at
-  // all — call this after login and whenever access might have changed.
+  // Settings is visible (view-only) to any signed-in treasurer/manager; Subscription
+  // stays Chairperson-only. Call this after login and whenever access might have changed.
   function applyRoleNavVisibility(){
     const chair = isChairperson();
-    document.querySelectorAll('.nav-btn[data-page="settings"], .nav-btn[data-page="subscription"]').forEach(b=>{
-      b.style.display = chair ? '' : 'none';
-    });
+    const authorized = isAuthorizedTreasurer(); // any signed-in treasurer/manager, chair or not
+    const settingsNav = document.querySelector('.nav-btn[data-page="settings"]');
+    const subNav = document.querySelector('.nav-btn[data-page="subscription"]');
+    if(settingsNav) settingsNav.style.display = authorized ? '' : 'none';
+    if(subNav) subNav.style.display = chair ? '' : 'none';
     const qs = document.getElementById('btnQuickSettings');
-    if(qs) qs.style.display = chair ? 'flex' : 'none';
-    // If a manager was viewing one of those pages when access changed, bounce them home.
+    if(qs) qs.style.display = authorized ? 'flex' : 'none';
+    // Subscription stays Chairperson-only — if a manager was viewing it when access
+    // changed, bounce them home. Settings is fine for managers to stay on (view-only).
     if(!chair){
-      const settingsPage = document.getElementById('page-settings');
       const subPage = document.getElementById('page-subscription');
-      if((settingsPage && settingsPage.style.display!=='none') || (subPage && subPage.style.display!=='none')){
+      if(subPage && subPage.style.display!=='none'){
         document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
         document.querySelector('.nav-btn[data-page="dashboard"]').classList.add('active');
         document.querySelectorAll('.page').forEach(p=>p.style.display='none');
@@ -1685,16 +1739,19 @@
   /* ---------- Beneficiaries (per member, up to 10) ---------- */
   const MAX_BENEFICIARIES = 10;
 
-  function beneficiaryManagerRowHtml(b, idx){
+  function beneficiaryRowHtml(b, idx, onRemoveJs){
     b = b || {name:'', nrc:'', relationship:''};
     return `
       <div class="beneficiary-row" data-idx="${idx}">
         <input type="text" class="ben-name" placeholder="Full name" value="${escapeHtml(b.name)}">
         <input type="text" class="ben-nrc" placeholder="NRC number" value="${escapeHtml(b.nrc)}">
         <input type="text" class="ben-rel" placeholder="Relationship to principal" value="${escapeHtml(b.relationship)}">
-        <button type="button" class="icon-btn" title="Remove beneficiary" onclick="this.closest('.beneficiary-row').remove(); ZF.refreshBeneficiaryManagerLimit();">Remove</button>
+        <button type="button" class="icon-btn" title="Remove beneficiary" onclick="this.closest('.beneficiary-row').remove(); ${onRemoveJs}">Remove</button>
       </div>
     `;
+  }
+  function beneficiaryManagerRowHtml(b, idx){
+    return beneficiaryRowHtml(b, idx, 'ZF.refreshBeneficiaryManagerLimit();');
   }
   function refreshBeneficiaryManagerLimit(){
     const count = document.querySelectorAll('#beneficiaryManagerRows .beneficiary-row').length;
@@ -1730,6 +1787,38 @@
   document.getElementById('btnQuickAddBeneficiary').addEventListener('click', quickAddBeneficiary);
   document.getElementById('newBeneficiaryName').addEventListener('keydown', (e)=>{
     if(e.key === 'Enter'){ e.preventDefault(); quickAddBeneficiary(); }
+  });
+
+  // Member-facing equivalents, used inside the self-service Settings modal (memberPortal).
+  // Same row markup and 10-beneficiary cap as the chairperson's manager above, just
+  // targeting the #settingsBeneficiaryRows container instead of #beneficiaryManagerRows.
+  function settingsBeneficiaryRowHtml(b, idx){
+    return beneficiaryRowHtml(b, idx, 'ZF.refreshSettingsBeneficiaryLimit();');
+  }
+  function refreshSettingsBeneficiaryLimit(){
+    const count = document.querySelectorAll('#settingsBeneficiaryRows .beneficiary-row').length;
+    const addBtn = document.getElementById('btnSettingsQuickAddBeneficiary');
+    addBtn.disabled = count >= MAX_BENEFICIARIES;
+    document.getElementById('settingsBeneficiaryLimitNote').textContent = count >= MAX_BENEFICIARIES
+      ? 'Maximum of 10 beneficiaries reached.'
+      : `${count} of ${MAX_BENEFICIARIES} beneficiaries added.`;
+  }
+  function quickAddSettingsBeneficiary(){
+    const container = document.getElementById('settingsBeneficiaryRows');
+    const nameInput = document.getElementById('settingsNewBeneficiaryName');
+    const name = nameInput.value.trim();
+    if(!name){ toast('Type the beneficiary\u2019s name first.'); return; }
+    if(container.querySelectorAll('.beneficiary-row').length >= MAX_BENEFICIARIES){
+      toast('You can add up to 10 beneficiaries.'); return;
+    }
+    container.insertAdjacentHTML('beforeend', settingsBeneficiaryRowHtml({name, nrc:'', relationship:''}));
+    nameInput.value = '';
+    nameInput.focus();
+    refreshSettingsBeneficiaryLimit();
+  }
+  document.getElementById('btnSettingsQuickAddBeneficiary').addEventListener('click', quickAddSettingsBeneficiary);
+  document.getElementById('settingsNewBeneficiaryName').addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter'){ e.preventDefault(); quickAddSettingsBeneficiary(); }
   });
   document.getElementById('btnSaveBeneficiaries').addEventListener('click', ()=>{
     const memberId = document.getElementById('beneficiaryMemberId').value;
@@ -2253,6 +2342,25 @@
     document.getElementById('setDefaultPayoutPercent').value = data.settings.defaultPayoutPercent || 0;
     document.getElementById('setTreasurerEmail').value = data.settings.treasurerEmail || '(not set — log in as Treasurer to create one)';
     setSettingsPayoutBasisUI(data.settings.defaultPayoutBasis || 'fixed');
+
+    // Everyone with fund access can VIEW settings, but only the Chairperson can change
+    // them (the server-side rules enforce this too — this just keeps the UI honest about
+    // it instead of letting a Manager fill the form out and get a save-time toast).
+    const chair = isChairperson();
+    if(!chair){
+      document.getElementById('setOrgName').readOnly = true;
+      document.getElementById('setFundNumber').readOnly = true;
+    }
+    ['setDefaultRate','setDefaultPayout','setDefaultPayoutPercent'].forEach(id=>{
+      document.getElementById(id).disabled = !chair;
+    });
+    document.querySelectorAll('#payoutBasisTags .tag-btn').forEach(b=> b.disabled = !chair);
+    document.getElementById('editOrgName').style.display = chair ? '' : 'none';
+    document.getElementById('editFundNumber').style.display = chair ? '' : 'none';
+    document.getElementById('btnSaveSettings').style.display = chair ? '' : 'none';
+    document.getElementById('settingsReadOnlyNote').style.display = chair ? 'none' : 'block';
+    const managerPanel = document.getElementById('managerAccessPanel');
+    if(managerPanel) managerPanel.style.display = chair ? '' : 'none';
   }
 
   function renderTreasurerAccess(){
@@ -2283,6 +2391,7 @@
 
     accessBody.querySelectorAll('[data-revoke-uid]').forEach(btn=>{
       btn.addEventListener('click', ()=>{
+        if(!isChairperson()){ toast('Only the Chairperson can manage manager access.'); return; }
         const uid = btn.getAttribute('data-revoke-uid');
         const name = (access[uid] && access[uid].name) || 'this person';
         if(!confirm(`Revoke treasurer access for ${name}? They'll immediately lose the ability to save changes.`)) return;
@@ -2294,6 +2403,7 @@
     });
     invitesBody.querySelectorAll('[data-cancel-invite]').forEach(btn=>{
       btn.addEventListener('click', ()=>{
+        if(!isChairperson()){ toast('Only the Chairperson can manage invites.'); return; }
         const code = btn.getAttribute('data-cancel-invite');
         delete data.invites[code];
         renderAll();
@@ -2304,6 +2414,7 @@
   }
 
   document.getElementById('btnInviteTreasurer').addEventListener('click', ()=>{
+    if(!isChairperson()){ toast('Only the Chairperson can invite managers.'); return; }
     const sel = document.getElementById('inviteTreasurerMember');
     sel.innerHTML = '<option value="">Select a member (optional)</option>' +
       data.members.map(m => `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join('');
@@ -2312,6 +2423,7 @@
     openModal('inviteTreasurerModal');
   });
   document.getElementById('btnGenerateInvite').addEventListener('click', ()=>{
+    if(!isChairperson()){ toast('Only the Chairperson can invite managers.'); return; }
     const memberId = document.getElementById('inviteTreasurerMember').value;
     const member = data.members.find(m=> m.id === memberId);
     const name = document.getElementById('inviteTreasurerName').value.trim() || (member ? member.name : '');
@@ -2388,7 +2500,7 @@
     });
   }
 
-  window.ZF = { editMember, deleteMember, deleteContribution, editCase, deleteCase, openBeneficiaryManager, refreshBeneficiaryManagerLimit };
+  window.ZF = { editMember, deleteMember, deleteContribution, editCase, deleteCase, openBeneficiaryManager, refreshBeneficiaryManagerLimit, refreshSettingsBeneficiaryLimit };
 
   /* ---------- Role Gate & Member Portal ---------- */
   function normalizePhone(s){ return String(s||'').replace(/[\s\-()]/g,''); }
@@ -2444,6 +2556,7 @@
     document.getElementById('portalLookupError').style.display = 'none';
     document.getElementById('btnPortalLogout').style.display = 'none';
     document.getElementById('btnPortalChangePin').style.display = 'none';
+    document.getElementById('btnPortalSettings').style.display = 'none';
     document.getElementById('portalPhoneInput').value = '';
     document.getElementById('portalPinInput').value = '';
     document.getElementById('portalStaySignedIn').checked = false;
@@ -2584,6 +2697,7 @@
     document.getElementById('portalLookupPanel').style.display = 'none';
     document.getElementById('btnPortalLogout').style.display = 'inline-flex';
     document.getElementById('btnPortalChangePin').style.display = 'inline-flex';
+    document.getElementById('btnPortalSettings').style.display = 'inline-flex';
     currentPortalMember = member;
     if(staySignedIn){
       localStorage.setItem(MEMBER_SESSION_KEY, JSON.stringify({ memberId: member.id }));
@@ -2646,6 +2760,57 @@
   });
   document.getElementById('changePinConfirm').addEventListener('keydown', (e)=>{
     if(e.key === 'Enter'){ e.preventDefault(); document.getElementById('btnChangePinSubmit').click(); }
+  });
+
+  document.getElementById('btnPortalSettings').addEventListener('click', ()=>{
+    if(!currentPortalMember) return;
+    document.getElementById('settingsPhoneInput').value = currentPortalMember.phone || '';
+    document.getElementById('settingsNotifyReminders').checked = currentPortalMember.notifyReminders !== false; // default on
+    document.getElementById('settingsNewBeneficiaryName').value = '';
+    const container = document.getElementById('settingsBeneficiaryRows');
+    container.innerHTML = (currentPortalMember.beneficiaries||[]).map(settingsBeneficiaryRowHtml).join('');
+    refreshSettingsBeneficiaryLimit();
+    document.getElementById('memberSettingsError').style.display = 'none';
+    openModal('memberSettingsModal');
+  });
+
+  document.getElementById('btnSaveMemberSettings').addEventListener('click', ()=>{
+    const errEl = document.getElementById('memberSettingsError');
+    errEl.style.display = 'none';
+    if(!currentPortalMember){ closeModal('memberSettingsModal'); return; }
+
+    const newPhone = document.getElementById('settingsPhoneInput').value.trim();
+    if(!newPhone){ errEl.textContent = 'Phone number is required.'; errEl.style.display = 'block'; return; }
+    const normalizedNew = normalizePhone(newPhone);
+    const clash = data.members.find(m=> m.id !== currentPortalMember.id && normalizePhone(m.phone) === normalizedNew);
+    if(clash){ errEl.textContent = 'Another member already uses that phone number.'; errEl.style.display = 'block'; return; }
+
+    const notifyReminders = document.getElementById('settingsNotifyReminders').checked;
+    const beneficiaries = Array.from(document.querySelectorAll('#settingsBeneficiaryRows .beneficiary-row')).map(row=>({
+      name: row.querySelector('.ben-name').value.trim(),
+      nrc: row.querySelector('.ben-nrc').value.trim(),
+      relationship: row.querySelector('.ben-rel').value.trim()
+    })).filter(b=> b.name || b.nrc || b.relationship).slice(0, MAX_BENEFICIARIES);
+
+    const member = data.members.find(m=> m.id === currentPortalMember.id);
+    if(!member){ errEl.textContent = 'Member record not found.'; errEl.style.display = 'block'; return; }
+
+    const phoneChanged = member.phone !== newPhone;
+    const notifyChanged = member.notifyReminders !== notifyReminders;
+
+    member.phone = newPhone;
+    member.notifyReminders = notifyReminders;
+    member.beneficiaries = beneficiaries;
+    currentPortalMember = member;
+    localStorage.setItem(STORE_KEY, JSON.stringify(data));
+    closeModal('memberSettingsModal');
+
+    const writes = [ fbPushMemberSelfField(member.id, 'beneficiaries', beneficiaries) ];
+    if(phoneChanged) writes.push(fbPushMemberSelfField(member.id, 'phone', newPhone));
+    if(notifyChanged) writes.push(fbPushMemberSelfField(member.id, 'notifyReminders', notifyReminders));
+    Promise.all(writes)
+      .then(()=> toast('Your settings have been saved.'))
+      .catch(()=>{ /* toast already shown by fbPushMemberSelfField; local copy is still saved */ });
   });
 
   function resumeMemberSession(){
