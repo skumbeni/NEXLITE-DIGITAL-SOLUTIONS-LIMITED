@@ -3720,7 +3720,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.10';
+const SW_VERSION  = 'v0.11';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -4154,6 +4154,7 @@ let TAB='dashboard';
 let SETTINGS_VIEW='menu'; // 'menu' or a category id — which Settings sub-page is showing
 let ONLINE=navigator.onLine;
 let PERIOD={dashboard:'monthly',general:'monthly',maize:'monthly',staff:'monthly',roleHistory:'all'};
+let STAFF_LIST_ROLE_FILTER='all'; // which registered role to show in the Staff List (or 'all')
 let DATE_RANGE={general:{from:'',to:''},maize:{from:'',to:''},staff:{from:'',to:''},dashboard:{from:'',to:''},roleHistory:{from:'',to:''}};
 let STAB='logs'; // staff subtab
 let STAFF_LOG_TASK_FILTER='all'; // work logs task filter: 'all' or a specific task name
@@ -11089,6 +11090,16 @@ function renderPayments(){
 function renderStaffList(){
   const _sList=scopedStaff();
   const roles=isStaffRole()?[...new Set(_sList.flatMap(s=>staffRoleList(s)))]:allRoleNames();
+  // Only offer roles that actually have at least one registered staff member,
+  // so the filter row doesn't list roles with nothing to show.
+  const rolesWithStaff=roles.filter(role=>_sList.some(s=>staffHasRole(s,role)));
+  if(STAFF_LIST_ROLE_FILTER!=='all'&&!rolesWithStaff.includes(STAFF_LIST_ROLE_FILTER))STAFF_LIST_ROLE_FILTER='all';
+  const activeRoles=STAFF_LIST_ROLE_FILTER==='all'?roles:roles.filter(r=>r===STAFF_LIST_ROLE_FILTER);
+  const roleFilterBar=rolesWithStaff.length>1?`
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+      <button class="pb${STAFF_LIST_ROLE_FILTER==='all'?' act':''}" onclick="setStaffListRoleFilter('all')">All</button>
+      ${rolesWithStaff.map(role=>`<button class="pb${STAFF_LIST_ROLE_FILTER===role?' act':''}" onclick="setStaffListRoleFilter('${esc(role)}')">${esc(role)}</button>`).join('')}
+    </div>`:'';
   const statusBadge=s=>{
     if(s.status==='terminated')return`<span class="bdg br2" style="font-size:15px">TERMINATED</span>`;
     if(s.status==='resigned')return`<span class="bdg br2" style="font-size:15px">RESIGNED</span>`;
@@ -11096,7 +11107,7 @@ function renderStaffList(){
     if(s.status==='suspended')return`<span class="bdg ba2" style="font-size:15px">SUSPENDED</span>`;
     return`<span class="bdg bg2" style="font-size:15px">ACTIVE</span>`;
   };
-  const sections=roles.map((role,ri)=>{
+  const sections=activeRoles.map((role,ri)=>{
     const members=_sList.filter(s=>staffHasRole(s,role));
     const roleRGB=_roleColorRGB(role);
     if(members.length===0)return`<div class="card"><div class="ctitle">👷 ${role}s</div><div class="empty" style="padding:8px 0">No ${role.toLowerCase()}s registered</div></div>`;
@@ -11152,7 +11163,12 @@ function renderStaffList(){
   }).join('');
   return`
     <div class="hint" style="margin-bottom:10px">Tap any staff card to view their full profile, history, and take actions.</div>
+    ${DATA.staff.length===0?'':roleFilterBar}
     ${DATA.staff.length===0?`<div class="card"><div class="empty">No staff registered yet.<br>Use "+ Add Staff" to register.</div></div>`:sections}`;
+}
+function setStaffListRoleFilter(role){
+  STAFF_LIST_ROLE_FILTER=role;
+  render();
 }
 
 // ── ROLE WORK HISTORY (admin) ────────────────────────────────────────────
