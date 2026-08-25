@@ -659,7 +659,21 @@
     </div>
   </div>
 
-  <div class="panel" id="portalLookupPanel">
+  <div class="panel" id="portalFundGatePanel" style="display:none;">
+    <div style="padding:20px; display:flex; flex-direction:column; gap:14px;">
+      <p class="helper" style="margin:0;">Enter the Fund Code your chairperson shared with you (this identifies your specific burial fund).</p>
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
+        <div class="field" style="flex:1; min-width:180px;">
+          <label>Fund Code</label>
+          <input type="text" id="portalFundCodeInput" placeholder="e.g. 7K3PXQ" style="text-transform:uppercase;">
+        </div>
+        <button class="btn" id="btnPortalFundCodeSubmit">Continue</button>
+      </div>
+    </div>
+    <div class="helper" id="portalFundGateError" style="display:none; padding:0 20px 16px; color:var(--rose);">That Fund Code was not found. Please check with your chairperson.</div>
+  </div>
+
+  <div class="panel" id="portalLookupPanel" style="display:none;">
     <div style="padding:20px; display:flex; flex-direction:column; gap:14px;">
       <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end;">
         <div class="field" style="flex:1; min-width:180px;">
@@ -1012,6 +1026,16 @@
           </div>
         </div>
       </div>
+      <div class="panel" id="memberFundCodePanel">
+        <div class="panel-head"><h3>Member Fund Code</h3></div>
+        <div style="padding:20px; display:flex; flex-direction:column; gap:12px;">
+          <span class="helper">Share this code (or the link) with members so the "My Contributions" portal knows which fund to look up. Each member enters it once — it's remembered on their device after that.</span>
+          <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+            <div class="mono" id="memberFundCodeDisplay" style="font-size:20px; letter-spacing:2px; color:var(--gold-bright); font-weight:700;">—</div>
+            <button class="btn secondary small" id="btnCopyFundCode">Copy Link</button>
+          </div>
+        </div>
+      </div>
       <div class="panel">
         <div class="panel-head"><h3>Install on This Phone</h3></div>
         <div style="padding:20px; display:flex; flex-direction:column; gap:12px;">
@@ -1250,35 +1274,48 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script>
 (function(){
-  const STORE_KEY = 'zamFuneralFund_v1';
+  // Local cache key is namespaced per-fund (see storeKeyFor below) so a shared device can
+  // hold more than one fund's offline copy at once — signing a second treasurer/fund into
+  // the same browser no longer overwrites the first fund's cached blob. 'zamFuneralFund_v1'
+  // alone (no fund suffix) is only ever used transiently, before any fund has been resolved.
+  const STORE_KEY_BASE = 'zamFuneralFund_v1';
+  const FUND_ID_KEY = 'zamFuneralFundId_v1';
   const MEMBER_SESSION_KEY = 'zamFuneralMemberSession_v1';
+  function storeKeyFor(fundId){ return fundId ? (STORE_KEY_BASE + '__' + fundId) : STORE_KEY_BASE; }
+  // On a repeat visit we already know (from a previous session on this device) which fund
+  // was last active, via FUND_ID_KEY — use that fund's own cache key right from the start.
+  let storeKey = storeKeyFor(localStorage.getItem(FUND_ID_KEY));
   let currentPortalMember = null;
   const todayISO = () => new Date().toISOString().slice(0,10);
   const thisMonth = () => new Date().toISOString().slice(0,7);
 
   let data = load();
-  if(!data.subscriptionPayments) data.subscriptionPayments = [];
   function load(){
+    let d = null;
     try{
-      const raw = localStorage.getItem(STORE_KEY);
-      if(raw) return JSON.parse(raw);
+      const raw = localStorage.getItem(storeKey);
+      if(raw) d = JSON.parse(raw);
     }catch(e){}
-    return {
-      settings:{ orgName:'', fundNumber:'', defaultRate:150, defaultPayoutBasis:'fixed', defaultPayout:5000, defaultPayoutPercent:0, treasurerEmail:'' },
-      access:{ treasurerAccess:{} }, invites:{},
-      members:[], contributions:[], cases:[], subscriptionPayments:[]
-    };
+    if(!d){
+      d = {
+        settings:{ orgName:'', fundNumber:'', fundCode:'', defaultRate:150, defaultPayoutBasis:'fixed', defaultPayout:5000, defaultPayoutPercent:0, treasurerEmail:'' },
+        access:{ treasurerAccess:{} }, invites:{},
+        members:[], contributions:[], cases:[], subscriptionPayments:[]
+      };
+    }
+    if(!d.subscriptionPayments) d.subscriptionPayments = [];
+    // Migrate any old cached copy (from before treasurerAccess/treasurerInvites moved to
+    // their own top-level nodes) into the new shape, and strip the stale keys so nothing
+    // still reads or writes them from inside "settings".
+    if(!d.access) d.access = { treasurerAccess: (d.settings && d.settings.treasurerAccess) || {} };
+    if(!d.access.treasurerAccess) d.access.treasurerAccess = {};
+    if(!d.invites) d.invites = (d.settings && d.settings.treasurerInvites) || {};
+    if(d.settings){ delete d.settings.treasurerAccess; delete d.settings.treasurerInvites; }
+    return d;
   }
-  // Migrate any old cached copy (from before treasurerAccess/treasurerInvites moved to
-  // their own top-level nodes) into the new shape, and strip the stale keys so nothing
-  // still reads or writes them from inside "settings".
-  if(!data.access) data.access = { treasurerAccess: (data.settings && data.settings.treasurerAccess) || {} };
-  if(!data.access.treasurerAccess) data.access.treasurerAccess = {};
-  if(!data.invites) data.invites = (data.settings && data.settings.treasurerInvites) || {};
-  if(data.settings){ delete data.settings.treasurerAccess; delete data.settings.treasurerInvites; }
-  function save(){ localStorage.setItem(STORE_KEY, JSON.stringify(data)); renderAll(); fbPush(); }
+  function save(){ localStorage.setItem(storeKey, JSON.stringify(data)); renderAll(); fbPush(); }
 
-  /* ---------- Firebase (auth-gated sync, offline-cache) ---------- */
+  /* ---------- Firebase (multi-tenant: each fund lives at funds/$fundId/...) ---------- */
   const firebaseConfig = {
     apiKey: "AIzaSyBmf374bIU4H6ddd1kG3AudT_M03xMmFj0",
     authDomain: "zam-funeral.firebaseapp.com",
@@ -1291,18 +1328,55 @@
   firebase.initializeApp(firebaseConfig);
   const db = firebase.database();
   const auth = firebase.auth();
-  const fbRef = db.ref('fundData');
-  // treasurerAccess and treasurerInvites live under their own top-level nodes (not inside
-  // fundData) so their read rules can be scoped to treasurers only — see the rules file.
-  // fundData/settings/members/contributions/cases stay broadly readable by any signed-in
-  // client (anonymous members included), which the self-service portal relies on.
-  const dbAccessRef = db.ref('access');
-  const dbInvitesRef = db.ref('invites');
+
+  // Small top-level lookup nodes shared across every fund (see database.rules.json):
+  //  userFunds/$uid      -> fundId       (which fund a treasurer/manager account belongs to)
+  //  inviteIndex/$code   -> fundId       (lets a manager redeem an invite code without also
+  //                                       needing to know/type the Fund Code)
+  //  fundCodes/$code     -> fundId       (the human-shareable code members use to find their fund)
+  const dbUserFundsRef = db.ref('userFunds');
+  const dbInviteIndexRef = db.ref('inviteIndex');
+  const dbFundCodesRef = db.ref('fundCodes');
+
+  // These three are bound once we know which fund this session belongs to (bindFundRefs
+  // below) — everything past this point in the file that reads/writes fund data goes
+  // through these three variables exactly as before, they just now point at
+  // funds/$fundId/... instead of a single global path.
+  let fbRef = null, dbAccessRef = null, dbInvitesRef = null;
+  let currentFundId = null;
 
   let fbReady = false;       // becomes true once the first remote snapshot arrives
   let suppressEcho = false;  // true while we're writing our own change, to ignore the echo
   let saveTimer = null;
   let listenerAttached = false;
+
+  function bindFundRefs(fundId){
+    if(currentFundId === fundId && fbRef) return;
+    const isAccountSwitch = !!(currentFundId && currentFundId !== fundId);
+    if(isAccountSwitch){
+      // Switching funds mid-session (rare) — detach the old fund's listeners first.
+      if(fbRef) fbRef.off();
+      if(dbAccessRef) dbAccessRef.off();
+      if(dbInvitesRef) dbInvitesRef.off();
+      listenerAttached = false;
+      fbReady = false;
+    }
+    currentFundId = fundId;
+    fbRef = db.ref('funds/'+fundId+'/data');
+    dbAccessRef = db.ref('funds/'+fundId+'/access');
+    dbInvitesRef = db.ref('funds/'+fundId+'/invites');
+    try{ localStorage.setItem(FUND_ID_KEY, fundId); }catch(e){}
+    // Point the local cache at this fund's own blob (see storeKeyFor above) instead of
+    // whatever key was in use before this fund was known/resolved.
+    storeKey = storeKeyFor(fundId);
+    if(isAccountSwitch){
+      // A different fund than whatever was in memory — load that fund's own cached copy
+      // (if this device has seen it before) rather than carrying over the previous fund's
+      // in-memory data. Firebase's listener will reconcile/overwrite this moments later.
+      data = load();
+      renderAll();
+    }
+  }
 
   // True only when this browser tab holds a real, authorised treasurer/chairman session —
   // i.e. Firebase Auth has a non-anonymous user AND that uid is listed in treasurerAccess.
@@ -1327,12 +1401,13 @@
   }
 
   function fbPush(){
+    if(!fbRef) return; // no fund bound yet in this session (nothing to sync to)
     if(saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(()=>{
       // password lives only in Firebase Auth — it's never part of the synced data at all.
-      // Only the fundData-shaped fields go here — treasurerAccess/invites live under their
-      // own top-level nodes now and are synced separately (fbSaveAccess/fbSaveInvites),
-      // so a stray copy of them never gets written back under this broadly-readable path.
+      // Only the fund's data-shaped fields go here — treasurerAccess/invites live under
+      // their own nodes now and are synced separately (fbSaveAccess/fbSaveInvites), so a
+      // stray copy of them never gets written back under this broadly-readable path.
       const payload = JSON.parse(JSON.stringify({
         settings: data.settings, members: data.members, contributions: data.contributions,
         cases: data.cases, subscriptionPayments: data.subscriptionPayments
@@ -1364,25 +1439,25 @@
   }
 
   // Targeted writes for the treasurer roster and pending invites — these live outside
-  // fundData now, so they don't ride along with fbPush()'s fundData-only write.
+  // this fund's "data" node, so they don't ride along with fbPush()'s data-only write.
   function fbSaveAccess(){
     suppressEcho = true;
-    localStorage.setItem(STORE_KEY, JSON.stringify(data));
+    localStorage.setItem(storeKey, JSON.stringify(data));
     return dbAccessRef.child('treasurerAccess').set(data.access.treasurerAccess || {})
       .catch(()=>{ toast('Could not sync access changes online.'); })
       .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
   }
   function fbSaveInvites(){
     suppressEcho = true;
-    localStorage.setItem(STORE_KEY, JSON.stringify(data));
+    localStorage.setItem(storeKey, JSON.stringify(data));
     return dbInvitesRef.set(data.invites || {})
       .catch(()=>{ toast('Could not sync invite changes online.'); })
       .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
   }
 
   // Targeted write for member-initiated PIN changes: members are signed in anonymously and
-  // cannot write the whole fundData tree (that's treasurer-only per security rules), but the
-  // rules grant a narrow exception letting any authenticated session overwrite a single
+  // cannot write the whole fund data tree (that's treasurer-only per security rules), but
+  // the rules grant a narrow exception letting any authenticated session overwrite a single
   // member's pin leaf directly. This bypasses fbPush()/the root .set() on purpose.
   function fbPushMemberPin(memberId, newPin){
     suppressEcho = true;
@@ -1402,18 +1477,24 @@
   }
 
   // Targeted writes for a brand-new treasurer redeeming an invite code. This user has no
-  // general fundData write access yet (they're not yet in treasurerAccess), so — like the
+  // general fund-data write access yet (they're not yet in treasurerAccess), so — like the
   // member PIN write above — this bypasses fbPush()/the root .set() and relies on narrow
-  // rules scoped to exactly these two leaves.
+  // rules scoped to exactly these leaves. Also records which fund this uid now belongs to
+  // (userFunds) and retires the global invite-code shortcut (inviteIndex) so it can't be
+  // redeemed twice.
   function fbRedeemTreasurerInvite(uid, entry, code){
     suppressEcho = true;
     return dbAccessRef.child('treasurerAccess/'+uid).set(entry)
-      .then(()=> dbInvitesRef.child(code).remove())
+      .then(()=> Promise.all([
+        dbInvitesRef.child(code).remove(),
+        dbInviteIndexRef.child(code).remove(),
+        dbUserFundsRef.child(uid).set(currentFundId)
+      ]))
       .finally(()=>{ setTimeout(()=>{ suppressEcho = false; }, 300); });
   }
 
   // Targeted write for the very first-ever account on a fresh fund (no invite needed —
-  // the rules allow this only while treasurerAccess is still completely empty).
+  // the rules allow this only while that fund's treasurerAccess is still completely empty).
   function fbBootstrapChairman(uid, entry){
     suppressEcho = true;
     return dbAccessRef.child('treasurerAccess/'+uid).set(entry)
@@ -1421,7 +1502,7 @@
   }
 
   function attachFbListenerOnce(){
-    if(listenerAttached) return;
+    if(listenerAttached || !fbRef) return;
     listenerAttached = true;
     fbRef.on('value', (snap)=>{
       const remote = snap.val();
@@ -1432,10 +1513,10 @@
         data.contributions = remote.contributions || [];
         data.cases = remote.cases || [];
         data.subscriptionPayments = remote.subscriptionPayments || [];
-        localStorage.setItem(STORE_KEY, JSON.stringify(data));
+        localStorage.setItem(storeKey, JSON.stringify(data));
         if(fbReady) renderAll(); // don't double-render on the very first load
       } else if(fbReady === false){
-        // nothing in Firebase yet (fresh project) — push up whatever we have locally
+        // nothing in Firebase yet for this fund — push up whatever we have locally
         fbPush();
       }
       fbReady = true;
@@ -1443,22 +1524,19 @@
       toast('Sync error — working offline from last saved data.');
     });
 
-    // Only readable by uids already in the treasurer roster — anonymous member-portal
-    // sessions and not-yet-redeemed signups will get a permission error here, which is
-    // expected and silently ignored (they simply never see this data).
-    // Only readable by uids already in the treasurer roster — anonymous member-portal
-    // sessions and not-yet-redeemed signups will get a permission error here, which is
-    // expected and silently ignored (they simply never see this data).
-    // NOTE: this is a separate listener from fundData above, so it must NOT gate its
-    // re-render on fbReady (that flag belongs to fundData's own first-load timing) —
-    // doing so previously meant that if this listener resolved before fundData's first
-    // snapshot, the update was silently dropped and the settings button/badge never
-    // appeared until some unrelated save happened to trigger a re-render.
+    // Only readable by uids already in this fund's treasurer roster — anonymous
+    // member-portal sessions and not-yet-redeemed signups will get a permission error
+    // here, which is expected and silently ignored (they simply never see this data).
+    // NOTE: this is a separate listener from the data node above, so it must NOT gate its
+    // re-render on fbReady (that flag belongs to the data node's own first-load timing) —
+    // doing so previously meant that if this listener resolved before that first snapshot,
+    // the update was silently dropped and the settings button/badge never appeared until
+    // some unrelated save happened to trigger a re-render.
     dbAccessRef.on('value', (snap)=>{
       if(suppressEcho) return;
       const remote = snap.val();
       data.access = { treasurerAccess: (remote && remote.treasurerAccess) || {} };
-      localStorage.setItem(STORE_KEY, JSON.stringify(data));
+      localStorage.setItem(storeKey, JSON.stringify(data));
       applyRoleNavVisibility();
       updateLoggedInBadge();
       if(fbReady) renderAll();
@@ -1470,10 +1548,37 @@
     dbInvitesRef.on('value', (snap)=>{
       if(suppressEcho) return;
       data.invites = snap.val() || {};
-      localStorage.setItem(STORE_KEY, JSON.stringify(data));
+      localStorage.setItem(storeKey, JSON.stringify(data));
       if(fbReady) renderAll();
       else renderTreasurerAccess();
     }, ()=>{ /* not a treasurer in this session — nothing to show, no error toast */ });
+  }
+
+  // Resolves which fund a signed-in (non-anonymous) treasurer/manager account belongs to,
+  // via the userFunds lookup, then binds and attaches the listeners for that fund.
+  // Rejects if this uid has no fund mapping yet (e.g. account creation is still mid-flight
+  // elsewhere — see createChairmanAccount/treasurerSignInOrCreate, which bind explicitly
+  // and don't rely on this path).
+  function resolveFundForUid(uid){
+    return dbUserFundsRef.child(uid).once('value').then((snap)=>{
+      const fundId = snap.val();
+      if(!fundId) return Promise.reject({ code: 'auth/no-fund' });
+      bindFundRefs(fundId);
+      attachFbListenerOnce();
+      return fundId;
+    });
+  }
+
+  // Resolves a member-facing Fund Code (see the "Member Fund Code" panel in Settings) to
+  // its fundId and binds this (anonymous) session to that fund's read-only data.
+  function resolveFundCode(code){
+    return dbFundCodesRef.child(code).once('value').then((snap)=>{
+      const fundId = snap.val();
+      if(!fundId) return Promise.reject({ code: 'fund-code-not-found' });
+      bindFundRefs(fundId);
+      attachFbListenerOnce();
+      return fundId;
+    });
   }
 
   // Every visitor needs to be authenticated to read (rules require auth != null).
@@ -1484,11 +1589,36 @@
       auth.signInAnonymously().catch(()=>{ toast('Could not connect — working offline.'); });
       return; // this will fire again once anonymous sign-in completes
     }
-    attachFbListenerOnce();
-    // A non-anonymous user here means a "stay logged in" session was restored from a
-    // previous visit — skip straight into the Treasurer / Manager side.
-    if(!user.isAnonymous && document.getElementById('memberPortal').style.display === 'none'){
-      try{ enterMainApp(); }catch(e){ console.error('Auto-login enterMainApp failed:', e); }
+    if(!user.isAnonymous){
+      // A non-anonymous user here means a "stay logged in" session was restored from a
+      // previous visit — resolve which fund it belongs to, then skip straight into the
+      // Treasurer / Manager side. If the lookup fails (e.g. offline, or this fires mid
+      // account-creation before userFunds has been written yet), do nothing — the explicit
+      // create/login flows handle binding and entering the app themselves.
+      resolveFundForUid(user.uid).then(()=>{
+        if(document.getElementById('memberPortal').style.display === 'none'){
+          try{ enterMainApp(); }catch(e){ console.error('Auto-login enterMainApp failed:', e); }
+        }
+      }).catch(()=>{ /* not resolvable yet — see comment above */ });
+      return;
+    }
+    // Anonymous session (member portal). Resolve which fund this device belongs to: a
+    // ?fund=CODE link (e.g. shared by the chairperson) takes priority on first visit,
+    // otherwise fall back to whatever Fund Code was entered/cached on an earlier visit.
+    const urlFundCode = new URLSearchParams(location.search).get('fund');
+    const cachedFundId = localStorage.getItem(FUND_ID_KEY);
+    if(urlFundCode && !currentFundId){
+      resolveFundCode(urlFundCode.trim().toUpperCase()).then(()=>{
+        // If the member portal's Fund Code gate happens to be showing right now, skip it.
+        const gate = document.getElementById('portalFundGatePanel');
+        if(gate && gate.style.display !== 'none'){
+          gate.style.display = 'none';
+          document.getElementById('portalLookupPanel').style.display = 'block';
+        }
+      }).catch(()=>{ /* bad/old link — user can still type the Fund Code manually */ });
+    } else if(cachedFundId){
+      bindFundRefs(cachedFundId);
+      attachFbListenerOnce();
     }
   });
 
@@ -1497,25 +1627,36 @@
   // chairman account is created separately, via createChairmanAccount()). Returns a promise
   // that resolves on success and rejects with the Firebase error otherwise.
   function treasurerSignInOrCreate(email, password, inviteCode){
-    return auth.signInWithEmailAndPassword(email, password).catch((err)=>{
+    return auth.signInWithEmailAndPassword(email, password).then((cred)=>{
+      // Existing account — find out which fund it belongs to before we report success,
+      // so the caller's enterMainApp() has real fund data bound and ready to render.
+      return resolveFundForUid(cred.user.uid).then(()=> cred);
+    }).catch((err)=>{
       if(err.code === 'auth/user-not-found'){
         const code = (inviteCode||'').trim().toUpperCase();
         if(!code) return Promise.reject({ code: 'auth/invite-required' });
         // A not-yet-treasurer session can't list all invites (that'd let anyone browse
-        // active codes), but it CAN look up one exact code directly — that's how a
-        // legitimate invite gets verified before the account is even created.
-        return dbInvitesRef.child(code).once('value').then((snap)=>{
-          const invite = snap.val();
-          if(!invite){
-            return Promise.reject({ code: 'auth/invite-required' });
-          }
-          return auth.createUserWithEmailAndPassword(email, password).then((cred)=>{
-            const entry = { email: email.toLowerCase(), memberId: invite.memberId||null, name: invite.name||'', inviteCode: code, grantedAt: new Date().toISOString().slice(0,10) };
-            return fbRedeemTreasurerInvite(cred.user.uid, entry, code).then(()=>{
-              data.access.treasurerAccess[cred.user.uid] = entry;
-              if(data.invites) delete data.invites[code];
-              localStorage.setItem(STORE_KEY, JSON.stringify(data));
-              return cred;
+        // active codes), but it CAN look up one exact code directly in the global
+        // inviteIndex to find which fund it belongs to — that's how a legitimate invite
+        // gets verified and routed to the right fund before the account even exists.
+        return dbInviteIndexRef.child(code).once('value').then((idxSnap)=>{
+          const fundId = idxSnap.val();
+          if(!fundId) return Promise.reject({ code: 'auth/invite-required' });
+          bindFundRefs(fundId);
+          return dbInvitesRef.child(code).once('value').then((snap)=>{
+            const invite = snap.val();
+            if(!invite){
+              return Promise.reject({ code: 'auth/invite-required' });
+            }
+            return auth.createUserWithEmailAndPassword(email, password).then((cred)=>{
+              const entry = { email: email.toLowerCase(), memberId: invite.memberId||null, name: invite.name||'', inviteCode: code, grantedAt: new Date().toISOString().slice(0,10) };
+              return fbRedeemTreasurerInvite(cred.user.uid, entry, code).then(()=>{
+                data.access.treasurerAccess[cred.user.uid] = entry;
+                if(data.invites) delete data.invites[code];
+                localStorage.setItem(storeKey, JSON.stringify(data));
+                attachFbListenerOnce();
+                return cred;
+              });
             });
           });
         });
@@ -1524,20 +1665,31 @@
     });
   }
 
-  // Founding setup for a brand-new fund: creates the first Auth account and grants it
-  // treasurer access via the one-time "bootstrap" rule (only usable while treasurerAccess
-  // is still completely empty — see the Firebase rules). Then saves the fund's basic
-  // settings, which only succeeds now that this account has write access.
+  // Founding setup for a brand-new fund: generates a fresh fundId and a short, shareable
+  // Fund Code, creates the first Auth account, and grants it treasurer access via the
+  // one-time "bootstrap" rule (only usable while that fund's treasurerAccess is still
+  // completely empty — see database.rules.json). Then saves the fund's basic settings,
+  // which only succeeds now that this account has write access.
   function createChairmanAccount(details){
+    const fundId = uid();
     return auth.createUserWithEmailAndPassword(details.email, details.password).then((cred)=>{
+      bindFundRefs(fundId);
       const entry = { email: details.email.toLowerCase(), memberId: null, name: details.chairName||'', grantedAt: new Date().toISOString().slice(0,10), bootstrap: true };
       return fbBootstrapChairman(cred.user.uid, entry).then(()=>{
         data.access.treasurerAccess[cred.user.uid] = entry;
+        const fundCode = inviteCode();
         data.settings.orgName = details.orgName;
         data.settings.fundNumber = details.fundNumber;
         data.settings.treasurerEmail = details.email;
-        save();
-        return cred;
+        data.settings.fundCode = fundCode;
+        return Promise.all([
+          dbUserFundsRef.child(cred.user.uid).set(fundId),
+          dbFundCodesRef.child(fundCode).set(fundId)
+        ]).then(()=>{
+          save();
+          attachFbListenerOnce();
+          return cred;
+        });
       });
     });
   }
@@ -2329,6 +2481,16 @@
     input.focus();
     input.select();
   }
+  document.getElementById('btnCopyFundCode').addEventListener('click', ()=>{
+    const code = data.settings.fundCode;
+    if(!code){ toast('No Fund Code yet — save your fund settings first.'); return; }
+    const link = location.origin + location.pathname + '?fund=' + code;
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(link).then(()=> toast('Link copied — share it with your members.')).catch(()=> toast('Could not copy — the code is ' + code));
+    } else {
+      toast('Your Fund Code is ' + code);
+    }
+  });
   document.getElementById('editOrgName').addEventListener('click', ()=> unlockSettingsField('setOrgName'));
   document.getElementById('editFundNumber').addEventListener('click', ()=> unlockSettingsField('setFundNumber'));
 
@@ -2342,6 +2504,7 @@
     document.getElementById('setDefaultPayoutPercent').value = data.settings.defaultPayoutPercent || 0;
     document.getElementById('setTreasurerEmail').value = data.settings.treasurerEmail || '(not set — log in as Treasurer to create one)';
     setSettingsPayoutBasisUI(data.settings.defaultPayoutBasis || 'fixed');
+    document.getElementById('memberFundCodeDisplay').textContent = data.settings.fundCode || '—';
 
     // Everyone with fund access can VIEW settings, but only the Chairperson can change
     // them (the server-side rules enforce this too — this just keeps the UI honest about
@@ -2432,6 +2595,9 @@
     if(!data.invites) data.invites = {};
     data.invites[code] = { memberId: memberId || null, name, createdAt: new Date().toISOString().slice(0,10) };
     fbSaveInvites();
+    // Global shortcut so a manager only needs to type this one code (not also the Fund
+    // Code) when redeeming it — see dbInviteIndexRef in treasurerSignInOrCreate.
+    dbInviteIndexRef.child(code).set(currentFundId).catch(()=>{ /* invite still works via fbSaveInvites; this is just a routing shortcut */ });
     document.getElementById('inviteCodeValue').textContent = code;
     document.getElementById('inviteCodeResult').style.display = 'block';
   });
@@ -2552,7 +2718,6 @@
     document.getElementById('mainApp').style.display = 'none';
     document.getElementById('memberPortal').style.display = 'block';
     document.getElementById('portalResults').style.display = 'none';
-    document.getElementById('portalLookupPanel').style.display = 'block';
     document.getElementById('portalLookupError').style.display = 'none';
     document.getElementById('btnPortalLogout').style.display = 'none';
     document.getElementById('btnPortalChangePin').style.display = 'none';
@@ -2560,8 +2725,34 @@
     document.getElementById('portalPhoneInput').value = '';
     document.getElementById('portalPinInput').value = '';
     document.getElementById('portalStaySignedIn').checked = false;
+    document.getElementById('portalFundGateError').style.display = 'none';
     currentPortalMember = null;
+    // If this device already knows which fund it belongs to (a Fund Code entered earlier,
+    // a ?fund= link, or a cached value from a previous visit), skip straight to phone/PIN.
+    // Otherwise ask for the Fund Code first.
+    if(currentFundId || localStorage.getItem(FUND_ID_KEY)){
+      document.getElementById('portalFundGatePanel').style.display = 'none';
+      document.getElementById('portalLookupPanel').style.display = 'block';
+    } else {
+      document.getElementById('portalFundCodeInput').value = '';
+      document.getElementById('portalFundGatePanel').style.display = 'block';
+      document.getElementById('portalLookupPanel').style.display = 'none';
+    }
   }
+  function submitPortalFundCode(){
+    const code = document.getElementById('portalFundCodeInput').value.trim().toUpperCase();
+    const errEl = document.getElementById('portalFundGateError');
+    errEl.style.display = 'none';
+    if(!code){ toast('Enter the Fund Code your chairperson shared with you.'); return; }
+    resolveFundCode(code).then(()=>{
+      document.getElementById('portalFundGatePanel').style.display = 'none';
+      document.getElementById('portalLookupPanel').style.display = 'block';
+    }).catch(()=>{ errEl.style.display = 'block'; });
+  }
+  document.getElementById('btnPortalFundCodeSubmit').addEventListener('click', submitPortalFundCode);
+  document.getElementById('portalFundCodeInput').addEventListener('keydown', (e)=>{
+    if(e.key === 'Enter'){ e.preventDefault(); submitPortalFundCode(); }
+  });
   function showGate(){
     const wasTreasurer = document.getElementById('mainApp').style.display !== 'none';
     document.getElementById('mainApp').style.display = 'none';
@@ -2752,7 +2943,7 @@
     if(!member){ errEl.textContent = 'Member record not found.'; errEl.style.display = 'block'; return; }
     member.pin = next;
     currentPortalMember = member;
-    localStorage.setItem(STORE_KEY, JSON.stringify(data));
+    localStorage.setItem(storeKey, JSON.stringify(data));
     closeModal('changePinModal');
     fbPushMemberPin(member.id, next)
       .then(()=> toast('Your PIN has been updated.'))
@@ -2802,7 +2993,7 @@
     member.notifyReminders = notifyReminders;
     member.beneficiaries = beneficiaries;
     currentPortalMember = member;
-    localStorage.setItem(STORE_KEY, JSON.stringify(data));
+    localStorage.setItem(storeKey, JSON.stringify(data));
     closeModal('memberSettingsModal');
 
     const writes = [ fbPushMemberSelfField(member.id, 'beneficiaries', beneficiaries) ];
