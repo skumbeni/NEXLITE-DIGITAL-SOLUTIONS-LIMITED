@@ -25,7 +25,20 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.10 (2026-08-25)
+// Current version: v0.18 (2026-08-26)
+//
+// v0.18 changes (2026-08-26) — Bulk multi-select delete for entry tables:
+//   - Added checkbox column (Admin only) to Received, Issued, Commodity
+//     Received/Issued, and Work Log tables. A "Select All" checkbox sits
+//     in the header; a floating action bar shows the selected count with
+//     Delete Selected / Cancel buttons.
+//   - Bulk delete reuses each table's existing safety rules: records
+//     outside the edit window can't be selected, one admin-password
+//     confirmation covers the whole batch, and every deleted record is
+//     still written to the audit log individually.
+//   - Selections are cleared automatically on every re-render (tab switch,
+//     data sync, period change) so bulk deletes can never target a stale
+//     row set.
 //
 // v0.10 changes (2026-08-25) — Time range added to Work History by Role:
 //   - The Role History modal (Staff → Role History) now has its own
@@ -943,7 +956,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.17';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v0.18';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

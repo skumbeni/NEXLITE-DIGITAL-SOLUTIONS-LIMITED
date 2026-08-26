@@ -3724,7 +3724,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.17';
+const SW_VERSION  = 'v0.18';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -7638,6 +7638,7 @@ function renderGenReceived(){
     const pp=Number(item.purchasePrice||0);
     const sv=pp>0?pp*Number(item.received||0):null;
     return`<tr>
+    ${USER.role==='admin'?`<td><input type="checkbox" class="bulk-chk" data-id="${item.id}" onchange="bulkToggleRow('gen-inv-table','${item.id}',this.checked)" ${!editable?'disabled title="Outside edit window"':''}></td>`:''}
     <td style="white-space:nowrap">
       <div style="font-weight:700;font-size:17px">${fmtDate(item.date)}${approvalBadge(item)}</div>
       <div style="font-size:15px;color:var(--muted)">${item.time||'—'}</div>
@@ -7654,6 +7655,7 @@ function renderGenReceived(){
     <td style="color:var(--blue);text-align:right;font-weight:700;border-left:2px solid var(--border)">${(cumMap[item.id]||0).toLocaleString()}</td>
     ${USER.role==='admin'?`<td style="white-space:nowrap"><button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`openEditGenRec('${item.id}')`:''}" title="${editable?'Edit':'Edit window closed (>'+_editWindowLabel()+')'}">✏️</button> <button class="delbtn" onclick="delGenRec('${item.id}')">🗑</button></td>`:''}
   </tr>`;}).join('');
+  bulkClear('gen-inv-table');
   const allTimeRec=approvedArr(DATA.generalInventory).reduce((a,b)=>a+Number(b.received||0),0);
   const allTimeIss=approvedArr(DATA.generalIssued).reduce((a,b)=>a+Number(b.issued||0),0);
   const totRec=approvedArr(items).reduce((a,b)=>a+Number(b.received||0),0);
@@ -7682,9 +7684,10 @@ function renderGenReceived(){
     <div style="margin-bottom:10px">
       <input class="fi" id="gen-inv-search" placeholder="🔍 Search by item name, condition…" oninput="filterTable('gen-inv-table',this.value)" style="font-size:18px"/>
     </div>
+    ${USER.role==='admin'?bulkBarHtml('gen-inv-table','bulkDeleteGenRec'):''}
     <div class="card" style="padding:0"><div class="tw"><table id="gen-inv-table">
-      <thead><tr><th>Date & Time</th><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Purchase Price</th><th style="text-align:right">Stock Value</th><th style="text-align:right">Good</th><th style="text-align:right">Damaged</th><th>Cond.</th><th>Payment</th><th>Expiry</th><th style="text-align:right;color:var(--blue);border-left:2px solid var(--border)">Item Cum.</th>${USER.role==='admin'?'<th></th>':''}</tr></thead>
-      <tbody>${items.length===0?`<tr><td colspan="11" class="empty">No received items for this period</td></tr>`:rows}</tbody>
+      <thead><tr>${USER.role==='admin'?`<th style="width:34px"><input type="checkbox" id="gen-inv-table-chkall" onchange="bulkToggleAll('gen-inv-table',this.checked)"></th>`:''}<th>Date & Time</th><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Purchase Price</th><th style="text-align:right">Stock Value</th><th style="text-align:right">Good</th><th style="text-align:right">Damaged</th><th>Cond.</th><th>Payment</th><th>Expiry</th><th style="text-align:right;color:var(--blue);border-left:2px solid var(--border)">Item Cum.</th>${USER.role==='admin'?'<th></th>':''}</tr></thead>
+      <tbody>${items.length===0?`<tr><td colspan="${USER.role==='admin'?12:11}" class="empty">No received items for this period</td></tr>`:rows}</tbody>
     </table></div></div>`;
 }
 
@@ -7712,6 +7715,7 @@ function renderGenIssued(){
         :`<span class="bdg br2" style="font-size:14px">CREDIT</span>`;
     const custChip=item.customerName?`<span style="font-size:14px;color:var(--blue);font-weight:700">👤 ${esc(item.customerName)}</span>`:item.customerId?`<span style="font-size:13px;color:var(--muted)">linked</span>`:'<span style="color:var(--muted)">—</span>';
     return`<tr>
+    ${USER.role==='admin'?`<td><input type="checkbox" class="bulk-chk" data-id="${item.id}" onchange="bulkToggleRow('gen-iss-table','${item.id}',this.checked)" ${!editable?'disabled title="Outside edit window"':''}></td>`:''}
     <td style="white-space:nowrap">
       <div style="font-weight:700;font-size:17px">${fmtDate(item.date)}${approvalBadge(item)}</div>
       <div style="font-size:15px;color:var(--muted)">${item.time||'—'}</div>
@@ -7726,6 +7730,7 @@ function renderGenIssued(){
     <td style="color:var(--blue);text-align:right;font-weight:700;border-left:2px solid var(--border)">${(cumMap[item.id]||0).toLocaleString()}</td>
     <td style="white-space:nowrap"><button class="editbtn" onclick="printSaleReceipt('${item.id}')" title="Print receipt">🧾</button>${USER.role==='admin'?` <button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`openEditGenIss('${item.id}')`:''}" title="${editable?'Edit':'Edit window closed (>'+_editWindowLabel()+')'}">✏️</button> <button class="delbtn" onclick="delGenIss('${item.id}')">🗑</button>`:''}</td>
   </tr>`;}).join('');
+  bulkClear('gen-iss-table');
   const allTimeIss=approvedArr(DATA.generalIssued).reduce((a,b)=>a+Number(b.issued||0),0);
   const periodIss=approvedArr(items).reduce((a,b)=>a+Number(b.issued||0),0);
   const periodSales=approvedArr(items).reduce((a,b)=>a+Number(b.issued||0)*Number(b.sellingPrice||0),0);
@@ -7780,9 +7785,10 @@ function renderGenIssued(){
     <div style="margin-bottom:10px">
       <input class="fi" id="gen-iss-search" placeholder="🔍 Search by item name or notes…" oninput="filterTable('gen-iss-table',this.value)" style="font-size:18px"/>
     </div>
+    ${USER.role==='admin'?bulkBarHtml('gen-iss-table','bulkDeleteGenIss'):''}
     <div class="card" style="padding:0"><div class="tw"><table id="gen-iss-table">
-      <thead><tr><th>Date & Time</th><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Selling Price</th><th style="text-align:right">Sale Value</th><th>Payment</th><th>Customer</th><th>Notes</th><th style="text-align:right;color:var(--blue);border-left:2px solid var(--border)">Item Cum.</th>${USER.role==='admin'?'<th></th>':''}</tr></thead>
-      <tbody>${items.length===0?`<tr><td colspan="10" class="empty">No issued items for this period</td></tr>`:rows}</tbody>
+      <thead><tr>${USER.role==='admin'?`<th style="width:34px"><input type="checkbox" id="gen-iss-table-chkall" onchange="bulkToggleAll('gen-iss-table',this.checked)"></th>`:''}<th>Date & Time</th><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Selling Price</th><th style="text-align:right">Sale Value</th><th>Payment</th><th>Customer</th><th>Notes</th><th style="text-align:right;color:var(--blue);border-left:2px solid var(--border)">Item Cum.</th>${USER.role==='admin'?'<th></th>':''}</tr></thead>
+      <tbody>${items.length===0?`<tr><td colspan="${USER.role==='admin'?11:10}" class="empty">No issued items for this period</td></tr>`:rows}</tbody>
     </table></div></div>`;
 }
 
@@ -8418,6 +8424,112 @@ function _commitGenIss(payload){
   closeModal();
 }
 
+// ── BULK MULTI-SELECT DELETE (shared across all entry tables) ────────────────
+// Each table id (e.g. 'gen-inv-table') gets its own Set of selected row ids.
+// Selections are intentionally NOT persisted across re-renders — any data
+// mutation or tab switch rebuilds the table and clears its selection, so a
+// user is never able to bulk-delete against a stale/renumbered row set.
+const BULK_SEL={};
+function bulkSet(tid){return BULK_SEL[tid]||(BULK_SEL[tid]=new Set());}
+function bulkClear(tid){BULK_SEL[tid]=new Set();bulkRefreshBar(tid);}
+function bulkBarHtml(tid,onDeleteFn){
+  return `<div id="${tid}-bulkbar" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;background:var(--surface2);border:1px solid var(--red);border-radius:10px;padding:8px 12px;margin-bottom:10px">
+    <span style="font-weight:700"><span id="${tid}-bulkcount">0</span> selected</span>
+    <button class="btn br" style="padding:6px 14px;font-size:15px" onclick="${onDeleteFn}()">🗑 Delete Selected</button>
+    <button class="btn bo" style="padding:6px 14px;font-size:15px" onclick="bulkClear('${tid}')">Cancel</button>
+  </div>`;
+}
+function bulkToggleRow(tid,id,checked){const s=bulkSet(tid);checked?s.add(String(id)):s.delete(String(id));bulkRefreshBar(tid);}
+function bulkToggleAll(tid,checked){
+  const tbody=document.querySelector(`#${tid} tbody`);
+  if(!tbody)return;
+  const s=bulkSet(tid);
+  tbody.querySelectorAll('input.bulk-chk:not(:disabled)').forEach(cb=>{
+    cb.checked=checked;
+    checked?s.add(cb.dataset.id):s.delete(cb.dataset.id);
+  });
+  bulkRefreshBar(tid);
+}
+function bulkRefreshBar(tid){
+  const s=bulkSet(tid);
+  const bar=document.getElementById(tid+'-bulkbar');
+  if(bar)bar.style.display=s.size>0?'flex':'none';
+  const cnt=document.getElementById(tid+'-bulkcount');
+  if(cnt)cnt.textContent=s.size;
+  const headChk=document.getElementById(tid+'-chkall');
+  if(headChk){
+    const boxes=document.querySelectorAll(`#${tid} tbody input.bulk-chk`);
+    const enabled=[...boxes].filter(cb=>!cb.disabled);
+    headChk.checked=enabled.length>0&&s.size===enabled.length;
+    headChk.indeterminate=s.size>0&&s.size<enabled.length;
+  }
+}
+function _bulkRun(tid,label,ids,records,onDelete){
+  if(ids.length===0)return;
+  if(!confirm(`Delete ${ids.length} ${label}${ids.length!==1?'s':''}? This cannot be undone.`))return;
+  requireAdminPassword(`delete ${ids.length} ${label}${ids.length!==1?'s':''}`,()=>{
+    onDelete();
+    bulkClear(tid);
+    showToast(`🗑 Deleted ${ids.length} ${label}${ids.length!==1?'s':''}`);
+  });
+}
+function bulkDeleteGenRec(){
+  const ids=[...bulkSet('gen-inv-table')];
+  if(!ids.length)return;
+  const recs=ids.map(id=>(DATA.generalInventory||[]).find(x=>String(x.id)===id)).filter(Boolean);
+  const locked=recs.filter(r=>!isWithin24h(r));
+  if(locked.length){alert(`🔒 ${locked.length} of the selected record(s) are older than the ${_editWindowLabel()} edit window and cannot be deleted. Deselect them and try again.`);return;}
+  _bulkRun('gen-inv-table','receive record',ids,recs,()=>{
+    recs.forEach(r=>logAuditEvent('DELETE','Inventory Received',`ID:${r.id} · Item:${r.itemName} · Qty:${r.received}`,r));
+    updateData(d=>({...d,generalInventory:d.generalInventory.filter(x=>!ids.includes(String(x.id)))}));
+  });
+}
+function bulkDeleteGenIss(){
+  const ids=[...bulkSet('gen-iss-table')];
+  if(!ids.length)return;
+  const recs=ids.map(id=>(DATA.generalIssued||[]).find(x=>String(x.id)===id)).filter(Boolean);
+  const locked=recs.filter(r=>!isWithin24h(r));
+  if(locked.length){alert(`🔒 ${locked.length} of the selected record(s) are older than the ${_editWindowLabel()} edit window and cannot be deleted. Deselect them and try again.`);return;}
+  _bulkRun('gen-iss-table','issue record',ids,recs,()=>{
+    recs.forEach(r=>logAuditEvent('DELETE','Inventory Issued',`ID:${r.id} · Item:${r.itemName} · Qty:${r.issued}`,r));
+    updateData(d=>({...d,generalIssued:d.generalIssued.filter(x=>!ids.includes(String(x.id)))}));
+  });
+}
+function bulkDeleteMaizeRec(){
+  const ids=[...bulkSet('maize-rec-table')];
+  if(!ids.length)return;
+  const cid=CCOM;
+  const recs=ids.map(id=>((DATA.commodityReceived||{})[cid]||[]).find(x=>String(x.id)===id)).filter(Boolean);
+  const locked=recs.filter(r=>!isWithin24h(r));
+  if(locked.length){alert(`🔒 ${locked.length} of the selected record(s) are older than the ${_editWindowLabel()} edit window and cannot be deleted. Deselect them and try again.`);return;}
+  _bulkRun('maize-rec-table','receive record',ids,recs,()=>{
+    recs.forEach(r=>logAuditEvent('DELETE',`${getCom(cid).name} Received`,`ID:${r.id} · Batch:${r.batchName} · Qty:${r.received}`,r));
+    updateData(d=>{const cr={...(d.commodityReceived||{})};cr[cid]=(cr[cid]||[]).filter(x=>!ids.includes(String(x.id)));return{...d,commodityReceived:cr};});
+  });
+}
+function bulkDeleteMaizeIss(){
+  const ids=[...bulkSet('maize-iss-table')];
+  if(!ids.length)return;
+  const cid=CCOM;
+  const recs=ids.map(id=>((DATA.commodityIssued||{})[cid]||[]).find(x=>String(x.id)===id)).filter(Boolean);
+  const locked=recs.filter(r=>!isWithin24h(r));
+  if(locked.length){alert(`🔒 ${locked.length} of the selected record(s) are older than the ${_editWindowLabel()} edit window and cannot be deleted. Deselect them and try again.`);return;}
+  _bulkRun('maize-iss-table','issue record',ids,recs,()=>{
+    recs.forEach(r=>logAuditEvent('DELETE',`${getCom(cid).name} Issued`,`ID:${r.id} · Batch:${r.batchName} · Qty:${r.issued}`,r));
+    updateData(d=>{const ci={...(d.commodityIssued||{})};ci[cid]=(ci[cid]||[]).filter(x=>!ids.includes(String(x.id)));return{...d,commodityIssued:ci};});
+  });
+}
+function bulkDeleteStaffLog(){
+  const ids=[...bulkSet('staff-log-table')];
+  if(!ids.length)return;
+  const recs=ids.map(id=>(DATA.staffLogs||[]).find(l=>String(l.id)===id)).filter(Boolean);
+  const locked=recs.filter(r=>!isWithin24h(r,true));
+  if(locked.length){alert(`🔒 ${locked.length} of the selected record(s) are older than the ${_editWindowLabel(true)} edit window and cannot be deleted. Deselect them and try again.`);return;}
+  _bulkRun('staff-log-table','work log',ids,recs,()=>{
+    recs.forEach(r=>logAuditEvent('DELETE','Work Log',`ID:${r.id} · Staff:${r.staffId} · Task:${r.task}`,r));
+    updateData(d=>({...d,staffLogs:d.staffLogs.filter(l=>!ids.includes(String(l.id)))}));
+  });
+}
 function delGenRec(id){const _r=(DATA.generalInventory||[]).find(x=>x.id===id);if(_r&&!isWithin24h(_r)){alert('🔒 This record is older than the '+_editWindowLabel()+' edit window and cannot be deleted.');return;}requireAdminPassword('delete this receive record',()=>{logAuditEvent('DELETE','Inventory Received',`ID:${id} · Item:${_r?_r.itemName:''} · Qty:${_r?_r.received:''}`,_r);updateData(d=>({...d,generalInventory:d.generalInventory.filter(x=>x.id!==id)}));});}
 function delGenIss(id){const _r=(DATA.generalIssued||[]).find(x=>x.id===id);if(_r&&!isWithin24h(_r)){alert('🔒 This record is older than the '+_editWindowLabel()+' edit window and cannot be deleted.');return;}requireAdminPassword('delete this issue record',()=>{logAuditEvent('DELETE','Inventory Issued',`ID:${id} · Item:${_r?_r.itemName:''} · Qty:${_r?_r.issued:''}`,_r);updateData(d=>({...d,generalIssued:d.generalIssued.filter(x=>x.id!==id)}));});}
 
@@ -8992,6 +9104,7 @@ function renderMaizeRec(){
     const cost=stockVal; // cost of this transaction = qty × unit price
     const editable=isWithin24h(item);
     return`<tr>
+    ${USER.role==='admin'?`<td><input type="checkbox" class="bulk-chk" data-id="${item.id}" onchange="bulkToggleRow('maize-rec-table','${item.id}',this.checked)" ${!editable?'disabled title="Outside edit window"':''}></td>`:''}
     <td style="white-space:nowrap">
       <div style="font-weight:700;font-size:17px">${fmtDate(item.date)}${approvalBadge(item)}</div>
       <div style="font-size:15px;color:var(--muted)">${item.time||'—'}</div>
@@ -9005,6 +9118,7 @@ function renderMaizeRec(){
     ${USER.role==='admin'?`<td style="color:var(--amber);text-align:right;font-size:16px;border-left:1px solid var(--border)">${cumCostMap[item.id]>0?zm(cumCostMap[item.id]):'—'}</td>`:''}
     ${USER.role==='admin'?`<td style="white-space:nowrap"><button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`openEditMaizeRec('${item.id}')`:''}\" title="${editable?'Edit':'Edit window closed (>'+_editWindowLabel()+')'}">✏️</button> <button class="delbtn" onclick="delMaizeRec('${item.id}')">🗑</button></td>`:''}
   </tr>`;}).join('');
+  bulkClear('maize-rec-table');
   const allTimeRec=approvedArr(all).reduce((a,b)=>a+Number(b.received||0),0);
   const allTimeIss=approvedArr(cIss(CCOM)).reduce((a,b)=>a+Number(b.issued||0),0);
   const allTimeCost=approvedArr(all).reduce((a,b)=>a+Number(b.received||0)*Number(b.unitPrice||0),0);
@@ -9035,8 +9149,10 @@ function renderMaizeRec(){
     <div style="margin-bottom:10px">
       <input class="fi" id="maize-rec-search" placeholder="🔍 Search by batch name, date…" oninput="filterTable('maize-rec-table',this.value)" style="font-size:18px"/>
     </div>
+    ${USER.role==='admin'?bulkBarHtml('maize-rec-table','bulkDeleteMaizeRec'):''}
     <div class="card" style="padding:0"><div class="tw"><table id="maize-rec-table">
       <thead><tr>
+        ${USER.role==='admin'?`<th style="width:34px"><input type="checkbox" id="maize-rec-table-chkall" onchange="bulkToggleAll('maize-rec-table',this.checked)"></th>`:''}
         <th>Date & Time</th><th>Batch</th>
         <th style="text-align:right">Received</th>
         ${USER.role==='admin'?`<th style="text-align:right;color:var(--muted)">Unit Price</th>
@@ -9046,7 +9162,7 @@ function renderMaizeRec(){
         ${USER.role==='admin'?`<th style="text-align:right;color:var(--amber);border-left:1px solid var(--border)">Cum.Cost</th>`:''}
         ${USER.role==='admin'?'<th></th>':''}
       </tr></thead>
-      <tbody>${items.length===0?`<tr><td colspan="9" class="empty">No ${esc(com.name)} received for this period</td></tr>`:rows}</tbody>
+      <tbody>${items.length===0?`<tr><td colspan="${USER.role==='admin'?10:9}" class="empty">No ${esc(com.name)} received for this period</td></tr>`:rows}</tbody>
     </table></div></div>`;
 }
 
@@ -9072,6 +9188,7 @@ function renderMaizeIss(){
     const revenue=qty*sp;
     const editable=isWithin24h(item);
     return`<tr>
+    ${USER.role==='admin'?`<td><input type="checkbox" class="bulk-chk" data-id="${item.id}" onchange="bulkToggleRow('maize-iss-table','${item.id}',this.checked)" ${!editable?'disabled title="Outside edit window"':''}></td>`:''}
     <td style="white-space:nowrap">
       <div style="font-weight:700;font-size:17px">${fmtDate(item.date)}${approvalBadge(item)}</div>
       <div style="font-size:15px;color:var(--muted)">${item.time||'—'}</div>
@@ -9088,6 +9205,7 @@ function renderMaizeIss(){
     ${USER.role==='admin'?`<td style="white-space:nowrap"><button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`openEditMaizeIss('${item.id}')`:''}\" title="${editable?'Edit':'Edit window closed (>'+_editWindowLabel()+')'}">✏️</button> <button class="delbtn" onclick="delMaizeIss('${item.id}')">🗑</button></td>`:''}
     <td><button class="editbtn" onclick="openTraceModal('${item.id}','commodity')" title="Trace batch/lot origin">🔍</button></td>
   </tr>`;}).join('');
+  bulkClear('maize-iss-table');
   const allTimeIss=approvedArr(all).reduce((a,b)=>a+Number(b.issued||0),0);
   const allTimeRec=approvedArr(allRec).reduce((a,b)=>a+Number(b.received||0),0);
   const allTimeRev=approvedArr(all).reduce((a,b)=>a+Number(b.issued||0)*Number(b.salePrice||0),0);
@@ -9112,8 +9230,10 @@ function renderMaizeIss(){
     <div style="margin-bottom:10px">
       <input class="fi" id="maize-iss-search" placeholder="🔍 Search by batch name, transporter…" oninput="filterTable('maize-iss-table',this.value)" style="font-size:18px"/>
     </div>
+    ${USER.role==='admin'?bulkBarHtml('maize-iss-table','bulkDeleteMaizeIss'):''}
     <div class="card" style="padding:0"><div class="tw"><table id="maize-iss-table">
       <thead><tr>
+        ${USER.role==='admin'?`<th style="width:34px"><input type="checkbox" id="maize-iss-table-chkall" onchange="bulkToggleAll('maize-iss-table',this.checked)"></th>`:''}
         <th>Date & Time</th><th>Batch</th><th>Transporter</th>
         <th style="text-align:right">Issued</th>
         ${USER.role==='admin'?`<th style="text-align:right;color:var(--muted)">Sale Price</th>
@@ -9125,7 +9245,7 @@ function renderMaizeIss(){
         ${USER.role==='admin'?'<th></th>':''}
         <th title="Batch traceability">🔍</th>
       </tr></thead>
-      <tbody>${items.length===0?`<tr><td colspan="12" class="empty">No ${esc(com.name)} issued for this period</td></tr>`:rows}</tbody>
+      <tbody>${items.length===0?`<tr><td colspan="${USER.role==='admin'?13:12}" class="empty">No ${esc(com.name)} issued for this period</td></tr>`:rows}</tbody>
     </table></div></div>`;
 }
 
@@ -10167,7 +10287,9 @@ function renderStaffLogs(){
       const lbl=typeLabels[log.entryType]||log.entryType.toUpperCase();
       const col=typeColors[log.entryType]||'var(--muted)';
       const dayRGB=_dayColorRGB(log.date);
+      const editableAbs=isWithin24h(log,true);
       return `<tr style="background:rgba(${dayRGB},.035)">
+        ${USER.role==='admin'?`<td><input type="checkbox" class="bulk-chk" data-id="${log.id}" onchange="bulkToggleRow('staff-log-table','${log.id}',this.checked)" ${!editableAbs?'disabled title="Outside edit window"':''}></td>`:''}
         <td style="white-space:nowrap"><div style='font-size:17px;font-weight:700'>${fmtDate(log.date)}${approvalBadge(log)}</div><div style='font-size:15px;color:var(--muted)'>${log.time||'—'}</div></td>
         <td style="font-weight:700">${s?.name||'—'}</td>
         <td><span class="tag">${esc(log.role||s?.role||'—')}</span></td>
@@ -10192,6 +10314,7 @@ function renderStaffLogs(){
       hoursCell=`${hrs}h${ot?` <span style="color:var(--amber);font-size:14px">OT</span>`:''}`;
     }
     return `<tr${isOpen?' style="background:rgba(0,214,143,.05)"':` style="background:rgba(${_dayColorRGB(log.date)},.035)"`}>
+      ${USER.role==='admin'?`<td><input type="checkbox" class="bulk-chk" data-id="${log.id}" onchange="bulkToggleRow('staff-log-table','${log.id}',this.checked)" ${!editable||isOpen?'disabled title="'+(isOpen?'Clock out first':'Outside edit window')+'"':''}></td>`:''}
       <td style="white-space:nowrap"><div style='font-size:17px;font-weight:700'>${fmtDate(log.date)}${approvalBadge(log)}</div><div style='font-size:15px;color:var(--muted)'>${log.time||'—'}</div>${isOpen?`<span class="bdg bdg-active" style="margin-top:3px;display:inline-block">🟢 ACTIVE</span>`:''}
       ${isOpen&&USER.role==='admin'?`<div style="margin-top:4px"><button class="clockout-btn" onclick="openClockOutForm('${log.id}')">⏹ Clock Out</button></div>`:''}</td>
       <td style="font-weight:700">${s?.name||'—'}</td>
@@ -10206,6 +10329,7 @@ function renderStaffLogs(){
       <td style="color:var(--purple);font-weight:700;text-align:right">${isOpen?'—':zm(cum.cumNet)}</td>
       ${USER.role==='admin'?`<td style="white-space:nowrap"><button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`openEditLog('${log.id}')`:''}" title="${editable?'Edit':'Edit window closed (>'+_editWindowLabel(true)+')'}">✏️</button> <button class="delbtn" onclick="delLog('${log.id}')">🗑</button></td>`:''}
     </tr>`;}).join('');
+  bulkClear('staff-log-table');
 
   return `
     <div class="prow">${pBtns('staff')}</div>
@@ -10229,8 +10353,10 @@ function renderStaffLogs(){
     <div style="margin-bottom:10px">
       <input class="fi" id="staff-log-search" placeholder="🔍 Search by name, role, or task…" oninput="filterStaffLogTable(this.value)" style="font-size:18px"/>
     </div>
+    ${USER.role==='admin'?bulkBarHtml('staff-log-table','bulkDeleteStaffLog'):''}
     <div class="card" style="padding:0"><div class="tw"><table id="staff-log-table">
       <thead><tr>
+        ${USER.role==='admin'?`<th style="width:34px"><input type="checkbox" id="staff-log-table-chkall" onchange="bulkToggleAll('staff-log-table',this.checked)"></th>`:''}
         <th>Date</th><th>Staff</th><th>Role</th><th>Task</th>
         <th style="text-align:right">Qty</th>
         <th style="text-align:right">Gross</th>
@@ -10241,7 +10367,7 @@ function renderStaffLogs(){
         <th style="text-align:right;color:var(--purple)">Cum.Net</th>
         ${USER.role==='admin'?'<th></th>':''}
       </tr></thead>
-      <tbody>${taskFilteredLogs.length===0?`<tr><td colspan="12" class="empty">${STAFF_LOG_TASK_FILTER==='all'?'No logs for this period':'No logs for "'+esc(STAFF_LOG_TASK_FILTER)+'" in this period'}</td></tr>`:rows}</tbody>
+      <tbody>${taskFilteredLogs.length===0?`<tr><td colspan="${USER.role==='admin'?13:12}" class="empty">${STAFF_LOG_TASK_FILTER==='all'?'No logs for this period':'No logs for "'+esc(STAFF_LOG_TASK_FILTER)+'" in this period'}</td></tr>`:rows}</tbody>
     </table></div></div>`;
 }
 
