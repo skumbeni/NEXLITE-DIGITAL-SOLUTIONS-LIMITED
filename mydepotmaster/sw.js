@@ -25,7 +25,18 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.18 (2026-08-26)
+// Current version: v0.19 (2026-08-26)
+//
+// v0.19 changes (2026-08-26) — Bulk multi-record EDIT alongside bulk delete:
+//   - The bulk action bar (Received, Issued, Commodity Received/Issued,
+//     Work Logs) now has an "✏️ Edit Selected" button next to Delete.
+//   - Opens a small field-picker modal per table (Date, Condition/Status,
+//     Payment Status where applicable). Only ticked fields are applied to
+//     every selected record — unticked fields are left untouched.
+//   - Reuses the same admin-password gate and edit-window lock as single
+//     edits, and writes one EDIT audit-log entry per affected record.
+//   - Staff Work Logs also blocks bulk-editing any selected active/open
+//     shift until it's clocked out.
 //
 // v0.18 changes (2026-08-26) — Bulk multi-select delete for entry tables:
 //   - Added checkbox column (Admin only) to Received, Issued, Commodity
@@ -956,7 +967,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.18';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v0.19';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
