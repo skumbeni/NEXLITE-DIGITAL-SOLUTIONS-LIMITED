@@ -2094,12 +2094,20 @@
           ]).then(([dirSnap, memberSnap]) => {
             const coopName = (dirSnap.val() && dirSnap.val().name) || invite.coopId;
             const memberName = (memberSnap.val() && memberSnap.val().name) || 'Member';
-            const updates = {};
-            updates['users/' + cred.user.uid] = { coopId: invite.coopId, coopName, role: 'member', memberId: invite.memberId };
-            updates['coops/' + invite.coopId + '/members/' + invite.memberId + '/uid'] = cred.user.uid;
-            updates['coops/' + invite.coopId + '/accountRoles/' + cred.user.uid] = { role: 'member', name: memberName, memberId: invite.memberId };
-            updates['inviteCodes/' + code] = null;
-            return updateAfterSignup(cred.user, updates).then(() => {
+            const uid = cred.user.uid;
+            // Three sequential steps, not one atomic update(): the member-slot claim and the
+            // users/{uid} profile each have write rules that reference the other, so each step
+            // must fully commit before the next one's rule check can see it.
+            return cred.user.getIdToken(true)
+              .then(() => db.ref('coops/' + invite.coopId + '/members/' + invite.memberId + '/uid').set(uid))
+              .then(() => {
+                const updates = {};
+                updates['users/' + uid] = { coopId: invite.coopId, coopName, role: 'member', memberId: invite.memberId };
+                updates['coops/' + invite.coopId + '/accountRoles/' + uid] = { role: 'member', name: memberName, memberId: invite.memberId };
+                return updateAfterSignup(cred.user, updates);
+              })
+              .then(() => db.ref('inviteCodes/' + code).remove().catch(() => {})) // best-effort — code is one-shot but a failed cleanup here shouldn't block the join that already succeeded
+              .then(() => {
               IS_SUPERADMIN = false;
               IS_MEMBER = true;
               MY_MEMBER_ID = invite.memberId;
