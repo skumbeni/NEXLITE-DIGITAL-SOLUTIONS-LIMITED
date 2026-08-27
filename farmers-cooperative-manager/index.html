@@ -90,6 +90,24 @@
      rather than just disabled, since the security rules already block the writes;
      this just keeps the UI honest about what will and won't work. */
   body.member-view .admin-only{ display:none !important; }
+  /* Duo-approval controls: an admin-only action (like "Give advance") stays hidden for
+     members as before, but a handful of member-only controls (requesting an advance,
+     deciding on an approval sent to them) need the opposite — hidden from admins,
+     shown only in member-view. */
+  .member-only{ display:none; }
+  body.member-view .member-only{ display:block; }
+  .approval-card{
+    border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; background:var(--card);
+  }
+  .approval-card .approval-summary{ font-size:13.5px; font-weight:600; margin-bottom:4px; }
+  .approval-card .approval-meta{ font-size:11.5px; color:var(--ink-soft); margin-bottom:10px; }
+  .approval-card .approval-waiting{ font-size:11.5px; color:var(--ink-soft); font-style:italic; }
+  .nav-badge{
+    position:absolute; top:2px; right:2px; min-width:16px; height:16px; border-radius:999px;
+    background:var(--brick); color:#fff; font-size:10px; line-height:16px; text-align:center;
+    padding:0 3px; display:none;
+  }
+  .icon-btn{ position:relative; }
   .readonly-badge{
     display:none;
     font-size:11px;
@@ -176,6 +194,19 @@
     opacity:0.9;
   }
   .silo-stats strong{font-weight:600;}
+
+  /* Project funding progress card — same anatomy as .silo-card, gold-toned
+     instead of crop-green so a project ("buy a grinder") reads visually
+     distinct from a harvest season on the same screen family. */
+  .fund-card{
+    background:var(--gold-deep);
+    border-radius:var(--radius);
+    padding:20px;
+    color:#F6F1E4;
+    margin-bottom:16px;
+    position:relative;
+    overflow:hidden;
+  }
 
   .stat-row{
     display:grid;
@@ -559,6 +590,13 @@
     </div>
     <div style="display:flex;align-items:center;gap:6px;">
       <div class="coop-pill" id="coop-pill" onclick="onCoopPillClick()" title="Tap to switch coop">Loading…</div>
+      <button class="icon-btn" onclick="showScreen('userGuide')" title="Help &amp; user guide">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="var(--ink-soft)" stroke-width="1.8" fill="none"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 2-3 4"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      </button>
+      <button class="icon-btn" onclick="showScreen('approvals')" title="Approvals">
+        <svg viewBox="0 0 24 24" width="16" height="16" stroke="var(--ink-soft)" stroke-width="1.8" fill="none"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        <span class="nav-badge" id="approvals-badge"></span>
+      </button>
       <button class="icon-btn" onclick="doLogout()" title="Log out">
         <svg viewBox="0 0 24 24" width="16" height="16" stroke="var(--ink-soft)" stroke-width="1.8" fill="none"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
       </button>
@@ -584,6 +622,12 @@
         <div class="stat-box">
           <div class="num" id="stat-outstanding">–</div>
           <div class="label">Outstanding payouts</div>
+        </div>
+      </div>
+      <div class="stat-row" style="grid-template-columns:1fr;">
+        <div class="stat-box">
+          <div class="num" id="stat-advances-outstanding">–</div>
+          <div class="label">Advances outstanding (cash &amp; inputs owed back by members)</div>
         </div>
       </div>
 
@@ -623,8 +667,19 @@
         <button class="btn btn-secondary" style="color:var(--brick);" onclick="deleteMember()">Delete</button>
       </div>
       <div class="btn-row admin-only" id="member-detail-invite-row">
-        <button class="btn btn-secondary" onclick="inviteMember()">Invite to app</button>
+        <button class="btn btn-secondary" id="btn-invite-member" onclick="inviteMember()">Invite to app</button>
       </div>
+      <div class="li-sub admin-only" id="member-detail-invite-note" style="display:none;margin-top:-6px;margin-bottom:14px;"></div>
+
+      <div class="section-label">Advances</div>
+      <div class="stat-box" style="margin-bottom:12px;">
+        <div class="num" id="member-detail-advances-total" style="font-size:16px;">–</div>
+      </div>
+      <div class="btn-row admin-only">
+        <button class="btn btn-secondary" onclick="openGiveAdvance()">+ Give advance</button>
+      </div>
+      <div id="member-detail-advances" style="margin-bottom:18px;"></div>
+
       <div class="section-label">Contribution history</div>
       <div id="member-detail-history"></div>
     </section>
@@ -663,6 +718,44 @@
       <div id="payouts-list"><div class="empty-state"><div class="icon">💰</div><p>No sold seasons yet. Record a sale from the Seasons tab to generate payouts.</p></div></div>
     </section>
 
+    <!-- PROJECTS -->
+    <section class="screen" id="projects">
+      <div class="eyebrow">Coop-agreed initiatives</div>
+      <h1 class="page-title">Projects</h1>
+      <div class="readonly-badge">Read-only — you can view your coop but not make changes</div>
+
+      <div class="btn-row admin-only">
+        <button class="btn btn-primary" onclick="openModal('addProject')">+ New project</button>
+      </div>
+
+      <div class="field" style="margin-bottom:14px;">
+        <input type="text" id="input-project-search" placeholder="Search by project name" oninput="renderProjects()">
+      </div>
+
+      <div id="projects-list"><div class="empty-state"><div class="icon">🎯</div><p>No projects yet. Once the coop agrees on one — a grinder, a storage shed, a joint input order — start it above.</p></div></div>
+    </section>
+
+    <!-- PROJECT DETAIL -->
+    <section class="screen" id="project-detail">
+      <div class="modal-close" style="text-align:left;margin-bottom:14px;" onclick="showScreen('projects', document.querySelectorAll('nav.bottom button')[4])">&larr; Back to projects</div>
+      <h1 class="page-title" id="project-detail-name" style="margin-bottom:4px;">Project</h1>
+      <div class="eyebrow" id="project-detail-sub" style="text-transform:none;letter-spacing:normal;margin-bottom:16px;"></div>
+
+      <div id="project-detail-fund"></div>
+
+      <div class="btn-row admin-only">
+        <button class="btn btn-secondary" onclick="openEditProject()">Edit</button>
+        <button class="btn btn-secondary" style="color:var(--brick);" onclick="deleteProjectPrompt()">Delete</button>
+      </div>
+      <div class="btn-row admin-only" id="project-detail-status-actions"></div>
+
+      <div class="section-label">Contributions</div>
+      <div class="btn-row admin-only" id="project-detail-add-contrib-row">
+        <button class="btn btn-secondary" onclick="openAddProjectContribution()">+ Add contribution</button>
+      </div>
+      <div id="project-detail-contributions"></div>
+    </section>
+
     <!-- SETTINGS -->
     <section class="screen" id="settings">
       <div class="eyebrow">Preferences</div>
@@ -685,8 +778,150 @@
       <div class="section-label">Account</div>
       <div class="btn-row">
         <button class="btn btn-secondary" onclick="openChangePasswordModal()">Change password</button>
+        <button class="btn btn-secondary" onclick="openChangePinModal()" id="btn-settings-pin">Set transaction PIN</button>
+        <button class="btn btn-secondary" onclick="showScreen('userGuide')">User guide</button>
         <button class="btn btn-secondary" style="color:var(--brick);" onclick="doLogout()">Log out</button>
       </div>
+    </section>
+
+    <!-- USER GUIDE (plain-language help — no technical/security detail, safe to ship in-app) -->
+    <section class="screen" id="userGuide">
+      <div class="modal-close" style="text-align:left;margin-bottom:14px;" onclick="showScreen('settings', document.querySelectorAll('nav.bottom button')[5])">&larr; Back to settings</div>
+      <div class="eyebrow">Help</div>
+      <h1 class="page-title">User guide</h1>
+      <p style="font-size:12.5px;color:var(--ink-soft);margin-bottom:16px;">
+        A quick reference for using Pool. Tap a section to open it.
+      </p>
+
+      <style>
+        #userGuide details{ border:1px solid var(--line); border-radius:12px; margin-bottom:10px; background:var(--card); overflow:hidden; }
+        #userGuide summary{ padding:13px 14px; font-weight:600; font-size:14px; cursor:pointer; list-style:none; }
+        #userGuide summary::-webkit-details-marker{ display:none; }
+        #userGuide summary::before{ content:'▸'; display:inline-block; margin-right:8px; color:var(--gold-deep); transition:transform .15s; }
+        #userGuide details[open] summary::before{ transform:rotate(90deg); }
+        #userGuide .guide-body{ padding:0 16px 14px; font-size:13px; line-height:1.55; color:var(--ink); }
+        #userGuide .guide-body p{ margin-bottom:8px; }
+        #userGuide .guide-body ul{ margin:0 0 8px 18px; }
+        #userGuide .guide-body li{ margin-bottom:4px; }
+        #userGuide .guide-body strong{ color:var(--gold-deep); }
+      </style>
+
+      <details>
+        <summary>What is Pool?</summary>
+        <div class="guide-body">
+          <p>Pool helps a cooperative track everyone's produce, sell it together, and split the proceeds fairly — plus manage advances, mobile money payouts, and shared community projects.</p>
+          <p>There are two kinds of accounts: <strong>Admin</strong> (usually the treasurer or secretary — can add records) and <strong>Member</strong> (read-only view of their own and the coop's records).</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Getting started</summary>
+        <div class="guide-body">
+          <p><strong>Setting up a coop (admin):</strong> Use "Set up your coop" on the landing screen, give it a name, and create your admin sign-in.</p>
+          <p><strong>Joining as a member:</strong> Your admin adds you under Members, then shares a one-time invite link with you. Open it and set up your own sign-in — it only works once.</p>
+          <p>Every account signs in with its own email and password, kept private to that person.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Members</summary>
+        <div class="guide-body">
+          <p>Admins add members with a name, phone number, and village. Each member's page shows their total contributions, advances, and payout history.</p>
+          <p>From a member's page, an admin can generate an invite link so that member can sign in and see their own records.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Seasons &amp; contributions</summary>
+        <div class="guide-body">
+          <p>A <strong>season</strong> is one round of pooling a particular crop (e.g. "Maize — 2026 rainy season"). While it's open, admins log each member's contribution in kilograms and grade.</p>
+          <p>When the harvest is sold, the admin records the sale (buyer, price, any transport/handling cost) and finalizes it. <strong>Finalizing can't be undone</strong> — it calculates and locks in every member's share.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Payouts</summary>
+        <div class="guide-body">
+          <p>After a sale is finalized, each member's share appears here as a payout, either <strong>due</strong> or <strong>paid</strong>.</p>
+          <p>An admin can mark a payout paid in cash, or log a mobile money transfer (network, phone, and the reference from the confirmation SMS) for a paper trail.</p>
+          <p>Marking a payout paid isn't final until the member confirms it — see "Approvals" below.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Advances</summary>
+        <div class="guide-body">
+          <p>An advance is cash or farm inputs given ahead of the harvest, deducted later from that member's payout.</p>
+          <p>Either side can start one: an admin can give an advance, or a member can request one. Either way, it needs the other side's confirmation before it's recorded (see "Approvals").</p>
+          <p>Outstanding advances are automatically deducted from that member's next payout(s) until fully repaid.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Projects</summary>
+        <div class="guide-body">
+          <p>A project is a coop-agreed initiative funded separately from harvest pooling — a grinder, storage shed, joint input order, etc. Members can see progress toward the funding target.</p>
+          <p>Admins record cash contributions toward a project, and mark it completed once the funds are used — completion also needs member confirmation.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Approvals (duo sign-off)</summary>
+        <div class="guide-body">
+          <p>Every movement of funds — a payout, an advance, or a project payout — needs agreement from <strong>both</strong> sides: whoever didn't start it has to confirm it before anything actually moves.</p>
+          <p>Open the Approvals tab (the checkmark icon at the top) to see what's waiting on you, what you've sent that's still waiting on the other side, and recent decisions. You can also cancel a request you started, as long as no one has acted on it yet.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Transaction PIN</summary>
+        <div class="guide-body">
+          <p>Confirming any funds movement — finalizing a sale, or approving a payout, advance, or project completion — asks for your <strong>transaction PIN</strong>, a short PIN separate from your sign-in password.</p>
+          <p>Set or change it any time from Settings. The first time you confirm a transaction without one set, you'll be asked to choose one on the spot.</p>
+          <p>Keep it private, and don't share it with anyone — including other members of your coop.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>The coop assistant</summary>
+        <div class="guide-body">
+          <p>Tap the chat button to ask questions about your coop's own records — outstanding payouts, unsold seasons, project progress — or get a plain-language summary. It only answers from your coop's data.</p>
+        </div>
+      </details>
+
+      <details>
+        <summary>Troubleshooting</summary>
+        <div class="guide-body">
+          <p><strong>Forgot your password?</strong> Use the reset link on the sign-in screen.</p>
+          <p><strong>Forgot your transaction PIN?</strong> There's currently no self-service reset — contact whoever manages this Pool for your coop.</p>
+          <p><strong>Offline banner showing?</strong> Your changes are saved once your phone reconnects — nothing is lost, but wait for a connection before assuming a record went through.</p>
+          <p><strong>Invite link not working?</strong> Each link works once. Ask your admin to generate a fresh one.</p>
+        </div>
+      </details>
+    </section>
+
+    <!-- APPROVALS (duo approval: whichever side didn't initiate a funds movement decides it) -->
+    <section class="screen" id="approvals">
+      <div class="modal-close" style="text-align:left;margin-bottom:14px;" onclick="showScreen('dashboard', document.querySelectorAll('nav.bottom button')[0])">&larr; Back</div>
+      <div class="eyebrow">Duo approval</div>
+      <h1 class="page-title">Approvals</h1>
+      <p style="font-size:12.5px;color:var(--ink-soft);margin-bottom:16px;">
+        Every payout, advance, and project withdrawal needs sign-off from both sides — whoever didn't start it
+        has to confirm it before the funds actually move.
+      </p>
+
+      <div class="member-only" style="margin-bottom:14px;">
+        <button class="btn btn-secondary" onclick="openRequestAdvance()">Request an advance</button>
+      </div>
+
+      <div class="section-label">Waiting on you</div>
+      <div id="approvals-mine"><div class="empty-state"><div class="icon">✅</div><p>Loading…</p></div></div>
+
+      <div class="section-label">Sent, waiting on the other side</div>
+      <div id="approvals-sent"><div class="empty-state"><div class="icon">⏳</div><p>Loading…</p></div></div>
+
+      <div class="section-label">Recent decisions</div>
+      <div id="approvals-history"><div class="empty-state"><div class="icon">📜</div><p>Loading…</p></div></div>
     </section>
 
   </main>
@@ -707,6 +942,10 @@
     <button onclick="showScreen('payouts', this)">
       <svg viewBox="0 0 24 24"><path d="M12 2v20M17 6.5c0-2-2-3.5-5-3.5s-5 1.5-5 3.5S9 9 12 9s5 1.5 5 3.5-2 3.5-5 3.5-5-1.5-5-3.5"/></svg>
       Payouts
+    </button>
+    <button onclick="showScreen('projects', this)">
+      <svg viewBox="0 0 24 24"><path d="M4 21V4"/><path d="M4 4h12l-2 4 2 4H4"/></svg>
+      Projects
     </button>
     <button onclick="showScreen('settings', this)">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -768,6 +1007,160 @@
       <div class="field-error" id="input-contrib-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
       <button class="btn btn-primary" style="width:100%;" id="btn-save-contribution" onclick="saveContribution()">Save contribution</button>
       <div class="modal-close" onclick="closeModal('addContribution')">Cancel</div>
+    </div>
+  </div>
+
+  <!-- MODAL: Give Advance -->
+  <div class="modal-overlay" id="modal-giveAdvance">
+    <div class="modal">
+      <h2>Give advance</h2>
+      <div class="field">
+        <label>Type</label>
+        <div class="grade-toggle" id="input-advance-type">
+          <div class="grade-opt selected" data-type="cash">Cash</div>
+          <div class="grade-opt" data-type="input">Inputs</div>
+        </div>
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <input type="text" id="input-advance-desc" placeholder="e.g. 2x50kg bags of fertiliser">
+      </div>
+      <div class="field">
+        <label>Value (K)</label>
+        <input type="number" id="input-advance-amount" placeholder="e.g. 350" min="0.01" step="0.01" inputmode="decimal">
+      </div>
+      <div class="field">
+        <label>Date given</label>
+        <input type="date" id="input-advance-date">
+      </div>
+      <div class="field-error" id="input-advance-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <div style="font-size:12px;color:var(--ink-soft);margin-bottom:10px;">
+        Deducted automatically — in full or in part — from this member's next payout(s) until repaid.
+      </div>
+      <button class="btn btn-primary" style="width:100%;" onclick="saveAdvance()">Save advance</button>
+      <div class="modal-close" onclick="closeModal('giveAdvance')">Cancel</div>
+    </div>
+  </div>
+
+  <!-- MODAL: Request an advance (member-initiated — needs admin approval) -->
+  <div class="modal-overlay" id="modal-requestAdvance">
+    <div class="modal">
+      <h2>Request an advance</h2>
+      <div class="field">
+        <label>Type</label>
+        <div class="grade-toggle" id="input-reqadvance-type">
+          <div class="grade-opt selected" data-type="cash">Cash</div>
+          <div class="grade-opt" data-type="input">Inputs</div>
+        </div>
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <input type="text" id="input-reqadvance-desc" placeholder="e.g. 2x50kg bags of fertiliser">
+      </div>
+      <div class="field">
+        <label>Value (K)</label>
+        <input type="number" id="input-reqadvance-amount" placeholder="e.g. 350" min="0.01" step="0.01" inputmode="decimal">
+      </div>
+      <div class="field">
+        <label>Date needed</label>
+        <input type="date" id="input-reqadvance-date">
+      </div>
+      <div class="field-error" id="input-reqadvance-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <div style="font-size:12px;color:var(--ink-soft);margin-bottom:10px;">
+        Sent to your Pool admin for approval. If approved, it'll be deducted automatically — in full or in part — from your next payout(s) until repaid.
+      </div>
+      <button class="btn btn-primary" style="width:100%;" onclick="submitAdvanceRequest()">Send request</button>
+      <div class="modal-close" onclick="closeModal('requestAdvance')">Cancel</div>
+    </div>
+  </div>
+
+  <!-- MODAL: PIN confirmation gate — shown right before any transaction that moves funds
+       (finalizing a sale, or approving an advance/payout/project-completion). If the signed-in
+       account has no PIN yet, this doubles as first-time PIN setup: setting it also confirms
+       the pending transaction, so there's no separate extra step. -->
+  <div class="modal-overlay" id="modal-pinConfirm">
+    <div class="modal">
+      <h2 id="pinconfirm-title">Confirm with PIN</h2>
+      <div id="pinconfirm-summary" style="font-size:12.5px;color:var(--ink-soft);margin-bottom:14px;"></div>
+
+      <div id="pinconfirm-existing-fields">
+        <div class="field">
+          <label>Your PIN</label>
+          <input type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="6" id="input-pinconfirm-pin" placeholder="••••">
+        </div>
+      </div>
+
+      <div id="pinconfirm-setup-fields" style="display:none;">
+        <div style="font-size:12px;color:var(--ink-soft);margin-bottom:10px;">
+          You don't have a transaction PIN yet. Set one now — this also confirms the transaction below.
+        </div>
+        <div class="field">
+          <label>Choose a 4–6 digit PIN</label>
+          <input type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="6" id="input-pinconfirm-new">
+        </div>
+        <div class="field">
+          <label>Confirm PIN</label>
+          <input type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="6" id="input-pinconfirm-new2">
+        </div>
+      </div>
+
+      <div class="field-error" id="input-pinconfirm-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary" style="width:100%;" id="btn-pinconfirm-submit" onclick="submitPinConfirm()">Confirm</button>
+      <div class="modal-close" onclick="cancelPinConfirm()">Cancel</div>
+    </div>
+  </div>
+
+  <!-- MODAL: Set / change transaction PIN (Settings-initiated, voluntary) -->
+  <div class="modal-overlay" id="modal-changePin">
+    <div class="modal">
+      <h2 id="changePin-title">Set transaction PIN</h2>
+      <div id="changePin-current-field" class="field" style="display:none;">
+        <label>Current PIN</label>
+        <input type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="6" id="input-current-pin">
+      </div>
+      <div class="field">
+        <label>New PIN (4–6 digits)</label>
+        <input type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="6" id="input-new-pin">
+      </div>
+      <div class="field">
+        <label>Confirm new PIN</label>
+        <input type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="6" id="input-confirm-pin">
+      </div>
+      <div class="field-error" id="input-change-pin-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <div style="font-size:12px;color:var(--ink-soft);margin-bottom:10px;">
+        This PIN is required to confirm any transaction — finalizing a sale, or approving an advance, payout, or project completion. It's separate from your login password.
+      </div>
+      <button class="btn btn-primary" style="width:100%;" id="btn-save-pin" onclick="saveNewPin()">Save PIN</button>
+      <div class="modal-close" onclick="closeChangePinModal()">Cancel</div>
+    </div>
+  </div>
+
+  <!-- MODAL: Pay via Mobile Money -->
+  <div class="modal-overlay" id="modal-mobileMoneyPayout">
+    <div class="modal">
+      <h2>Pay via Mobile Money</h2>
+      <div id="mm-payout-summary" class="stat-box" style="margin-bottom:14px;"></div>
+      <div class="field">
+        <label>Network</label>
+        <div class="grade-toggle" id="input-mm-network">
+          <div class="grade-opt selected" data-network="MTN">MTN Money</div>
+          <div class="grade-opt" data-network="Airtel">Airtel Money</div>
+        </div>
+      </div>
+      <div class="field">
+        <label>Recipient phone number</label>
+        <input type="tel" id="input-mm-phone" placeholder="e.g. 0977 214 xxx" inputmode="tel">
+      </div>
+      <div style="font-size:12px;color:var(--ink-soft);margin-bottom:10px;">
+        Pool doesn't have a live mobile money merchant connection, so send this payout yourself from your coop's MTN/Airtel Money line first — using the amount and number above. Once you have the confirmation SMS, enter its reference below to record the disbursement.
+      </div>
+      <div class="field">
+        <label>Transaction reference (from the confirmation SMS)</label>
+        <input type="text" id="input-mm-reference" placeholder="e.g. MP240613.1055.A12345">
+      </div>
+      <div class="field-error" id="input-mm-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary" style="width:100%;" onclick="confirmMobileMoneyPayout()">Mark paid &amp; save record</button>
+      <div class="modal-close" onclick="closeModal('mobileMoneyPayout')">Cancel</div>
     </div>
   </div>
 
@@ -875,6 +1268,11 @@
         <input type="text" id="input-sale-buyer" placeholder="e.g. Zamgold Millers">
       </div>
       <div class="field">
+        <label>Transport &amp; handling costs (K)</label>
+        <input type="number" id="input-sale-costs" placeholder="0.00" min="0" step="0.01">
+        <div class="li-sub" style="margin-top:4px;">Optional. Split across every member's payout in proportion to their share, before advances are deducted.</div>
+      </div>
+      <div class="field">
         <label>Pricing</label>
         <div class="grade-toggle" id="input-sale-mode">
           <div class="grade-opt selected" data-mode="flat">Flat price</div>
@@ -923,7 +1321,7 @@
       <div id="confirm-sale-warning" style="display:none;background:#fdf1ec;border:1px solid var(--brick);color:var(--brick);border-radius:12px;padding:10px 12px;font-size:12.5px;margin-bottom:14px;"></div>
       <div id="confirm-sale-summary"></div>
       <div class="field-error" id="input-confirm-sale-error" style="display:none;color:var(--brick);font-size:12px;margin:10px 0;"></div>
-      <button class="btn btn-primary" style="width:100%;" onclick="confirmSaleFinal()">Confirm &amp; finalize — can't be undone</button>
+      <button class="btn btn-primary" style="width:100%;" onclick="confirmSaleFinalWithPin()">Confirm &amp; finalize — can't be undone</button>
       <div class="modal-close" onclick="closeModal('confirmSale')">Back, let me check the numbers</div>
     </div>
   </div>
@@ -950,6 +1348,51 @@
         <button class="btn btn-secondary" style="color:var(--brick);width:100%;" onclick="deleteSeason()">Delete season</button>
       </div>
       <div class="modal-close" onclick="closeModal('addSeason')">Cancel</div>
+    </div>
+  </div>
+  <!-- MODAL: Add / Edit Project -->
+  <div class="modal-overlay" id="modal-addProject">
+    <div class="modal">
+      <h2 id="addProject-title">New project</h2>
+      <div class="field">
+        <label>Project name</label>
+        <input type="text" id="input-project-name" placeholder="e.g. Maize grinder">
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <input type="text" id="input-project-description" placeholder="e.g. Shared grinder for members' own use">
+      </div>
+      <div class="field">
+        <label>Target (K)</label>
+        <input type="number" id="input-project-target" placeholder="e.g. 15000" min="1" step="0.01" inputmode="decimal">
+      </div>
+      <div class="field-error" id="input-project-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary" style="width:100%;" id="btn-save-project" onclick="saveProject()">Save project</button>
+      <div class="btn-row" id="project-delete-row" style="display:none;margin-top:8px;">
+        <button class="btn btn-secondary" style="color:var(--brick);width:100%;" onclick="deleteProject()">Delete project</button>
+      </div>
+      <div class="modal-close" onclick="closeModal('addProject')">Cancel</div>
+    </div>
+  </div>
+  <!-- MODAL: Add contribution toward a project -->
+  <div class="modal-overlay" id="modal-addProjectContribution">
+    <div class="modal">
+      <h2>Add contribution</h2>
+      <div class="field">
+        <label>Member</label>
+        <select id="input-projcontrib-member"></select>
+      </div>
+      <div class="field">
+        <label>Amount (K)</label>
+        <input type="number" id="input-projcontrib-amount" placeholder="e.g. 200" min="0.01" step="0.01" inputmode="decimal">
+      </div>
+      <div class="field">
+        <label>Date</label>
+        <input type="date" id="input-projcontrib-date">
+      </div>
+      <div class="field-error" id="input-projcontrib-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
+      <button class="btn btn-primary" style="width:100%;" onclick="saveProjectContribution()">Save contribution</button>
+      <div class="modal-close" onclick="closeModal('addProjectContribution')">Cancel</div>
     </div>
   </div>
   <!-- MODAL: Switch coop (super-admins only) -->
@@ -1257,7 +1700,8 @@
     const memberCount = Object.keys(members).length;
     const seasonList = Object.values(seasons).map(s =>
       `- ${s.crop || 'Unknown crop'} (${s.label || ''}): status=${s.status || 'open'}, pooled=${fmtKg(s.pooledKg)}` +
-      (s.status === 'sold' ? `, sold to ${s.buyer || 'buyer'} at ${fmtK(s.pricePerKg)}/kg, total ${fmtK(s.saleAmount)}` : '')
+      (s.status === 'sold' ? `, sold to ${s.buyer || 'buyer'} at ${fmtK(s.pricePerKg)}/kg, total ${fmtK(s.saleAmount)}` +
+        (s.logisticsCost > 0 ? `, minus ${fmtK(s.logisticsCost)} transport/handling, net ${fmtK(s.netSaleAmount)}` : '') : '')
     ).join('\n') || 'No seasons yet.';
     const contribCount = Object.keys(contributions).length;
     const payoutSummary = Object.entries(payouts).map(([seasonId, byMember]) => {
@@ -1275,7 +1719,10 @@
         }).join('\n');
       return `- ${seasonLabel}: ${fmtK(total)} total, ${paid}/${all} members paid\n${memberLines}`;
     }).join('\n') || 'No payouts yet.';
-    return `Cooperative snapshot:\n- Members: ${memberCount}\n- Contributions recorded: ${contribCount}\n\nSeasons:\n${seasonList}\n\nPayouts:\n${payoutSummary}`;
+    const projectList = Object.values(projects).map(p =>
+      `- ${p.name}: status=${p.status}, raised ${fmtK(p.raisedAmount)} of target ${fmtK(p.targetAmount)}`
+    ).join('\n') || 'No projects yet.';
+    return `Cooperative snapshot:\n- Members: ${memberCount}\n- Contributions recorded: ${contribCount}\n\nSeasons:\n${seasonList}\n\nPayouts:\n${payoutSummary}\n\nProjects:\n${projectList}`;
   }
 
   /* ---------- Coop resolution (multi-coop / per-user) ----------
@@ -1314,10 +1761,26 @@
   let IS_SUPERADMIN = false;
   let IS_MEMBER = false;       // true once a member-role account is resolved — gates the app to read-only
   let MY_MEMBER_ID = null;     // the member record this signed-in member account is linked to
+  let MY_PIN_HASH = null;      // salted SHA-256 hex of this account's transaction PIN, or null if unset
   let MEMBER_AUTO_OPEN_PENDING = false; // set once at sign-in; consumed by membersHandler the
                                           // first time member data streams in, to land on "their" record
   let ONBOARDING_IN_PROGRESS = false; // true while createCoop() or joinCoop() is writing new account data —
                                        // stops onAuthStateChanged from racing in and signing the new account out
+
+  // Read a one-time invite code from the URL, if present, and strip it from the address
+  // bar immediately. Without this, ?invite=<code> sticks around in the tab's URL forever
+  // (Firebase Auth persists sessions, so the app never reloads with a bare URL again), and
+  // an already-*used* invite code is deleted from the DB the moment it's redeemed — so any
+  // later sign-out on that same tab (session expiry, manual logout) would re-read the same
+  // stale param and drop the member on a "Join coop" screen with a dead code instead of the
+  // normal login screen. Stashing it in a variable (rather than re-reading the URL each
+  // time) means it's consumed exactly once, right after the invite link is actually opened.
+  let PENDING_INVITE_CODE = new URLSearchParams(window.location.search).get('invite');
+  if(PENDING_INVITE_CODE){
+    const cleanUrl = window.location.origin + window.location.pathname;
+    window.history.replaceState({}, '', cleanUrl);
+  }
+
   function blockIfMember(){
     if(IS_MEMBER){
       alert('Your account has read-only access. Ask your Pool administrator to make this change.');
@@ -1325,15 +1788,34 @@
     }
     return false;
   }
-  let coopRef = null, membersRef = null, seasonsRef = null, contributionsRef = null, payoutsRef = null, accountRolesRef = null;
+  let coopRef = null, membersRef = null, seasonsRef = null, contributionsRef = null, payoutsRef = null, accountRolesRef = null, advancesRef = null, projectsRef = null, projectContribsRef = null, approvalsRef = null;
 
   /* ---------- Local cache (kept in sync by Firebase listeners) ---------- */
   let members = {};       // memberId -> {name, phone, village, totalKg}
-  let seasons = {};       // seasonId -> {crop, label, targetKg, pooledKg, status, buyer, pricePerKg, saleAmount}
+  let advances = {};      // advanceId -> {memberId, type ('cash'|'input'), description, amount, date, ts, repaidAmount, status}
+  let seasons = {};       // seasonId -> {crop, label, targetKg, pooledKg, status, buyer, pricePerKg, saleAmount, logisticsCost, netSaleAmount}
   let contributions = {}; // contribId -> {memberId, seasonId, kg, grade, date, ts}
-  let payouts = {};       // seasonId -> { memberId -> {amount, sharePercent, status, paidTs} }
+  let payouts = {};       // seasonId -> { memberId -> {amount, sharePercent, status, paidTs, method, disbursement:{network,phone,reference,ts}} }
   let accountRoles = {};  // uid -> {role: 'admin'|'member', name, memberId?} — who can sign in to this coop
   let currentMemberId = null; // member currently open on the Member Detail screen
+  // projectId -> {name, description, targetAmount, raisedAmount, status ('open'|'funded'|'completed'), createdTs}
+  // — a coop-agreed initiative (grinder, storage shed, joint input order) that members fund with
+  // cash contributions, separate from the harvest-pooling flow above.
+  let projects = {};
+  let projectContributions = {}; // contribId -> {projectId, memberId, amount, date, ts}
+  let currentProjectId = null;   // project currently open on the Project Detail screen
+  /* approvalId -> {
+       kind: 'advance' | 'payoutPaid' | 'payoutMobileMoney' | 'projectCompleted',
+       memberId, projectId, seasonId,   // whichever apply to this kind; the rest null
+       payload,                          // the data needed to actually apply the movement once approved
+       summary,                          // human-readable one-liner shown on the approval card
+       initiatedByUid, initiatedByName, initiatedByRole ('admin'|'member'),
+       awaitingRole ('admin'|'member'),  // whoever DIDN'T initiate — they're the one who must decide
+       status ('pending'|'approved'|'rejected'|'cancelled'),
+       createdTs, decidedByUid, decidedByName, decidedTs, decisionNote
+     } — duo-approval queue: no funds movement (payout, advance, project withdrawal) applies
+     until the other side of the admin/member pair signs off on it. */
+  let approvals = {};
 
   const fmtK = n => 'K' + Number(n || 0).toLocaleString('en-ZM', {minimumFractionDigits: 2, maximumFractionDigits: 2});
   const fmtKg = n => Number(n || 0).toLocaleString('en-ZM') + ' kg';
@@ -1350,12 +1832,20 @@
     contributionsRef = coopRef.child('contributions');
     payoutsRef = coopRef.child('payouts');
     accountRolesRef = coopRef.child('accountRoles');
+    advancesRef = coopRef.child('advances');
+    projectsRef = coopRef.child('projects');
+    projectContribsRef = coopRef.child('projectContributions');
+    approvalsRef = coopRef.child('approvals');
 
     membersRef.on('value', membersHandler);
     seasonsRef.on('value', seasonsHandler);
     contributionsRef.on('value', contributionsHandler);
     payoutsRef.on('value', payoutsHandler);
     accountRolesRef.on('value', accountRolesHandler);
+    advancesRef.on('value', advancesHandler);
+    projectsRef.on('value', projectsHandler);
+    projectContribsRef.on('value', projectContributionsHandler);
+    approvalsRef.on('value', approvalsHandler);
 
     localStorage.setItem('pool_last_coop', COOP_ID);
   }
@@ -1365,13 +1855,20 @@
     if(contributionsRef) contributionsRef.off('value', contributionsHandler);
     if(payoutsRef) payoutsRef.off('value', payoutsHandler);
     if(accountRolesRef) accountRolesRef.off('value', accountRolesHandler);
-    coopRef = membersRef = seasonsRef = contributionsRef = payoutsRef = accountRolesRef = null;
+    if(advancesRef) advancesRef.off('value', advancesHandler);
+    if(projectsRef) projectsRef.off('value', projectsHandler);
+    if(projectContribsRef) projectContribsRef.off('value', projectContributionsHandler);
+    if(approvalsRef) approvalsRef.off('value', approvalsHandler);
+    coopRef = membersRef = seasonsRef = contributionsRef = payoutsRef = accountRolesRef = advancesRef = projectsRef = projectContribsRef = approvalsRef = null;
     // Clear local cache + UI so a coop switch (or logout) never leaks the previous coop's data
-    members = {}; seasons = {}; contributions = {}; payouts = {}; accountRoles = {};
+    members = {}; seasons = {}; contributions = {}; payouts = {}; accountRoles = {}; advances = {};
+    projects = {}; projectContributions = {}; currentProjectId = null;
+    approvals = {};
     currentMemberId = null;
-    renderMembers(); renderDashboard(); renderSeasons();
+    renderMembers(); renderDashboard(); renderSeasons(); renderProjects();
     if(document.getElementById('payouts').classList.contains('active')) renderPayouts();
     if(document.getElementById('settings').classList.contains('active')) renderSettings();
+    renderApprovals(); updateApprovalsBadge();
   }
   const accountRolesHandler = snap => {
     accountRoles = snap.val() || {};
@@ -1395,6 +1892,10 @@
   const seasonsHandler = snap => { seasons = snap.val() || {}; renderSeasons(); renderDashboard(); populateSeasonOptions(); refreshMemberDetailIfActive(); };
   const contributionsHandler = snap => { contributions = snap.val() || {}; renderDashboard(); refreshMemberDetailIfActive(); };
   const payoutsHandler = snap => { payouts = snap.val() || {}; renderDashboard(); if(document.getElementById('payouts').classList.contains('active')) renderPayouts(); };
+  const advancesHandler = snap => { advances = snap.val() || {}; renderDashboard(); refreshMemberDetailIfActive(); };
+  const projectsHandler = snap => { projects = snap.val() || {}; renderProjects(); refreshProjectDetailIfActive(); };
+  const projectContributionsHandler = snap => { projectContributions = snap.val() || {}; renderProjects(); refreshProjectDetailIfActive(); };
+  const approvalsHandler = snap => { approvals = snap.val() || {}; renderApprovals(); updateApprovalsBadge(); };
 
   /* ---------- Landing page navigation ---------- */
   function goToLogin(){
@@ -1580,19 +2081,60 @@
       });
   }
 
-  /* ---------- Admin: invite an existing member to sign in on their own device ---------- */
+  /* ---------- Admin: invite an existing member to sign in on their own device ----------
+     A member can only ever be claimed by one live account at a time — the security rules
+     reject a second self-serve join for a memberId that's already linked (see
+     firebase-rtdb-rules.json), so generating a fresh invite for an already-linked member
+     used to just hand out a link that would fail with a confusing permission error the
+     moment someone tried to use it. findLinkedAccount() lets both this and deleteMember()
+     check that up front instead. */
+  function findLinkedAccount(memberId){
+    return Object.entries(accountRoles).find(([uid, acct]) => acct.memberId === memberId);
+  }
+
   function inviteMember(){
     if(blockIfMember()) return;
     const m = members[currentMemberId];
     if(!m) return;
     const err = document.getElementById('input-invite-error');
     err.style.display = 'none';
-    document.getElementById('inviteMember-name').textContent = m.name;
+
+    const linked = findLinkedAccount(currentMemberId);
+    if(linked){
+      const proceed = confirm(
+        `${m.name} already has a sign-in account. Generating a new invite will revoke that account for good — ` +
+        `they'll need to sign up again from scratch with a new email and password. Only do this if they've lost ` +
+        `their phone or forgotten their password.\n\nRevoke the old account and continue?`
+      );
+      if(!proceed) return;
+
+      const revokeUpdates = {};
+      revokeUpdates['coops/' + COOP_ID + '/accountRoles/' + linked[0]] = null;
+      revokeUpdates['users/' + linked[0]] = null;
+      revokeUpdates['coops/' + COOP_ID + '/members/' + currentMemberId + '/uid'] = null;
+      db.ref().update(revokeUpdates)
+        .then(() => generateAndShowInvite(currentMemberId, m.name))
+        .catch(e => {
+          err.textContent = 'Could not revoke the old account: ' + e.message;
+          openModal('inviteMember');
+          document.getElementById('input-invite-link').value = '';
+          err.style.display = 'block';
+        });
+      return;
+    }
+
+    generateAndShowInvite(currentMemberId, m.name);
+  }
+
+  function generateAndShowInvite(memberId, memberName){
+    const err = document.getElementById('input-invite-error');
+    err.style.display = 'none';
+    document.getElementById('inviteMember-name').textContent = memberName;
     document.getElementById('input-invite-link').value = 'Generating…';
     openModal('inviteMember');
 
     const code = generateInviteCode();
-    db.ref('inviteCodes/' + code).set({ coopId: COOP_ID, memberId: currentMemberId })
+    db.ref('inviteCodes/' + code).set({ coopId: COOP_ID, memberId })
       .then(() => {
         const link = window.location.origin + window.location.pathname + '?invite=' + code;
         document.getElementById('input-invite-link').value = link;
@@ -1603,6 +2145,7 @@
         document.getElementById('input-invite-link').value = '';
       });
   }
+
   function copyInviteLink(){
     const input = document.getElementById('input-invite-link');
     input.select();
@@ -1624,24 +2167,51 @@
       document.getElementById('app-loading').classList.remove('active');
       if(!user){
         detachCoopListeners();
-        IS_SUPERADMIN = false; IS_MEMBER = false; MY_MEMBER_ID = null; MEMBER_AUTO_OPEN_PENDING = false;
+        IS_SUPERADMIN = false; IS_MEMBER = false; MY_MEMBER_ID = null; MEMBER_AUTO_OPEN_PENDING = false; MY_PIN_HASH = null;
         document.body.classList.remove('member-view');
         document.getElementById('coop-pill').textContent = '';
         const greetingEl = document.getElementById('dashboard-greeting-name');
         if(greetingEl) greetingEl.textContent = '';
-        const inviteCode = new URLSearchParams(window.location.search).get('invite');
-        if(inviteCode) goToJoin(inviteCode);
+        if(PENDING_INVITE_CODE){
+          const code = PENDING_INVITE_CODE;
+          PENDING_INVITE_CODE = null; // one-shot — consumed whether or not they finish joining
+          goToJoin(code);
+        }
         return;
       }
       if(ONBOARDING_IN_PROGRESS) return; // createCoop()/joinCoop() will finish loading the coop itself once its write lands
-      document.getElementById('landing-screen').classList.remove('active');
-      document.getElementById('login-screen').classList.remove('active');
-      document.getElementById('create-coop-screen').classList.remove('active');
-      document.getElementById('join-screen').classList.remove('active');
-      resolveCoopForUser(user);
+
+      if(PENDING_INVITE_CODE){
+        // Someone's already signed in on this tab/device, but the page just loaded with a
+        // fresh invite link — most likely a different person's phone, or the admin testing
+        // the link they just generated. Check the invite is still live before disrupting
+        // anything: a dead/already-used code just falls through to a normal sign-in below.
+        const code = PENDING_INVITE_CODE;
+        db.ref('inviteCodes/' + code).once('value').then(snap => {
+          if(snap.exists()){
+            PENDING_INVITE_CODE = code; // keep it — the next (signed-out) pass opens Join with it
+            alert("Signing you out so this invite can be accepted — it's for a different account. Sign back in afterward if that was a mistake.");
+            firebase.auth().signOut();
+          } else {
+            PENDING_INVITE_CODE = null;
+            proceedToResolve(user);
+          }
+        }).catch(() => { PENDING_INVITE_CODE = null; proceedToResolve(user); });
+        return;
+      }
+
+      proceedToResolve(user);
     });
   } catch(e){
     console.error('Firebase auth init failed — check firebaseConfig above.', e);
+  }
+
+  function proceedToResolve(user){
+    document.getElementById('landing-screen').classList.remove('active');
+    document.getElementById('login-screen').classList.remove('active');
+    document.getElementById('create-coop-screen').classList.remove('active');
+    document.getElementById('join-screen').classList.remove('active');
+    resolveCoopForUser(user);
   }
 
   function resolveCoopForUser(user){
@@ -1658,6 +2228,7 @@
         IS_SUPERADMIN = profile.role === 'superadmin';
         IS_MEMBER = profile.role === 'member';
         MY_MEMBER_ID = profile.memberId || null;
+        MY_PIN_HASH = profile.pinHash || null;
         document.body.classList.toggle('member-view', IS_MEMBER);
         pill.title = IS_SUPERADMIN ? 'Tap to switch coop' : 'Contact your Pool administrator to change your coop';
         if(profile.coopId){
@@ -1738,6 +2309,8 @@
     const myUid = firebase.auth().currentUser && firebase.auth().currentUser.uid;
     const myRole = IS_SUPERADMIN ? 'Superadmin' : (IS_MEMBER ? 'Member (read-only)' : 'Admin');
     document.getElementById('settings-your-role').textContent = 'Your role: ' + myRole;
+    const pinBtn = document.getElementById('btn-settings-pin');
+    if(pinBtn) pinBtn.textContent = MY_PIN_HASH ? 'Change transaction PIN' : 'Set transaction PIN';
 
     if(IS_MEMBER) return; // accounts list is admin-only; markup is already hidden via .admin-only
     const list = document.getElementById('settings-accounts-list');
@@ -1837,6 +2410,138 @@
       });
   }
 
+  /* ---------- Transaction PIN ----------
+     A separate 4-6 digit PIN (distinct from the login password) that must be entered to
+     confirm any transaction that actually moves funds: finalizing a sale (generates payouts),
+     or approving an advance / payout / project-completion. Only a salted hash is ever stored
+     (coops security rules only permit the owning account to write its own users/{uid}/pinHash),
+     so this is a client-side confirmation gate on top of whatever the RTDB rules already
+     enforce for the underlying write — same "reasonable trade-off for a small coop app on the
+     Spark plan" as the rest of this file's client-enforced logic (see notes near
+     resolveCoopForUser / confirmSaleFinal). It does not replace those rules.
+  */
+  async function hashPin(pin, uid){
+    const enc = new TextEncoder().encode('pool-pin:' + uid + ':' + pin);
+    const buf = await crypto.subtle.digest('SHA-256', enc);
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+  function isValidPinFormat(pin){
+    return /^[0-9]{4,6}$/.test(pin);
+  }
+
+  /* ---------- Settings-initiated: set or change your PIN ---------- */
+  function openChangePinModal(){
+    document.getElementById('changePin-title').textContent = MY_PIN_HASH ? 'Change transaction PIN' : 'Set transaction PIN';
+    document.getElementById('changePin-current-field').style.display = MY_PIN_HASH ? 'block' : 'none';
+    document.getElementById('input-current-pin').value = '';
+    document.getElementById('input-new-pin').value = '';
+    document.getElementById('input-confirm-pin').value = '';
+    document.getElementById('input-change-pin-error').style.display = 'none';
+    document.getElementById('modal-changePin').classList.add('active');
+  }
+  function closeChangePinModal(){
+    document.getElementById('modal-changePin').classList.remove('active');
+  }
+  async function saveNewPin(){
+    const current = document.getElementById('input-current-pin').value.trim();
+    const next = document.getElementById('input-new-pin').value.trim();
+    const confirmNext = document.getElementById('input-confirm-pin').value.trim();
+    const err = document.getElementById('input-change-pin-error');
+    const showErr = msg => { err.textContent = msg; err.style.display = 'block'; };
+    err.style.display = 'none';
+
+    const user = firebase.auth().currentUser;
+    if(!user){ showErr('You are signed out — please log in again.'); return; }
+    if(MY_PIN_HASH && !current){ showErr('Enter your current PIN.'); return; }
+    if(!isValidPinFormat(next)){ showErr('New PIN must be 4–6 digits.'); return; }
+    if(next !== confirmNext){ showErr("New PINs don't match."); return; }
+
+    const btn = document.getElementById('btn-save-pin');
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      if(MY_PIN_HASH){
+        const currentHash = await hashPin(current, user.uid);
+        if(currentHash !== MY_PIN_HASH){
+          btn.disabled = false; btn.textContent = 'Save PIN';
+          showErr('Current PIN is incorrect.');
+          return;
+        }
+      }
+      const newHash = await hashPin(next, user.uid);
+      await db.ref('users/' + user.uid + '/pinHash').set(newHash);
+      MY_PIN_HASH = newHash;
+      btn.disabled = false; btn.textContent = 'Save PIN';
+      closeChangePinModal();
+      alert('Your transaction PIN has been saved.');
+    } catch(e){
+      btn.disabled = false; btn.textContent = 'Save PIN';
+      showErr('Could not save PIN: ' + e.message);
+    }
+  }
+
+  /* ---------- Transaction-time PIN gate ----------
+     requirePin(summary) returns a Promise<boolean> — resolves true only once the signed-in
+     account's PIN has been correctly entered (or, if none exists yet, just been set). Callers
+     await this immediately before doing anything that actually moves funds, and skip the action
+     entirely on a false/cancelled result. */
+  let pinConfirmResolver = null;
+  function requirePin(summary){
+    return new Promise(resolve => {
+      pinConfirmResolver = resolve;
+      const isSetup = !MY_PIN_HASH;
+      document.getElementById('pinconfirm-title').textContent = isSetup ? 'Set up your transaction PIN' : 'Confirm with PIN';
+      document.getElementById('pinconfirm-summary').textContent = summary || '';
+      document.getElementById('pinconfirm-existing-fields').style.display = isSetup ? 'none' : 'block';
+      document.getElementById('pinconfirm-setup-fields').style.display = isSetup ? 'block' : 'none';
+      document.getElementById('input-pinconfirm-pin').value = '';
+      document.getElementById('input-pinconfirm-new').value = '';
+      document.getElementById('input-pinconfirm-new2').value = '';
+      document.getElementById('input-pinconfirm-error').style.display = 'none';
+      document.getElementById('btn-pinconfirm-submit').textContent = isSetup ? 'Set PIN & confirm' : 'Confirm';
+      document.getElementById('modal-pinConfirm').classList.add('active');
+    });
+  }
+  function cancelPinConfirm(){
+    document.getElementById('modal-pinConfirm').classList.remove('active');
+    if(pinConfirmResolver) pinConfirmResolver(false);
+    pinConfirmResolver = null;
+  }
+  async function submitPinConfirm(){
+    const err = document.getElementById('input-pinconfirm-error');
+    const showErr = msg => { err.textContent = msg; err.style.display = 'block'; };
+    err.style.display = 'none';
+    const user = firebase.auth().currentUser;
+    if(!user){ showErr('You are signed out — please log in again.'); return; }
+
+    const btn = document.getElementById('btn-pinconfirm-submit');
+    btn.disabled = true;
+
+    try {
+      if(!MY_PIN_HASH){
+        const next = document.getElementById('input-pinconfirm-new').value.trim();
+        const next2 = document.getElementById('input-pinconfirm-new2').value.trim();
+        if(!isValidPinFormat(next)){ showErr('PIN must be 4–6 digits.'); btn.disabled = false; return; }
+        if(next !== next2){ showErr("PINs don't match."); btn.disabled = false; return; }
+        const newHash = await hashPin(next, user.uid);
+        await db.ref('users/' + user.uid + '/pinHash').set(newHash);
+        MY_PIN_HASH = newHash;
+      } else {
+        const pin = document.getElementById('input-pinconfirm-pin').value.trim();
+        if(!isValidPinFormat(pin)){ showErr('Enter your PIN.'); btn.disabled = false; return; }
+        const hash = await hashPin(pin, user.uid);
+        if(hash !== MY_PIN_HASH){ showErr('Incorrect PIN.'); btn.disabled = false; return; }
+      }
+      btn.disabled = false;
+      document.getElementById('modal-pinConfirm').classList.remove('active');
+      const resolve = pinConfirmResolver;
+      pinConfirmResolver = null;
+      if(resolve) resolve(true);
+    } catch(e){
+      btn.disabled = false;
+      showErr('Could not verify PIN: ' + e.message);
+    }
+  }
+
   /* ---------- Connection / sync indicator ---------- */
   db.ref('.info/connected').on('value', snap => {
     document.getElementById('offline-banner').style.display = snap.val() === true ? 'none' : 'block';
@@ -1850,9 +2555,11 @@
     if(btn) btn.classList.add('active');
     if(id === 'payouts') renderPayouts();
     if(id === 'settings') renderSettings();
+    if(id === 'projects') renderProjects();
+    if(id === 'approvals') renderApprovals();
   }
   function openModal(name){
-    if(['addContribution','addMember','addSeason','recordSale'].includes(name) && blockIfMember()) return;
+    if(['addContribution','addMember','addSeason','recordSale','giveAdvance','mobileMoneyPayout','addProject','addProjectContribution'].includes(name) && blockIfMember()) return;
     if(name === 'addContribution') prefillContributionForm();
     if(name === 'recordSale') prefillSaleForm();
     if(name === 'addMember'){
@@ -1872,11 +2579,20 @@
       document.getElementById('input-season-label').value = '';
       document.getElementById('input-season-target').value = '';
     }
+    if(name === 'addProject'){
+      document.getElementById('addProject-title').textContent = 'New project';
+      document.getElementById('btn-save-project').textContent = 'Save project';
+      document.getElementById('project-delete-row').style.display = 'none';
+      delete document.getElementById('modal-addProject').dataset.editingId;
+      document.getElementById('input-project-name').value = '';
+      document.getElementById('input-project-description').value = '';
+      document.getElementById('input-project-target').value = '';
+    }
     document.getElementById('modal-'+name).classList.add('active');
   }
   function closeModal(name){
     document.getElementById('modal-'+name).classList.remove('active');
-    const err = document.getElementById('input-'+{addContribution:'contrib',addMember:'member',recordSale:'sale',addSeason:'season',confirmSale:'confirm-sale'}[name]+'-error');
+    const err = document.getElementById('input-'+{addContribution:'contrib',addMember:'member',recordSale:'sale',addSeason:'season',confirmSale:'confirm-sale',giveAdvance:'advance',requestAdvance:'reqadvance',mobileMoneyPayout:'mm',addProject:'project',addProjectContribution:'projcontrib'}[name]+'-error');
     if(err){ err.style.display = 'none'; err.textContent = ''; }
   }
   document.querySelectorAll('.grade-opt').forEach(opt=>{
@@ -1898,6 +2614,9 @@
      once we know which coop the signed-in user belongs to. */
   function refreshMemberDetailIfActive(){
     if(document.getElementById('member-detail').classList.contains('active')) renderMemberDetail();
+  }
+  function refreshProjectDetailIfActive(){
+    if(document.getElementById('project-detail').classList.contains('active')) renderProjectDetail();
   }
 
   /* ---------- Rendering: Dashboard ---------- */
@@ -1932,6 +2651,10 @@
       Object.values(seasonPayouts).forEach(p => { if(p.status !== 'paid') outstanding += Number(p.amount || 0); });
     });
     document.getElementById('stat-outstanding').textContent = fmtK(outstanding);
+
+    let advancesOutstanding = 0;
+    Object.values(advances).forEach(a => { advancesOutstanding += Math.max(0, Number(a.amount || 0) - Number(a.repaidAmount || 0)); });
+    document.getElementById('stat-advances-outstanding').textContent = fmtK(advancesOutstanding);
 
     const recentEl = document.getElementById('dashboard-recent');
     const recent = Object.values(contributions).sort((a,b) => (b.ts||0) - (a.ts||0)).slice(0, 5);
@@ -2003,6 +2726,20 @@
     document.getElementById('member-detail-sub').textContent =
       [m.village, m.phone].filter(Boolean).join(' · ') || 'No contact details on file';
 
+    const linked = findLinkedAccount(currentMemberId);
+    const inviteBtn = document.getElementById('btn-invite-member');
+    const inviteNote = document.getElementById('member-detail-invite-note');
+    if(linked){
+      inviteBtn.textContent = 'Revoke access & re-invite';
+      inviteNote.textContent = `${m.name} already has a sign-in account (signed up ${linked[1].name ? 'as ' + linked[1].name : 'already'}). Generating a new invite will sign that account out for good — only do this if they've lost their phone or forgotten their password.`;
+      inviteNote.style.display = 'block';
+    } else {
+      inviteBtn.textContent = 'Invite to app';
+      inviteNote.style.display = 'none';
+    }
+
+    renderMemberAdvances();
+
     const historyEl = document.getElementById('member-detail-history');
     const rows = Object.entries(contributions)
       .filter(([id, c]) => c.memberId === currentMemberId)
@@ -2032,6 +2769,306 @@
     }).join('');
   }
 
+  function renderMemberAdvances(){
+    const totalEl = document.getElementById('member-detail-advances-total');
+    const listEl = document.getElementById('member-detail-advances');
+    const rows = Object.entries(advances)
+      .filter(([id, a]) => a.memberId === currentMemberId)
+      .sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
+
+    const owed = a => Math.max(0, Number(a.amount || 0) - Number(a.repaidAmount || 0));
+    const outstandingTotal = rows.reduce((sum, [id, a]) => sum + owed(a), 0);
+    totalEl.textContent = outstandingTotal > 0
+      ? `${fmtK(outstandingTotal)} outstanding — deducted automatically from future payouts`
+      : 'No outstanding balance';
+
+    if(!rows.length){
+      listEl.innerHTML = '<div class="empty-state"><div class="icon">🧾</div><p>No advances given to this member.</p></div>';
+      return;
+    }
+
+    listEl.innerHTML = rows.map(([id, a]) => {
+      const stillOwed = owed(a);
+      const typeLabel = a.type === 'cash' ? 'Cash advance' : 'Input advance';
+      const partNote = (stillOwed > 0 && stillOwed < Number(a.amount)) ? ` · ${fmtK(stillOwed)} still owed` : '';
+      const deleteAction = (!IS_MEMBER && Number(a.repaidAmount || 0) === 0)
+        ? ` · <span class="link-action danger" onclick="deleteAdvance('${id}')">Delete</span>` : '';
+      return `<div class="list-item">
+        <div>
+          <div class="li-name">${escapeHtml(a.description || typeLabel)}</div>
+          <div class="li-sub">${typeLabel} · given ${fmtDate(a.date)}${partNote}${deleteAction}</div>
+        </div>
+        <div class="li-right">
+          <div class="li-amount">${fmtK(a.amount)}</div>
+          <span class="status-tag ${stillOwed <= 0 ? 'tag-paid' : 'tag-due'}">${stillOwed <= 0 ? 'Repaid' : 'Outstanding'}</span>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  function openGiveAdvance(){
+    if(blockIfMember()) return;
+    if(!currentMemberId) return;
+    document.getElementById('input-advance-desc').value = '';
+    document.getElementById('input-advance-amount').value = '';
+    document.getElementById('input-advance-date').value = new Date().toISOString().slice(0, 10);
+    const toggle = document.getElementById('input-advance-type');
+    toggle.querySelectorAll('.grade-opt').forEach(o => o.classList.remove('selected'));
+    toggle.querySelector('[data-type="cash"]').classList.add('selected');
+    openModal('giveAdvance');
+  }
+
+  function saveAdvance(){
+    if(blockIfMember()) return;
+    const memberId = currentMemberId;
+    const err = document.getElementById('input-advance-error');
+    err.style.display = 'none';
+    if(!memberId){ return; }
+
+    const type = document.querySelector('#input-advance-type .grade-opt.selected').dataset.type;
+    const description = document.getElementById('input-advance-desc').value.trim();
+    const amount = Number(document.getElementById('input-advance-amount').value);
+    const date = document.getElementById('input-advance-date').value;
+
+    if(!amount || amount <= 0){ err.textContent = 'Enter a value above 0.'; err.style.display = 'block'; return; }
+    if(!date){ err.textContent = 'Choose the date this was given.'; err.style.display = 'block'; return; }
+
+    const m = members[memberId];
+    const payload = { memberId, type, description, amount, date, ts: Date.now(), repaidAmount: 0, status: 'outstanding' };
+    createApproval('advance', {
+      memberId,
+      payload,
+      summary: `Give ${m ? m.name : 'this member'} a ${type === 'cash' ? 'cash' : 'input'} advance of ${fmtK(amount)}`,
+      initiatedByRole: 'admin'
+    }).then(() => closeModal('giveAdvance'))
+      .catch(e => { err.textContent = 'Could not submit for approval: ' + e.message; err.style.display = 'block'; });
+  }
+
+  function deleteAdvance(id){
+    if(blockIfMember()) return;
+    const a = advances[id];
+    if(!a) return;
+    if(Number(a.repaidAmount || 0) > 0){
+      alert('This advance has already been deducted (in part or in full) from a payout, so it can\'t be deleted.');
+      return;
+    }
+    if(!confirm(`Delete this ${a.type === 'cash' ? 'cash advance' : 'input advance'} of ${fmtK(a.amount)}?`)) return;
+    advancesRef.child(id).remove().catch(e => alert('Could not delete: ' + e.message));
+  }
+
+  /* ---------- Duo approval: every funds movement (payout, advance, project withdrawal)
+     is proposed by one side of the admin/member pair and must be confirmed by the other
+     side before it actually happens. Whoever calls createApproval() is the initiator;
+     the record is only "live" — i.e. only actually written to payouts/advances/projects —
+     once the opposite role decides to approve it. This queue lives at coops/{id}/approvals
+     and is separate from the records it will eventually write to. */
+
+  function myUidAndName(){
+    const uid = firebase.auth().currentUser && firebase.auth().currentUser.uid;
+    const acct = uid && accountRoles[uid];
+    return { uid, name: (acct && acct.name) || '' };
+  }
+
+  function createApproval(kind, opts){
+    const { uid, name } = myUidAndName();
+    const awaitingRole = opts.initiatedByRole === 'admin' ? 'member' : 'admin';
+    return approvalsRef.push({
+      kind,
+      memberId: opts.memberId || null,
+      projectId: opts.projectId || null,
+      seasonId: opts.seasonId || null,
+      payload: opts.payload || {},
+      summary: opts.summary || '',
+      initiatedByUid: uid || null,
+      initiatedByName: name,
+      initiatedByRole: opts.initiatedByRole,
+      awaitingRole,
+      status: 'pending',
+      createdTs: Date.now()
+    });
+  }
+
+  // Who is allowed to decide (approve/reject) a given pending approval right now.
+  function canDecideApproval(a){
+    if(!a || a.status !== 'pending') return false;
+    if(a.awaitingRole === 'admin') return !IS_MEMBER; // any admin/superadmin signed into this coop
+    // awaitingRole === 'member'
+    if(!IS_MEMBER) return false;
+    if(a.memberId) return MY_MEMBER_ID === a.memberId; // only the specific affected member
+    return true; // coop-wide movement (e.g. a project withdrawal) — any linked member can confirm
+  }
+  function canCancelApproval(a){
+    const { uid } = myUidAndName();
+    return a && a.status === 'pending' && a.initiatedByUid === uid;
+  }
+
+  // Applies the actual write once an approval is granted — this is exactly what the old
+  // direct-write code used to do immediately; now it only runs after sign-off.
+  function applyApprovalPayload(a){
+    if(a.kind === 'advance'){
+      return advancesRef.push(a.payload);
+    }
+    if(a.kind === 'payoutPaid'){
+      const updates = {};
+      updates['payouts/' + a.seasonId + '/' + a.memberId + '/status'] = 'paid';
+      updates['payouts/' + a.seasonId + '/' + a.memberId + '/paidTs'] = Date.now();
+      updates['payouts/' + a.seasonId + '/' + a.memberId + '/method'] = 'cash';
+      updates['payouts/' + a.seasonId + '/' + a.memberId + '/disbursement'] = null;
+      updates['payouts/' + a.seasonId + '/' + a.memberId + '/pendingApprovalId'] = null;
+      return coopRef.update(updates);
+    }
+    if(a.kind === 'payoutMobileMoney'){
+      const updates = {};
+      updates['payouts/' + a.seasonId + '/' + a.memberId + '/status'] = 'paid';
+      updates['payouts/' + a.seasonId + '/' + a.memberId + '/paidTs'] = Date.now();
+      updates['payouts/' + a.seasonId + '/' + a.memberId + '/method'] = 'mobile_money';
+      updates['payouts/' + a.seasonId + '/' + a.memberId + '/disbursement'] = a.payload.disbursement;
+      updates['payouts/' + a.seasonId + '/' + a.memberId + '/pendingApprovalId'] = null;
+      return coopRef.update(updates);
+    }
+    if(a.kind === 'projectCompleted'){
+      const updates = {};
+      updates['projects/' + a.projectId + '/status'] = 'completed';
+      updates['projects/' + a.projectId + '/completedTs'] = Date.now();
+      updates['projects/' + a.projectId + '/pendingApprovalId'] = null;
+      return coopRef.update(updates);
+    }
+    return Promise.resolve();
+  }
+
+  // Clears the "pendingApprovalId" flag left on the underlying record when a request is
+  // rejected or cancelled, so the payout/project unlocks and can be tried again.
+  function clearPendingFlag(a){
+    if(a.kind === 'payoutPaid' || a.kind === 'payoutMobileMoney'){
+      return coopRef.child('payouts/' + a.seasonId + '/' + a.memberId + '/pendingApprovalId').remove();
+    }
+    if(a.kind === 'projectCompleted'){
+      return coopRef.child('projects/' + a.projectId + '/pendingApprovalId').remove();
+    }
+    return Promise.resolve();
+  }
+
+  function decideApproval(id, decision){
+    const a = approvals[id];
+    if(!a || !canDecideApproval(a)) return;
+    const { uid, name } = myUidAndName();
+
+    if(decision === 'reject'){
+      const note = prompt('Optional note for rejecting this (leave blank to skip):') || '';
+      approvalsRef.child(id).update({ status: 'rejected', decidedByUid: uid, decidedByName: name, decidedTs: Date.now(), decisionNote: note })
+        .then(() => clearPendingFlag(a))
+        .catch(e => alert('Could not save decision: ' + e.message));
+      return;
+    }
+    if(!confirm('Approve this?\n\n' + a.summary)) return;
+    requirePin(a.summary).then(ok => {
+      if(!ok) return;
+      applyApprovalPayload(a)
+        .then(() => approvalsRef.child(id).update({ status: 'approved', decidedByUid: uid, decidedByName: name, decidedTs: Date.now() }))
+        .catch(e => alert('Could not complete this: ' + e.message));
+    });
+  }
+
+  function cancelApproval(id){
+    const a = approvals[id];
+    if(!canCancelApproval(a)) return;
+    if(!confirm('Cancel this request? Nothing will move.')) return;
+    approvalsRef.child(id).update({ status: 'cancelled', decidedTs: Date.now() })
+      .then(() => clearPendingFlag(a))
+      .catch(e => alert('Could not cancel: ' + e.message));
+  }
+
+  function approvalStatusLabel(a){
+    if(a.status === 'pending') return canDecideApproval(a) ? 'Needs your decision' : `Awaiting ${a.awaitingRole === 'member' ? 'member' : 'admin'} approval`;
+    if(a.status === 'approved') return 'Approved';
+    if(a.status === 'rejected') return 'Rejected';
+    return 'Cancelled';
+  }
+
+  function updateApprovalsBadge(){
+    const el = document.getElementById('approvals-badge');
+    if(!el) return;
+    const count = Object.values(approvals).filter(canDecideApproval).length;
+    el.textContent = count > 9 ? '9+' : String(count);
+    el.style.display = count > 0 ? 'block' : 'none';
+  }
+
+  function renderApprovals(){
+    const mineEl = document.getElementById('approvals-mine');
+    const sentEl = document.getElementById('approvals-sent');
+    const historyEl = document.getElementById('approvals-history');
+    if(!mineEl || !sentEl || !historyEl) return;
+    const { uid } = myUidAndName();
+    const entries = Object.entries(approvals);
+
+    const mine = entries.filter(([id, a]) => canDecideApproval(a));
+    const sent = entries.filter(([id, a]) => a.status === 'pending' && a.initiatedByUid === uid && !canDecideApproval(a));
+    const history = entries.filter(([id, a]) => a.status !== 'pending')
+      .sort((a, b) => (b[1].decidedTs || 0) - (a[1].decidedTs || 0)).slice(0, 15);
+
+    mineEl.innerHTML = mine.length ? mine.map(([id, a]) => `
+      <div class="approval-card">
+        <div class="approval-summary">${escapeHtml(a.summary)}</div>
+        <div class="approval-meta">Requested by ${escapeHtml(a.initiatedByName || (a.initiatedByRole === 'admin' ? 'Admin' : 'Member'))} · ${fmtTs(a.createdTs)}</div>
+        <div class="btn-row">
+          <button class="btn btn-primary" style="padding:8px 14px;font-size:12.5px;" onclick="decideApproval('${id}','approve')">Approve</button>
+          <button class="btn btn-secondary" style="padding:8px 14px;font-size:12.5px;color:var(--brick);" onclick="decideApproval('${id}','reject')">Reject</button>
+        </div>
+      </div>`).join('') : '<div class="empty-state"><div class="icon">✅</div><p>Nothing waiting on you right now.</p></div>';
+
+    sentEl.innerHTML = sent.length ? sent.map(([id, a]) => `
+      <div class="approval-card">
+        <div class="approval-summary">${escapeHtml(a.summary)}</div>
+        <div class="approval-meta">${fmtTs(a.createdTs)}</div>
+        <div class="approval-waiting">${escapeHtml(approvalStatusLabel(a))}</div>
+        <div class="btn-row" style="margin-top:8px;">
+          <button class="btn btn-secondary" style="padding:8px 14px;font-size:12.5px;" onclick="cancelApproval('${id}')">Cancel request</button>
+        </div>
+      </div>`).join('') : '<div class="empty-state"><div class="icon">⏳</div><p>Nothing you\'ve sent is waiting right now.</p></div>';
+
+    historyEl.innerHTML = history.length ? history.map(([id, a]) => `
+      <div class="approval-card">
+        <div class="approval-summary">${escapeHtml(a.summary)}</div>
+        <div class="approval-meta">${escapeHtml(approvalStatusLabel(a))}${a.decidedByName ? ' by ' + escapeHtml(a.decidedByName) : ''} · ${fmtTs(a.decidedTs)}${a.decisionNote ? ' — "' + escapeHtml(a.decisionNote) + '"' : ''}</div>
+      </div>`).join('') : '<div class="empty-state"><div class="icon">📜</div><p>No decisions yet.</p></div>';
+  }
+
+  /* ---------- Member self-service: request an advance (needs admin approval) ---------- */
+  function openRequestAdvance(){
+    if(!IS_MEMBER || !MY_MEMBER_ID) return;
+    document.getElementById('input-reqadvance-desc').value = '';
+    document.getElementById('input-reqadvance-amount').value = '';
+    document.getElementById('input-reqadvance-date').value = new Date().toISOString().slice(0, 10);
+    const toggle = document.getElementById('input-reqadvance-type');
+    toggle.querySelectorAll('.grade-opt').forEach(o => o.classList.remove('selected'));
+    toggle.querySelector('[data-type="cash"]').classList.add('selected');
+    openModal('requestAdvance');
+  }
+
+  function submitAdvanceRequest(){
+    if(!IS_MEMBER || !MY_MEMBER_ID) return;
+    const err = document.getElementById('input-reqadvance-error');
+    err.style.display = 'none';
+    const m = members[MY_MEMBER_ID];
+
+    const type = document.querySelector('#input-reqadvance-type .grade-opt.selected').dataset.type;
+    const description = document.getElementById('input-reqadvance-desc').value.trim();
+    const amount = Number(document.getElementById('input-reqadvance-amount').value);
+    const date = document.getElementById('input-reqadvance-date').value;
+
+    if(!amount || amount <= 0){ err.textContent = 'Enter a value above 0.'; err.style.display = 'block'; return; }
+    if(!date){ err.textContent = 'Choose the date you need it by.'; err.style.display = 'block'; return; }
+
+    const payload = { memberId: MY_MEMBER_ID, type, description, amount, date, ts: Date.now(), repaidAmount: 0, status: 'outstanding' };
+    createApproval('advance', {
+      memberId: MY_MEMBER_ID,
+      payload,
+      summary: `${m ? m.name : 'A member'} requested a ${type === 'cash' ? 'cash' : 'input'} advance of ${fmtK(amount)}`,
+      initiatedByRole: 'member'
+    }).then(() => closeModal('requestAdvance'))
+      .catch(e => { err.textContent = 'Could not send request: ' + e.message; err.style.display = 'block'; });
+  }
+
   function openEditMember(){
     if(blockIfMember()) return;
     const m = members[currentMemberId];
@@ -2053,7 +3090,7 @@
       alert(`${m.name} has recorded contributions (${fmtKg(m.totalKg)} total). Remove or reassign those contributions first before deleting the member.`);
       return;
     }
-    const linkedUid = Object.entries(accountRoles).find(([uid, acct]) => acct.memberId === currentMemberId);
+    const linkedUid = findLinkedAccount(currentMemberId);
     const linkedWarning = linkedUid ? ` This member also has a linked sign-in account — it will be removed too, and they won't be able to log in again unless re-invited.` : '';
     if(!confirm(`Delete ${m.name}? This can't be undone.${linkedWarning}`)) return;
     const updates = {};
@@ -2154,6 +3191,263 @@
     closeModal('addSeason');
   }
 
+  /* ---------- Rendering: Projects ----------
+     A project is a coop-agreed initiative funded by direct cash contributions from members
+     (a grinder, a storage shed, a joint input order) — separate from the harvest-pooling flow
+     above. status moves open -> funded -> completed, all admin-set (there's no Trustee vote
+     step wired up here yet — same admin-only gating as the rest of the app). */
+  const projectStatusTag = s => s === 'open' ? 'tag-open' : s === 'funded' ? 'tag-sold' : 'tag-closed';
+
+  function renderProjects(){
+    const list = document.getElementById('projects-list');
+    const searchEl = document.getElementById('input-project-search');
+    const term = (searchEl ? searchEl.value : '').trim().toLowerCase();
+    let entries = Object.entries(projects);
+
+    if(!entries.length){
+      list.innerHTML = '<div class="empty-state"><div class="icon">🎯</div><p>No projects yet. Once the coop agrees on one — a grinder, a storage shed, a joint input order — start it above.</p></div>';
+      return;
+    }
+    if(term){
+      entries = entries.filter(([id, p]) => (p.name || '').toLowerCase().includes(term));
+    }
+    if(!entries.length){
+      list.innerHTML = '<div class="empty-state"><div class="icon">🔍</div><p>No projects match your search.</p></div>';
+      return;
+    }
+    entries.sort((a, b) => (b[1].createdTs || 0) - (a[1].createdTs || 0));
+
+    list.innerHTML = entries.map(([id, p]) => {
+      const raised = Number(p.raisedAmount || 0);
+      const target = Number(p.targetAmount || 0);
+      const pct = target ? Math.min(100, Math.round(raised / target * 100)) : 0;
+      return `<div class="list-item" onclick="showProjectDetail('${id}')" style="cursor:pointer;">
+        <div>
+          <div class="li-name">${escapeHtml(p.name)}</div>
+          <div class="li-sub">${fmtK(raised)} of ${fmtK(target)} raised · ${pct}%</div>
+        </div>
+        <span class="status-tag ${projectStatusTag(p.status)}">${statusLabel(p.status)}</span>
+      </div>`;
+    }).join('');
+  }
+
+  function showProjectDetail(projectId){
+    currentProjectId = projectId;
+    renderProjectDetail();
+    showScreen('project-detail');
+  }
+
+  function renderProjectDetail(){
+    const p = projects[currentProjectId];
+    if(!p){ showScreen('projects', document.querySelectorAll('nav.bottom button')[4]); return; }
+
+    document.getElementById('project-detail-name').textContent = p.name;
+    document.getElementById('project-detail-sub').textContent = p.description || 'No description on file';
+
+    const raised = Number(p.raisedAmount || 0);
+    const target = Number(p.targetAmount || 0);
+    const pct = target ? Math.min(100, Math.round(raised / target * 100)) : 0;
+    document.getElementById('project-detail-fund').innerHTML = `
+      <div class="fund-card">
+        <div class="season-label">${statusLabel(p.status)}</div>
+        <div class="crop-name">${escapeHtml(p.name)}</div>
+        <div class="silo-track"><div class="silo-fill" style="width:${pct}%"></div></div>
+        <div class="silo-stats">
+          <span><strong>${fmtK(raised)}</strong> raised</span>
+          <span>target ${fmtK(target)}</span>
+        </div>
+      </div>`;
+
+    // Editing/deleting the goalposts is locked once the coop has moved past collecting money
+    // for it, same reasoning as a sold season: real contributions now depend on this record.
+    const canEdit = p.status === 'open' && !IS_MEMBER;
+    document.querySelectorAll('#project-detail .btn-row.admin-only')[0].style.display = canEdit ? '' : 'none';
+    document.getElementById('project-detail-add-contrib-row').style.display = (p.status === 'open' && !IS_MEMBER) ? '' : 'none';
+
+    const actionsEl = document.getElementById('project-detail-status-actions');
+    const completedBtn = p.pendingApprovalId
+      ? `<button class="btn btn-secondary" disabled title="Awaiting member approval">Completion pending approval</button>`
+      : `<button class="btn btn-secondary" onclick="setProjectStatus('completed')">Mark as completed</button>`;
+    if(IS_MEMBER){
+      actionsEl.innerHTML = '';
+    } else if(p.status === 'open'){
+      actionsEl.innerHTML = `<button class="btn btn-secondary" onclick="setProjectStatus('funded')">Mark as funded</button>
+        ${completedBtn}`;
+    } else if(p.status === 'funded'){
+      actionsEl.innerHTML = `${completedBtn}
+        <button class="btn btn-secondary" onclick="setProjectStatus('open')">Reopen</button>`;
+    } else {
+      actionsEl.innerHTML = `<button class="btn btn-secondary" onclick="setProjectStatus('open')">Reopen</button>`;
+    }
+
+    const listEl = document.getElementById('project-detail-contributions');
+    const rows = Object.entries(projectContributions)
+      .filter(([id, c]) => c.projectId === currentProjectId)
+      .sort((a, b) => (b[1].ts || 0) - (a[1].ts || 0));
+
+    if(!rows.length){
+      listEl.innerHTML = '<div class="empty-state"><div class="icon">🎯</div><p>No contributions logged yet.</p></div>';
+      return;
+    }
+    listEl.innerHTML = rows.map(([id, c]) => {
+      const m = members[c.memberId];
+      const deleteAction = (!IS_MEMBER && p.status === 'open')
+        ? ` · <span class="link-action danger" onclick="deleteProjectContribution('${id}')">Delete</span>` : '';
+      return `<div class="list-item">
+        <div>
+          <div class="li-name">${escapeHtml(m ? m.name : 'Unknown member')}</div>
+          <div class="li-sub">Given ${fmtDate(c.date)}${deleteAction}</div>
+        </div>
+        <div class="li-amount">${fmtK(c.amount)}</div>
+      </div>`;
+    }).join('');
+  }
+
+  function setProjectStatus(newStatus){
+    if(blockIfMember()) return;
+    const p = projects[currentProjectId];
+    if(!p) return;
+
+    if(newStatus === 'completed'){
+      // Marking a project completed is what releases/spends its pooled funds — a real
+      // withdrawal — so, like payouts and advances, it needs sign-off from the other side
+      // before it's final. There's no single "affected member" for a coop-wide project, so
+      // any linked member account can confirm it.
+      if(p.pendingApprovalId){ alert('This already has a pending approval — decide it (or cancel it) from Approvals first.'); return; }
+      createApproval('projectCompleted', {
+        projectId: currentProjectId,
+        payload: {},
+        summary: `Mark project "${p.name}" (${fmtK(p.raisedAmount || 0)} raised) as completed — releases the pooled funds`,
+        initiatedByRole: 'admin'
+      }).then(ref => projectsRef.child(currentProjectId).update({ pendingApprovalId: ref.key }))
+        .catch(e => alert('Could not submit for approval: ' + e.message));
+      return;
+    }
+
+    const updates = { status: newStatus };
+    projectsRef.child(currentProjectId).update(updates)
+      .catch(e => alert('Could not update project: ' + e.message));
+  }
+
+  function openEditProject(){
+    if(blockIfMember()) return;
+    const p = projects[currentProjectId];
+    if(!p) return;
+    document.getElementById('addProject-title').textContent = 'Edit project';
+    document.getElementById('btn-save-project').textContent = 'Save changes';
+    document.getElementById('input-project-name').value = p.name || '';
+    document.getElementById('input-project-description').value = p.description || '';
+    document.getElementById('input-project-target').value = p.targetAmount || '';
+    document.getElementById('project-delete-row').style.display = (Number(p.raisedAmount || 0) > 0) ? 'none' : 'block';
+    document.getElementById('modal-addProject').dataset.editingId = currentProjectId;
+    document.getElementById('modal-addProject').classList.add('active');
+  }
+
+  function deleteProjectPrompt(){
+    if(blockIfMember()) return;
+    const p = projects[currentProjectId];
+    if(!p) return;
+    if(Number(p.raisedAmount || 0) > 0){
+      alert(`${p.name} has recorded contributions. Remove those contributions first before deleting the project.`);
+      return;
+    }
+    if(!confirm(`Delete ${p.name}? This can't be undone.`)) return;
+    projectsRef.child(currentProjectId).remove()
+      .then(() => showScreen('projects', document.querySelectorAll('nav.bottom button')[4]))
+      .catch(e => alert('Could not delete: ' + e.message));
+  }
+  function deleteProject(){
+    const id = document.getElementById('modal-addProject').dataset.editingId;
+    if(!id) return;
+    deleteProjectPrompt();
+    closeModal('addProject');
+  }
+
+  function saveProject(){
+    const modal = document.getElementById('modal-addProject');
+    const editingId = modal.dataset.editingId;
+    const name = document.getElementById('input-project-name').value.trim();
+    const description = document.getElementById('input-project-description').value.trim();
+    const targetAmount = Number(document.getElementById('input-project-target').value);
+    const err = document.getElementById('input-project-error');
+    err.style.display = 'none';
+    if(!name){ err.textContent = 'Project name is required.'; err.style.display = 'block'; return; }
+    if(!targetAmount || targetAmount <= 0){ err.textContent = 'Enter a target above K0.'; err.style.display = 'block'; return; }
+
+    if(editingId){
+      const existing = projects[editingId];
+      if(!existing){ err.textContent = 'This project no longer exists.'; err.style.display = 'block'; return; }
+      if(existing.status !== 'open'){ err.textContent = 'Only open projects can be edited.'; err.style.display = 'block'; return; }
+      projectsRef.child(editingId).update({ name, description, targetAmount })
+        .then(() => closeModal('addProject'))
+        .catch(e => { err.textContent = 'Could not save: ' + e.message; err.style.display = 'block'; });
+    } else {
+      projectsRef.push({ name, description, targetAmount, raisedAmount: 0, status: 'open', createdTs: Date.now() })
+        .then(() => closeModal('addProject'))
+        .catch(e => { err.textContent = 'Could not save: ' + e.message; err.style.display = 'block'; });
+    }
+  }
+
+  /* ---------- Form: Add contribution toward a project ---------- */
+  function populateProjectContribMemberOptions(){
+    const sel = document.getElementById('input-projcontrib-member');
+    const current = sel.value;
+    sel.innerHTML = Object.entries(members).map(([id,m]) => `<option value="${id}">${escapeHtml(m.name)}</option>`).join('');
+    if(current) sel.value = current;
+  }
+
+  function openAddProjectContribution(){
+    if(blockIfMember()) return;
+    if(!currentProjectId) return;
+    populateProjectContribMemberOptions();
+    document.getElementById('input-projcontrib-amount').value = '';
+    document.getElementById('input-projcontrib-date').value = new Date().toISOString().slice(0,10);
+    openModal('addProjectContribution');
+  }
+
+  function saveProjectContribution(){
+    if(blockIfMember()) return;
+    const projectId = currentProjectId;
+    const project = projects[projectId];
+    const err = document.getElementById('input-projcontrib-error');
+    err.style.display = 'none';
+    if(!project){ err.textContent = 'This project no longer exists.'; err.style.display = 'block'; return; }
+    if(project.status !== 'open'){ err.textContent = 'This project is no longer collecting contributions.'; err.style.display = 'block'; return; }
+
+    const memberId = document.getElementById('input-projcontrib-member').value;
+    const amount = Number(document.getElementById('input-projcontrib-amount').value);
+    const date = document.getElementById('input-projcontrib-date').value;
+    if(!memberId){ err.textContent = 'Add a member first.'; err.style.display = 'block'; return; }
+    if(!amount || amount <= 0){ err.textContent = 'Enter an amount above K0.'; err.style.display = 'block'; return; }
+    if(!date){ err.textContent = 'Select a date.'; err.style.display = 'block'; return; }
+
+    const newKey = projectContribsRef.push().key;
+    const updates = {};
+    updates['projectContributions/' + newKey] = { projectId, memberId, amount, date, ts: Date.now() };
+    updates['projects/' + projectId + '/raisedAmount'] = Number(project.raisedAmount || 0) + amount;
+
+    coopRef.update(updates)
+      .then(() => closeModal('addProjectContribution'))
+      .catch(e => { err.textContent = 'Could not save: ' + e.message; err.style.display = 'block'; });
+  }
+
+  function deleteProjectContribution(contribId){
+    if(blockIfMember()) return;
+    const c = projectContributions[contribId];
+    if(!c) return;
+    const project = projects[c.projectId];
+    if(project && project.status !== 'open'){
+      alert("This project is no longer collecting contributions, so it can't be deleted.");
+      return;
+    }
+    if(!confirm('Delete this contribution? This will reduce the project\'s raised total.')) return;
+
+    const updates = {};
+    updates['projectContributions/' + contribId] = null;
+    updates['projects/' + c.projectId + '/raisedAmount'] = Math.max(0, (projects[c.projectId]?.raisedAmount || 0) - Number(c.amount));
+    coopRef.update(updates).catch(e => alert('Could not delete: ' + e.message));
+  }
+
   /* ---------- Rendering: Payouts ---------- */
   let payoutFilterStatus = 'all';
   function setPayoutFilter(el){
@@ -2182,10 +3476,13 @@
     const priceLabel = (season.pricingMode === 'byGrade' && season.priceByGrade)
       ? `Grade A ${fmtK(season.priceByGrade.A||0)} · B ${fmtK(season.priceByGrade.B||0)} · C ${fmtK(season.priceByGrade.C||0)} per kg`
       : `${fmtK(season.pricePerKg)}/kg`;
-    summary.innerHTML = `<div class="stat-box" style="margin-bottom:18px;">
+    const costLine = season.logisticsCost > 0
+      ? `<div class="li-sub" style="margin-bottom:18px;">Transport &amp; handling: <strong>-${fmtK(season.logisticsCost)}</strong> · Net distributed: <strong>${fmtK(season.netSaleAmount != null ? season.netSaleAmount : season.saleAmount)}</strong></div>`
+      : '';
+    summary.innerHTML = `<div class="stat-box" style="margin-bottom:${costLine ? '6px' : '18px'};">
       <div class="num">${fmtK(season.saleAmount)}</div>
       <div class="label">Total sale amount · ${priceLabel}</div>
-    </div>`;
+    </div>${costLine}`;
 
     const seasonPayouts = payouts[seasonId] || {};
     let entries = Object.entries(seasonPayouts);
@@ -2216,14 +3513,30 @@
     list.innerHTML = entries.map(([memberId, p]) => {
       const m = members[memberId];
       const paidNote = p.status === 'paid' && p.paidTs ? ` · paid ${fmtTs(p.paidTs)}` : '';
-      return `<div class="list-item" onclick="togglePayoutStatus('${seasonId}','${memberId}')" style="cursor:pointer;" title="Tap to mark ${p.status === 'paid' ? 'due' : 'paid'}">
+      const costNote = p.costShare > 0 ? ` · ${fmtK(p.costShare)} transport/handling` : '';
+      const advanceNote = p.advanceDeducted > 0
+        ? ` · ${fmtK(p.advanceDeducted)} advance deducted (gross ${fmtK(p.grossAmount)})` : '';
+      const disbursementLine = p.disbursement
+        ? `<div class="li-sub">${escapeHtml(p.disbursement.network)} Money to ${escapeHtml(p.disbursement.phone || 'no number on file')} · ref ${escapeHtml(p.disbursement.reference)}</div>`
+        : '';
+      const pendingId = p.pendingApprovalId;
+      const mobileMoneyBtn = (p.status !== 'paid' && !pendingId)
+        ? `<button class="btn btn-secondary" style="padding:6px 10px;font-size:11.5px;margin-top:6px;" onclick="event.stopPropagation(); openMobileMoneyPayout('${seasonId}','${memberId}')">Mobile Money</button>`
+        : '';
+      const clickHandler = pendingId ? '' : `onclick="togglePayoutStatus('${seasonId}','${memberId}')" style="cursor:pointer;"`;
+      const statusTag = pendingId
+        ? `<span class="status-tag tag-due">Pending approval</span>`
+        : `<span class="status-tag ${p.status === 'paid' ? 'tag-paid' : 'tag-due'}">${p.status === 'paid' ? 'Paid' : 'Due'}</span>`;
+      return `<div class="list-item" ${clickHandler} title="${pendingId ? 'Awaiting approval' : 'Tap to mark ' + (p.status === 'paid' ? 'due' : 'paid')}">
         <div>
           <div class="li-name">${escapeHtml(m ? m.name : 'Unknown member')}</div>
-          <div class="li-sub">${fmtKg(p.kg)} · ${p.sharePercent.toFixed(1)}% share${paidNote}</div>
+          <div class="li-sub">${fmtKg(p.kg)} · ${p.sharePercent.toFixed(1)}% share${costNote}${advanceNote}${paidNote}</div>
+          ${disbursementLine}
         </div>
         <div class="li-right">
           <div class="li-amount">${fmtK(p.amount)}</div>
-          <span class="status-tag ${p.status === 'paid' ? 'tag-paid' : 'tag-due'}">${p.status === 'paid' ? 'Paid' : 'Due'}</span>
+          ${statusTag}
+          ${mobileMoneyBtn}
         </div>
       </div>`;
     }).join('');
@@ -2232,13 +3545,100 @@
 
   function togglePayoutStatus(seasonId, memberId){
     if(blockIfMember()) return;
-    const current = (payouts[seasonId] && payouts[seasonId][memberId] && payouts[seasonId][memberId].status) || 'due';
-    const newStatus = current === 'paid' ? 'due' : 'paid';
+    const p = payouts[seasonId] && payouts[seasonId][memberId];
+    if(p && p.pendingApprovalId){ alert('This payout already has a pending approval — decide it (or cancel it) from Approvals first.'); return; }
+    const current = (p && p.status) || 'due';
+
+    if(current === 'due'){
+      // Marking a payout paid sends real money out — it's a funds movement and needs
+      // the affected member's sign-off before it's final, same as a cash advance.
+      const m = members[memberId];
+      createApproval('payoutPaid', {
+        memberId, seasonId,
+        payload: {},
+        summary: `Mark ${fmtK(p ? p.amount : 0)} payout to ${m ? m.name : 'this member'} as paid (cash)`,
+        initiatedByRole: 'admin'
+      }).then(ref => coopRef.update({ ['payouts/' + seasonId + '/' + memberId + '/pendingApprovalId']: ref.key }))
+        .catch(e => alert('Could not submit for approval: ' + e.message));
+      return;
+    }
+
+    // Reverting an already-paid payout back to "due" is a correction (no money moves),
+    // so it stays an immediate admin action rather than going through approval.
     const updates = {};
-    updates['payouts/' + seasonId + '/' + memberId + '/status'] = newStatus;
-    updates['payouts/' + seasonId + '/' + memberId + '/paidTs'] = newStatus === 'paid' ? Date.now() : null;
+    updates['payouts/' + seasonId + '/' + memberId + '/status'] = 'due';
+    updates['payouts/' + seasonId + '/' + memberId + '/paidTs'] = null;
+    updates['payouts/' + seasonId + '/' + memberId + '/method'] = null;
+    updates['payouts/' + seasonId + '/' + memberId + '/disbursement'] = null;
     coopRef.update(updates);
   }
+
+  /* ---------- Mobile money payout (MTN/Airtel Money disbursement record) ----------
+     Pool runs on Firebase's free Spark plan with no backend of its own, and a live push
+     to the MTN MoMo / Airtel Money merchant APIs needs a server holding API secrets —
+     something that can't live safely in client-side code. So this doesn't fire an actual
+     transfer: the treasurer sends the money themselves via their coop's mobile money line,
+     then logs the confirmation reference here. What it solves is the actual gap noted —
+     payouts marked "paid" with zero disbursement record — by attaching network, phone,
+     and transaction reference to the payout, so there's a paper trail for reconciliation
+     and for members who ask for proof for a loan application (see item 4, receipts/export).
+  */
+  let pendingDisbursement = null; // {seasonId, memberId} while modal-mobileMoneyPayout is open
+
+  function openMobileMoneyPayout(seasonId, memberId){
+    if(blockIfMember()) return;
+    const p = payouts[seasonId] && payouts[seasonId][memberId];
+    const m = members[memberId];
+    if(!p || !m) return;
+    if(p.pendingApprovalId){ alert('This payout already has a pending approval — decide it (or cancel it) from Approvals first.'); return; }
+
+    pendingDisbursement = { seasonId, memberId };
+    document.getElementById('mm-payout-summary').innerHTML =
+      `<div class="num">${fmtK(p.amount)}</div><div class="label">Payout for ${escapeHtml(m.name)}</div>`;
+    const toggle = document.getElementById('input-mm-network');
+    toggle.querySelectorAll('.grade-opt').forEach(o => o.classList.remove('selected'));
+    toggle.querySelector('[data-network="MTN"]').classList.add('selected');
+    document.getElementById('input-mm-phone').value = m.phone || '';
+    document.getElementById('input-mm-reference').value = '';
+    openModal('mobileMoneyPayout');
+  }
+
+  function confirmMobileMoneyPayout(){
+    if(!pendingDisbursement) return;
+    const { seasonId, memberId } = pendingDisbursement;
+    const err = document.getElementById('input-mm-error');
+    err.style.display = 'none';
+
+    const network = document.querySelector('#input-mm-network .grade-opt.selected').dataset.network;
+    const phone = document.getElementById('input-mm-phone').value.trim();
+    const reference = document.getElementById('input-mm-reference').value.trim();
+
+    if(phone && !/^(\+260|0)[0-9]{9}$/.test(phone.replace(/\s+/g, ''))){
+      err.textContent = 'Enter a valid Zambian phone number, e.g. 0977123456.';
+      err.style.display = 'block';
+      return;
+    }
+    if(!reference){
+      err.textContent = 'Enter the transaction reference from the confirmation SMS.';
+      err.style.display = 'block';
+      return;
+    }
+
+    // Recording a mobile money disbursement is a funds movement, same as marking a cash
+    // payout paid — it goes to the affected member for approval instead of applying right away.
+    const p = payouts[seasonId] && payouts[seasonId][memberId];
+    const m = members[memberId];
+    const disbursement = { network, phone, reference, ts: Date.now() };
+    createApproval('payoutMobileMoney', {
+      memberId, seasonId,
+      payload: { disbursement },
+      summary: `Pay ${fmtK(p ? p.amount : 0)} to ${m ? m.name : 'this member'} via ${network} Money (ref ${reference})`,
+      initiatedByRole: 'admin'
+    }).then(ref => coopRef.update({ ['payouts/' + seasonId + '/' + memberId + '/pendingApprovalId']: ref.key }))
+      .then(() => { pendingDisbursement = null; closeModal('mobileMoneyPayout'); })
+      .catch(e => { err.textContent = 'Could not submit for approval: ' + e.message; err.style.display = 'block'; });
+  }
+
 
   /* ---------- Form: Add / Edit Member ---------- */
   function saveMember(){
@@ -2330,6 +3730,7 @@
   function prefillSaleForm(){
     populateSeasonOptions();
     document.getElementById('input-sale-buyer').value = '';
+    document.getElementById('input-sale-costs').value = '';
     document.getElementById('input-sale-qty').value = '';
     document.getElementById('input-sale-price').value = '';
     document.getElementById('input-sale-price-A').value = '';
@@ -2485,6 +3886,81 @@
     return { payoutMap, saleAmount: saleAmountNgwee / 100 };
   }
 
+  // Splits a flat transport/handling cost across every member's payout in proportion to
+  // the value they were about to receive (not raw kg — a member paid a premium grade
+  // price carries a proportionally bigger share of the logistics bill too). Mutates
+  // payoutMap in place: 'amount' becomes the produce value net of this member's cost
+  // share, and 'costShare' records what was deducted so the UI can show a breakdown.
+  // Uses the same largest-remainder rounding as computePayouts so the cost shares sum to
+  // exactly costAmount (in ngwee) with no drift, and is a no-op when costAmount is 0.
+  function deductCosts(payoutMap, costAmount){
+    const costNgwee = Math.round((Number(costAmount) || 0) * 100);
+    if(costNgwee <= 0){
+      Object.keys(payoutMap).forEach(id => { payoutMap[id] = { ...payoutMap[id], costShare: 0 }; });
+      return;
+    }
+    const totalAmountNgwee = Object.values(payoutMap).reduce((sum, p) => sum + Math.round(p.amount * 100), 0);
+    if(totalAmountNgwee <= 0) return;
+
+    const rows = Object.entries(payoutMap).map(([memberId, p]) => {
+      const grossNgwee = Math.round(p.amount * 100);
+      const exactShare = (grossNgwee / totalAmountNgwee) * costNgwee;
+      return { memberId, grossNgwee, floor: Math.floor(exactShare), remainder: exactShare - Math.floor(exactShare) };
+    });
+
+    let allocated = rows.reduce((sum, r) => sum + r.floor, 0);
+    let leftoverNgwee = costNgwee - allocated;
+    rows.sort((a, b) => b.remainder - a.remainder);
+    for(let i = 0; i < rows.length && leftoverNgwee > 0; i++){ rows[i].floor += 1; leftoverNgwee--; }
+
+    rows.forEach(r => {
+      const p = payoutMap[r.memberId];
+      payoutMap[r.memberId] = { ...p, costShare: r.floor / 100, amount: (r.grossNgwee - r.floor) / 100 };
+    });
+  }
+
+  // Nets out any outstanding advances (cash or inputs given ahead of the season) against
+  // each member's gross payout. Mutates payoutMap in place, adding grossAmount/advanceDeducted
+  // and turning 'amount' into the net figure actually payable. Oldest advances are settled
+  // first; if a payout isn't enough to clear an advance, the remainder simply carries forward
+  // and gets picked up automatically next time that member has a payout. Returns the set of
+  // {repaidAmount, status} updates that need writing back to the advances themselves — callers
+  // that are only previewing (not finalizing a sale) can safely ignore the return value.
+  function applyAdvanceDeductions(payoutMap, advancesData){
+    const advanceUpdates = {};
+    const memberAdvances = {};
+    Object.entries(advancesData || {}).forEach(([id, a]) => {
+      if(a.status === 'repaid') return;
+      if(!memberAdvances[a.memberId]) memberAdvances[a.memberId] = [];
+      memberAdvances[a.memberId].push({ id, ...a });
+    });
+
+    Object.entries(payoutMap).forEach(([memberId, p]) => {
+      const gross = p.amount;
+      let remainingNgwee = Math.round(gross * 100);
+      const list = (memberAdvances[memberId] || []).sort((a, b) => (a.ts || 0) - (b.ts || 0));
+      let deductedNgwee = 0;
+      list.forEach(a => {
+        if(remainingNgwee <= 0) return;
+        const owedNgwee = Math.round((Number(a.amount) - Number(a.repaidAmount || 0)) * 100);
+        if(owedNgwee <= 0) return;
+        const take = Math.min(owedNgwee, remainingNgwee);
+        remainingNgwee -= take;
+        deductedNgwee += take;
+        const newRepaid = Number(a.repaidAmount || 0) + take / 100;
+        advanceUpdates[a.id] = { repaidAmount: newRepaid, status: newRepaid >= Number(a.amount) - 0.001 ? 'repaid' : 'outstanding' };
+      });
+      payoutMap[memberId] = {
+        ...p,
+        grossAmount: gross,
+        advanceDeducted: deductedNgwee / 100,
+        amount: remainingNgwee / 100
+      };
+    });
+
+    return advanceUpdates;
+  }
+
   /* ---------- Form: Record Sale (also generates payouts) ---------- */
   let pendingSale = null; // holds computed sale/payout data between reviewSale() and confirmSaleFinal()
 
@@ -2497,6 +3973,9 @@
 
     if(!seasonId){ err.textContent = 'Choose a season to sell.'; err.style.display = 'block'; return; }
     if(!buyer){ err.textContent = 'Buyer name is required.'; err.style.display = 'block'; return; }
+
+    const costAmount = Number(document.getElementById('input-sale-costs').value) || 0;
+    if(costAmount < 0){ err.textContent = 'Transport & handling costs can\'t be negative.'; err.style.display = 'block'; return; }
 
     const season = seasons[seasonId];
     const seasonContribs = Object.values(contributions).filter(c => c.seasonId === seasonId);
@@ -2545,13 +4024,27 @@
       pricingPayload = { mode: 'byGrade', priceByGrade };
     }
 
-    pendingSale = { seasonId, season, buyer, saleAmount, payoutMap, pricingPayload };
+    if(costAmount > saleAmount){
+      err.textContent = `Transport & handling costs (${fmtK(costAmount)}) can't exceed the sale amount (${fmtK(saleAmount)}).`;
+      err.style.display = 'block';
+      return;
+    }
+
+    // Costs come off the top, split proportionally to each member's produce value, before
+    // advances are netted out — see deductCosts() for the rounding approach.
+    deductCosts(payoutMap, costAmount);
+
+    // Preview only — uses locally cached advances so the review screen shows realistic net
+    // payouts. The authoritative deduction happens against fresh data in confirmSaleFinal().
+    applyAdvanceDeductions(payoutMap, advances);
+
+    pendingSale = { seasonId, season, buyer, saleAmount, costAmount, payoutMap, pricingPayload: { ...pricingPayload, costAmount } };
     renderConfirmSale(mismatchWarning);
     openModal('confirmSale');
   }
 
   function renderConfirmSale(mismatchWarning){
-    const { season, buyer, saleAmount, payoutMap } = pendingSale;
+    const { season, buyer, saleAmount, costAmount, payoutMap } = pendingSale;
     const warningEl = document.getElementById('confirm-sale-warning');
     if(mismatchWarning){
       warningEl.textContent = mismatchWarning;
@@ -2564,21 +4057,28 @@
       .sort((a, b) => b[1].amount - a[1].amount)
       .map(([memberId, p]) => {
         const m = members[memberId];
+        const costNote = p.costShare > 0 ? ` · ${fmtK(p.costShare)} transport/handling` : '';
+        const advanceNote = p.advanceDeducted > 0
+          ? ` · ${fmtK(p.advanceDeducted)} advance deducted` : '';
         return `<div class="list-item">
           <div>
             <div class="li-name">${escapeHtml(m ? m.name : 'Unknown member')}</div>
-            <div class="li-sub">${fmtKg(p.kg)} · ${p.sharePercent.toFixed(1)}% share</div>
+            <div class="li-sub">${fmtKg(p.kg)} · ${p.sharePercent.toFixed(1)}% share${costNote}${advanceNote}</div>
           </div>
           <div class="li-amount">${fmtK(p.amount)}</div>
         </div>`;
       }).join('');
     const numMembers = Object.keys(payoutMap).length;
+    const netAmount = saleAmount - costAmount;
 
     document.getElementById('confirm-sale-summary').innerHTML = `
       <div class="stat-box" style="margin-bottom:14px;">
         <div class="num">${fmtK(saleAmount)}</div>
         <div class="label">${escapeHtml(season.crop)} — ${escapeHtml(season.label)} · sold to ${escapeHtml(buyer)}</div>
       </div>
+      ${costAmount > 0 ? `<div class="li-sub" style="margin-bottom:14px;">
+        Transport &amp; handling: <strong>-${fmtK(costAmount)}</strong> · Net to distribute: <strong>${fmtK(netAmount)}</strong>
+      </div>` : ''}
       <div class="section-label">Payouts for ${numMembers} member${numMembers === 1 ? '' : 's'}</div>
       <div style="max-height:260px;overflow-y:auto;margin-bottom:6px;">${rows}</div>
       <div class="field-error" style="display:block;color:var(--brick);font-size:12px;margin-top:6px;">
@@ -2586,6 +4086,12 @@
       </div>`;
   }
 
+  function confirmSaleFinalWithPin(){
+    if(!pendingSale) return;
+    const season = seasons[pendingSale.seasonId];
+    const summary = `Finalize sale of ${season ? escapeHtml(season.crop) + ' — ' + escapeHtml(season.label) : 'this season'} to ${escapeHtml(pendingSale.buyer)} — generates payouts and can't be undone.`;
+    requirePin(summary).then(ok => { if(ok) confirmSaleFinal(); });
+  }
   function confirmSaleFinal(){
     if(!pendingSale) return;
     const { seasonId, buyer, pricingPayload } = pendingSale;
@@ -2614,10 +4120,12 @@
         return;
       }
 
-      // We now hold the season. Re-read the freshest contributions before computing payouts,
-      // in case something changed between opening the review screen and tapping Confirm.
-      return contributionsRef.once('value').then(snap => {
+      // We now hold the season. Re-read the freshest contributions (and outstanding advances)
+      // before computing payouts, in case something changed between opening the review screen
+      // and tapping Confirm.
+      return Promise.all([contributionsRef.once('value'), advancesRef.once('value')]).then(([snap, advSnap]) => {
         const liveContribs = Object.values(snap.val() || {}).filter(c => c.seasonId === seasonId);
+        const liveAdvances = advSnap.val() || {};
         if(!liveContribs.length){
           return seasonRef.child('status').set('open').then(() => {
             err.textContent = 'This season has no contributions left to pay out. Nothing was finalized.';
@@ -2645,10 +4153,26 @@
           updates['seasons/' + seasonId + '/pricePerKg'] = null;
         }
 
+        // Clamp in case live contributions shrank between the review screen and this tap,
+        // so a fixed cost figure entered against the old (larger) sale amount never pushes
+        // a member's payout negative.
+        const costAmount = Math.min(Number(pricingPayload.costAmount) || 0, saleAmount);
+        deductCosts(payoutMap, costAmount);
+
+        // Net out any outstanding advances against these gross payouts, using the freshest
+        // advances data — same reasoning as re-reading contributions above.
+        const advanceUpdates = applyAdvanceDeductions(payoutMap, liveAdvances);
+
         updates['seasons/' + seasonId + '/buyer'] = buyer;
         updates['seasons/' + seasonId + '/saleAmount'] = saleAmount;
+        updates['seasons/' + seasonId + '/logisticsCost'] = costAmount;
+        updates['seasons/' + seasonId + '/netSaleAmount'] = saleAmount - costAmount;
         updates['seasons/' + seasonId + '/soldTs'] = Date.now();
         Object.entries(payoutMap).forEach(([memberId, p]) => { updates['payouts/' + seasonId + '/' + memberId] = p; });
+        Object.entries(advanceUpdates).forEach(([advanceId, u]) => {
+          updates['advances/' + advanceId + '/repaidAmount'] = u.repaidAmount;
+          updates['advances/' + advanceId + '/status'] = u.status;
+        });
 
         return coopRef.update(updates)
           .then(() => {
@@ -2700,9 +4224,14 @@
     input.value = '';
     document.getElementById('assistant-loading').style.display = 'block';
     try {
-      const system = "You are a helpful assistant for a Zambian farmers' cooperative pooling app. " +
-        "Answer only using the cooperative snapshot given below plus the member's question. " +
-        "Be concise and use ZMW (K) for money. If the answer isn't in the data, say so.\n\n" + buildCoopContext();
+      const system = "You are the manager of a Zambian farmers' cooperative that pools members' produce, " +
+        "sells it collectively, and splits the proceeds by each member's share. Speak like an experienced " +
+        "cooperative manager talking to a member or committee official, not like a generic chatbot: be " +
+        "direct, practical, and proactive. Don't just recite numbers — flag anything that needs attention " +
+        "(overdue payouts, an unsold season sitting too long, a member whose share looks off) and say what " +
+        "you'd do about it. Answer only using the cooperative snapshot given below plus the question asked. " +
+        "Be concise and use ZMW (K) for money. If the answer isn't in the data, say so plainly rather than " +
+        "guessing.\n\n" + buildCoopContext();
       const answer = await askGemini(question, system);
       appendAssistantMessage('assistant', answer);
     } catch(e){
@@ -2715,9 +4244,11 @@
     document.getElementById('modal-assistant').classList.add('active');
     document.getElementById('assistant-loading').style.display = 'block';
     try {
-      const system = "You are summarizing records for a Zambian farmers' cooperative pooling app. " +
-        "Write a short, plain-language summary (4-6 sentences) a coop leader could read aloud at a meeting: " +
-        "overall activity, which seasons are open vs sold, and payout progress. Use ZMW (K) for money.";
+      const system = "You are the manager of a Zambian farmers' cooperative, giving a verbal report to the " +
+        "committee. Write a short, plain-language report (4-6 sentences) covering overall activity, which " +
+        "seasons are open vs sold, payout progress, and — most importantly — anything that needs the " +
+        "committee's attention or action right now (overdue payouts, stalled sales, anything unusual). " +
+        "Use ZMW (K) for money.";
       const summary = await askGemini(buildCoopContext(), system);
       appendAssistantMessage('assistant', summary);
     } catch(e){
