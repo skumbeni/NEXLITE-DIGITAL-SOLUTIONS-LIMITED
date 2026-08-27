@@ -4,6 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pool — Cooperative Produce Aggregation</title>
+
+<!-- PWA: manifest + icons -->
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#4A5D3A">
+<link rel="icon" type="image/png" sizes="32x32" href="./icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="16x16" href="./icons/favicon-16.png">
+<link rel="apple-touch-icon" sizes="180x180" href="./icons/icon-180.png">
+<!-- iOS ignores the manifest for install metadata, so these are needed alongside it -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Pool">
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Firebase (Realtime Database) -->
@@ -1585,7 +1597,7 @@
         <input type="password" id="input-login-password" placeholder="••••••••" autocomplete="current-password">
       </div>
       <div class="field-error" id="input-login-error" style="display:none;color:var(--brick);font-size:12px;margin-bottom:10px;"></div>
-      <button class="btn btn-primary" style="width:100%;" onclick="doLogin()">Sign in</button>
+      <button class="btn btn-primary" id="btn-login" style="width:100%;" onclick="doLogin()">Sign in</button>
       <div class="modal-close" onclick="goToCreateCoop()">New coop? Set one up</div>
       <div class="modal-close" onclick="backToLanding()">&larr; Back</div>
     </div>
@@ -1766,6 +1778,25 @@
                                           // first time member data streams in, to land on "their" record
   let ONBOARDING_IN_PROGRESS = false; // true while createCoop() or joinCoop() is writing new account data —
                                        // stops onAuthStateChanged from racing in and signing the new account out
+
+  /* Right after createUserWithEmailAndPassword() resolves, the Auth SDK still has to push the
+     freshly-minted user's ID token down to the Realtime Database connection before that
+     connection is allowed to write as the new uid. That handshake is asynchronous, so firing
+     db.ref().update() in the very next tick can reach the server a few hundred ms before the
+     re-auth lands — the server sees the request as still unauthenticated (or authenticated as
+     the previous user) and rejects it with PERMISSION_DENIED, even though the rules themselves
+     would have allowed the write. This is a well-known Firebase race, not a rules bug. Forcing
+     a fresh ID token fetch gives the SDK a checkpoint to finish that handshake, and retrying
+     once on PERMISSION_DENIED covers whatever's left. */
+  function updateAfterSignup(user, updates, attemptsLeft){
+    if(attemptsLeft === undefined) attemptsLeft = 1;
+    return user.getIdToken(true).then(() => db.ref().update(updates)).catch(e => {
+      if(e && e.code === 'PERMISSION_DENIED' && attemptsLeft > 0){
+        return new Promise(resolve => setTimeout(resolve, 700)).then(() => updateAfterSignup(user, updates, attemptsLeft - 1));
+      }
+      throw e;
+    });
+  }
 
   // Read a one-time invite code from the URL, if present, and strip it from the address
   // bar immediately. Without this, ?invite=<code> sticks around in the tab's URL forever
@@ -1982,7 +2013,7 @@
         updates['coopDirectory/' + coopId] = { name: coopName, createdBy: cred.user.uid };
         updates['users/' + cred.user.uid] = { coopId, coopName, role: 'admin', adminName };
         updates['coops/' + coopId + '/accountRoles/' + cred.user.uid] = { role: 'admin', name: adminName };
-        return db.ref().update(updates).then(() => {
+        return updateAfterSignup(cred.user, updates).then(() => {
           // Write confirmed — now finish what resolveCoopForUser would normally do.
           IS_SUPERADMIN = false;
           IS_MEMBER = false;
@@ -2053,7 +2084,7 @@
             updates['coops/' + invite.coopId + '/members/' + invite.memberId + '/uid'] = cred.user.uid;
             updates['coops/' + invite.coopId + '/accountRoles/' + cred.user.uid] = { role: 'member', name: memberName, memberId: invite.memberId };
             updates['inviteCodes/' + code] = null;
-            return db.ref().update(updates).then(() => {
+            return updateAfterSignup(cred.user, updates).then(() => {
               IS_SUPERADMIN = false;
               IS_MEMBER = true;
               MY_MEMBER_ID = invite.memberId;
@@ -2296,8 +2327,15 @@
     const err = document.getElementById('input-login-error');
     err.style.display = 'none';
     if(!email || !password){ err.textContent = 'Enter your email and password.'; err.style.display = 'block'; return; }
+    const btn = document.getElementById('btn-login');
+    btn.disabled = true;
+    btn.textContent = 'Signing in…';
     firebase.auth().signInWithEmailAndPassword(email, password)
-      .catch(e => { err.textContent = 'Sign-in failed: ' + e.message; err.style.display = 'block'; });
+      .catch(e => { err.textContent = 'Sign-in failed: ' + e.message; err.style.display = 'block'; })
+      .finally(() => {
+        btn.disabled = false;
+        btn.textContent = 'Sign in';
+      });
   }
   function doLogout(){
     if(confirm('Log out of Pool?')) firebase.auth().signOut();
@@ -4256,6 +4294,14 @@
     } finally {
       document.getElementById('assistant-loading').style.display = 'none';
     }
+  }
+
+  /* ---------- PWA: register service worker for offline-first app shell ---------- */
+  if('serviceWorker' in navigator){
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js')
+        .catch(e => console.error('Service worker registration failed:', e));
+    });
   }
 </script>
 
