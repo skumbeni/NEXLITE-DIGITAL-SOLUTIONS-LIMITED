@@ -600,6 +600,10 @@
                 <div id="auth-signup-panel" style="display:none;">
                     <form id="signupForm" onsubmit="handleSignup(event)">
                         <div class="form-group"><label>Business / Company Name</label><input type="text" id="signup-company-name" placeholder="e.g. Chanda Agro Supplies" required autocomplete="organization" oninput="scheduleAvailabilityCheck()"/></div>
+                        <div style="display:flex;align-items:flex-start;gap:.5rem;margin-bottom:1rem;font-size:.82rem;color:var(--text-muted);">
+                            <input type="checkbox" id="signup-join-mode" style="margin-top:3px;flex-shrink:0;accent-color:var(--primary);">
+                            <label for="signup-join-mode">I'm joining an <strong>existing</strong> business as an additional Administrator (not creating a new business). Use the same Business / Company Name the business already signed up with.</label>
+                        </div>
                         <hr style="margin:.85rem 0;border-color:#ddd;"/>
                         <p style="font-weight:700;margin-bottom:.75rem;color:var(--primary-dark);font-size:.88rem;">Administrator Account</p>
                         <div class="form-group"><label>Admin Username</label><input type="text" id="signup-admin-user" placeholder="e.g. admin" required autocomplete="off" oninput="scheduleAvailabilityCheck()"/></div>
@@ -619,6 +623,19 @@
             </div>
         </div>
     </section>
+
+    <!-- Shows a newly-created co-admin their uid, to hand to the business owner -->
+    <div id="modal-join-admin-id" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width:420px;">
+            <h3>✅ Account Created</h3>
+            <p style="color:var(--text-muted);font-size:.88rem;margin:.75rem 0;">Send this ID to the business owner — they'll add it in <strong>Settings → Co-Administrators</strong> to grant you access. You won't be able to sign in until they do.</p>
+            <div style="display:flex;gap:.5rem;align-items:center;background:var(--surface-2);border-radius:6px;padding:.6rem .8rem;margin-bottom:1rem;">
+                <code id="join-admin-id-value" style="flex:1;word-break:break-all;font-size:.85rem;"></code>
+                <button type="button" class="btn btn-sm" onclick="copyJoinAdminId()">📋 Copy</button>
+            </div>
+            <button type="button" class="btn btn-primary" style="width:100%" onclick="closeModal('modal-join-admin-id');_showLoginPage('signin');">Done — Go to Sign In</button>
+        </div>
+    </div>
 
     <!-- --- LICENSE EXPIRED OVERLAY --- -->
     <div id="license-expired-overlay" class="hidden">
@@ -1055,6 +1072,28 @@
                     </div>
                 </div>
 
+                <!-- CO-ADMINISTRATORS CARD -->
+                <div id="coadmin-card" class="card" style="margin-bottom: 2rem; border-left-color: var(--secondary);">
+                    <h3 style="margin-bottom:.5rem;">&#128272; Co-Administrators</h3>
+                    <p style="color:var(--text-muted);font-size:.85rem;margin-bottom:.75rem;">Grant another person full Administrator access to this business, using their own email/password login — separate from Staff/Client accounts, which have limited access.</p>
+                    <div style="background:var(--surface-2);border-radius:6px;padding:.7rem .9rem;margin-bottom:1rem;font-size:.85rem;">
+                        <div style="font-weight:600;margin-bottom:.2rem;">Your Admin ID</div>
+                        <div style="display:flex;gap:.5rem;align-items:center;">
+                            <code id="own-admin-id-value" style="flex:1;word-break:break-all;">—</code>
+                            <button type="button" class="btn btn-sm" onclick="copyOwnAdminId()">📋 Copy</button>
+                        </div>
+                    </div>
+                    <div id="coadmin-owner-only">
+                        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.75rem;">
+                            <input type="text" id="coadmin-new-uid" placeholder="Paste the new admin's ID here" style="flex:1;min-width:220px;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:.85rem;outline:none;">
+                            <button class="btn btn-sm btn-primary" onclick="grantCoAdminAccess()">&#43; Grant Access</button>
+                        </div>
+                        <div id="coadmin-form-error" style="display:none;color:var(--danger);font-size:.82rem;margin-bottom:.5rem;"></div>
+                        <div id="coadmin-list"></div>
+                        <p style="color:var(--text-muted);font-size:.78rem;margin-top:.5rem;">Ask the new admin to open <strong>Create Account</strong>, check "I'm joining an existing business", and use this business's exact name. They'll get an ID to send you — paste it above.</p>
+                    </div>
+                    <div id="coadmin-non-owner-note" class="hidden" style="color:var(--text-muted);font-size:.82rem;">Only the original business owner can add or remove co-administrators.</div>
+                </div>
 
                 <!-- CLOUD SYNC STATUS (connection is automatic via login; Upload/Restore are manual force-sync actions) -->
                 <div class="card" style="margin-bottom: 2rem; border-left-color:#1565C0;">
@@ -1877,6 +1916,27 @@
         const SYNC_COLLECTIONS = ['inventory', 'sales', 'purchases', 'expenses', 'fisp', 'credit', 'customers', 'suppliers', 'adjustments'];
 
         let cloudAuth = null;
+        // The uid whose businesses/{uid} node this session actually reads/writes. For the
+        // original owner this is just their own uid. For an invited co-admin (their own
+        // Firebase Auth account, granted access via adminOf/{their uid} -> owner uid), this
+        // is the OWNER's uid — set once at login/boot via resolveBusinessUid() and reused for
+        // every subsequent read/write for the rest of the session.
+        let businessUid = null;
+
+        // Looks up adminOf/{uid} to find which business (owner uid) this Firebase Auth
+        // account has been granted co-admin access to. Falls back to the account's own uid
+        // if there's no such grant (i.e. this account IS the owner) or the lookup fails.
+        async function resolveBusinessUid(uid, idToken) {
+            try {
+                const resp = await fetch(`${FIREBASE_CONFIG.databaseURL}/adminOf/${uid}.json?auth=${idToken}`);
+                if (!resp.ok) return uid;
+                const owner = await resp.json();
+                return owner || uid;
+            } catch (e) {
+                console.warn('ZamAgro Cloud: adminOf lookup failed, using own uid', e);
+                return uid;
+            }
+        }
         let sseConn = null;
         let syncFlushTimer = null;
         let lastSyncedAt = parseInt(localStorage.getItem(LAST_SYNCED_KEY) || '0', 10) || 0;
@@ -2015,7 +2075,7 @@
             const idToken = await getFreshIdToken();
             if (!idToken) throw new Error('No valid cloud session');
             const appCheckToken = await getAppCheckToken();
-            const url = `${FIREBASE_CONFIG.databaseURL}/businesses/${cloudAuth.uid}/${path}.json?auth=${idToken}`;
+            const url = `${FIREBASE_CONFIG.databaseURL}/businesses/${businessUid || cloudAuth.uid}/${path}.json?auth=${idToken}`;
             const headers = { 'Content-Type': 'application/json' };
             if (appCheckToken) headers['X-Firebase-AppCheck'] = appCheckToken;
             const resp = await fetch(url, { method, headers, body: method === 'DELETE' ? undefined : JSON.stringify(body) });
@@ -2036,7 +2096,7 @@
         async function firebaseGet(path, signal) {
             const idToken = await getFreshIdToken();
             if (!idToken) throw new Error('No valid cloud session');
-            const resp = await fetch(`${FIREBASE_CONFIG.databaseURL}/businesses/${cloudAuth.uid}/${path}.json?auth=${idToken}`, signal ? { signal } : undefined);
+            const resp = await fetch(`${FIREBASE_CONFIG.databaseURL}/businesses/${businessUid || cloudAuth.uid}/${path}.json?auth=${idToken}`, signal ? { signal } : undefined);
             if (!resp.ok) throw new Error(`Firebase GET ${path} failed: ${resp.status}`);
             return resp.json();
         }
@@ -2115,7 +2175,7 @@
             try {
                 // Claim the code -> uid mapping first (rules only let you claim an unclaimed code).
                 await fetch(`${FIREBASE_CONFIG.databaseURL}/syncCodes/${code}.json?auth=${idToken}`, {
-                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cloudAuth.uid)
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(businessUid || cloudAuth.uid)
                 });
                 const s = dbLoad('settings') || {};
                 s.syncCode = code;
@@ -2155,7 +2215,7 @@
             const newCode = genSyncCode();
             try {
                 await fetch(`${FIREBASE_CONFIG.databaseURL}/syncCodes/${newCode}.json?auth=${idToken}`, {
-                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cloudAuth.uid)
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(businessUid || cloudAuth.uid)
                 });
                 const s = dbLoad('settings') || {};
                 s.syncCode = newCode;
@@ -2175,7 +2235,7 @@
                 for (const c of clients) {
                     if (!c) continue;
                     await publishUsernameDirectoryEntry(idToken, c.username, {
-                        uid: cloudAuth.uid, email: cloudAuth.email, role: 'client', salt: c.salt, hash: c.hash, syncCode: newCode
+                        uid: businessUid || cloudAuth.uid, email: cloudAuth.email, role: 'client', salt: c.salt, hash: c.hash, syncCode: newCode
                     });
                 }
                 return true;
@@ -2232,7 +2292,7 @@
             if (!cloudAuth) return;
             getFreshIdToken().then(idToken => {
                 if (!idToken) return;
-                const url = `${FIREBASE_CONFIG.databaseURL}/businesses/${cloudAuth.uid}.json?auth=${idToken}`;
+                const url = `${FIREBASE_CONFIG.databaseURL}/businesses/${businessUid || cloudAuth.uid}.json?auth=${idToken}`;
                 sseConn = new EventSource(url);
                 sseConn.addEventListener('put', e => handleRemoteEvent(JSON.parse(e.data)));
                 sseConn.addEventListener('patch', e => handleRemoteEvent(JSON.parse(e.data)));
@@ -2359,6 +2419,8 @@
                     refreshToken: data.refreshToken,
                     idTokenExpiry: Date.now() + (parseInt(data.expiresIn, 10) * 1000)
                 });
+                // A fresh business signup always owns itself.
+                businessUid = data.localId;
                 if (mode === 'create') await pushFullSnapshot();
                 else await pullFullSnapshot();
                 startCloudListener();
@@ -2693,6 +2755,44 @@
             btn.disabled = true; btn.textContent = 'Connecting to cloud...';
             statusEl.style.background = '#e3f2fd'; statusEl.style.color = '#1565C0';
             statusEl.textContent = 'Connecting to cloud...'; statusEl.style.display = 'block';
+
+            // JOIN MODE: creating a co-admin login for an EXISTING business, not a new one.
+            // This only creates the Firebase Auth account + a username-directory entry (so the
+            // username stays globally unique and this login works later) — it never creates
+            // business data of its own. The resulting uid must be handed to the existing
+            // business owner, who grants access via Settings → Co-Administrators.
+            const joinMode = document.getElementById('signup-join-mode').checked;
+            if (joinMode) {
+                const joinEmail = deriveCloudEmail(companyName, adminUser);
+                let data;
+                try {
+                    data = await cloudSignUp(joinEmail, adminPw);
+                } catch(err) {
+                    statusEl.style.display = 'none';
+                    btn.disabled = false; btn.textContent = 'Create Account & Connect Cloud →';
+                    errEl.textContent = err.code === 'EMAIL_EXISTS'
+                        ? 'That business name + username combination is already registered. Choose a different username.'
+                        : 'Could not create cloud account: ' + (err.message || err.code || 'unknown error');
+                    errEl.style.display = 'block';
+                    return;
+                }
+                saveCloudAuth({
+                    uid: data.localId,
+                    email: joinEmail,
+                    idToken: data.idToken,
+                    refreshToken: data.refreshToken,
+                    idTokenExpiry: Date.now() + (parseInt(data.expiresIn, 10) * 1000)
+                });
+                await publishUsernameDirectoryEntry(cloudAuth?.idToken, adminUser, {
+                    uid: cloudAuth.uid, email: joinEmail, role: 'admin', username: adminUser
+                });
+                clearCloudAuth(); // don't leave this device "logged in" — there's no business access yet
+                statusEl.style.display = 'none';
+                btn.disabled = false; btn.textContent = 'Create Account & Connect Cloud →';
+                document.getElementById('signupForm').reset();
+                showJoinAdminIdModal(data.localId);
+                return;
+            }
 
             // Cloud account creation MUST succeed before any local account is written. No
             // offline fallback, no "connect later" — a signup that can't reach the cloud is
@@ -3268,7 +3368,7 @@
             const oldClient = clients[slot - 1];
             if (oldClient && oldClient.username.toLowerCase() !== newUser.toLowerCase() && cloudAuth) {
                 const idTok = await getFreshIdToken();
-                await removeUsernameDirectoryEntry(idTok, oldClient.username, 'client', cloudAuth.uid);
+                await removeUsernameDirectoryEntry(idTok, oldClient.username, 'client', businessUid || cloudAuth.uid);
             }
             const salt = genSalt();
             const hash = await pbkdf2Hash(newPw, salt);
@@ -3279,7 +3379,7 @@
                 const idTok = await getFreshIdToken();
                 const syncCode = await ensureSyncCode();
                 await publishUsernameDirectoryEntry(idTok, newUser, {
-                    uid: cloudAuth.uid, email: cloudAuth.email, role: 'client', salt, hash, syncCode
+                    uid: businessUid || cloudAuth.uid, email: cloudAuth.email, role: 'client', salt, hash, syncCode
                 });
             }
             document.getElementById(`staff-new-user-${slot}`).value = '';
@@ -3453,9 +3553,10 @@
                     refreshToken: authData.refreshToken,
                     idTokenExpiry: Date.now() + (parseInt(authData.expiresIn, 10) * 1000)
                 });
+                businessUid = await Promise.race([resolveBusinessUid(cloudAuth.uid, cloudAuth.idToken), _timeout]).catch(() => cloudAuth.uid);
                 let snapshot;
                 try {
-                    snapshot = await Promise.race([fetchAuthedBusinessSnapshot(cloudAuth.uid, cloudAuth.idToken), _timeout]);
+                    snapshot = await Promise.race([fetchAuthedBusinessSnapshot(businessUid, cloudAuth.idToken), _timeout]);
                 } catch (e) {
                     console.error('ZamAgro: cloud-first admin snapshot fetch failed', e);
                     return { valid: false, networkError: true, errorMessage: e && e.message };
@@ -3504,9 +3605,10 @@
                     refreshToken: authData.refreshToken,
                     idTokenExpiry: Date.now() + (parseInt(authData.expiresIn, 10) * 1000)
                 });
+                businessUid = await resolveBusinessUid(cloudAuth.uid, cloudAuth.idToken);
                 let snapshot;
                 try {
-                    snapshot = await fetchAuthedBusinessSnapshot(cloudAuth.uid, cloudAuth.idToken);
+                    snapshot = await fetchAuthedBusinessSnapshot(businessUid, cloudAuth.idToken);
                 } catch (e) {
                     console.error('ZamAgro: directory-based admin snapshot fetch failed', e);
                     return { valid: false, networkError: true, errorMessage: e && e.message };
@@ -3663,6 +3765,7 @@
             }
             if (view === 'settings') {
                 renderExpCatTags();
+                renderCoAdminUI();
             }
             if (view === 'activitylog') {
                 renderActivityLog();
@@ -3671,6 +3774,113 @@
 
         function openModal(id) { document.getElementById(id).classList.remove('hidden'); }
         function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+        function showJoinAdminIdModal(uid) {
+            document.getElementById('join-admin-id-value').textContent = uid;
+            openModal('modal-join-admin-id');
+        }
+        function copyJoinAdminId() {
+            const val = document.getElementById('join-admin-id-value').textContent;
+            navigator.clipboard?.writeText(val).then(
+                () => showToast('ID copied'),
+                () => showToast('Could not copy — select and copy manually', 'danger')
+            );
+        }
+
+        // ── CO-ADMINISTRATORS ────────────────────────────────────────────
+        function copyOwnAdminId() {
+            const val = document.getElementById('own-admin-id-value').textContent;
+            if (!val || val === '—') return;
+            navigator.clipboard?.writeText(val).then(
+                () => showToast('ID copied'),
+                () => showToast('Could not copy — select and copy manually', 'danger')
+            );
+        }
+
+        // The true owner is whoever this business's uid actually is. A co-admin's own
+        // cloudAuth.uid differs from businessUid (resolved via adminOf at login).
+        function isBusinessOwner() {
+            return !!cloudAuth && (!businessUid || businessUid === cloudAuth.uid);
+        }
+
+        async function renderCoAdminUI() {
+            if (!cloudAuth) return;
+            const idEl = document.getElementById('own-admin-id-value');
+            if (idEl) idEl.textContent = cloudAuth.uid;
+
+            const ownerOnly = document.getElementById('coadmin-owner-only');
+            const nonOwnerNote = document.getElementById('coadmin-non-owner-note');
+            const owner = isBusinessOwner();
+            if (ownerOnly) ownerOnly.classList.toggle('hidden', !owner);
+            if (nonOwnerNote) nonOwnerNote.classList.toggle('hidden', owner);
+            if (!owner) return;
+
+            const listEl = document.getElementById('coadmin-list');
+            if (!listEl) return;
+            listEl.innerHTML = '<p style="color:var(--text-muted);font-size:.82rem;">Loading…</p>';
+            try {
+                const idToken = await getFreshIdToken();
+                const resp = await fetch(`${FIREBASE_CONFIG.databaseURL}/businesses/${businessUid || cloudAuth.uid}/adminUids.json?auth=${idToken}`);
+                const uids = (await resp.json()) || {};
+                const keys = Object.keys(uids);
+                if (!keys.length) {
+                    listEl.innerHTML = '<p style="color:var(--text-muted);font-size:.82rem;">No co-administrators yet.</p>';
+                    return;
+                }
+                listEl.innerHTML = keys.map(uid => `
+                    <div style="display:flex;align-items:center;gap:.5rem;padding:.5rem .7rem;background:var(--surface-2);border-radius:6px;margin-bottom:.4rem;">
+                        <code style="flex:1;word-break:break-all;font-size:.8rem;">${esc(uid)}</code>
+                        <button type="button" class="btn btn-sm btn-danger" onclick="revokeCoAdminAccess('${esc(uid)}')">Remove</button>
+                    </div>
+                `).join('');
+            } catch (e) {
+                listEl.innerHTML = '<p style="color:var(--danger);font-size:.82rem;">Could not load co-administrators. Check your connection.</p>';
+            }
+        }
+
+        async function grantCoAdminAccess() {
+            const input = document.getElementById('coadmin-new-uid');
+            const errEl = document.getElementById('coadmin-form-error');
+            errEl.style.display = 'none';
+            const uid = (input.value || '').trim();
+            if (!uid) { errEl.textContent = 'Paste the new admin\'s ID first.'; errEl.style.display = 'block'; return; }
+            if (uid === cloudAuth.uid) { errEl.textContent = 'That\'s your own ID.'; errEl.style.display = 'block'; return; }
+            if (!isBusinessOwner()) { errEl.textContent = 'Only the original owner can add co-administrators.'; errEl.style.display = 'block'; return; }
+            try {
+                const idToken = await getFreshIdToken();
+                if (!idToken) throw new Error('No valid cloud session');
+                const ownerUid = businessUid || cloudAuth.uid;
+                const r1 = await fetch(`${FIREBASE_CONFIG.databaseURL}/businesses/${ownerUid}/adminUids/${uid}.json?auth=${idToken}`, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: 'true'
+                });
+                if (!r1.ok) throw new Error(`Could not grant access (${r1.status}). Double-check the ID.`);
+                const r2 = await fetch(`${FIREBASE_CONFIG.databaseURL}/adminOf/${uid}.json?auth=${idToken}`, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ownerUid)
+                });
+                if (!r2.ok) throw new Error(`Access partially granted but pointer failed (${r2.status}). Try removing and re-adding.`);
+                input.value = '';
+                showToast('Co-admin access granted.');
+                renderCoAdminUI();
+            } catch (e) {
+                errEl.textContent = e.message || 'Failed to grant access. Check your connection.';
+                errEl.style.display = 'block';
+            }
+        }
+
+        async function revokeCoAdminAccess(uid) {
+            if (!isBusinessOwner()) { showToast('Only the original owner can remove co-administrators.', 'danger'); return; }
+            if (!confirm('Remove this co-administrator? They will immediately lose access to this business.')) return;
+            try {
+                const idToken = await getFreshIdToken();
+                const ownerUid = businessUid || cloudAuth.uid;
+                await fetch(`${FIREBASE_CONFIG.databaseURL}/businesses/${ownerUid}/adminUids/${uid}.json?auth=${idToken}`, { method: 'DELETE' });
+                await fetch(`${FIREBASE_CONFIG.databaseURL}/adminOf/${uid}.json?auth=${idToken}`, { method: 'DELETE' });
+                showToast('Co-admin access removed.');
+                renderCoAdminUI();
+            } catch (e) {
+                showToast('Failed to remove access. Check your connection.', 'danger');
+            }
+        }
 
         // ── SUBSCRIPTION REQUEST ─────────────────────────────────────────
         function openSubRequest(tier, isRenewal) {
@@ -5996,7 +6206,7 @@
                 localStorage.setItem(AUTH_KEY, JSON.stringify(accounts));
                 if (removedUsername && cloudAuth) {
                     const idTok = await getFreshIdToken();
-                    await removeUsernameDirectoryEntry(idTok, removedUsername, 'client', cloudAuth.uid);
+                    await removeUsernameDirectoryEntry(idTok, removedUsername, 'client', businessUid || cloudAuth.uid);
                 }
                 renderStaffAccountUI();
                 showToast(`Staff account ${slot} removed.`);
@@ -7112,8 +7322,9 @@
             // Re-check suspension on every restored session (not just fresh logins) — an
             // admin could suspend this business while the device was already logged in.
             if (session.role === 'admin') {
+                businessUid = await resolveBusinessUid(cloudAuth.uid, idToken);
                 try {
-                    const settings = await fetch(`${FIREBASE_CONFIG.databaseURL}/businesses/${cloudAuth.uid}/settings.json?auth=${idToken}`).then(r => r.json());
+                    const settings = await fetch(`${FIREBASE_CONFIG.databaseURL}/businesses/${businessUid}/settings.json?auth=${idToken}`).then(r => r.json());
                     if (settings && settings.suspended) {
                         localStorage.removeItem(LOCAL_SESSION_KEY);
                         clearCloudAuth();

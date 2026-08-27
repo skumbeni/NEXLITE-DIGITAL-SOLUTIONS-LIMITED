@@ -5,7 +5,7 @@
 
 // Bump this on every deploy so returning users pick up the new index.html
 // instead of being stuck on a stale cached copy.
-const CACHE_VERSION = 'zamagro-shell-v8';
+const CACHE_VERSION = 'zamagro-shell-v9';
 
 const APP_SHELL = [
   './',
