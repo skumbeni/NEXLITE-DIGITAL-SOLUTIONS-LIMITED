@@ -2015,11 +2015,20 @@
 
     generateAvailableCoopId(coopName)
       .then(coopId => firebase.auth().createUserWithEmailAndPassword(email, password).then(cred => {
-        const updates = {};
-        updates['coopDirectory/' + coopId] = { name: coopName, createdBy: cred.user.uid };
-        updates['users/' + cred.user.uid] = { coopId, coopName, role: 'admin', adminName };
-        updates['coops/' + coopId + '/accountRoles/' + cred.user.uid] = { role: 'admin', name: adminName };
-        return updateAfterSignup(cred.user, updates).then(() => {
+        const uid = cred.user.uid;
+        // Written as two sequential steps, not one atomic update(): coopDirectory's write rule
+        // and users/{uid}'s write rule each reference the other, so committing coopDirectory
+        // first (on its own) means the users/{uid} write can then correctly see it already
+        // exists when its rule checks root.child('coopDirectory')...createdBy.
+        return cred.user.getIdToken(true)
+          .then(() => db.ref('coopDirectory/' + coopId).set({ name: coopName, createdBy: uid }))
+          .then(() => {
+            const updates = {};
+            updates['users/' + uid] = { coopId, coopName, role: 'admin', adminName };
+            updates['coops/' + coopId + '/accountRoles/' + uid] = { role: 'admin', name: adminName };
+            return updateAfterSignup(cred.user, updates);
+          })
+          .then(() => {
           // Write confirmed — now finish what resolveCoopForUser would normally do.
           IS_SUPERADMIN = false;
           IS_MEMBER = false;
