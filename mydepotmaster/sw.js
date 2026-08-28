@@ -25,6 +25,33 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.20 (2026-08-28)
+//
+// v0.20 changes (2026-08-28) — Depot Assistant: lean, on-topic context:
+//   - Chat questions no longer get the entire depot dumped into every
+//     request. buildCopilotContext() now scans the question for date
+//     language ("last month", "in April", "today", "last 10 days", "all
+//     time", etc.) and topic language (staff/pay, stock/commodities,
+//     transport, finance/cash, books, contacts, audit) and sends only the
+//     matching date window and data groups. No date or topic keyword
+//     matched → falls back to sending everything, same as before, so
+//     open-ended questions still get a full picture.
+//   - Every log-style array is still hard-capped at 1000 records regardless
+//     of window, so an "all time" question on an old depot can't blow the
+//     payload back up.
+//   - New "dataScope" and "dataCoversFrom" fields in the context tell the
+//     model exactly what it was and wasn't sent; system prompt now has it
+//     say so plainly (instead of guessing) when a question needs a topic
+//     or date range that wasn't included.
+//   - Root cause this addresses: the full-dataset payload sent on every
+//     question was large enough to regularly blow past the 45s request
+//     timeout on mobile data — this was the source of the repeated
+//     "Request timed out" errors in Depot Assistant.
+//   - Reconciliation mode is unaffected — still gets the complete,
+//     untrimmed dataset (no question to scope against).
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v0.19 (2026-08-26)
 //
 // v0.19 changes (2026-08-26) — Bulk multi-record EDIT alongside bulk delete:
@@ -967,7 +994,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.19';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v0.20';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

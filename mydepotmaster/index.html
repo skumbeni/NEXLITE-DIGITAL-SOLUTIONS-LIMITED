@@ -3724,7 +3724,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.19';
+const SW_VERSION  = 'v0.20';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -18186,13 +18186,150 @@ function _copilotRecentTurns(maxTurns){
 // capped to their most recent entries — this keeps everyday questions fast
 // over mobile data. Reconciliation (full=true) still gets everything, since
 // it's specifically meant to check across a longer window.
-function buildCopilotContext(daysBack, full){
-  daysBack = daysBack || 7;
-  const CHAT_LOG_CAP = 1000; // recent entries kept per log-style array when full=false
+// Scans a free-text question for date-range language ("last month", "in
+// April", "this year", "all time", "last 10 days", etc.) and returns a lower
+// -bound cutoff date plus a human label the model can lean on. Returns null
+// when nothing matches, so the caller can fall back to its own default
+// (recent-only). This only ever widens/narrows the LOWER bound — there's no
+// upper bound because depot data is never future-dated in practice.
+function _inferContextRange(question){
+  const q = (question||'').toLowerCase();
+  const today = new Date();
+  const iso = (d)=> d.toISOString().slice(0,10);
+  const daysAgo = (n)=>{ const d=new Date(today); d.setDate(d.getDate()-n); return iso(d); };
+  const startOfMonth = (monthsBack)=> iso(new Date(today.getFullYear(), today.getMonth()-monthsBack, 1));
+  const MONTHS = ['january','february','march','april','may','june','july','august','september','october','november','december'];
 
-  const cap = (arr) => (full || !Array.isArray(arr) || arr.length<=CHAT_LOG_CAP)
-    ? (arr||[])
-    : arr.slice(-CHAT_LOG_CAP);
+  if(/\ball[\s-]?time\b|\bever\b|\bsince (the )?start\b|\bsince inception\b|\bfrom the beginning\b|\boverall\b|\btotal(?:s)? ever\b/.test(q))
+    return { fromDate:null, days:3650, label:'all available history' };
+  if(/\byear to date\b|\bytd\b|\bthis year\b/.test(q))
+    return { fromDate: iso(new Date(today.getFullYear(),0,1)), days:366, label:'this year' };
+  if(/\blast year\b/.test(q))
+    return { fromDate: iso(new Date(today.getFullYear()-1,0,1)), days:731, label:'last year' };
+  if(/\blast quarter\b|\bpast quarter\b|\blast 3 months\b|\bpast 3 months\b/.test(q))
+    return { fromDate: daysAgo(90), days:90, label:'the last 3 months' };
+  // Explicit month name ("in April", "for March") — the most recent
+  // occurrence of that month (this year, or last year if it hasn't
+  // happened yet this year).
+  for(let i=0;i<MONTHS.length;i++){
+    if(new RegExp('\\b'+MONTHS[i]+'\\b').test(q)){
+      let monthsBack = today.getMonth() - i;
+      if(monthsBack < 0) monthsBack += 12;
+      const from = new Date(today.getFullYear(), today.getMonth()-monthsBack, 1);
+      return { fromDate: iso(from), days: Math.ceil((today-from)/86400000)+1, label: MONTHS[i]+' '+from.getFullYear() };
+    }
+  }
+  if(/\blast month\b|\bprevious month\b/.test(q))
+    return { fromDate: startOfMonth(1), days:60, label:'last month' };
+  if(/\bthis month\b/.test(q))
+    return { fromDate: startOfMonth(0), days:31, label:'this month' };
+  if(/\blast week\b|\bpast week\b/.test(q))
+    return { fromDate: daysAgo(14), days:14, label:'the last 2 weeks' };
+  if(/\bthis week\b/.test(q))
+    return { fromDate: daysAgo(7), days:7, label:'this week' };
+  if(/\byesterday\b/.test(q))
+    return { fromDate: daysAgo(2), days:2, label:'yesterday' };
+  if(/\btoday\b/.test(q))
+    return { fromDate: daysAgo(1), days:1, label:'today' };
+  const m = /\blast\s+(\d+)\s*(day|week|month)s?\b/.exec(q);
+  if(m){
+    const n = parseInt(m[1],10);
+    const mult = m[2]==='week' ? 7 : m[2]==='month' ? 30 : 1;
+    return { fromDate: daysAgo(n*mult), days:n*mult, label:`the last ${n} ${m[2]}${n>1?'s':''}` };
+  }
+  return null;
+}
+
+// Groups the operational dataset into topics, each with the keywords that
+// pull it in and a builder that assembles its slice of context. Lets
+// buildCopilotContext send only what a question is actually about instead of
+// the entire depot every time.
+const COPILOT_TOPICS = {
+  staff: {
+    keywords: /\b(staff|employee|worker|salary|wage|wages|pay|paid|earning|earn|clock|attendance|leave|warning|warn|contract|hours|shift)\b/,
+    build: (ctx) => ({
+      staff: ctx.staffSafe,
+      staffRoles: DATA.staffRoles||[],
+      staffPayments: ctx.cap(DATA.staffPayments),
+      staffWarnings: ctx.cap(DATA.staffWarnings),
+      staffLogs: ctx.cap(DATA.staffLogs),
+      leaveLog: ctx.cap(DATA.leaveLog),
+      attendance: ctx.cap(DATA.attendance||DATA.clockLogs),
+      deductionReasons: DATA.deductionReasons||[]
+    })
+  },
+  stock: {
+    keywords: /\b(stock|maize|commodit|inventory|bag|bags|receiv|issu|sold|sale|sales|price|reorder)\b/,
+    build: (ctx) => ({
+      lowStockItems: ctx.lowStock,
+      commodities: DATA.commodities||[],
+      commodityReceived: ctx.capObj(DATA.commodityReceived||{}),
+      commodityIssued: ctx.capObj(DATA.commodityIssued||{}),
+      commodityStockCounts: DATA.commodityStockCounts||{},
+      maizeReceived: ctx.cap(DATA.maizeReceived),
+      maizeIssued: ctx.cap(DATA.maizeIssued),
+      maizeStockCounts: ctx.cap(DATA.maizeStockCounts),
+      generalInventory: DATA.generalInventory||[],
+      generalIssued: ctx.cap(DATA.generalIssued),
+      generalStockCounts: ctx.cap(DATA.generalStockCounts),
+      inventoryItems: DATA.inventoryItems||[],
+      inventoryPrices: DATA.inventoryPrices||{}
+    })
+  },
+  transport: {
+    keywords: /\b(transport|truck|vehicle|driver|delivery|trip)\b/,
+    build: (ctx) => ({ transportLog: ctx.cap(DATA.transportLog) })
+  },
+  finance: {
+    keywords: /\b(cash|close[- ]?out|closeout|budget|expense|revenue|profit|financ)\b/,
+    build: (ctx) => ({ dailyCloseOuts: ctx.cap(DATA.dailyCloseOuts), budgets: DATA.budgets||{} })
+  },
+  books: {
+    keywords: /\b(book|document|file|upload)\b/,
+    build: () => ({ books: DATA.books||{} })
+  },
+  contacts: {
+    keywords: /\b(customer|supplier|contact|client)\b/,
+    build: () => ({ contacts: DATA.contacts||[] })
+  },
+  audit: {
+    keywords: /\bauditl?og|\bwho (did|changed|edited|deleted)\b|history of changes\b/,
+    build: (ctx) => ({ auditLog: ctx.cap(DATA.auditLog) })
+  }
+};
+
+// Returns the list of matched topic keys, or null when nothing matched
+// (or there's no question, e.g. reconciliation) — null means "no signal,
+// include everything", same safety fallback pattern as the date inference.
+function _inferTopics(question){
+  if(!question) return null;
+  const q = question.toLowerCase();
+  const matched = Object.keys(COPILOT_TOPICS).filter(k => COPILOT_TOPICS[k].keywords.test(q));
+  return matched.length ? matched : null;
+}
+
+function buildCopilotContext(daysBack, full, fromDate, question){
+  daysBack = daysBack || 7;
+  const CHAT_LOG_CAP = 1000; // hard ceiling per log-style array regardless of date range,
+                              // so an "all time" question on an old depot can't blow up payload size
+
+  // Lower-bound cutoff: an explicit fromDate wins (from keyword inference);
+  // otherwise derive one from daysBack. full=true (reconciliation) skips
+  // date filtering entirely, same as before.
+  const cutoff = full ? null : (fromDate || (()=>{ const d=new Date(); d.setDate(d.getDate()-daysBack); return d.toISOString().slice(0,10); })());
+
+  const cap = (arr) => {
+    if(full || !Array.isArray(arr)) return arr||[];
+    const filtered = cutoff ? arr.filter(x => !x || !x.date || x.date >= cutoff) : arr;
+    return filtered.length>CHAT_LOG_CAP ? filtered.slice(-CHAT_LOG_CAP) : filtered;
+  };
+  // Same date-filter + hard cap, but for the {commodityId: [...]} shaped
+  // objects (commodityReceived/commodityIssued) instead of flat arrays.
+  const capObj = (obj) => {
+    const out = {};
+    for(const k in (obj||{})) out[k] = cap(obj[k]);
+    return out;
+  };
 
   // Account/user records are NOT depot-operational data — they're per-person
   // login/contact info (recovery email, phone, linked-staff identity, role).
@@ -18204,12 +18341,17 @@ function buildCopilotContext(daysBack, full){
   const _myAccount = (DATA.users||[]).find(u => u.username === (USER && USER.username));
   const myAccountSafe = _myAccount ? (({password, ...rest})=>rest)(_myAccount) : null;
 
+  const topics = isStaffRole() ? null : _inferTopics(question); // staff scope below ignores topics entirely
+
   const base = {
     depotName: (DATA.depotInfo||{}).name || 'Unnamed depot',
     currency: DATA.currency || 'ZMW',
     generatedAt: new Date().toISOString(),
     focusRangeDaysHint: daysBack, // suggested recency focus
-    dataTruncatedToRecent: !full, // tells the model logs may be a recent-only subset
+    dataCoversFrom: cutoff, // actual lower-bound date applied to the logs below, or null if unfiltered
+    dataTruncatedToRecent: !full, // tells the model logs may be a recent-only subset; if the question
+                                   // needs data older than dataCoversFrom, it should say so rather than guess
+    dataScope: topics ? topics.join(', ') : 'all', // which topics were sent — 'all' when nothing specific matched
     // Only the calling account's own record — see note above. Never the
     // full users roster; other accounts are out of scope for the Assistant.
     myAccount: myAccountSafe
@@ -18237,7 +18379,7 @@ function buildCopilotContext(daysBack, full){
     };
   }
 
-  // ── Admin / Manager (data_entry): full operational dataset, unchanged ──
+  // ── Admin / Manager (data_entry): topic-gated operational dataset ──
   const lowStock = (DATA.inventoryItems||[])
     .map(x=>typeof x==='string'?{name:x,minStock:0}:x)
     .filter(it=>{
@@ -18251,37 +18393,21 @@ function buildCopilotContext(daysBack, full){
   // Admin/Manager, who already see all of this in the manual UI.
   const staffSafe = (DATA.staff||[]).map(({password, ...rest})=>rest);
 
+  const helpers = { cap, capObj, lowStock, staffSafe };
+  let topicData = {};
+  if(topics === null){
+    // No keyword matched (or none was given, e.g. reconciliation) — include
+    // every topic, same as before this change.
+    for(const key in COPILOT_TOPICS) Object.assign(topicData, COPILOT_TOPICS[key].build(helpers));
+  } else {
+    for(const key of topics) Object.assign(topicData, COPILOT_TOPICS[key].build(helpers));
+  }
+
   return {
     ...base,
     accessScope: isManagerRole() ? 'manager-full-depot' : 'admin-full-depot',
-    lowStockItems: lowStock,
-    staff: staffSafe,
-    staffRoles: DATA.staffRoles||[],
-    staffPayments: cap(DATA.staffPayments),
-    staffWarnings: cap(DATA.staffWarnings),
-    staffLogs: cap(DATA.staffLogs),
-    leaveLog: cap(DATA.leaveLog),
-    attendance: cap(DATA.attendance||DATA.clockLogs),
-    commodities: DATA.commodities||[],
-    commodityReceived: DATA.commodityReceived||{},
-    commodityIssued: DATA.commodityIssued||{},
-    commodityStockCounts: DATA.commodityStockCounts||{},
-    maizeReceived: cap(DATA.maizeReceived),
-    maizeIssued: cap(DATA.maizeIssued),
-    maizeStockCounts: cap(DATA.maizeStockCounts),
-    generalInventory: DATA.generalInventory||[],
-    generalIssued: cap(DATA.generalIssued),
-    generalStockCounts: cap(DATA.generalStockCounts),
-    inventoryItems: DATA.inventoryItems||[],
-    inventoryPrices: DATA.inventoryPrices||{},
-    transportLog: cap(DATA.transportLog),
-    dailyCloseOuts: cap(DATA.dailyCloseOuts),
-    budgets: DATA.budgets||{},
-    books: DATA.books||{},
-    contacts: DATA.contacts||[],
-    auditLog: cap(DATA.auditLog),
-    deductionReasons: DATA.deductionReasons||[],
-    tier: DATA.tier||'free'
+    tier: DATA.tier||'free',
+    ...topicData
   };
 }
 
@@ -18455,8 +18581,16 @@ function _copilotSystemPrompt(mode){
     'transcript conflicts with it (e.g. a figure has since changed), trust the JSON.\n\n'+
     'Answer the user\'s question '+
     'using only the data you\'re given. Be concise and use plain language, '+
-    'not code. If the data doesn\'t contain what\'s needed to answer, say so '+
-    'rather than guessing.'+
+    'not code. Check "dataScope" in the JSON — it lists which topics (staff, '+
+    'stock, transport, finance, books, contacts, audit) were sent for this '+
+    'question, or "all" if everything was sent. If a follow-up needs a topic '+
+    'not in dataScope, say so plainly and ask the user to ask about that '+
+    'topic directly, rather than guessing. Also check "dataCoversFrom" — '+
+    'logs and payments older than that date were not sent to you. If the '+
+    'question needs data from before that date, say plainly that you only '+
+    'have data from dataCoversFrom onward and suggest asking again with a '+
+    'specific period (e.g. "last month", "in April"), rather than guessing '+
+    'or extrapolating.'+
     (isStaffRole() ? (
       '\n\nThis account is view-only (Staff role) — you have NOT been given any '+
       'data-entry tools, and you cannot clock anyone in/out, log work or absences, '+
@@ -19727,7 +19861,14 @@ async function askCopilot(question){
   _copilotAppend('user', question);
   _copilotAppend('assistant', '…thinking');
   try {
-    const context = buildCopilotContext(7, false);
+    // No date keyword in the question → don't guess a window; send the full
+    // history for date-stamped arrays (still hard-capped at 1000 records per
+    // array by buildCopilotContext for payload safety). Only a recognized
+    // keyword narrows the window. Same pattern for topics: only send the
+    // data groups the question's keywords actually touch — falls back to
+    // everything if nothing matches, so open-ended questions still work.
+    const range = _inferContextRange(question);
+    const context = buildCopilotContext(range ? range.days : 3650, false, range ? range.fromDate : null, question);
     const data = await _callCopilot('chat', question, context, priorTurns);
     _copilotHistory.pop(); // remove the "…thinking" placeholder
     if(data){
