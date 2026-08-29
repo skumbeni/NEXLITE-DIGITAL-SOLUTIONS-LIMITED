@@ -3724,7 +3724,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.20';
+const SW_VERSION  = 'v0.23';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -7437,6 +7437,8 @@ function renderGeneral(){
         <button class="btn bg bsm" id="btn-add-gen-rec">+ Receive</button>
         <button class="btn ba bsm" id="btn-add-gen-iss">+ Issue</button>
         <button class="btn bo bsm" id="btn-add-gen-sc">&#x1F4E6; Stock Count</button>
+        <button class="btn bo bsm" onclick="openMultiEntryForm('receive')" title="Receive multiple items/commodities in one transaction">&#x1F500; Multi Receive</button>
+        <button class="btn bo bsm" onclick="openMultiEntryForm('issue')" title="Issue multiple items/commodities in one transaction">&#x1F500; Multi Issue</button>
         ${USER.role==='admin'?`<button class="btn bo bsm" onclick="openManageInventory()">⚙️ Manage</button>`:''}
         <button class="btn bo bsm" id="btn-add-transport" onclick="openTransportForm()">🚛 Transport</button>
         <button class="btn bo bsm" onclick="exportCurrentTabCSV()" title="Export current view as PDF">⬇️ PDF</button>
@@ -9238,6 +9240,8 @@ function renderMaize(){
         <button class="btn bg bsm" id="btn-add-maize-rec">+ Receive</button>
         <button class="btn ba bsm" id="btn-add-maize-iss">+ Issue</button>
         <button class="btn bo bsm" id="btn-add-stock-count">📦 Stock Count</button>
+        <button class="btn bo bsm" onclick="openMultiEntryForm('receive')" title="Receive multiple items/commodities in one transaction">&#x1F500; Multi Receive</button>
+        <button class="btn bo bsm" onclick="openMultiEntryForm('issue')" title="Issue multiple items/commodities in one transaction">&#x1F500; Multi Issue</button>
         ${USER.role==='admin'?`<button class="btn bo bsm" id="btn-manage-commodities" onclick="openManageCommodities()">⚙️ Manage</button>`:''}
         <button class="btn bo bsm" onclick="exportCurrentTabCSV()" title="Export current view as PDF">⬇️ PDF</button>
       </div>
@@ -9668,6 +9672,260 @@ function saveMaizeIss(){if(isReadOnly()){alert("🔒 This account is in read-onl
   closeModal();
 }
 
+// ══════════════════════════════════════════════════════════
+// MULTI RECEIVE / MULTI ISSUE — one transaction, many lines
+// Each line can be a General Inventory item OR a named Commodity
+// (batch-tracked), each with its own supplier/customer. On save,
+// every line fans out into the SAME arrays the single-entry forms
+// use (generalInventory/generalIssued, commodityReceived/Issued),
+// so all existing reports, balances and exports keep working
+// without any schema change.
+// ══════════════════════════════════════════════════════════
+let _mriLines=[];
+let _mriType='receive'; // 'receive' | 'issue'
+
+function openMultiEntryForm(type){
+  if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+  if(!requireAddPermission(type==='receive'?'receive stock':'issue stock'))return;
+  _mriType=type;
+  _mriLines=[_mriBlankLine()];
+  openModal(_mriRenderModal(),'uncloseable');
+  _mriRefreshRows();
+}
+
+function _mriBlankLine(){
+  return{
+    id:uid(),
+    kind:'general', // 'general' | 'commodity'
+    itemName:'',
+    itemNameOther:'',
+    commodityId:(DATA.commodities||[])[0]?.id||'',
+    batchName:'',
+    qty:'',
+    price:'',
+    contactId:'',
+    transporter:'',
+    creditStatus:'paid',
+    partialPaid:''
+  };
+}
+
+function _mriRenderModal(){
+  const isRec=_mriType==='receive';
+  return `
+    <div class="mtitle">${isRec?'📦 Multi Receive':'📤 Multi Issue'}</div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:10px;line-height:1.5">Record several items/commodities in one transaction — mix General Inventory items and named commodities, each with its own ${isRec?'supplier':'customer'}.</div>
+    <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="mri-date" value="${today()}"/></div>
+    <div id="mri-rows"></div>
+    <button class="btn bo bsm" style="width:100%;margin:4px 0 10px" onclick="_mriAddRow()">+ Add Line</button>
+    <div id="mri-total" style="text-align:right;font-family:var(--fh);font-size:19px;font-weight:800;color:var(--green);margin-bottom:6px"></div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="_mriSave()">✓ Save All</button></div>`;
+}
+
+function _mriAddRow(){
+  _mriLines.push(_mriBlankLine());
+  _mriRefreshRows();
+  // Scroll the new row into view
+  setTimeout(()=>{const rows=document.querySelectorAll('#mri-rows .mri-line');const last=rows[rows.length-1];if(last)last.scrollIntoView({behavior:'smooth',block:'nearest'});},30);
+}
+
+function _mriRemoveRow(id){
+  if(_mriLines.length<=1){alert('At least one line is required — cancel the form instead if you don\'t want to save anything.');return;}
+  _mriLines=_mriLines.filter(l=>l.id!==id);
+  _mriRefreshRows();
+}
+
+function _mriSetField(id,field,val){
+  const l=_mriLines.find(x=>x.id===id);
+  if(!l)return;
+  l[field]=val;
+  if(field==='kind'||field==='commodityId'||field==='itemName'){_mriRefreshRows();return;}
+  _mriUpdateTotal();
+}
+
+// Non-blocking stock hint shown under Qty — mirrors batchAvail()/general
+// balance math used elsewhere in the app, so it stays consistent with the
+// figures shown on the Received/Issued tables.
+function _mriAvailHint(l){
+  if(_mriType!=='issue')return'';
+  let bal=null;
+  if(l.kind==='commodity'){
+    if(l.commodityId&&l.batchName)bal=batchAvail(l.batchName,l.commodityId);
+  } else {
+    const name=l.itemName==='__other__'?(l.itemNameOther||'').trim().toUpperCase():(l.itemName||'').trim();
+    if(name){
+      const rec=approvedArr(DATA.generalInventory).filter(r=>r.itemName===name).reduce((a,b)=>a+Number(b.received||0),0);
+      const iss=approvedArr(DATA.generalIssued).filter(r=>r.itemName===name).reduce((a,b)=>a+Number(b.issued||0),0);
+      bal=rec-iss;
+    }
+  }
+  if(bal===null)return'';
+  return `<div style="font-size:14px;color:${bal<=0?'var(--red)':'var(--muted)'};margin-top:3px">Available: ${bal.toLocaleString()}</div>`;
+}
+
+function _mriRefreshRows(){
+  const wrap=document.getElementById('mri-rows');
+  if(!wrap)return;
+  const isRec=_mriType==='receive';
+  const coms=DATA.commodities||[];
+  const contacts=(DATA.contacts||[]).filter(c=>c.type===(isRec?'supplier':'customer')).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const defined=(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean);
+  const fromData=[...new Set(DATA.generalInventory.map(x=>x.itemName))];
+  const genNames=[...new Set([...defined,...fromData])].sort();
+  wrap.innerHTML=_mriLines.map((l,idx)=>{
+    const batchOpts=isRec
+      ? '' // free-typed batch name when receiving (new or existing lot)
+      : (()=>{ const all=(l.commodityId?cRec(l.commodityId):[]).slice().sort((a,b)=>b.date.localeCompare(a.date)); const batches=[...new Set(all.map(x=>x.batchName))]; return batches; })();
+    return `
+    <div class="card mri-line" style="padding:10px;margin-bottom:8px;background:var(--surface2)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-weight:700;font-size:15px;color:var(--muted)">LINE ${idx+1}</span>
+        <button class="delbtn" onclick="_mriRemoveRow('${l.id}')" title="Remove line">🗑</button>
+      </div>
+      <div class="fw"><div class="fl">Type</div>
+        <select class="fi" onchange="_mriSetField('${l.id}','kind',this.value)">
+          <option value="general" ${l.kind==='general'?'selected':''}>General Item</option>
+          ${coms.length>0?`<option value="commodity" ${l.kind==='commodity'?'selected':''}>Commodity</option>`:''}
+        </select>
+      </div>
+      ${l.kind==='commodity'?`
+        <div class="fw"><div class="fl">Commodity</div>
+          <select class="fi" onchange="_mriSetField('${l.id}','commodityId',this.value)">
+            ${coms.map(c=>`<option value="${c.id}" ${l.commodityId===c.id?'selected':''}>${esc(c.icon)} ${esc(c.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="fw"><div class="fl">Batch Name</div>
+          ${isRec
+            ?`<input class="fi" value="${esc(l.batchName)}" placeholder="e.g. Batch 1, Batch A…" oninput="_mriSetField('${l.id}','batchName',this.value.toUpperCase());_mriUpdateTotal()"/>`
+            :(batchOpts.length>0
+              ?`<select class="fi" onchange="_mriSetField('${l.id}','batchName',this.value)"><option value="">— Select Batch —</option>${batchOpts.map(b=>`<option value="${b}" ${l.batchName===b?'selected':''}>${b}</option>`).join('')}</select>`
+              :`<div style="font-size:15px;color:var(--muted);padding:6px 0">No batches received yet for this commodity</div>`)}
+        </div>
+        ${!isRec?`<div class="fw"><div class="fl">Transporter Name</div><input class="fi" value="${esc(l.transporter)}" placeholder="e.g. Truck A, John's Truck…" oninput="_mriSetField('${l.id}','transporter',this.value)"/></div>`:''}`
+        :`
+        <div class="fw"><div class="fl">Item Name</div>
+          ${genNames.length>0
+            ?`<select class="fi" onchange="_mriSetField('${l.id}','itemName',this.value)">
+                <option value="">— Select Item —</option>
+                ${genNames.map(n=>`<option value="${n}" ${l.itemName===n?'selected':''}>${n}</option>`).join('')}
+                <option value="__other__" ${l.itemName==='__other__'?'selected':''}>OTHER (TYPE BELOW)</option>
+              </select>
+              ${l.itemName==='__other__'?`<input class="fi" style="margin-top:8px" placeholder="TYPE NEW ITEM NAME" value="${esc(l.itemNameOther)}" oninput="_mriSetField('${l.id}','itemNameOther',this.value.toUpperCase())"/>`:''}`
+            :`<input class="fi" value="${esc(l.itemName)}" placeholder="E.G. FERTILIZER, RICE…" oninput="_mriSetField('${l.id}','itemName',this.value.toUpperCase())"/>`}
+        </div>`}
+      <div class="twobox">
+        <div class="fw"><div class="fl">Qty ${isRec?'Received':'Issued'}</div><input class="fi" type="number" inputmode="numeric" placeholder="0" value="${l.qty}" oninput="_mriSetField('${l.id}','qty',this.value)"/>${_mriAvailHint(l)}</div>
+        <div class="fw"><div class="fl">${isRec?'Unit Price':'Sale Price'} (${cur()})</div><input class="fi" type="number" step="0.01" inputmode="decimal" placeholder="0.00" value="${l.price}" oninput="_mriSetField('${l.id}','price',this.value)"/></div>
+      </div>
+      <div class="fw"><div class="fl">${isRec?'Supplier':'Customer'} <span style="font-size:14px;color:var(--muted)">(optional)</span></div>
+        <select class="fi" onchange="_mriSetField('${l.id}','contactId',this.value)">
+          <option value="">— None${isRec?' / Unknown':' / Walk-in'} —</option>
+          ${contacts.map(c=>`<option value="${c.id}" ${l.contactId===c.id?'selected':''}>${esc(c.name)}${c.phone?' · '+esc(c.phone):''}</option>`).join('')}
+        </select>
+      </div>
+      ${!isRec?`
+      <div class="fw"><div class="fl">Payment Status</div>
+        <select class="fi" onchange="_mriSetField('${l.id}','creditStatus',this.value)">
+          <option value="paid" ${l.creditStatus==='paid'?'selected':''}>✅ PAID — Settled in full</option>
+          <option value="partial" ${l.creditStatus==='partial'?'selected':''}>🔶 PARTIAL — Partially paid</option>
+          <option value="credit" ${l.creditStatus==='credit'?'selected':''}>🔴 CREDIT — On account / debt</option>
+        </select>
+      </div>
+      ${l.creditStatus==='partial'?`<div class="fw"><div class="fl">Amount Paid (${cur()})</div><input class="fi" type="number" step="0.01" inputmode="decimal" placeholder="0.00" value="${l.partialPaid}" oninput="_mriSetField('${l.id}','partialPaid',this.value)"/></div>`:''}`:''}
+    </div>`;
+  }).join('');
+  _mriUpdateTotal();
+}
+
+function _mriUpdateTotal(){
+  const el=document.getElementById('mri-total');
+  if(!el)return;
+  const total=_mriLines.reduce((a,l)=>a+(Number(l.qty)||0)*(Number(l.price)||0),0);
+  el.textContent=total>0?`Total: ${zm(total)}`:'';
+}
+
+function _mriSave(){
+  if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+  if(!requireAddPermission(_mriType==='receive'?'receive stock':'issue stock'))return;
+  const isRec=_mriType==='receive';
+  const date=document.getElementById('mri-date')?.value||today();
+  const lines=[];
+  for(const l of _mriLines){
+    const qty=Number(l.qty||0);
+    if(!qty||qty<=0){alert('Enter a valid quantity greater than 0 for every line.');return;}
+    if(l.kind==='commodity'){
+      if(!l.commodityId){alert('Select a commodity for every commodity line.');return;}
+      if(!l.batchName){alert(isRec?'Enter a batch name for every commodity line.':'Select a batch for every commodity line.');return;}
+      if(!isRec&&!(l.transporter||'').trim()){alert('Enter a transporter name for every commodity issue line.');return;}
+      lines.push({...l,qty});
+    } else {
+      const name=l.itemName==='__other__'?(l.itemNameOther||'').trim().toUpperCase():(l.itemName||'').trim().toUpperCase();
+      if(!name){alert('Enter or select an item name for every general-inventory line.');return;}
+      lines.push({...l,qty,_resolvedName:name});
+    }
+  }
+  if(lines.length===0){alert('Add at least one line.');return;}
+
+  const summary=lines.map(l=>{
+    const label=l.kind==='commodity'?`${getCom(l.commodityId).name} — ${l.batchName}`:l._resolvedName;
+    return `• ${label} · ${Number(l.qty).toLocaleString()}${Number(l.price)>0?` × ${cur()}${Number(l.price).toFixed(2)}`:''}`;
+  }).join('\n');
+  if(!confirm(`Confirm Multi ${isRec?'Receive':'Issue'} — ${lines.length} line(s):\n\n${summary}\n\nProceed?`))return;
+
+  updateData(d=>{
+    let genArr=[...(isRec?(d.generalInventory||[]):(d.generalIssued||[]))];
+    let comReceived={...(d.commodityReceived||{})};
+    let comIssued={...(d.commodityIssued||{})};
+    let prices={...(d.inventoryPrices||{})};
+
+    lines.forEach(l=>{
+      const qty=Number(l.qty);
+      const price=Number(l.price||0);
+      let contactName='';
+      if(l.contactId){
+        const c=(d.contacts||[]).find(x=>x.id===l.contactId);
+        contactName=c?c.name:'';
+      }
+      if(l.kind==='commodity'){
+        const cid=l.commodityId;
+        if(isRec){
+          const existingRec=(comReceived[cid]||[]).find(r=>r.batchName===l.batchName&&r.lotId);
+          const lotId=existingRec?existingRec.lotId:('LOT-'+uid().toUpperCase().slice(0,8));
+          const payload=stampEntry({id:uid(),batchName:l.batchName,date,time:nowTime(),received:qty,unitPrice:price,supplierId:l.contactId||'',supplierName:contactName,lotId});
+          comReceived[cid]=[...(comReceived[cid]||[]),payload];
+        } else {
+          const partialPaid=l.creditStatus==='partial'?Number(l.partialPaid||0):0;
+          const payload=stampEntry({id:uid(),batchName:l.batchName,date,time:nowTime(),issued:qty,salePrice:price,transporter:(l.transporter||'').trim(),creditStatus:l.creditStatus||'paid',partialPaid,customerId:l.contactId||'',customerName:contactName});
+          comIssued[cid]=[...(comIssued[cid]||[]),payload];
+        }
+      } else {
+        const name=l._resolvedName;
+        if(isRec){
+          const payload=stampEntry({id:uid(),date,time:nowTime(),itemName:name,received:qty,good:qty,damaged:0,condition:'good',purchasePrice:price,creditStatus:'paid',supplierId:l.contactId||'',supplierName:contactName});
+          genArr=[...genArr,payload];
+          if(price>0)prices[name]={...(prices[name]||{}),purchasePrice:price};
+        } else {
+          const partialPaid=l.creditStatus==='partial'?Number(l.partialPaid||0):0;
+          const payload=stampEntry({id:uid(),date,time:nowTime(),itemName:name,issued:qty,sellingPrice:price,creditStatus:l.creditStatus||'paid',partialPaid,customerId:l.contactId||'',customerName:contactName});
+          genArr=[...genArr,payload];
+          if(price>0)prices[name]={...(prices[name]||{}),sellingPrice:price};
+        }
+      }
+    });
+
+    return{...d,
+      ...(isRec?{generalInventory:genArr}:{generalIssued:genArr}),
+      commodityReceived:comReceived,
+      commodityIssued:comIssued,
+      inventoryPrices:prices
+    };
+  });
+
+  logAuditEvent('CREATE',isRec?'Multi Receive':'Multi Issue',`${lines.length} line(s) · ${date} · `+lines.map(l=>l.kind==='commodity'?`${getCom(l.commodityId).name}:${l.batchName}`:l._resolvedName).join(', '));
+  closeModal();
+  showToast(`✅ ${lines.length} line(s) saved`);
+}
+// ══ END MULTI RECEIVE / ISSUE ═══════════════════════════════
 
 // ══════════════════════════════════════════════════════════
 // FIX 24 — Transport Log
@@ -10398,7 +10656,8 @@ function renderStaff(){
       <div style="display:flex;gap:8px;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap;padding-bottom:2px">
         ${USER.role==='admin'?`<button class="btn bo bsm" id="btn-add-staff" style="flex-shrink:0">+ Add Staff</button>`:''}
         <button class="btn bg bsm" id="btn-clock-in" style="flex-shrink:0">⏵ Clock In</button>
-        ${!staffOnly?`<button class="btn bo bsm" id="btn-log-work" style="flex-shrink:0">✏️ Manual</button>
+        ${!staffOnly?`<button class="btn bo bsm" id="btn-bulk-clockin" style="flex-shrink:0" onclick="openBulkClockInForm()">👥 Bulk Clock In</button>
+        <button class="btn bo bsm" id="btn-log-work" style="flex-shrink:0">✏️ Manual</button>
         <button class="btn bo bsm" id="btn-bulk-log" style="flex-shrink:0">👥 Bulk Log</button>
         <button class="btn ba bsm" id="btn-pay-staff" style="flex-shrink:0">💳 Pay</button>`:''}
         <button class="btn bo bsm" onclick="exportCurrentTabCSV()" title="Export current view as PDF" style="flex-shrink:0">⬇️ PDF</button>
@@ -10741,6 +11000,7 @@ function openClockInForm(preStaffId){
     <div class="fw"><div class="fl">Time In</div><input class="fi" type="time" id="ci-time-in" value="${nowTime()}"/></div>
     <div class="fw" id="ci-role-wrap"><div class="fl">Role</div><div id="ci-role-field"></div></div>
     <div class="fw"><div class="fl">Task</div><select class="fi" id="ci-task"><option>—</option></select></div>
+    <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="ci-notes" placeholder="Any notes for this shift…"/></div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveClockIn()">⏵ Clock In</button></div>`);
   onClockInStaffChange();
 }
@@ -10805,9 +11065,10 @@ function saveClockIn(){
     closeModal();setTimeout(()=>openClockOutForm(existing.id),50);return;
   }
   const timeInTs=Date.now();
+  const notes=(document.getElementById('ci-notes')?.value||'').trim();
   const payload=stampEntry({id:uid(),staffId:sid,date,role,task,timeIn,timeInTs,status:'open',
     bags:0,qty:0,earnings:0,deduction:0,deductionReason:'',timeOut:'',
-    time:nowTime(),entryType:'work'});
+    time:nowTime(),entryType:'work',notes});
   updateData(d=>({...d,staffLogs:[...d.staffLogs,payload]}));
   logAuditEvent('CREATE','Work Log (Clock In)',`Staff ID:${sid} · Task:${task} · TimeIn:${timeIn}`);
   closeModal();
@@ -10853,7 +11114,7 @@ function openClockOutForm(logId){
         </div>
       </div>
     </div>
-    <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="co-notes" placeholder="Any shift notes…"/></div>
+    <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="co-notes" placeholder="Any shift notes…" value="${esc(log.notes||'')}"/></div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="co-date" value="${log.date}"/></div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveClockOut('${logId}')">⏹ Complete Shift</button></div>`);
   // Store role in hidden element for calcCoGross
@@ -11209,6 +11470,7 @@ function openBulkLogForm(){
       </div>
     </div>
     <div id="bl-staff-rows" style="margin-bottom:12px"></div>
+    <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="bl-notes" placeholder="Any notes for this batch of entries…"/></div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkLog()">✓ Save All</button></div>`);
   _blRoleChange();
 }
@@ -11275,18 +11537,117 @@ function saveBulkLog(){
   const totalEarnings=entries.reduce((a,e)=>a+getEarnings(e.qty,role,task),0);
   if(!confirm(`Confirm Bulk Log:\n${role} · ${task}\n${entries.length} staff · ${totalQty.toLocaleString()} ${ru}${totalQty!==1?'s':''} total\nTotal pay: K${totalEarnings.toFixed(2)}\nDate: ${fmtDate(date)}\n\nProceed?`))return;
   const timeInTs=Date.now(), timeOutTs=Date.now();
+  const notes=(document.getElementById('bl-notes')?.value||'').trim();
   const payloads=entries.map(e=>{
     const earnings=getEarnings(e.qty,role,task);
     const bagsVal=ru==='bag'?e.qty:0;
     return stampEntry({id:uid(),staffId:e.staffId,role,task,bags:bagsVal,qty:e.qty,rateUnit:ru,earnings,
       deduction:0,deductions:[],deductionReason:'',timeIn,timeOut,timeInTs,timeOutTs,status:'completed',
-      date,time:nowTime(),entryType:'work'});
+      date,time:nowTime(),entryType:'work',notes});
   });
   updateData(d=>({...d,staffLogs:[...d.staffLogs,...payloads]}));
   logAuditEvent('CREATE','Work Log (Bulk)',`Role:${role} · Task:${task} · Staff:${entries.length} · TotalQty:${totalQty} · Date:${date}`);
   closeModal();
   showToast(`✅ Logged ${task} for ${entries.length} staff`);
 }
+
+// ══════════════════════════════════════════════════════════
+// BULK CLOCK IN — open shifts for every selected staff member
+// (or all active staff in a role) in one go, instead of clocking
+// each person in one at a time. Staff who already have an open
+// shift are shown but auto-unchecked and disabled, same
+// safeguard as the single Clock In form (_openShiftFor).
+// ══════════════════════════════════════════════════════════
+function openBulkClockInForm(){
+  if(isStaffRole()){alert('⛔ Staff logins can only clock themselves in. Ask your Admin to bulk clock in.');return;}
+  if(DATA.staff.length===0){alert('Register staff members first.');return;}
+  if((DATA.staffRoles||[]).length===0){alert('No roles defined. Go to Staff > Roles & Rates to add roles first.');return;}
+  const activeStaff=DATA.staff.filter(s=>!s.status||s.status==='active');
+  if(activeStaff.length===0){alert('No active staff. Check roster for suspended/expelled staff.');return;}
+  const roles=allRoleNames();
+  const roleOpts=roles.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
+  openModal(`
+    <div class="mtitle">👥 Bulk Clock In ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Clock in every selected staff member in a role at once — tick "All" or pick individuals. Anyone already on an open shift is skipped automatically.</div>
+    <div class="fw"><div class="fl">Role</div><select class="fi" id="bci-role" onchange="_bciRoleChange()">${roleOpts}</select></div>
+    <div class="fw"><div class="fl">Task</div><select class="fi" id="bci-task"><option>—</option></select></div>
+    <div class="twobox">
+      <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="bci-date" value="${today()}"/></div>
+      <div class="fw"><div class="fl">Time In</div><input class="fi" type="time" id="bci-time-in" value="${nowTime()}"/></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div class="fl" style="margin-bottom:0">Staff in this role</div>
+      <div style="display:flex;gap:10px">
+        <button type="button" onclick="_bciSelectAll(true)" style="background:none;border:none;color:var(--green);font-size:14px;font-weight:700;cursor:pointer;padding:0">Select All Eligible</button>
+        <button type="button" onclick="_bciSelectAll(false)" style="background:none;border:none;color:var(--muted);font-size:14px;font-weight:700;cursor:pointer;padding:0">Clear All</button>
+      </div>
+    </div>
+    <div id="bci-staff-rows" style="margin-bottom:12px"></div>
+    <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="bci-notes" placeholder="Any notes for this batch of clock-ins…"/></div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkClockIn()">⏵ Clock In All</button></div>`);
+  _bciRoleChange();
+}
+
+function _bciRoleChange(){
+  const role=document.getElementById('bci-role')?.value;
+  const taskEl=document.getElementById('bci-task');
+  if(taskEl){
+    const tasks=tasksForRole(role);
+    taskEl.innerHTML=tasks.length>0?tasks.map(t=>{
+      const u=t.rateUnit||'bag';const ul=u==='custom'?(t.customUnit||'unit'):u;
+      return`<option value="${esc(t.name)}">${esc(t.name)} — K${Number(t.rate||0).toFixed(2)}/${ul}</option>`;
+    }).join(''):'<option>No tasks defined</option>';
+  }
+  const staffInRole=DATA.staff.filter(s=>(!s.status||s.status==='active')&&staffHasRole(s,role));
+  const rowsEl=document.getElementById('bci-staff-rows');
+  if(rowsEl){
+    rowsEl.innerHTML = staffInRole.length>0 ? staffInRole.map(s=>{
+      const open=_openShiftFor(s.id);
+      return `
+      <div class="ded-line" style="display:grid;grid-template-columns:28px 1fr;gap:8px;align-items:center;margin-bottom:8px">
+        <input type="checkbox" class="bci-row-check" data-staffid="${esc(s.id)}" ${open?'disabled':'checked'} style="width:18px;height:18px"/>
+        <div>
+          <div style="font-weight:600${open?';color:var(--muted)':''}">${esc(s.name)}</div>
+          ${open?`<div style="font-size:13px;color:var(--amber)">⚠️ Already clocked in (${open.date} ${open.timeIn||'—'}) — skipped</div>`:''}
+        </div>
+      </div>`;
+    }).join('') : '<div class="empty">No active staff in this role.</div>';
+  }
+}
+function _bciSelectAll(on){
+  document.querySelectorAll('#bci-staff-rows .bci-row-check').forEach(el=>{if(!el.disabled)el.checked=on;});
+}
+
+function saveBulkClockIn(){
+  if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+  if(!requireAddPermission('clock in staff'))return;
+  const role=document.getElementById('bci-role')?.value;
+  const task=document.getElementById('bci-task')?.value;
+  const date=document.getElementById('bci-date')?.value||today();
+  const timeIn=document.getElementById('bci-time-in')?.value||nowTime();
+  const notes=(document.getElementById('bci-notes')?.value||'').trim();
+  if(!role||!task||task==='No tasks defined'){alert('Select a role and task first.');return;}
+  const staffIds=[...document.querySelectorAll('#bci-staff-rows .bci-row-check')]
+    .filter(el=>el.checked&&!el.disabled)
+    .map(el=>el.dataset.staffid);
+  if(staffIds.length===0){alert('Select at least one eligible staff member (not already clocked in).');return;}
+  // Defense-in-depth: re-check for open shifts at save time in case data changed
+  // (e.g. sync from another device) since the modal was opened.
+  const eligible=staffIds.filter(id=>!_openShiftFor(id));
+  if(eligible.length===0){alert('All selected staff already have an open shift now — nothing to clock in.');return;}
+  const names=eligible.map(id=>DATA.staff.find(s=>String(s.id)===String(id))?.name||id).join(', ');
+  if(!confirm(`Confirm Bulk Clock In:\n${role} · ${task}\n${eligible.length} staff: ${names}\nDate: ${fmtDate(date)} · Time In: ${timeIn}\n\nProceed?`))return;
+  const timeInTs=Date.now();
+  const payloads=eligible.map(staffId=>stampEntry({id:uid(),staffId,date,role,task,timeIn,timeInTs,status:'open',
+    bags:0,qty:0,earnings:0,deduction:0,deductionReason:'',timeOut:'',
+    time:nowTime(),entryType:'work',notes}));
+  updateData(d=>({...d,staffLogs:[...d.staffLogs,...payloads]}));
+  logAuditEvent('CREATE','Work Log (Bulk Clock In)',`Role:${role} · Task:${task} · Staff:${eligible.length} · Date:${date} · TimeIn:${timeIn}`);
+  closeModal();
+  showToast(`⏵ Clocked in ${eligible.length} staff`);
+}
+// ══ END BULK CLOCK IN ═══════════════════════════════════════
+
 
 
 // ── RENDER PAYMENTS ──────────────────────────────────────────────────────────
