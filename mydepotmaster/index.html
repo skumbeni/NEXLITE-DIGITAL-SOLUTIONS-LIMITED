@@ -3724,7 +3724,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.23';
+const SW_VERSION  = 'v0.24';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -9683,12 +9683,15 @@ function saveMaizeIss(){if(isReadOnly()){alert("🔒 This account is in read-onl
 // ══════════════════════════════════════════════════════════
 let _mriLines=[];
 let _mriType='receive'; // 'receive' | 'issue'
+let _mriDate=null; // preserved across modal swaps (main form ↔ item picker)
+let _mriPickedItems=new Set(); // working selection while the item picker is open
 
 function openMultiEntryForm(type){
   if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
   if(!requireAddPermission(type==='receive'?'receive stock':'issue stock'))return;
   _mriType=type;
   _mriLines=[_mriBlankLine()];
+  _mriDate=today();
   openModal(_mriRenderModal(),'uncloseable');
   _mriRefreshRows();
 }
@@ -9715,9 +9718,12 @@ function _mriRenderModal(){
   return `
     <div class="mtitle">${isRec?'📦 Multi Receive':'📤 Multi Issue'}</div>
     <div style="font-size:15px;color:var(--muted);margin-bottom:10px;line-height:1.5">Record several items/commodities in one transaction — mix General Inventory items and named commodities, each with its own ${isRec?'supplier':'customer'}.</div>
-    <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="mri-date" value="${today()}"/></div>
+    <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="mri-date" value="${_mriDate||today()}" oninput="_mriDate=this.value"/></div>
     <div id="mri-rows"></div>
-    <button class="btn bo bsm" style="width:100%;margin:4px 0 10px" onclick="_mriAddRow()">+ Add Line</button>
+    <div style="display:flex;gap:8px;margin:4px 0 10px">
+      <button class="btn bo bsm" style="flex:1" onclick="_mriAddRow()">+ Add Line</button>
+      <button class="btn bo bsm" style="flex:1" onclick="_mriOpenItemPicker()">☑️ Pick Multiple Items</button>
+    </div>
     <div id="mri-total" style="text-align:right;font-family:var(--fh);font-size:19px;font-weight:800;color:var(--green);margin-bottom:6px"></div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="_mriSave()">✓ Save All</button></div>`;
 }
@@ -9734,6 +9740,82 @@ function _mriRemoveRow(id){
   _mriLines=_mriLines.filter(l=>l.id!==id);
   _mriRefreshRows();
 }
+
+// ── Pick Multiple Items — tick several known/new General Inventory item
+// names at once instead of adding lines one by one. Confirming replaces the
+// picker with the main Multi Receive/Issue form again (same _mriLines array,
+// so nothing already entered on other lines is lost) with one new line per
+// ticked item. Commodities aren't included here since each commodity line
+// also needs its own batch name, which doesn't fit a flat tick-list.
+function _mriOpenItemPicker(){
+  const dateEl=document.getElementById('mri-date');
+  if(dateEl)_mriDate=dateEl.value;
+  _mriPickedItems=new Set();
+  openModal(_mriRenderItemPicker(),'uncloseable');
+}
+
+function _mriRenderItemPicker(){
+  const defined=(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean);
+  const fromData=[...new Set(DATA.generalInventory.map(x=>x.itemName))];
+  const genNames=[...new Set([...defined,...fromData])].sort();
+  return `
+    <div class="mtitle">☑️ Pick Multiple Items</div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:10px">Tick every item to add as its own line. You'll set quantity, price and ${_mriType==='receive'?'supplier':'customer'} for each afterward.</div>
+    <div style="max-height:48vh;overflow-y:auto;margin-bottom:12px;border:1px solid var(--border);border-radius:10px" id="mri-picker-list">
+      ${genNames.length>0?genNames.map(n=>`
+        <label style="display:flex;align-items:center;gap:10px;padding:12px 10px;border-bottom:1px solid var(--border);font-weight:600;cursor:pointer">
+          <input type="checkbox" class="mri-pick-chk" ${_mriPickedItems.has(n)?'checked':''} onchange="_mriTogglePick('${esc(n)}',this.checked)" style="width:20px;height:20px;flex-shrink:0"/>
+          <span>${esc(n)}</span>
+        </label>`).join(''):`<div class="empty" style="padding:16px">No items defined yet — type a new one below.</div>`}
+    </div>
+    <div class="fw"><div class="fl">Add New Item Name <span style="font-size:14px;color:var(--muted)">(optional)</span></div>
+      <div style="display:flex;gap:8px">
+        <input class="fi" id="mri-picker-new" placeholder="TYPE NEW ITEM NAME" style="flex:1;margin-bottom:0" oninput="this.value=this.value.toUpperCase()" onkeydown="if(event.key==='Enter'){event.preventDefault();_mriPickerAddNew();}"/>
+        <button class="btn bo bsm" onclick="_mriPickerAddNew()">+ Add</button>
+      </div>
+    </div>
+    <div class="mact"><button class="btn bo" onclick="_mriCancelItemPicker()">Cancel</button><button class="btn bg" onclick="_mriConfirmItemPicker()">✓ Add Selected (<span id="mri-picker-count">${_mriPickedItems.size}</span>)</button></div>`;
+}
+
+function _mriTogglePick(name,checked){
+  if(checked)_mriPickedItems.add(name); else _mriPickedItems.delete(name);
+  const c=document.getElementById('mri-picker-count');
+  if(c)c.textContent=_mriPickedItems.size;
+}
+
+function _mriPickerAddNew(){
+  const el=document.getElementById('mri-picker-new');
+  const name=(el?el.value:'').trim().toUpperCase();
+  if(!name)return;
+  _mriPickedItems.add(name);
+  openModal(_mriRenderItemPicker(),'uncloseable'); // re-render — new name may not be in the known list, but stays selected via _mriPickedItems
+}
+
+function _mriCancelItemPicker(){
+  openModal(_mriRenderModal(),'uncloseable');
+  _mriRefreshRows();
+}
+
+function _mriConfirmItemPicker(){
+  if(_mriPickedItems.size===0){alert('Tick at least one item, or Cancel.');return;}
+  const defined=(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean);
+  const fromData=[...new Set(DATA.generalInventory.map(x=>x.itemName))];
+  const genNames=[...new Set([...defined,...fromData])];
+  // Drop the single still-untouched starter line so picking items doesn't
+  // leave a stray empty line behind alongside the new ones.
+  _mriLines=_mriLines.filter(l=>!(l.kind==='general'&&!l.itemName&&!l.qty&&!l.price&&!l.contactId));
+  _mriPickedItems.forEach(name=>{
+    const line=_mriBlankLine();
+    if(genNames.includes(name)) line.itemName=name;
+    else { line.itemName='__other__'; line.itemNameOther=name; }
+    _mriLines.push(line);
+  });
+  if(_mriLines.length===0)_mriLines=[_mriBlankLine()];
+  _mriPickedItems=new Set();
+  openModal(_mriRenderModal(),'uncloseable');
+  _mriRefreshRows();
+}
+
 
 function _mriSetField(id,field,val){
   const l=_mriLines.find(x=>x.id===id);
