@@ -16328,6 +16328,31 @@ document.addEventListener('visibilitychange', () => {
   if (ONLINE !== wasOnline) { updPill(); updateConnStatus(); }
   if (ONLINE && USER) flushOfflineQueue().then(() => scheduleFbSync());
 });
+// Fix: "staff edit reverts after reopening the app" — scheduleFbSync() debounces
+// the actual Firebase push by 2.5s so rapid edits don't flood the network. If the
+// app is backgrounded/closed inside that window, the setTimeout never fires, so
+// the edit only ever reaches localStorage/IDB, never the cloud. On next launch,
+// if any other device has synced in the meantime, fbRestoreData() sees the cloud
+// copy as newer and overwrites local — silently discarding the edit that was
+// never pushed. Flushing any pending sync the moment the app is hidden (not just
+// when it comes back) closes that window: the push fires immediately instead of
+// waiting out a debounce timer that may never get the chance to run.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'hidden') return;
+  if (!_fbSyncTimer) return; // nothing pending
+  clearTimeout(_fbSyncTimer);
+  _fbSyncTimer = null;
+  doFbSync();
+});
+// Extra safety net for mobile WebView wrappers (e.g. Median.co) where the app
+// process can be killed before 'visibilitychange' finishes running — 'pagehide'
+// fires earlier in the teardown sequence on most platforms.
+window.addEventListener('pagehide', () => {
+  if (!_fbSyncTimer) return;
+  clearTimeout(_fbSyncTimer);
+  _fbSyncTimer = null;
+  doFbSync();
+});
 
 // ══════════════════════════════════════════════════════════
 // ██ BOOKS TAB — In-app document creator (Word / Spreadsheet)
