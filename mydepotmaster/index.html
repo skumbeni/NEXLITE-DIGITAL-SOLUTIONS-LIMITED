@@ -3724,7 +3724,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.24';
+const SW_VERSION  = 'v0.25';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -9709,7 +9709,8 @@ function _mriBlankLine(){
     contactId:'',
     transporter:'',
     creditStatus:'paid',
-    partialPaid:''
+    partialPaid:'',
+    notes:''
   };
 }
 
@@ -9914,6 +9915,7 @@ function _mriRefreshRows(){
         </select>
       </div>
       ${l.creditStatus==='partial'?`<div class="fw"><div class="fl">Amount Paid (${cur()})</div><input class="fi" type="number" step="0.01" inputmode="decimal" placeholder="0.00" value="${l.partialPaid}" oninput="_mriSetField('${l.id}','partialPaid',this.value)"/></div>`:''}`:''}
+      <div class="fw" style="margin-bottom:0"><div class="fl">Notes <span style="font-size:14px;color:var(--muted)">(optional)</span></div><input class="fi" value="${esc(l.notes)}" placeholder="Any notes for this line…" oninput="_mriSetField('${l.id}','notes',this.value)"/></div>
     </div>`;
   }).join('');
   _mriUpdateTotal();
@@ -9973,22 +9975,22 @@ function _mriSave(){
         if(isRec){
           const existingRec=(comReceived[cid]||[]).find(r=>r.batchName===l.batchName&&r.lotId);
           const lotId=existingRec?existingRec.lotId:('LOT-'+uid().toUpperCase().slice(0,8));
-          const payload=stampEntry({id:uid(),batchName:l.batchName,date,time:nowTime(),received:qty,unitPrice:price,supplierId:l.contactId||'',supplierName:contactName,lotId});
+          const payload=stampEntry({id:uid(),batchName:l.batchName,date,time:nowTime(),received:qty,unitPrice:price,supplierId:l.contactId||'',supplierName:contactName,lotId,notes:uc(l.notes||'')});
           comReceived[cid]=[...(comReceived[cid]||[]),payload];
         } else {
           const partialPaid=l.creditStatus==='partial'?Number(l.partialPaid||0):0;
-          const payload=stampEntry({id:uid(),batchName:l.batchName,date,time:nowTime(),issued:qty,salePrice:price,transporter:(l.transporter||'').trim(),creditStatus:l.creditStatus||'paid',partialPaid,customerId:l.contactId||'',customerName:contactName});
+          const payload=stampEntry({id:uid(),batchName:l.batchName,date,time:nowTime(),issued:qty,salePrice:price,transporter:(l.transporter||'').trim(),creditStatus:l.creditStatus||'paid',partialPaid,customerId:l.contactId||'',customerName:contactName,notes:uc(l.notes||'')});
           comIssued[cid]=[...(comIssued[cid]||[]),payload];
         }
       } else {
         const name=l._resolvedName;
         if(isRec){
-          const payload=stampEntry({id:uid(),date,time:nowTime(),itemName:name,received:qty,good:qty,damaged:0,condition:'good',purchasePrice:price,creditStatus:'paid',supplierId:l.contactId||'',supplierName:contactName});
+          const payload=stampEntry({id:uid(),date,time:nowTime(),itemName:name,received:qty,good:qty,damaged:0,condition:'good',purchasePrice:price,creditStatus:'paid',supplierId:l.contactId||'',supplierName:contactName,notes:uc(l.notes||'')});
           genArr=[...genArr,payload];
           if(price>0)prices[name]={...(prices[name]||{}),purchasePrice:price};
         } else {
           const partialPaid=l.creditStatus==='partial'?Number(l.partialPaid||0):0;
-          const payload=stampEntry({id:uid(),date,time:nowTime(),itemName:name,issued:qty,sellingPrice:price,creditStatus:l.creditStatus||'paid',partialPaid,customerId:l.contactId||'',customerName:contactName});
+          const payload=stampEntry({id:uid(),date,time:nowTime(),itemName:name,issued:qty,sellingPrice:price,creditStatus:l.creditStatus||'paid',partialPaid,customerId:l.contactId||'',customerName:contactName,notes:uc(l.notes||'')});
           genArr=[...genArr,payload];
           if(price>0)prices[name]={...(prices[name]||{}),sellingPrice:price};
         }
