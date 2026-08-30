@@ -3724,7 +3724,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.25';
+const SW_VERSION  = 'v0.26';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -5424,11 +5424,13 @@ async function saveRecoveryPin() {
   if (p1.length < 6)       { msg.innerHTML='<div class="err-box">PIN must be at least 6 digits.</div>'; return; }
   if (!/^\d+$/.test(p1))   { msg.innerHTML='<div class="err-box">PIN must contain digits only.</div>'; return; }
   if (p1 !== p2)            { msg.innerHTML='<div class="err-box">PINs do not match.</div>'; return; }
-  const hashed = await hashPassword(p1);
-  updateData(d => ({...d, recoveryPin: hashed}));
-  msg.innerHTML = '<div class="ok-msg">✅ Recovery PIN saved! Keep it somewhere safe.</div>';
-  document.getElementById('rec-pin-new').value  = '';
-  document.getElementById('rec-pin-conf').value = '';
+  requireAdminPassword('set recovery PIN', async ()=>{
+    const hashed = await hashPassword(p1);
+    updateData(d => ({...d, recoveryPin: hashed}));
+    msg.innerHTML = '<div class="ok-msg">✅ Recovery PIN saved! Keep it somewhere safe.</div>';
+    document.getElementById('rec-pin-new').value  = '';
+    document.getElementById('rec-pin-conf').value = '';
+  });
 }
 
 function saveRecoveryEmail() {
@@ -5439,15 +5441,17 @@ function saveRecoveryEmail() {
   if (raw && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
     msg.innerHTML = '<div class="err-box">⚠️ Email format looks invalid. Please check it.</div>'; return;
   }
-  // Save on admin user record and depotInfo
-  updateData(d => ({
-    ...d,
-    depotInfo: {...(d.depotInfo||{}), recoveryEmail: raw},
-    users: (d.users||[]).map(u => u.role === 'admin' ? {...u, recoveryEmail: raw} : u)
-  }));
-  msg.innerHTML = raw
-    ? '<div class="ok-msg">✅ Recovery email saved.</div>'
-    : '<div class="ok-msg">✅ Recovery email cleared.</div>';
+  requireAdminPassword('set recovery email', ()=>{
+    // Save on admin user record and depotInfo
+    updateData(d => ({
+      ...d,
+      depotInfo: {...(d.depotInfo||{}), recoveryEmail: raw},
+      users: (d.users||[]).map(u => u.role === 'admin' ? {...u, recoveryEmail: raw} : u)
+    }));
+    msg.innerHTML = raw
+      ? '<div class="ok-msg">✅ Recovery email saved.</div>'
+      : '<div class="ok-msg">✅ Recovery email cleared.</div>';
+  });
 }
 
 function startSignUp() {
@@ -9052,7 +9056,7 @@ function _doOpenEditGenRec(id){
   const opts=allNames.map(n=>`<option value="${n}"${n===rec.itemName?' selected':''}>${n}</option>`).join('');
   openModal(`
     <div class="mtitle">✏️ Edit Received Item</div>
-    <div class="warn">⏰ Edits close 24 hrs after entry.</div>
+    <div class="warn">⏰ Editing is only allowed within ${_editWindowLabel()} of entry.</div>
     <div class="fw"><div class="fl">Item Name</div><select class="fi" id="eger-name">${opts}</select></div>
     <div class="twobox">
       <div class="fw"><div class="fl">Qty Received</div><input class="fi" type="number" id="eger-rec" value="${rec.received}" inputmode="numeric"/></div>
@@ -9116,7 +9120,7 @@ function _doOpenEditGenIss(id){
   const opts=allNames.map(n=>`<option value="${n}"${n===iss.itemName?' selected':''}>${n}</option>`).join('');
   openModal(`
     <div class="mtitle">✏️ Edit Issued Item</div>
-    <div class="warn">⏰ Edits close 24 hrs after entry.</div>
+    <div class="warn">⏰ Editing is only allowed within ${_editWindowLabel()} of entry.</div>
     <div class="fw"><div class="fl">Item Name</div><select class="fi" id="egei-name">${opts}</select></div>
     <div class="fw"><div class="fl">Qty Issued</div><input class="fi" type="number" id="egei-qty" value="${iss.issued}" inputmode="numeric"/></div>
     <div class="fw"><div class="fl">Selling Price (${cur()} per unit)</div><input class="fi" type="number" id="egei-sprice" value="${iss.sellingPrice||0}" step="0.01" inputmode="decimal"/></div>
@@ -10123,7 +10127,7 @@ function _doOpenEditTransport(id){
   const com=getCom(t.commodity||CCOM);
   openModal(`
     <div class="mtitle">✏️ Edit Transport Entry</div>
-    <div class="warn">⏰ Edits close 24 hrs after entry.</div>
+    <div class="warn">⏰ Editing is only allowed within ${_editWindowLabel()} of entry.</div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="etl-date" value="${t.date}"/></div>
     <div class="fw"><div class="fl">Vehicle Registration</div><input class="fi" id="etl-vehicle" value="${esc(t.vehicleReg||'')}" oninput="this.value=this.value.toUpperCase()"/></div>
     <div class="fw"><div class="fl">Driver Name</div><input class="fi" id="etl-driver" value="${esc(t.driverName||'')}" oninput="this.value=this.value.toUpperCase()"/></div>
@@ -10334,7 +10338,7 @@ function _doOpenEditMaizeRec(id){
   if(!rec){alert('Record not found.');return;}
   openModal(`
     <div class="mtitle">✏️ Edit ${esc(com.name)} Received</div>
-    <div class="warn">⏰ Edits close 24 hrs after entry.</div>
+    <div class="warn">⏰ Editing is only allowed within ${_editWindowLabel()} of entry.</div>
     <div class="fw"><div class="fl">Batch Name</div><input class="fi" id="emr-batch" value="${esc(rec.batchName)}" oninput="this.value=this.value.toUpperCase()"/></div>
     <div class="fw"><div class="fl">${com.unit.charAt(0).toUpperCase()+com.unit.slice(1)} Received</div><input class="fi" type="number" id="emr-rec" value="${rec.received}" inputmode="numeric"/></div>
     <div class="fw"><div class="fl">Unit Price (${cur()} per ${com.unit.slice(0,-1)||com.unit})</div><input class="fi" type="number" id="emr-uprice" value="${rec.unitPrice||0}" step="0.01" inputmode="decimal"/></div>
@@ -10372,7 +10376,7 @@ function _doOpenEditMaizeIss(id){
   const opts=batches.map(b=>`<option value="${b}"${b===iss.batchName?' selected':''}>${b}</option>`).join('');
   openModal(`
     <div class="mtitle">✏️ Edit ${esc(com.name)} Issued</div>
-    <div class="warn">⏰ Edits close 24 hrs after entry.</div>
+    <div class="warn">⏰ Editing is only allowed within ${_editWindowLabel()} of entry.</div>
     <div class="fw"><div class="fl">Batch</div><select class="fi" id="emi-batch">${opts}</select></div>
     <div class="fw"><div class="fl">Transporter</div><input class="fi" id="emi-trans" value="${iss.transporter||''}" oninput="this.value=this.value.toUpperCase()"/></div>
     <div class="fw"><div class="fl">${com.unit.charAt(0).toUpperCase()+com.unit.slice(1)} Issued</div><input class="fi" type="number" id="emi-qty" value="${iss.issued}" inputmode="numeric"/></div>
@@ -11554,7 +11558,7 @@ function openBulkLogForm(){
       </div>
     </div>
     <div id="bl-staff-rows" style="margin-bottom:12px"></div>
-    <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="bl-notes" placeholder="Any notes for this batch of entries…"/></div>
+    <div class="fw"><div class="fl">Notes (optional, applies to any staff without their own note above)</div><input class="fi" id="bl-notes" placeholder="Any notes for this batch of entries…"/></div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkLog()">✓ Save All</button></div>`);
   _blRoleChange();
 }
@@ -11573,10 +11577,13 @@ function _blRoleChange(){
   const rowsEl=document.getElementById('bl-staff-rows');
   if(rowsEl){
     rowsEl.innerHTML = staffInRole.length>0 ? staffInRole.map(s=>`
-      <div class="ded-line" style="display:grid;grid-template-columns:28px 1fr 100px;gap:8px;align-items:center;margin-bottom:8px">
-        <input type="checkbox" class="bl-row-check" data-staffid="${esc(s.id)}" checked style="width:18px;height:18px"/>
-        <div style="font-weight:600">${esc(s.name)}</div>
-        <input class="fi bl-row-qty" type="number" placeholder="0" inputmode="decimal" step="0.01" style="margin-bottom:0;padding:8px 10px;font-size:17px"/>
+      <div class="ded-line" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border,rgba(255,255,255,.08))">
+        <div style="display:grid;grid-template-columns:28px 1fr 100px;gap:8px;align-items:center">
+          <input type="checkbox" class="bl-row-check" data-staffid="${esc(s.id)}" checked style="width:18px;height:18px"/>
+          <div style="font-weight:600">${esc(s.name)}</div>
+          <input class="fi bl-row-qty" type="number" placeholder="0" inputmode="decimal" step="0.01" style="margin-bottom:0;padding:8px 10px;font-size:17px"/>
+        </div>
+        <input class="fi bl-row-note" type="text" placeholder="Note for ${esc(s.name)} (optional)" style="margin-bottom:0;margin-left:36px;padding:6px 10px;font-size:14px"/>
       </div>`).join('') : '<div class="empty">No active staff in this role.</div>';
   }
   _blSyncQtyLabel();
@@ -11612,22 +11619,23 @@ function saveBulkLog(){
   rows.forEach(row=>{
     const check=row.querySelector('.bl-row-check');
     const qtyEl=row.querySelector('.bl-row-qty');
+    const noteEl=row.querySelector('.bl-row-note');
     if(!check?.checked)return;
     const qty=Number(qtyEl?.value||0);
-    if(qty>0)entries.push({staffId:check.dataset.staffid,qty});
+    if(qty>0)entries.push({staffId:check.dataset.staffid,qty,note:(noteEl?.value||'').trim()});
   });
   if(entries.length===0){alert('Select at least one staff member and enter a quantity greater than zero for each.');return;}
   const totalQty=entries.reduce((a,e)=>a+e.qty,0);
   const totalEarnings=entries.reduce((a,e)=>a+getEarnings(e.qty,role,task),0);
   if(!confirm(`Confirm Bulk Log:\n${role} · ${task}\n${entries.length} staff · ${totalQty.toLocaleString()} ${ru}${totalQty!==1?'s':''} total\nTotal pay: K${totalEarnings.toFixed(2)}\nDate: ${fmtDate(date)}\n\nProceed?`))return;
   const timeInTs=Date.now(), timeOutTs=Date.now();
-  const notes=(document.getElementById('bl-notes')?.value||'').trim();
+  const batchNotes=(document.getElementById('bl-notes')?.value||'').trim();
   const payloads=entries.map(e=>{
     const earnings=getEarnings(e.qty,role,task);
     const bagsVal=ru==='bag'?e.qty:0;
     return stampEntry({id:uid(),staffId:e.staffId,role,task,bags:bagsVal,qty:e.qty,rateUnit:ru,earnings,
       deduction:0,deductions:[],deductionReason:'',timeIn,timeOut,timeInTs,timeOutTs,status:'completed',
-      date,time:nowTime(),entryType:'work',notes});
+      date,time:nowTime(),entryType:'work',notes:e.note||batchNotes});
   });
   updateData(d=>({...d,staffLogs:[...d.staffLogs,...payloads]}));
   logAuditEvent('CREATE','Work Log (Bulk)',`Role:${role} · Task:${task} · Staff:${entries.length} · TotalQty:${totalQty} · Date:${date}`);
@@ -13084,7 +13092,7 @@ function _doOpenEditLog(id){
   const qtyLbl=qtyLabelForTask(staffRole,log.task||'');
   openModal(`
     <div class="mtitle">✏️ Edit Work Log</div>
-    <div class="warn">⏰ Edits close 24 hrs after entry.</div>
+    <div class="warn">⏰ Editing is only allowed within ${_editWindowLabel(true)} of entry.</div>
     <div class="fw"><div class="fl">Staff Member</div><select class="fi" id="elg-staff">${staffOpts}</select></div>
     <div class="fw"><div class="fl">Task</div><select class="fi" id="elg-task" onchange="calcEditGross()">${taskOpts}</select></div>
     <div class="fw"><div class="fl" id="elg-qty-label">${qtyLbl}</div><input class="fi" type="number" id="elg-bags" value="${logQty}" inputmode="decimal" step="0.01" oninput="calcEditGross()"/></div>
@@ -13807,7 +13815,7 @@ const SETTINGS_CATS = {
     {id:'appearance', icon:'🎨', label:'Appearance', desc:'Theme, text size, currency & dashboard widgets',
       match:['Display Preferences','Dashboard Widgets']},
     {id:'data-backup', icon:'💾', label:'Data & Backup', desc:'Backup, audit log, cloud sync & account deletion',
-      match:['Data Management','Cloud Data Protection','Danger Zone']},
+      match:['Data Management','Cloud Data Protection','My Account']},
     {id:'help-about', icon:'❓', label:'Help & About', desc:'Install app, docs, support & legal',
       match:['Contact & Support','Install on This Phone','Help & Documentation','Legal']},
   ],
@@ -14297,10 +14305,10 @@ function _renderAdminSettings(){
       <div style="margin-top:10px"></div>
       <button class="btn bo" onclick="showPrivacyPolicy()" style="width:100%">🔒 View Privacy Policy</button>
     </div>
-    <div class="sh" style="color:var(--red)">Danger Zone</div>
+    <div class="sh" style="color:var(--red)">My Account</div>
     <div class="card" style="border:1px solid rgba(220,38,38,.3);background:rgba(220,38,38,.04)">
       <div style="font-size:18px;color:var(--muted);line-height:1.7;margin-bottom:12px">Permanently delete this company account and all associated data. <strong style="color:var(--red)">This cannot be undone.</strong></div>
-      <button class="btn" style="width:100%;background:transparent;border:1.5px solid var(--red);color:var(--red);font-weight:700;white-space:normal;line-height:1.3;min-height:48px;height:auto" onclick="deleteAccountStep1()">🗑 Delete Account &amp; Data</button>
+      <button class="btn" style="width:100%;background:transparent;border:1.5px solid var(--red);color:var(--red);font-weight:700;white-space:normal;line-height:1.3;min-height:48px;height:auto" onclick="deleteAccountStep1()">🗑 Suspend/Delete My Account</button>
     </div>
     <div style="text-align:center;padding:12px 0 4px;font-size:16px;color:var(--muted)">My Depot Master · © ${new Date().getFullYear()} NEXLITE-DIGITAL-SOLUTIONS-LIMITED · General Purpose Business Management Software</div>
     <div style="height:60px"></div>`;
@@ -14510,9 +14518,11 @@ function saveDepotInfo(){
   const countryCode=document.getElementById('di-country')?.value||'';
   const country=countryCode?uc((countryByCode(countryCode)||{}).name||''):uc(document.getElementById('di-country')?.value||'');
   const province=uc(document.getElementById('di-province')?.value||'');
-  updateData(d=>({...d,depotInfo:{...d.depotInfo,name,district,province,country,setupDone:true}}));
-  applyDepotInfo();
-  alert('\u2705 Company info updated!');
+  requireAdminPassword('update company info', ()=>{
+    updateData(d=>({...d,depotInfo:{...d.depotInfo,name,district,province,country,setupDone:true}}));
+    applyDepotInfo();
+    alert('\u2705 Company info updated!');
+  });
 }
 function saveRates(){
   // Legacy stub kept for compatibility — new system uses saveTaskRate()
@@ -14589,10 +14599,12 @@ function addRole(){
   const name=uc(inp?.value||'');
   if(!name){alert('Enter a role name.');return;}
   if((DATA.staffRoles||[]).find(r=>r.name===name)){alert('Role already exists.');return;}
-  const newRole={id:'role_'+Date.now(),name,tasks:[]};
-  updateData(d=>({...d,staffRoles:[...(d.staffRoles||[]),newRole]}));
-  if(inp)inp.value='';
-  refreshRolesEditor();
+  requireAdminPassword('add this role', ()=>{
+    const newRole={id:'role_'+Date.now(),name,tasks:[]};
+    updateData(d=>({...d,staffRoles:[...(d.staffRoles||[]),newRole]}));
+    if(inp)inp.value='';
+    refreshRolesEditor();
+  });
 }
 
 function removeRole(ri){
@@ -14616,15 +14628,17 @@ function addTask(ri){
   const role=(DATA.staffRoles||[])[ri];
   if(!role)return;
   if((role.tasks||[]).find(t=>t.name===name)){alert('Task already exists for this role.');return;}
-  const newTask={id:'task_'+Date.now(),name,rate:0};
-  updateData(d=>{
-    const roles=JSON.parse(JSON.stringify(d.staffRoles||[]));
-    if(!roles[ri].tasks)roles[ri].tasks=[];
-    roles[ri].tasks.push(newTask);
-    return{...d,staffRoles:roles};
+  requireAdminPassword('add this task', ()=>{
+    const newTask={id:'task_'+Date.now(),name,rate:0};
+    updateData(d=>{
+      const roles=JSON.parse(JSON.stringify(d.staffRoles||[]));
+      if(!roles[ri].tasks)roles[ri].tasks=[];
+      roles[ri].tasks.push(newTask);
+      return{...d,staffRoles:roles};
+    });
+    if(inp)inp.value='';
+    refreshRolesEditor();
   });
-  if(inp)inp.value='';
-  refreshRolesEditor();
 }
 
 function removeTask(ri,ti){
@@ -14770,32 +14784,31 @@ async function _confirmAddUser(){
     if(!linkedStaffId){ err.style.display='block'; err.textContent='⚠️ Select which staff profile this Staff login belongs to.'; return; }
   }
 
+  requireAdminPassword('add this user', async ()=>{
+    await _finishAddUser(username, role, pass, linkedStaffId, err);
+  });
+}
+async function _finishAddUser(username, role, pass, linkedStaffId, err){
   // ── GLOBAL FIREBASE DUPLICATE CHECK ────────────────────────────────────────
   // Usernames are registered globally across all depots in Firebase usernames/.
   // A sub-user added here must not collide with an admin username from another depot.
   const addBtn = document.querySelector('#modal-body button.bg');
   if(isFbConfigured()){
     if(!navigator.onLine){
-      err.style.display='block';
-      err.textContent='⚠️ An internet connection is required to verify username availability.';
+      alert('⚠️ An internet connection is required to verify username availability.');
       return;
     }
     if(addBtn){ addBtn.disabled=true; addBtn.textContent='⏳ Checking username…'; }
     try{
       const existing = await fbGet('usernames/' + username);
       if(existing && existing.installId){
-        err.style.display='block';
-        err.textContent='⛔ Username "'+username+'" is already taken globally. Choose a different one.';
-        if(addBtn){ addBtn.disabled=false; addBtn.textContent='✅ Add User'; }
+        alert('⛔ Username "'+username+'" is already taken globally. Choose a different one.');
         return;
       }
     } catch(uce){
-      err.style.display='block';
-      err.textContent='⚠️ Could not verify username availability. Please try again.';
-      if(addBtn){ addBtn.disabled=false; addBtn.textContent='✅ Add User'; }
+      alert('⚠️ Could not verify username availability. Please try again.');
       return;
     }
-    if(addBtn){ addBtn.disabled=true; addBtn.textContent='⏳ Adding user…'; }
   }
   // ── END GLOBAL CHECK ────────────────────────────────────────────────────────
 
@@ -14807,15 +14820,12 @@ async function _confirmAddUser(){
       await fbSetIfNotExists('usernames/' + username, { installId: depotKey(), createdAt: Date.now() });
     } catch(race){
       if(race.code===412){
-        err.style.display='block';
-        err.textContent='⛔ Username "'+username+'" was just taken by another account. Choose a different one.';
-        if(addBtn){ addBtn.disabled=false; addBtn.textContent='✅ Add User'; }
+        alert('⛔ Username "'+username+'" was just taken by another account. Choose a different one.');
         return;
       }
       // Non-critical: log but don't block — local uniqueness is already guaranteed
       console.warn('Firebase username register failed for sub-user:', race.message);
     }
-    if(addBtn){ addBtn.disabled=false; addBtn.textContent='✅ Add User'; }
   }
 
   // Phase 1 — provision a real Firebase Auth account alongside the legacy
@@ -14861,9 +14871,11 @@ function addInvItem(){
   const val=uc(sel?(sel.value==='__other__'?otherInput?.value:sel.value):otherInput?.value);
   if(!val){alert(sel?'Select an item, or choose OTHER and type a new item name.':'Enter an item name.');return;}
   if((DATA.inventoryItems||[]).some(x=>_invItemName(x)===val)){alert('Item already exists.');return;}
-  updateData(d=>({...d,inventoryItems:[...(d.inventoryItems||[]),{name:val,minStock:0,reservedQty:0}]}));
-  if(sel)sel.value='';
-  if(otherInput){otherInput.value='';otherInput.style.display='none';}
+  requireAdminPassword('add this inventory item', ()=>{
+    updateData(d=>({...d,inventoryItems:[...(d.inventoryItems||[]),{name:val,minStock:0,reservedQty:0}]}));
+    if(sel)sel.value='';
+    if(otherInput){otherInput.value='';otherInput.style.display='none';}
+  });
 }
 function exportJSON(){
   if(!requireAdmin('export data'))return;
@@ -14943,34 +14955,36 @@ function handleImportFile(input){
   const file = input.files[0];
   if (!file) return;
   if (!confirm('⚠️ Restoring a backup will REPLACE all current data. This cannot be undone. Continue?')) return;
-  const reader = new FileReader();
-  reader.onload = function(e){
-    try {
-      const imported = JSON.parse(e.target.result);
-      // Basic validation — must have at least users array
-      if (!imported || typeof imported !== 'object' || !Array.isArray(imported.users)) {
-        alert('❌ Invalid backup file. Please use a valid MDM backup JSON.'); return;
+  requireAdminPassword('restore this backup and replace all current data', ()=>{
+    const reader = new FileReader();
+    reader.onload = function(e){
+      try {
+        const imported = JSON.parse(e.target.result);
+        // Basic validation — must have at least users array
+        if (!imported || typeof imported !== 'object' || !Array.isArray(imported.users)) {
+          alert('❌ Invalid backup file. Please use a valid MDM backup JSON.'); return;
+        }
+        // Deduplicate users by username (case-insensitive, keep first)
+        const _seen = new Set();
+        imported.users = imported.users.filter(u => {
+          const key = (u.username||'').toLowerCase();
+          if(_seen.has(key)) return false;
+          _seen.add(key); return true;
+        });
+        // Strip any plain-text passwords before saving (they will be migrated on next login)
+        DATA = Object.assign(JSON.parse(JSON.stringify(DEFAULT)), imported);
+        DATA._v = (DATA._v || 0) + 1;
+        sv(DATA);
+        // Clear the license cache so it re-checks on next login
+        localStorage.removeItem(LICENSE_CACHE_KEY);
+        alert('✅ Backup restored successfully! Please log in again.');
+        _doLogoutNow();
+      } catch(err) {
+        alert('❌ Failed to read backup file: ' + err.message);
       }
-      // Deduplicate users by username (case-insensitive, keep first)
-      const _seen = new Set();
-      imported.users = imported.users.filter(u => {
-        const key = (u.username||'').toLowerCase();
-        if(_seen.has(key)) return false;
-        _seen.add(key); return true;
-      });
-      // Strip any plain-text passwords before saving (they will be migrated on next login)
-      DATA = Object.assign(JSON.parse(JSON.stringify(DEFAULT)), imported);
-      DATA._v = (DATA._v || 0) + 1;
-      sv(DATA);
-      // Clear the license cache so it re-checks on next login
-      localStorage.removeItem(LICENSE_CACHE_KEY);
-      alert('✅ Backup restored successfully! Please log in again.');
-      _doLogoutNow();
-    } catch(err) {
-      alert('❌ Failed to read backup file: ' + err.message);
-    }
-  };
-  reader.readAsText(file);
+    };
+    reader.readAsText(file);
+  });
 }
 function clearAll(){
   if(!requireAdmin('clear all data'))return;
@@ -15611,9 +15625,11 @@ function saveShiftHours(){
   const val=Number(document.getElementById('shift-hours-input')?.value||8);
   const msg=document.getElementById('shift-hours-msg');
   if(!val||val<1||val>24){if(msg)msg.innerHTML='<div class="err-box">Enter a value between 1 and 24.</div>';return;}
-  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),standardShiftHours:val}}));
-  if(msg)msg.innerHTML='<div class="ok-msg">✅ Standard shift set to '+val+' hours.</div>';
-  setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
+  requireAdminPassword('change shift hours setting', ()=>{
+    updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),standardShiftHours:val}}));
+    if(msg)msg.innerHTML='<div class="ok-msg">✅ Standard shift set to '+val+' hours.</div>';
+    setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
+  });
 }
 
 // ── CUSTOM BRANDING (logo + accent colour for staff ID cards) ───────────────
@@ -15631,28 +15647,34 @@ function handleBrandLogoUpload(input){
     input.value='';
     return;
   }
-  const reader=new FileReader();
-  reader.onload=()=>{
-    updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),logoDataUrl:reader.result}}));
-    if(msg)msg.innerHTML='<div class="ok-msg">✅ Logo updated.</div>';
-    setTimeout(()=>{showTab('settings');},600);
-  };
-  reader.onerror=()=>{ if(msg)msg.innerHTML='<div class="err-box">Could not read that file. Try a different image.</div>'; };
-  reader.readAsDataURL(file);
+  requireAdminPassword('change company logo', ()=>{
+    const reader=new FileReader();
+    reader.onload=()=>{
+      updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),logoDataUrl:reader.result}}));
+      if(msg)msg.innerHTML='<div class="ok-msg">✅ Logo updated.</div>';
+      setTimeout(()=>{showTab('settings');},600);
+    };
+    reader.onerror=()=>{ if(msg)msg.innerHTML='<div class="err-box">Could not read that file. Try a different image.</div>'; };
+    reader.readAsDataURL(file);
+  });
 }
 function removeBrandLogo(){
   if(!requireAdmin('remove company logo'))return;
-  if(!confirm('Remove your company logo from staff ID cards?'))return;
-  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),logoDataUrl:null}}));
-  showTab('settings');
+  requireAdminPassword('remove company logo', ()=>{
+    if(!confirm('Remove your company logo from staff ID cards?'))return;
+    updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),logoDataUrl:null}}));
+    showTab('settings');
+  });
 }
 function saveBrandColor(){
   if(!requireAdmin('change accent colour'))return;
   const val=document.getElementById('brand-color-input')?.value||'#27AE60';
   const msg=document.getElementById('brand-color-msg');
-  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),brandColor:val}}));
-  if(msg)msg.innerHTML='<div class="ok-msg">✅ Accent colour updated.</div>';
-  setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
+  requireAdminPassword('change accent colour', ()=>{
+    updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),brandColor:val}}));
+    if(msg)msg.innerHTML='<div class="ok-msg">✅ Accent colour updated.</div>';
+    setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
+  });
 }
 // Picks black or white text for readability against any chosen accent colour (WCAG-ish luminance check)
 function _brandTextColor(hex){
@@ -15667,9 +15689,11 @@ function saveLeaveEntitlement(){
   const val=Number(document.getElementById('leave-entitlement-input')?.value||15);
   const msg=document.getElementById('leave-entitlement-msg');
   if(!val||val<1||val>365){if(msg)msg.innerHTML='<div class="err-box">Enter a value between 1 and 365.</div>';return;}
-  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),annualLeaveEntitlement:val}}));
-  if(msg)msg.innerHTML='<div class="ok-msg">✅ Annual leave entitlement set to '+val+' days.</div>';
-  setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
+  requireAdminPassword('change leave entitlement', ()=>{
+    updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),annualLeaveEntitlement:val}}));
+    if(msg)msg.innerHTML='<div class="ok-msg">✅ Annual leave entitlement set to '+val+' days.</div>';
+    setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
+  });
 }
 
 function saveEditWindow(){
@@ -15678,10 +15702,12 @@ function saveEditWindow(){
   const msg=document.getElementById('edit-window-msg');
   const valid=[6,12,24,48,72,168,240,720];
   if(!valid.includes(val)){if(msg)msg.innerHTML='<div class="err-box">Invalid selection.</div>';return;}
-  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),editWindowHours:val}}));
-  const label=val<24?val+'h':(val/24)+' day'+(val>24?'s':'');
-  if(msg)msg.innerHTML='<div class="ok-msg">✅ Edit window set to '+label+'.</div>';
-  setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
+  requireAdminPassword('change edit window', ()=>{
+    updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),editWindowHours:val}}));
+    const label=val<24?val+'h':(val/24)+' day'+(val>24?'s':'');
+    if(msg)msg.innerHTML='<div class="ok-msg">✅ Edit window set to '+label+'.</div>';
+    setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
+  });
 }
 function saveStaffEditWindow(){
   if(!requireAdmin('change staff edit window'))return;
@@ -15690,10 +15716,12 @@ function saveStaffEditWindow(){
   const valid=['use-global',0,6,12,24,48,72,168,240,720].map(String);
   if(!valid.includes(String(raw))){if(msg)msg.innerHTML='<div class="err-box">Invalid selection.</div>';return;}
   const val=raw==='use-global'?null:Number(raw);
-  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),staffEditWindowHours:val}}));
-  const label=val==null?'the general setting':val===0?'never lock (always editable)':val<24?val+'h':(val/24)+' day'+(val>24?'s':'');
-  if(msg)msg.innerHTML='<div class="ok-msg">✅ Staff records edit window set to '+label+'.</div>';
-  setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
+  requireAdminPassword('change staff edit window', ()=>{
+    updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),staffEditWindowHours:val}}));
+    const label=val==null?'the general setting':val===0?'never lock (always editable)':val<24?val+'h':(val/24)+' day'+(val>24?'s':'');
+    if(msg)msg.innerHTML='<div class="ok-msg">✅ Staff records edit window set to '+label+'.</div>';
+    setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
+  });
 }
 
 // Fix 13: Per-tab sync/offline indicator chip
@@ -15737,10 +15765,12 @@ function saveAutoLogout(){
   const msg=document.getElementById('auto-logout-msg');
   const valid=[5,10,15,20,30,60];
   if(!valid.includes(val)){if(msg)msg.innerHTML='<div class="err-box">Invalid selection.</div>';return;}
-  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),autoLogoutMinutes:val}}));
-  _idleReset(); // apply new timeout immediately
-  if(msg)msg.innerHTML='<div class="ok-msg">✅ Auto-logout set to '+val+' minutes.</div>';
-  setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
+  requireAdminPassword('change auto-logout setting', ()=>{
+    updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),autoLogoutMinutes:val}}));
+    _idleReset(); // apply new timeout immediately
+    if(msg)msg.innerHTML='<div class="ok-msg">✅ Auto-logout set to '+val+' minutes.</div>';
+    setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
+  });
 }
 
 function savePerRoleTimeout(){
@@ -15748,17 +15778,19 @@ function savePerRoleTimeout(){
   const msg=document.getElementById('per-role-timeout-msg');
   const valid=[0,5,10,15,20,30,60];
   const byRole={...(DATA.depotInfo||{}).autoLogoutMinutesByRole||{}};
-  ['admin','data_entry','staff'].forEach(role=>{
+  for(const role of ['admin','data_entry','staff']){
     const el=document.getElementById('per-role-timeout-'+role);
     const val=Number(el?.value||0);
     if(!valid.includes(val)){if(msg)msg.innerHTML='<div class="err-box">Invalid selection.</div>';return;}
     if(val>0) byRole[role]=val;
     else delete byRole[role];
+  }
+  requireAdminPassword('change role timeout settings', ()=>{
+    updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),autoLogoutMinutesByRole:byRole}}));
+    _idleReset(); // re-arm with new per-role timeout
+    if(msg)msg.innerHTML='<div class="ok-msg">✅ Role timeouts saved.</div>';
+    setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
   });
-  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),autoLogoutMinutesByRole:byRole}}));
-  _idleReset(); // re-arm with new per-role timeout
-  if(msg)msg.innerHTML='<div class="ok-msg">✅ Role timeouts saved.</div>';
-  setTimeout(()=>{if(msg)msg.innerHTML='';},3000);
 }
 
 (function(){

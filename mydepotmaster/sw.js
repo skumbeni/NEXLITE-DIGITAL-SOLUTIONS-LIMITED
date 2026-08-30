@@ -25,6 +25,26 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.26 (2026-08-30)
+//
+// v0.26 changes (2026-08-30) — Settings now require admin password on every change:
+//   - Company info, roles/tasks (add), shift hours, accent colour, logo
+//     upload/remove, leave entitlement, edit window & staff edit window,
+//     auto-logout & per-role timeouts, recovery PIN/email, add user, add
+//     inventory item, and restoring a backup now all require the admin
+//     password confirmation modal before the change is applied — matching
+//     the gate already used for deletes.
+//   - Fixed several Edit modals (Received/Issued Item, Transport Entry,
+//     Commodity Received/Issued, Work Log) that showed a hardcoded
+//     "Edits close 24 hrs after entry" message instead of reflecting the
+//     actual configured Record Edit Window / Staff Records Edit Window.
+//   - Bulk Log Work now supports an optional per-staff note on each row,
+//     falling back to the shared batch note when a row has none.
+//   - "My Account" danger-zone section (Settings → Data & Backup) relabeled:
+//     button is now "🗑 Suspend/Delete My Account" (was "Delete Account & Data").
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v0.20 (2026-08-28)
 //
 // v0.20 changes (2026-08-28) — Depot Assistant: lean, on-topic context:
@@ -994,7 +1014,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.25';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v0.26';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
