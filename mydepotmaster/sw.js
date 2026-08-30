@@ -25,6 +25,36 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.0.0 (2026-08-30)
+//
+// v0.0.0 changes (2026-08-30) — Versioning scheme reset:
+//   - Switched from the flat "v0.NN" counter to a three-segment "x.y.z"
+//     scheme, each group capped at 10 (0-9) before rolling over to the
+//     next — e.g. v0.0.9 → v0.1.0, v0.9.9 → v1.0.0. Reset to v0.0.0 to
+//     start the new scheme; no functional changes in this bump.
+//
+// v0.29 changes (2026-08-30) — Bulk Edit Work Logs: per-record editing:
+//   - The "Bulk Edit Work Logs" modal now lists every selected record as
+//     its own row (Staff · Task · Date, plus editable Date/Qty/Deduction/
+//     Reason/Notes), pre-filled with that record's current values — so you
+//     can tweak individual logs, not just apply one shared value to all.
+//   - The "same for all" tick-a-field controls at the top still work as
+//     before: ticking a field there overrides that field on every row,
+//     regardless of what's typed into the individual rows. Leave it
+//     unticked to use each row's own (possibly edited) value instead.
+//   - Earnings are recalculated per record from its own qty and task rate,
+//     whichever qty source (bulk or individual) applied to it.
+//
+// Current version: v0.28 (2026-08-30)
+//
+// v0.28 changes (2026-08-30) — Bulk Edit Work Logs, more fields:
+//   - The "Bulk Edit Work Logs" modal (Staff → work log table → select rows →
+//     Edit Selected) previously only let you change Date. It now also
+//     supports: Quantity (earnings are recalculated per record using that
+//     record's own task rate — so mixed-task selections stay correct),
+//     Deduction, Deduction Reason, and Notes. Same as before, only ticked
+//     fields are applied; unticked fields are left as-is on each record.
+//
 // Current version: v0.27 (2026-08-30)
 //
 // v0.27 changes (2026-08-30) — Suspend/Reactivate Account:
@@ -1029,7 +1059,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.27';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v0.0.0';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
