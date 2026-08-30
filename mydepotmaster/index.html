@@ -8467,8 +8467,6 @@ function bulkBarHtml(tid,editFn,delFn){
 }
 // Reads bulkedit-chk-<key> / bulkedit-<key> pairs from an open bulk-edit modal.
 // Returns a patch object of only the ticked fields, or null if none were ticked.
-// Reads bulkedit-chk-<key> / bulkedit-<key> pairs from an open bulk-edit modal.
-// Returns a patch object of only the ticked fields, or null if none were ticked.
 function _bulkFieldPatch(fieldKeys){
   const patch={};
   let any=false;
@@ -8503,6 +8501,13 @@ function _bulkOverrideFieldHtml(key,label,inputHtml){
 }
 // Reads a per-row input's value for a given field class + record id.
 function _bulkRowVal(cls,id){return document.querySelector(`.${cls}[data-id="${id}"]`)?.value;}
+// Shared item-name option list for General Inventory Received/Issued row selects.
+function _invNameOpts(selected){
+  const defined=(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean);
+  const fromData=[...new Set((DATA.generalInventory||[]).map(x=>x.itemName))];
+  const allNames=[...new Set([...defined,...fromData])].sort();
+  return allNames.map(n=>`<option value="${n}"${n===selected?' selected':''}>${n}</option>`).join('');
+}
 // ── Bulk Edit: General Inventory Received ─────────────────────────────────
 function openBulkEditGenRec(){
   const ids=[...bulkSet('gen-inv-table')];
@@ -8513,10 +8518,25 @@ function openBulkEditGenRec(){
   requireAdminPassword(`edit ${ids.length} receive record(s)`,()=>_doOpenBulkEditGenRec(recs));
 }
 function _genRecRowHtml(r){
+  const sups=(DATA.contacts||[]).filter(c=>c.type==='supplier');
+  const supHtml=sups.length>0
+    ?`<select class="fi bel-supplierId" data-id="${r.id}"><option value="">— None / Unknown —</option>${sups.map(s=>`<option value="${s.id}"${s.id===r.supplierId?' selected':''}>${esc(s.name)}</option>`).join('')}</select>`
+    :`<input class="fi bel-supplierName" data-id="${r.id}" value="${esc(r.supplierName||'')}" placeholder="SUPPLIER NAME (optional)" oninput="this.value=this.value.toUpperCase()"/>`;
   return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
     <div style="font-weight:700;margin-bottom:8px">${esc(r.itemName)} · ${Number(r.received||0).toLocaleString()} units · ${fmtDate(r.date)}</div>
-    <div class="fw"><div class="fl">Date</div><input class="fi bel-date" type="date" data-id="${r.id}" value="${r.date||''}"/></div>
+    <div class="fw"><div class="fl">Item Name</div><select class="fi bel-itemName" data-id="${r.id}">${_invNameOpts(r.itemName)}</select></div>
+    <div class="twobox">
+      <div class="fw"><div class="fl">Qty Received</div><input class="fi bel-received" type="number" data-id="${r.id}" value="${r.received!=null?r.received:0}" inputmode="numeric"/></div>
+      <div class="fw"><div class="fl">Good Qty</div><input class="fi bel-good" type="number" data-id="${r.id}" value="${r.good!=null?r.good:0}" inputmode="numeric"/></div>
+    </div>
+    <div class="fw"><div class="fl">Damaged Qty</div><input class="fi bel-damaged" type="number" data-id="${r.id}" value="${r.damaged!=null?r.damaged:0}" inputmode="numeric"/></div>
+    <div class="fw"><div class="fl">Purchase Price (${cur()} per unit)</div><input class="fi bel-purchasePrice" type="number" data-id="${r.id}" value="${r.purchasePrice||0}" step="0.01" inputmode="decimal"/></div>
     <div class="fw"><div class="fl">Condition / Status</div><select class="fi bel-condition" data-id="${r.id}"><option value="good"${r.condition==='good'?' selected':''}>GOOD</option><option value="damaged"${r.condition==='damaged'?' selected':''}>DAMAGED (SOME)</option><option value="all-damaged"${r.condition==='all-damaged'?' selected':''}>ALL DAMAGED</option><option value="rejected"${r.condition==='rejected'?' selected':''}>❌ REJECTED</option></select></div>
+    <div class="fw"><div class="fl">Rejection Reason</div><input class="fi bel-rejectionReason" data-id="${r.id}" value="${esc(r.rejectionReason||'')}" placeholder="REJECTION REASON…" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div class="fw"><div class="fl">Date</div><input class="fi bel-date" type="date" data-id="${r.id}" value="${r.date||''}"/></div>
+    <div class="fw"><div class="fl">Best-Before / Expiry Date</div><input class="fi bel-expiryDate" type="date" data-id="${r.id}" value="${r.expiryDate||''}"/></div>
+    <div class="fw"><div class="fl">Notes</div><input class="fi bel-notes" data-id="${r.id}" value="${esc(r.notes||'')}" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div class="fw"><div class="fl">Supplier</div>${supHtml}</div>
     <div class="fw" style="margin-bottom:0"><div class="fl">Purchase Payment Status</div><select class="fi bel-creditStatus" data-id="${r.id}"><option value="paid"${r.creditStatus==='paid'?' selected':''}>✅ PAID</option><option value="partial"${r.creditStatus==='partial'?' selected':''}>🔶 PARTIAL</option><option value="credit"${r.creditStatus==='credit'?' selected':''}>🔴 CREDIT</option></select></div>
   </div>`;
 }
@@ -8526,7 +8546,7 @@ function _doOpenBulkEditGenRec(recs){
   const rowsHtml=recs.map(_genRecRowHtml).join('');
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Received (${n})</div>
-    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below.</div>
+    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below (every field from the receive form is editable there).</div>
     ${_bulkOverrideFieldHtml('date','Date',`<input class="fi" type="date" id="bulkedit-date" disabled/>`)}
     ${_bulkOverrideFieldHtml('condition','Condition / Status',`<select class="fi" id="bulkedit-condition" disabled><option value="good">GOOD</option><option value="damaged">DAMAGED (SOME)</option><option value="all-damaged">ALL DAMAGED</option><option value="rejected">❌ REJECTED</option></select>`)}
     ${_bulkOverrideFieldHtml('creditStatus','Purchase Payment Status',`<select class="fi" id="bulkedit-creditStatus" disabled><option value="paid">✅ PAID</option><option value="partial">🔶 PARTIAL</option><option value="credit">🔴 CREDIT</option></select>`)}
@@ -8546,14 +8566,32 @@ function saveBulkEditGenRec(){
   const recs=(DATA.generalInventory||[]).filter(x=>ids.includes(String(x.id)));
   if(!recs.length)return;
   recs.forEach(r=>logAuditEvent('EDIT','Inventory Received',`ID:${r.id} · Item:${r.itemName} · Bulk edit`,r));
-  updateData(d=>({...d,generalInventory:d.generalInventory.map(x=>{
-    const id=String(x.id);
-    if(!ids.includes(id))return x;
-    const date=chkDate?bulkDate:(_bulkRowVal('bel-date',id)||x.date);
-    const condition=chkCond?bulkCond:(_bulkRowVal('bel-condition',id)||x.condition);
-    const creditStatus=chkCredit?bulkCredit:(_bulkRowVal('bel-creditStatus',id)||x.creditStatus);
-    return{...x,date,condition,creditStatus};
-  })}));
+  updateData(d=>{
+    const prices={...(d.inventoryPrices||{})};
+    const generalInventory=d.generalInventory.map(x=>{
+      const id=String(x.id);
+      if(!ids.includes(id))return x;
+      const itemName=uc(_bulkRowVal('bel-itemName',id))||x.itemName;
+      const received=Number(_bulkRowVal('bel-received',id)||0);
+      const good=Number(_bulkRowVal('bel-good',id)||0);
+      const damaged=Number(_bulkRowVal('bel-damaged',id)||0);
+      const purchasePrice=Number(_bulkRowVal('bel-purchasePrice',id)||0);
+      const condition=chkCond?bulkCond:_bulkRowVal('bel-condition',id);
+      const rejectionReason=uc(_bulkRowVal('bel-rejectionReason',id)||'');
+      const date=chkDate?bulkDate:_bulkRowVal('bel-date',id);
+      const expiryDate=_bulkRowVal('bel-expiryDate',id)||'';
+      const notes=uc(_bulkRowVal('bel-notes',id)||'');
+      const supSelVal=_bulkRowVal('bel-supplierId',id);
+      const supInputVal=_bulkRowVal('bel-supplierName',id);
+      let supplierId=x.supplierId||'', supplierName=x.supplierName||'';
+      if(supSelVal!=null){supplierId=supSelVal;const c=(DATA.contacts||[]).find(cc=>cc.id===supSelVal);supplierName=c?c.name:'';}
+      else if(supInputVal!=null){supplierId='';supplierName=uc(supInputVal);}
+      const creditStatus=chkCredit?bulkCredit:_bulkRowVal('bel-creditStatus',id);
+      if(purchasePrice>0)prices[itemName]={...(prices[itemName]||{}),purchasePrice};
+      return{...x,itemName,received,good,damaged,purchasePrice,condition,rejectionReason,date,expiryDate,notes,supplierId,supplierName,creditStatus};
+    });
+    return{...d,generalInventory,inventoryPrices:prices};
+  });
   bulkClear('gen-inv-table');
   window._bulkEditGenRecIds=null;
   closeModal();
@@ -8571,8 +8609,13 @@ function openBulkEditGenIss(){
 function _genIssRowHtml(r){
   return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
     <div style="font-weight:700;margin-bottom:8px">${esc(r.itemName)} · ${Number(r.issued||0).toLocaleString()} units · ${fmtDate(r.date)}</div>
+    <div class="fw"><div class="fl">Item Name</div><select class="fi bel-itemName" data-id="${r.id}">${_invNameOpts(r.itemName)}</select></div>
+    <div class="fw"><div class="fl">Qty Issued</div><input class="fi bel-issued" type="number" data-id="${r.id}" value="${r.issued!=null?r.issued:0}" inputmode="numeric"/></div>
+    <div class="fw"><div class="fl">Selling Price (${cur()} per unit)</div><input class="fi bel-sellingPrice" type="number" data-id="${r.id}" value="${r.sellingPrice||0}" step="0.01" inputmode="decimal"/></div>
     <div class="fw"><div class="fl">Date</div><input class="fi bel-date" type="date" data-id="${r.id}" value="${r.date||''}"/></div>
-    <div class="fw" style="margin-bottom:0"><div class="fl">Payment Status</div><select class="fi bel-creditStatus" data-id="${r.id}"><option value="paid"${r.creditStatus==='paid'?' selected':''}>✅ PAID</option><option value="partial"${r.creditStatus==='partial'?' selected':''}>🔶 PARTIAL</option><option value="credit"${r.creditStatus==='credit'?' selected':''}>🔴 CREDIT</option></select></div>
+    <div class="fw"><div class="fl">Notes</div><input class="fi bel-notes" data-id="${r.id}" value="${esc(r.notes||'')}" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div class="fw"><div class="fl">Payment Status</div><select class="fi bel-creditStatus" data-id="${r.id}"><option value="paid"${r.creditStatus==='paid'?' selected':''}>✅ PAID</option><option value="partial"${r.creditStatus==='partial'?' selected':''}>🔶 PARTIAL</option><option value="credit"${r.creditStatus==='credit'?' selected':''}>🔴 CREDIT</option></select></div>
+    <div class="fw" style="margin-bottom:0"><div class="fl">Amount Paid (${cur()} — for partial)</div><input class="fi bel-partialPaid" type="number" data-id="${r.id}" value="${r.partialPaid||0}" step="0.01" inputmode="decimal"/></div>
   </div>`;
 }
 function _doOpenBulkEditGenIss(recs){
@@ -8581,7 +8624,7 @@ function _doOpenBulkEditGenIss(recs){
   const rowsHtml=recs.map(_genIssRowHtml).join('');
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Issued (${n})</div>
-    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below.</div>
+    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below (every field from the issue form is editable there).</div>
     ${_bulkOverrideFieldHtml('date','Date',`<input class="fi" type="date" id="bulkedit-date" disabled/>`)}
     ${_bulkOverrideFieldHtml('creditStatus','Payment Status',`<select class="fi" id="bulkedit-creditStatus" disabled><option value="paid">✅ PAID</option><option value="partial">🔶 PARTIAL</option><option value="credit">🔴 CREDIT</option></select>`)}
     <div class="sh" style="margin-top:14px">Or edit each record individually</div>
@@ -8598,13 +8641,23 @@ function saveBulkEditGenIss(){
   const recs=(DATA.generalIssued||[]).filter(x=>ids.includes(String(x.id)));
   if(!recs.length)return;
   recs.forEach(r=>logAuditEvent('EDIT','Inventory Issued',`ID:${r.id} · Item:${r.itemName} · Bulk edit`,r));
-  updateData(d=>({...d,generalIssued:d.generalIssued.map(x=>{
-    const id=String(x.id);
-    if(!ids.includes(id))return x;
-    const date=chkDate?bulkDate:(_bulkRowVal('bel-date',id)||x.date);
-    const creditStatus=chkCredit?bulkCredit:(_bulkRowVal('bel-creditStatus',id)||x.creditStatus);
-    return{...x,date,creditStatus};
-  })}));
+  updateData(d=>{
+    const prices={...(d.inventoryPrices||{})};
+    const generalIssued=d.generalIssued.map(x=>{
+      const id=String(x.id);
+      if(!ids.includes(id))return x;
+      const itemName=uc(_bulkRowVal('bel-itemName',id))||x.itemName;
+      const issued=Number(_bulkRowVal('bel-issued',id)||0);
+      const sellingPrice=Number(_bulkRowVal('bel-sellingPrice',id)||0);
+      const date=chkDate?bulkDate:_bulkRowVal('bel-date',id);
+      const notes=uc(_bulkRowVal('bel-notes',id)||'');
+      const creditStatus=chkCredit?bulkCredit:_bulkRowVal('bel-creditStatus',id);
+      const partialPaid=Number(_bulkRowVal('bel-partialPaid',id)||0);
+      if(sellingPrice>0)prices[itemName]={...(prices[itemName]||{}),sellingPrice};
+      return{...x,itemName,issued,sellingPrice,date,notes,creditStatus,partialPaid};
+    });
+    return{...d,generalIssued,inventoryPrices:prices};
+  });
   bulkClear('gen-iss-table');
   window._bulkEditGenIssIds=null;
   closeModal();
@@ -8623,6 +8676,9 @@ function openBulkEditMaizeRec(){
 function _maizeRecRowHtml(r){
   return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
     <div style="font-weight:700;margin-bottom:8px">${esc(r.batchName)} · ${Number(r.received||0).toLocaleString()} · ${fmtDate(r.date)}</div>
+    <div class="fw"><div class="fl">Batch Name</div><input class="fi bel-batchName" data-id="${r.id}" value="${esc(r.batchName||'')}" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div class="fw"><div class="fl">Qty Received</div><input class="fi bel-received" type="number" data-id="${r.id}" value="${r.received!=null?r.received:0}" inputmode="numeric"/></div>
+    <div class="fw"><div class="fl">Unit Price (${cur()})</div><input class="fi bel-unitPrice" type="number" data-id="${r.id}" value="${r.unitPrice||0}" step="0.01" inputmode="decimal"/></div>
     <div class="fw" style="margin-bottom:0"><div class="fl">Date</div><input class="fi bel-date" type="date" data-id="${r.id}" value="${r.date||''}"/></div>
   </div>`;
 }
@@ -8632,7 +8688,7 @@ function _doOpenBulkEditMaizeRec(recs){
   const rowsHtml=recs.map(_maizeRecRowHtml).join('');
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Received (${n})</div>
-    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below.</div>
+    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below (every field from the receive form is editable there).</div>
     ${_bulkOverrideFieldHtml('date','Date',`<input class="fi" type="date" id="bulkedit-date" disabled/>`)}
     <div class="sh" style="margin-top:14px">Or edit each record individually</div>
     <div style="max-height:38vh;overflow-y:auto;padding-right:4px">${rowsHtml}</div>
@@ -8650,8 +8706,11 @@ function saveBulkEditMaizeRec(){
   updateData(d=>{const cr={...(d.commodityReceived||{})};cr[cid]=(cr[cid]||[]).map(x=>{
     const id=String(x.id);
     if(!ids.includes(id))return x;
-    const date=chkDate?bulkDate:(_bulkRowVal('bel-date',id)||x.date);
-    return{...x,date};
+    const batchName=uc(_bulkRowVal('bel-batchName',id))||x.batchName;
+    const received=Number(_bulkRowVal('bel-received',id)||0);
+    const unitPrice=Number(_bulkRowVal('bel-unitPrice',id)||0);
+    const date=chkDate?bulkDate:_bulkRowVal('bel-date',id);
+    return{...x,batchName,received,unitPrice,date};
   });return{...d,commodityReceived:cr};});
   bulkClear('maize-rec-table');
   window._bulkEditMaizeRecIds=null;
@@ -8669,10 +8728,18 @@ function openBulkEditMaizeIss(){
   requireAdminPassword(`edit ${ids.length} issue record(s)`,()=>_doOpenBulkEditMaizeIss(recs));
 }
 function _maizeIssRowHtml(r){
+  const cid=CCOM;
+  const batches=[...new Set(cRec(cid).map(x=>x.batchName))];
+  const batchOpts=batches.map(b=>`<option value="${b}"${b===r.batchName?' selected':''}>${b}</option>`).join('');
   return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
     <div style="font-weight:700;margin-bottom:8px">${esc(r.batchName)} · ${Number(r.issued||0).toLocaleString()} · ${fmtDate(r.date)}</div>
+    <div class="fw"><div class="fl">Batch</div><select class="fi bel-batchName" data-id="${r.id}">${batchOpts}</select></div>
+    <div class="fw"><div class="fl">Transporter</div><input class="fi bel-transporter" data-id="${r.id}" value="${esc(r.transporter||'')}" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div class="fw"><div class="fl">Qty Issued</div><input class="fi bel-issued" type="number" data-id="${r.id}" value="${r.issued!=null?r.issued:0}" inputmode="numeric"/></div>
+    <div class="fw"><div class="fl">Sale Price (${cur()})</div><input class="fi bel-salePrice" type="number" data-id="${r.id}" value="${r.salePrice||0}" step="0.01" inputmode="decimal"/></div>
     <div class="fw"><div class="fl">Date</div><input class="fi bel-date" type="date" data-id="${r.id}" value="${r.date||''}"/></div>
-    <div class="fw" style="margin-bottom:0"><div class="fl">Payment Status</div><select class="fi bel-creditStatus" data-id="${r.id}"><option value="paid"${r.creditStatus==='paid'?' selected':''}>✅ PAID</option><option value="partial"${r.creditStatus==='partial'?' selected':''}>🔶 PARTIAL</option><option value="credit"${r.creditStatus==='credit'?' selected':''}>🔴 CREDIT</option></select></div>
+    <div class="fw"><div class="fl">Payment Status</div><select class="fi bel-creditStatus" data-id="${r.id}"><option value="paid"${r.creditStatus==='paid'?' selected':''}>✅ PAID</option><option value="partial"${r.creditStatus==='partial'?' selected':''}>🔶 PARTIAL</option><option value="credit"${r.creditStatus==='credit'?' selected':''}>🔴 CREDIT</option></select></div>
+    <div class="fw" style="margin-bottom:0"><div class="fl">Amount Paid (${cur()} — for partial)</div><input class="fi bel-partialPaid" type="number" data-id="${r.id}" value="${r.partialPaid||0}" step="0.01" inputmode="decimal"/></div>
   </div>`;
 }
 function _doOpenBulkEditMaizeIss(recs){
@@ -8681,7 +8748,7 @@ function _doOpenBulkEditMaizeIss(recs){
   const rowsHtml=recs.map(_maizeIssRowHtml).join('');
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Issued (${n})</div>
-    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below.</div>
+    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below (every field from the issue form is editable there).</div>
     ${_bulkOverrideFieldHtml('date','Date',`<input class="fi" type="date" id="bulkedit-date" disabled/>`)}
     ${_bulkOverrideFieldHtml('creditStatus','Payment Status',`<select class="fi" id="bulkedit-creditStatus" disabled><option value="paid">✅ PAID</option><option value="partial">🔶 PARTIAL</option><option value="credit">🔴 CREDIT</option></select>`)}
     <div class="sh" style="margin-top:14px">Or edit each record individually</div>
@@ -8702,9 +8769,14 @@ function saveBulkEditMaizeIss(){
   updateData(d=>{const ci={...(d.commodityIssued||{})};ci[cid]=(ci[cid]||[]).map(x=>{
     const id=String(x.id);
     if(!ids.includes(id))return x;
-    const date=chkDate?bulkDate:(_bulkRowVal('bel-date',id)||x.date);
-    const creditStatus=chkCredit?bulkCredit:(_bulkRowVal('bel-creditStatus',id)||x.creditStatus);
-    return{...x,date,creditStatus};
+    const batchName=_bulkRowVal('bel-batchName',id)||x.batchName;
+    const transporter=uc(_bulkRowVal('bel-transporter',id));
+    const issued=Number(_bulkRowVal('bel-issued',id)||0);
+    const salePrice=Number(_bulkRowVal('bel-salePrice',id)||0);
+    const date=chkDate?bulkDate:_bulkRowVal('bel-date',id);
+    const creditStatus=chkCredit?bulkCredit:_bulkRowVal('bel-creditStatus',id);
+    const partialPaid=Number(_bulkRowVal('bel-partialPaid',id)||0);
+    return{...x,batchName,transporter,issued,salePrice,date,creditStatus,partialPaid};
   });return{...d,commodityIssued:ci};});
   bulkClear('maize-iss-table');
   window._bulkEditMaizeIssIds=null;
@@ -8730,7 +8802,7 @@ function _staffLogRowHtml(log){
     <div style="font-weight:700;margin-bottom:8px">${esc(staff?staff.name:'Unknown')} · ${esc(log.task||'')} · ${fmtDate(log.date)}</div>
     <div class="twobox">
       <div class="fw"><div class="fl">Date</div><input class="fi bel-date" type="date" data-id="${log.id}" value="${log.date||''}"/></div>
-      <div class="fw"><div class="fl">Qty</div><input class="fi bel-qty" type="number" data-id="${log.id}" value="${qty}" inputmode="decimal" step="0.01"/></div>
+      <div class="fw"><div class="fl">Qty</div><input class="fi bel-qty" type="number" data-id="${log.id}" value="${qty!=null?qty:''}" inputmode="decimal" step="0.01"/></div>
     </div>
     <div class="twobox">
       <div class="fw"><div class="fl">Deduction (${cur()})</div><input class="fi bel-deduction" type="number" data-id="${log.id}" value="${log.deduction||0}" inputmode="decimal"/></div>
