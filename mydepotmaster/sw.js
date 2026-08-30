@@ -25,6 +25,21 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.27 (2026-08-30)
+//
+// v0.27 changes (2026-08-30) — Suspend/Reactivate Account:
+//   - Settings → Data & Backup → My Account redesigned: header is now plain
+//     "My Account" (not red), and the permanent-delete warning is no longer
+//     shown by default. Two buttons sit side by side: "⏸ Suspend My Account"
+//     and "🗑 Delete My Account" — each opens its own warning modal (with
+//     admin password confirmation) only when tapped.
+//   - New reversible "Suspend My Account" action: locks the entire app
+//     read-only for everyone (including Admin) via the existing license
+//     read-only banner/mode, without touching any data. Only an Admin can
+//     reactivate it, from the same My Account screen ("▶ Reactivate My
+//     Account"), which is exempted from the readonly button-lock so it's
+//     never permanently stuck.
+//
 // Current version: v0.26 (2026-08-30)
 //
 // v0.26 changes (2026-08-30) — Settings now require admin password on every change:
@@ -1014,7 +1029,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.26';   // ← bump this whenever you deploy a new version
+const CACHE     = 'v0.27';   // ← bump this whenever you deploy a new version
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

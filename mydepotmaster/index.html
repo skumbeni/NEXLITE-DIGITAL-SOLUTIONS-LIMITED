@@ -529,7 +529,7 @@ select.fi option{text-transform:uppercase;}
 #license-banner .lb-text{flex:1;font-size:16px;color:var(--amber);font-weight:600;line-height:1.4;}
 #license-banner .lb-tag{background:var(--amber);color:#060d18;border-radius:6px;padding:2px 8px;font-size:14px;font-weight:800;letter-spacing:.6px;flex-shrink:0;}
 body.readonly-mode #main-area{padding-top:52px;}
-body.readonly-mode .btn.bg,body.readonly-mode .btn.ba,body.readonly-mode .btn.br,body.readonly-mode .btn.bo[id^="btn-add"],body.readonly-mode button[id^="btn-add"],body.readonly-mode button[id^="btn-log"],body.readonly-mode button[id^="btn-pay"]{pointer-events:none;opacity:.35;filter:grayscale(1);}
+body.readonly-mode .btn.bg:not(#admpw-btn),body.readonly-mode .btn.ba,body.readonly-mode .btn.br,body.readonly-mode .btn.bo[id^="btn-add"],body.readonly-mode button[id^="btn-add"],body.readonly-mode button[id^="btn-log"],body.readonly-mode button[id^="btn-pay"]{pointer-events:none;opacity:.35;filter:grayscale(1);}
 /* Trial warning banner (top strip) */
 #trial-banner{position:fixed;top:0;left:0;right:0;z-index:800;background:rgba(139,92,246,.06);border-bottom:1px solid rgba(139,92,246,.2);padding:7px 16px;display:none;align-items:center;gap:8px;max-width:480px;margin:0 auto;backdrop-filter:blur(8px);}
 #trial-banner .tb-text{flex:1;font-size:16px;color:var(--purple);font-weight:600;line-height:1.4;}
@@ -3094,7 +3094,8 @@ document.addEventListener('visibilitychange',()=>{
 });
 
 function applyLicenseMode() {
-  const eff = LICENSE.effectiveStatus || LICENSE.status || 'active';
+  const selfSusp = isSelfSuspended();
+  const eff = selfSusp ? 'self_suspended' : (LICENSE.effectiveStatus || LICENSE.status || 'active');
   const banner   = document.getElementById('license-banner');
   const lbIcon   = document.getElementById('lb-icon');
   const lbTag    = document.getElementById('lb-tag');
@@ -3117,7 +3118,15 @@ function applyLicenseMode() {
   if (lbIcon) lbIcon.textContent = '🔒';
   if (lbTag)  { lbTag.textContent = 'READ ONLY'; lbTag.style.background = ''; }
 
-  if (eff === 'pending_approval') {
+  if (eff === 'self_suspended') {
+    document.body.classList.add('readonly-mode');
+    if (banner) banner.style.display = 'flex';
+    if (lbIcon) lbIcon.textContent = '⏸';
+    if (lbTag)  { lbTag.textContent = 'SUSPENDED'; lbTag.style.background = 'var(--amber)'; }
+    const susBy = (DATA.depotInfo||{}).selfSuspendedBy;
+    if (msg) msg.textContent = `This account was suspended${susBy?' by '+susBy:''}. An Admin can reactivate it in Settings → Data & Backup → My Account.`;
+
+  } else if (eff === 'pending_approval') {
     if (bsIcon)  bsIcon.textContent  = '⏳';
     if (bsTitle) bsTitle.textContent = 'Awaiting Approval';
     if (bsMsg)   bsMsg.innerHTML     = 'Your company is <strong style="color:var(--amber)">pending admin approval</strong>.<br><br>You will be activated shortly. Please contact the developer to follow up.';
@@ -3201,11 +3210,21 @@ function applyLicenseMode() {
 // a console attacker would need to call applyLicenseMode() with a fresh object — but
 // checkLicense() always re-fetches from Firebase first.
 function isReadOnly() {
+  if (isSelfSuspended()) return true;
   const eff = LICENSE.effectiveStatus || LICENSE.status || 'active';
   // Read-only only for terminal states: pending approval, suspended, and the 3-day
   // grace countdown banners. trial_expired and expired now degrade silently to the
   // free tier (full data entry, feature-gated) rather than blocking the app.
   return ['pending_approval','suspended','trial_grace','expired_grace'].includes(eff);
+}
+
+// ── SELF-SUSPEND (Admin-initiated pause, distinct from license 'suspended') ──
+// Locally controlled — set/cleared by the depot's own Admin via Settings →
+// Data & Backup → My Account. Locks the whole app read-only for everyone
+// (including Admin) until an Admin reactivates it from the same screen.
+// Data is never touched — this only flips a flag on depotInfo.
+function isSelfSuspended(){
+  return !!((DATA.depotInfo||{}).selfSuspended);
 }
 
 // ── TIER HELPERS ─────────────────────────────────────────────────────────────
@@ -3724,7 +3743,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.26';
+const SW_VERSION  = 'v0.27';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -14305,10 +14324,17 @@ function _renderAdminSettings(){
       <div style="margin-top:10px"></div>
       <button class="btn bo" onclick="showPrivacyPolicy()" style="width:100%">🔒 View Privacy Policy</button>
     </div>
-    <div class="sh" style="color:var(--red)">My Account</div>
-    <div class="card" style="border:1px solid rgba(220,38,38,.3);background:rgba(220,38,38,.04)">
-      <div style="font-size:18px;color:var(--muted);line-height:1.7;margin-bottom:12px">Permanently delete this company account and all associated data. <strong style="color:var(--red)">This cannot be undone.</strong></div>
-      <button class="btn" style="width:100%;background:transparent;border:1.5px solid var(--red);color:var(--red);font-weight:700;white-space:normal;line-height:1.3;min-height:48px;height:auto" onclick="deleteAccountStep1()">🗑 Suspend/Delete My Account</button>
+    <div class="sh">My Account</div>
+    <div class="card">
+      ${isSelfSuspended() ? `
+      <div style="font-size:17px;color:var(--amber);line-height:1.8;margin-bottom:12px">⏸ This account is currently <strong>suspended</strong>${(DATA.depotInfo||{}).selfSuspendedBy?' by '+esc((DATA.depotInfo||{}).selfSuspendedBy):''}. The app is read-only for everyone until reactivated.</div>
+      <button class="btn bo" style="width:100%;border-color:var(--green);color:var(--green)" onclick="reactivateAccountStep1()">▶ Reactivate My Account</button>
+      ` : `
+      <div style="display:flex;gap:8px">
+        <button class="btn bo" style="flex:1;font-weight:700;white-space:normal;line-height:1.3;min-height:48px;height:auto" onclick="suspendAccountStep1()">⏸ Suspend My Account</button>
+        <button class="btn" style="flex:1;background:transparent;border:1.5px solid var(--red);color:var(--red);font-weight:700;white-space:normal;line-height:1.3;min-height:48px;height:auto" onclick="deleteAccountStep1()">🗑 Delete My Account</button>
+      </div>
+      `}
     </div>
     <div style="text-align:center;padding:12px 0 4px;font-size:16px;color:var(--muted)">My Depot Master · © ${new Date().getFullYear()} NEXLITE-DIGITAL-SOLUTIONS-LIMITED · General Purpose Business Management Software</div>
     <div style="height:60px"></div>`;
@@ -14359,6 +14385,49 @@ function showPrivacyPolicy(){
 
 // ── DELETE ACCOUNT FLOW (Fix 21) ─────────────────────────────────────────────
 // Step 1: Emotional retention screen — what they'll lose
+// ── SUSPEND / REACTIVATE — reversible pause, distinct from permanent delete ──
+function suspendAccountStep1(){
+  if(!requireAdmin('suspend this company account'))return;
+  openModal(`
+    <div class="mtitle" style="color:var(--amber)">⏸ Suspend Account</div>
+    <div style="font-size:17px;color:var(--muted);line-height:1.85">
+      <div style="text-align:center;font-size:41px;margin:8px 0 4px">⏸</div>
+      <div style="text-align:center;font-size:19px;font-weight:700;color:var(--white);margin-bottom:10px">This locks the app for everyone.</div>
+      <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:17px;color:var(--amber);line-height:1.8">
+        • No one — including you — can add, edit, or delete records while suspended.<br>
+        • All company data stays exactly as it is. Nothing is deleted.<br>
+        • Only an Admin can reactivate it, from Settings → Data &amp; Backup → My Account.
+      </div>
+      <div style="font-size:17px;color:var(--muted)">This is fully reversible — unlike deleting your account.</div>
+    </div>
+    <div class="mact" style="flex-direction:column;gap:8px">
+      <button class="btn bg" style="width:100%" onclick="closeModal()">Cancel</button>
+      <button class="btn" style="width:100%;background:transparent;border:1px solid rgba(245,158,11,.5);color:var(--amber)" onclick="suspendAccountStep2()">Yes, Suspend Account</button>
+    </div>`,true);
+}
+function suspendAccountStep2(){
+  requireAdminPassword('suspend this company account', ()=>{
+    const who=(USER||{}).username||'';
+    updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),selfSuspended:true,selfSuspendedAt:Date.now(),selfSuspendedBy:who}}));
+    logAuditEvent('SUSPEND','Company Account',`Suspended by ${who}`);
+    applyLicenseMode();
+    closeModal();
+    showToast('⏸ Account suspended. Only an Admin can reactivate it.');
+  });
+}
+function reactivateAccountStep1(){
+  if(!requireAdmin('reactivate this company account'))return;
+  if(!confirm('Reactivate this account and restore full access for everyone?'))return;
+  requireAdminPassword('reactivate this company account', ()=>{
+    const who=(USER||{}).username||'';
+    updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),selfSuspended:false,selfSuspendedAt:null,selfSuspendedBy:''}}));
+    logAuditEvent('REACTIVATE','Company Account',`Reactivated by ${who}`);
+    applyLicenseMode();
+    closeModal();
+    showToast('✅ Account reactivated.');
+  });
+}
+
 function deleteAccountStep1(){
   if(!requireAdmin('delete this company account'))return;
   const rec = (DATA.inventory||[]).length + (DATA.issued||[]).length;
