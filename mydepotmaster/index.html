@@ -15733,6 +15733,45 @@ function applyFontSize(pct){
   document.querySelectorAll('.fs-dec').forEach(btn => { btn.disabled = (pct <= FS_MIN); });
   document.querySelectorAll('.fs-inc').forEach(btn => { btn.disabled = (pct >= FS_MAX); });
 }
+
+// ── FIX: native date-picker taps swallowed by CSS zoom ──────────────────────
+// Chrome positions/hit-tests the native <input type="date"> calendar popup
+// against the UNSCALED layout box of its ancestors. Since #main-area (and co.)
+// are visually scaled via the CSS `zoom` property above (default 115%, not
+// 100%), the calendar renders fine but taps on day numbers land on the wrong
+// underlying coordinates and silently do nothing. Fix: whenever a date input
+// gains focus (i.e. its picker is about to open), snap the zoom targets to
+// 100% for the duration, then restore the user's real zoom level once the
+// picker closes (blur).
+(function(){
+  const ZOOM_TARGETS=['main-area','landing-screen','login-screen','recovery-screen'];
+  let _zoomSuspended=false;
+  function suspendZoomForDatePicker(){
+    if(_zoomSuspended) return;
+    _zoomSuspended=true;
+    ZOOM_TARGETS.forEach(id=>{
+      const el=document.getElementById(id);
+      if(el) el.style.zoom=1;
+    });
+  }
+  function restoreZoomAfterDatePicker(){
+    if(!_zoomSuspended) return;
+    _zoomSuspended=false;
+    const pct=getFontSize();
+    ZOOM_TARGETS.forEach(id=>{
+      const el=document.getElementById(id);
+      if(el) el.style.zoom=pct/100;
+    });
+  }
+  document.addEventListener('focusin', e=>{
+    const t=e.target;
+    if(t && t.tagName==='INPUT' && (t.type==='date' || t.type==='datetime-local' || t.type==='month')) suspendZoomForDatePicker();
+  });
+  document.addEventListener('focusout', e=>{
+    const t=e.target;
+    if(t && t.tagName==='INPUT' && (t.type==='date' || t.type==='datetime-local' || t.type==='month')) restoreZoomAfterDatePicker();
+  });
+})();
 function changeFontSize(delta){
   let cur=getFontSize();
   cur=Math.min(FS_MAX,Math.max(FS_MIN,cur+delta));
