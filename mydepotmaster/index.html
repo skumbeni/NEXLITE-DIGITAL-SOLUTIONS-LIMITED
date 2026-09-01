@@ -4693,13 +4693,11 @@ function pBtns(tab){
   const dr=DATE_RANGE[tab]||{};
   const rangeInputs=PERIOD[tab]==='range'?`
     <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;align-items:center">
-      <input type="date" value="${dr.from||''}" max="${today()}"
-        style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:5px 8px;color:var(--text);font-size:17px;flex:1;min-width:120px"
-        onchange="setDateRange('${tab}','from',this.value)"/>
+      <button type="button" onclick="openMiniDatePicker(this,'${dr.from||''}','${today()}',iso=>setDateRange('${tab}','from',iso))"
+        style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:5px 8px;color:var(--text);font-size:17px;flex:1;min-width:120px;text-align:left;cursor:pointer">${_mdpDisp(dr.from)}</button>
       <span style="color:var(--muted);font-size:17px">→</span>
-      <input type="date" value="${dr.to||''}" max="${today()}"
-        style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:5px 8px;color:var(--text);font-size:17px;flex:1;min-width:120px"
-        onchange="setDateRange('${tab}','to',this.value)"/>
+      <button type="button" onclick="openMiniDatePicker(this,'${dr.to||''}','${today()}',iso=>setDateRange('${tab}','to',iso))"
+        style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:5px 8px;color:var(--text);font-size:17px;flex:1;min-width:120px;text-align:left;cursor:pointer">${_mdpDisp(dr.to)}</button>
     </div>`:'';
   return ['daily','weekly','monthly','yearly','all','range'].map(p=>{
     const label=p==='range'?'📅 Range':p[0].toUpperCase()+p.slice(1);
@@ -15734,44 +15732,84 @@ function applyFontSize(pct){
   document.querySelectorAll('.fs-inc').forEach(btn => { btn.disabled = (pct >= FS_MAX); });
 }
 
-// ── FIX: native date-picker taps swallowed by CSS zoom ──────────────────────
-// Chrome positions/hit-tests the native <input type="date"> calendar popup
-// against the UNSCALED layout box of its ancestors. Since #main-area (and co.)
-// are visually scaled via the CSS `zoom` property above (default 115%, not
-// 100%), the calendar renders fine but taps on day numbers land on the wrong
-// underlying coordinates and silently do nothing. Fix: whenever a date input
-// gains focus (i.e. its picker is about to open), snap the zoom targets to
-// 100% for the duration, then restore the user's real zoom level once the
-// picker closes (blur).
-(function(){
-  const ZOOM_TARGETS=['main-area','landing-screen','login-screen','recovery-screen'];
-  let _zoomSuspended=false;
-  function suspendZoomForDatePicker(){
-    if(_zoomSuspended) return;
-    _zoomSuspended=true;
-    ZOOM_TARGETS.forEach(id=>{
-      const el=document.getElementById(id);
-      if(el) el.style.zoom=1;
-    });
+// ── Custom in-page date picker (replaces native <input type="date">) ───────
+// Chrome hit-tests the native date-picker popup against the UNSCALED layout
+// box of its ancestors, so under our accessibility zoom feature (CSS `zoom`
+// on #main-area, default 115%) the calendar renders but taps on day numbers
+// land on the wrong coordinates and silently do nothing. Toggling zoom
+// off/on around focus "fixed" the hit-testing but made the whole screen
+// visibly jump/resize on every tap into a date field — worse than the bug.
+// Real fix: don't use the native popup at all for range picking. This is an
+// ordinary in-DOM calendar overlay, so it scales and hit-tests correctly at
+// any zoom level exactly like the rest of the app's UI.
+let _mdpPop=null;
+function _mdpPad(n){return String(n).padStart(2,'0');}
+function _mdpISO(y,m,d){return `${y}-${_mdpPad(m+1)}-${_mdpPad(d)}`;}
+function _mdpDisp(iso){
+  if(!iso) return 'Select date';
+  const d=new Date(iso+'T00:00:00');
+  return d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'});
+}
+function _mdpOutside(e){
+  if(_mdpPop && !_mdpPop.contains(e.target)) _mdpClose();
+}
+function _mdpClose(){
+  if(_mdpPop){ _mdpPop.remove(); _mdpPop=null; }
+  document.removeEventListener('mousedown', _mdpOutside, true);
+  document.removeEventListener('touchstart', _mdpOutside, true);
+  window._mdpNav=window._mdpPick=window._mdpClear=undefined;
+}
+function openMiniDatePicker(anchorEl, currentISO, maxISO, onPick){
+  _mdpClose();
+  const base = currentISO ? new Date(currentISO+'T00:00:00') : new Date();
+  let viewY=base.getFullYear(), viewM=base.getMonth();
+  const max = maxISO ? new Date(maxISO+'T00:00:00') : null;
+  const pop=document.createElement('div');
+  pop.style.cssText='position:fixed;z-index:9000;background:var(--surface,#16213E);border:1px solid var(--border,#2C3E50);border-radius:12px;padding:12px;box-shadow:0 8px 30px rgba(0,0,0,.5);width:270px;font-family:var(--fb,sans-serif);';
+  document.body.appendChild(pop);
+  _mdpPop=pop;
+  const rect=anchorEl.getBoundingClientRect();
+  const vw=window.innerWidth, vh=window.innerHeight;
+  let left=Math.min(Math.max(8,rect.left), vw-278);
+  let top=rect.bottom+6;
+  if(top+320>vh-8) top=Math.max(8, rect.top-326);
+  pop.style.left=left+'px'; pop.style.top=top+'px';
+  function render(){
+    const firstDow=(new Date(viewY,viewM,1).getDay()+6)%7; // Mon=0
+    const daysInMonth=new Date(viewY,viewM+1,0).getDate();
+    const monthLabel=new Date(viewY,viewM,1).toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+    let cells='';
+    for(let i=0;i<firstDow;i++) cells+='<div></div>';
+    for(let d=1; d<=daysInMonth; d++){
+      const iso=_mdpISO(viewY,viewM,d);
+      const disabled = max && new Date(viewY,viewM,d) > max;
+      const isSel = iso===currentISO;
+      cells+=`<div ${disabled?'':`onclick="_mdpPick('${iso}')"`} style="text-align:center;padding:8px 0;border-radius:8px;cursor:${disabled?'default':'pointer'};color:${disabled?'var(--muted,#8a93a6)':(isSel?'#fff':'var(--text,#fff)')};background:${isSel?'var(--green,#00D68F)':'transparent'};opacity:${disabled?.35:1};font-size:15px;">${d}</div>`;
+    }
+    pop.innerHTML=`
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <button type="button" onclick="_mdpNav(-1)" style="background:none;border:none;color:var(--text,#fff);font-size:18px;padding:4px 10px;cursor:pointer">‹</button>
+        <div style="font-weight:700;font-size:15px;color:var(--text,#fff)">${monthLabel}</div>
+        <button type="button" onclick="_mdpNav(1)" style="background:none;border:none;color:var(--text,#fff);font-size:18px;padding:4px 10px;cursor:pointer">›</button>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px">
+        ${['M','T','W','T','F','S','S'].map(d=>`<div style="text-align:center;font-size:12px;color:var(--muted,#8a93a6);font-weight:700">${d}</div>`).join('')}
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">${cells}</div>
+      <div style="display:flex;justify-content:space-between;margin-top:10px;border-top:1px solid var(--border,#2C3E50);padding-top:8px">
+        <button type="button" onclick="_mdpClear()" style="background:none;border:none;color:var(--muted,#8a93a6);font-weight:700;font-size:14px;cursor:pointer">Clear</button>
+        <button type="button" onclick="_mdpClose()" style="background:none;border:none;color:var(--blue,#3B82F6);font-weight:700;font-size:14px;cursor:pointer">Cancel</button>
+      </div>`;
   }
-  function restoreZoomAfterDatePicker(){
-    if(!_zoomSuspended) return;
-    _zoomSuspended=false;
-    const pct=getFontSize();
-    ZOOM_TARGETS.forEach(id=>{
-      const el=document.getElementById(id);
-      if(el) el.style.zoom=pct/100;
-    });
-  }
-  document.addEventListener('focusin', e=>{
-    const t=e.target;
-    if(t && t.tagName==='INPUT' && (t.type==='date' || t.type==='datetime-local' || t.type==='month')) suspendZoomForDatePicker();
-  });
-  document.addEventListener('focusout', e=>{
-    const t=e.target;
-    if(t && t.tagName==='INPUT' && (t.type==='date' || t.type==='datetime-local' || t.type==='month')) restoreZoomAfterDatePicker();
-  });
-})();
+  window._mdpNav=(dir)=>{ viewM+=dir; if(viewM<0){viewM=11;viewY--;} if(viewM>11){viewM=0;viewY++;} render(); };
+  window._mdpPick=(iso)=>{ _mdpClose(); onPick(iso); };
+  window._mdpClear=()=>{ _mdpClose(); onPick(''); };
+  render();
+  setTimeout(()=>{
+    document.addEventListener('mousedown', _mdpOutside, true);
+    document.addEventListener('touchstart', _mdpOutside, true);
+  },0);
+}
 function changeFontSize(delta){
   let cur=getFontSize();
   cur=Math.min(FS_MAX,Math.max(FS_MIN,cur+delta));
