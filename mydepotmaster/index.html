@@ -4011,7 +4011,7 @@ window.addEventListener('online', () => {
   ONLINE = true;
   updPill();
   updateConnStatus();
-  flushOfflineQueue().then(() => scheduleFbSync());
+  flushOfflineQueue().then(() => scheduleFbSync()).catch(e => console.warn('[MDM] post-flush sync failed', e));
 });
 
 // ── DATA DEFAULTS ───────────────────────────────────────────────────────────
@@ -4999,7 +4999,7 @@ async function _confirmReconnectCloudSync(){
     _fbAuthSessionLost = false;
     closeModal();
     showToast('☁ Cloud sync reconnected');
-    flushOfflineQueue().then(() => scheduleFbSync());
+    flushOfflineQueue().then(() => scheduleFbSync()).catch(e => console.warn('[MDM] post-flush sync failed', e));
     fbRestoreData().catch(()=>{});
   } catch (e) {
     if (btn) { btn.disabled=false; btn.textContent='✅ Reconnect'; }
@@ -8047,7 +8047,7 @@ function openDailyCloseOut(){
     </div>
     <div class="fw">
       <div class="fl">Notes (optional)</div>
-      <input class="fi" id="co-notes" placeholder="E.G. CASH HANDED TO MANAGER…" oninput="this.value=this.value.toUpperCase()"/>
+      <input class="fi" id="dco-notes" placeholder="E.G. CASH HANDED TO MANAGER…" oninput="this.value=this.value.toUpperCase()"/>
     </div>
     <div class="mact">
       <button class="btn bo" style="flex:1" onclick="closeModal()">Cancel</button>
@@ -8060,7 +8060,7 @@ function saveDailyCloseOut(expectedCash){
   if(!requireAdmin('close out daily sales'))return;
   const actual=Number(document.getElementById('co-actual')?.value||0);
   if(!actual&&actual!==0){showToast('⚠️ Enter actual cash counted');return;}
-  const notes=uc(document.getElementById('co-notes')?.value||'');
+  const notes=uc(document.getElementById('dco-notes')?.value||'');
   const todayStr=today();
   const payload={
     id:uid(), date:todayStr, closedAt:nowTime(),
@@ -8465,15 +8465,18 @@ function bulkBarHtml(tid,editFn,delFn){
     <button class="btn bo" style="padding:6px 14px;font-size:15px" onclick="bulkClear('${tid}')">Cancel</button>
   </div>`;
 }
-// Reads bulkedit-chk-<key> / bulkedit-<key> pairs from an open bulk-edit modal.
-// Returns a patch object of only the ticked fields, or null if none were ticked.
-function _bulkFieldPatch(fieldKeys){
+// Reads bulkedit-<ns>-chk-<key> / bulkedit-<ns>-<key> pairs from an open
+// bulk-edit modal. Returns a patch object of only the ticked fields, or null
+// if none were ticked. ns must match the namespace the modal was opened with
+// (see _bulkOverrideFieldHtml) — fields are namespaced per modal type so the
+// same key (e.g. 'date') never collides across the different bulk-edit modals.
+function _bulkFieldPatch(ns,fieldKeys){
   const patch={};
   let any=false;
   fieldKeys.forEach(k=>{
-    const chk=document.getElementById('bulkedit-chk-'+k);
+    const chk=document.getElementById('bulkedit-'+ns+'-chk-'+k);
     if(chk&&chk.checked){
-      const el=document.getElementById('bulkedit-'+k);
+      const el=document.getElementById('bulkedit-'+ns+'-'+k);
       if(el){patch[k]=el.value;any=true;}
     }
   });
@@ -8485,15 +8488,20 @@ function _bulkFieldPatch(fieldKeys){
 // list of per-record rows (each field individually editable, class="bel-<key>",
 // data-id="<record id>"). Ticking a bulk checkbox disables that field on every
 // row and applies the shared value instead; unticking re-enables the rows.
-function _bulkFieldToggle(key,checked){
-  const shared=document.getElementById('bulkedit-'+key);
+function _bulkFieldToggle(ns,key,checked){
+  const shared=document.getElementById('bulkedit-'+ns+'-'+key);
   if(shared)shared.disabled=!checked;
   document.querySelectorAll('.bel-'+key).forEach(inp=>{inp.disabled=checked;});
 }
-function _bulkOverrideFieldHtml(key,label,inputHtml){
+// ns namespaces every id to the calling modal (e.g. 'genrec','stafflog') so
+// the same field key (e.g. 'date') never collides across the 5 bulk-edit
+// modals below — they used to share bare "bulkedit-date"-style ids, which
+// only stayed safe because openModal() only ever has one modal mounted at a
+// time. Namespacing removes that hidden assumption.
+function _bulkOverrideFieldHtml(ns,key,label,inputHtml){
   return `<div class="fw">
     <label style="display:flex;align-items:center;gap:8px;margin-bottom:4px;cursor:pointer">
-      <input type="checkbox" id="bulkedit-chk-${key}" onchange="_bulkFieldToggle('${key}',this.checked)">
+      <input type="checkbox" id="bulkedit-${ns}-chk-${key}" onchange="_bulkFieldToggle('${ns}','${key}',this.checked)">
       <span class="fl" style="margin:0">${label} (same for all)</span>
     </label>
     ${inputHtml}
@@ -8547,9 +8555,9 @@ function _doOpenBulkEditGenRec(recs){
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Received (${n})</div>
     <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below (every field from the receive form is editable there).</div>
-    ${_bulkOverrideFieldHtml('date','Date',`<input class="fi" type="date" id="bulkedit-date" disabled/>`)}
-    ${_bulkOverrideFieldHtml('condition','Condition / Status',`<select class="fi" id="bulkedit-condition" disabled><option value="good">GOOD</option><option value="damaged">DAMAGED (SOME)</option><option value="all-damaged">ALL DAMAGED</option><option value="rejected">❌ REJECTED</option></select>`)}
-    ${_bulkOverrideFieldHtml('creditStatus','Purchase Payment Status',`<select class="fi" id="bulkedit-creditStatus" disabled><option value="paid">✅ PAID</option><option value="partial">🔶 PARTIAL</option><option value="credit">🔴 CREDIT</option></select>`)}
+    ${_bulkOverrideFieldHtml('genrec','date','Date',`<input class="fi" type="date" id="bulkedit-genrec-date" disabled/>`)}
+    ${_bulkOverrideFieldHtml('genrec','condition','Condition / Status',`<select class="fi" id="bulkedit-genrec-condition" disabled><option value="good">GOOD</option><option value="damaged">DAMAGED (SOME)</option><option value="all-damaged">ALL DAMAGED</option><option value="rejected">❌ REJECTED</option></select>`)}
+    ${_bulkOverrideFieldHtml('genrec','creditStatus','Purchase Payment Status',`<select class="fi" id="bulkedit-genrec-creditStatus" disabled><option value="paid">✅ PAID</option><option value="partial">🔶 PARTIAL</option><option value="credit">🔴 CREDIT</option></select>`)}
     <div class="sh" style="margin-top:14px">Or edit each record individually</div>
     <div style="max-height:38vh;overflow-y:auto;padding-right:4px">${rowsHtml}</div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkEditGenRec()">✓ Save Changes</button></div>`);
@@ -8557,12 +8565,12 @@ function _doOpenBulkEditGenRec(recs){
 function saveBulkEditGenRec(){
   const ids=window._bulkEditGenRecIds||[...bulkSet('gen-inv-table')];
   if(!ids.length)return;
-  const chkDate=document.getElementById('bulkedit-chk-date')?.checked;
-  const chkCond=document.getElementById('bulkedit-chk-condition')?.checked;
-  const chkCredit=document.getElementById('bulkedit-chk-creditStatus')?.checked;
-  const bulkDate=document.getElementById('bulkedit-date')?.value;
-  const bulkCond=document.getElementById('bulkedit-condition')?.value;
-  const bulkCredit=document.getElementById('bulkedit-creditStatus')?.value;
+  const chkDate=document.getElementById('bulkedit-genrec-chk-date')?.checked;
+  const chkCond=document.getElementById('bulkedit-genrec-chk-condition')?.checked;
+  const chkCredit=document.getElementById('bulkedit-genrec-chk-creditStatus')?.checked;
+  const bulkDate=document.getElementById('bulkedit-genrec-date')?.value;
+  const bulkCond=document.getElementById('bulkedit-genrec-condition')?.value;
+  const bulkCredit=document.getElementById('bulkedit-genrec-creditStatus')?.value;
   const recs=(DATA.generalInventory||[]).filter(x=>ids.includes(String(x.id)));
   if(!recs.length)return;
   recs.forEach(r=>logAuditEvent('EDIT','Inventory Received',`ID:${r.id} · Item:${r.itemName} · Bulk edit`,r));
@@ -8625,8 +8633,8 @@ function _doOpenBulkEditGenIss(recs){
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Issued (${n})</div>
     <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below (every field from the issue form is editable there).</div>
-    ${_bulkOverrideFieldHtml('date','Date',`<input class="fi" type="date" id="bulkedit-date" disabled/>`)}
-    ${_bulkOverrideFieldHtml('creditStatus','Payment Status',`<select class="fi" id="bulkedit-creditStatus" disabled><option value="paid">✅ PAID</option><option value="partial">🔶 PARTIAL</option><option value="credit">🔴 CREDIT</option></select>`)}
+    ${_bulkOverrideFieldHtml('geniss','date','Date',`<input class="fi" type="date" id="bulkedit-geniss-date" disabled/>`)}
+    ${_bulkOverrideFieldHtml('geniss','creditStatus','Payment Status',`<select class="fi" id="bulkedit-geniss-creditStatus" disabled><option value="paid">✅ PAID</option><option value="partial">🔶 PARTIAL</option><option value="credit">🔴 CREDIT</option></select>`)}
     <div class="sh" style="margin-top:14px">Or edit each record individually</div>
     <div style="max-height:38vh;overflow-y:auto;padding-right:4px">${rowsHtml}</div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn ba" onclick="saveBulkEditGenIss()">✓ Save Changes</button></div>`);
@@ -8634,10 +8642,10 @@ function _doOpenBulkEditGenIss(recs){
 function saveBulkEditGenIss(){
   const ids=window._bulkEditGenIssIds||[...bulkSet('gen-iss-table')];
   if(!ids.length)return;
-  const chkDate=document.getElementById('bulkedit-chk-date')?.checked;
-  const chkCredit=document.getElementById('bulkedit-chk-creditStatus')?.checked;
-  const bulkDate=document.getElementById('bulkedit-date')?.value;
-  const bulkCredit=document.getElementById('bulkedit-creditStatus')?.value;
+  const chkDate=document.getElementById('bulkedit-geniss-chk-date')?.checked;
+  const chkCredit=document.getElementById('bulkedit-geniss-chk-creditStatus')?.checked;
+  const bulkDate=document.getElementById('bulkedit-geniss-date')?.value;
+  const bulkCredit=document.getElementById('bulkedit-geniss-creditStatus')?.value;
   const recs=(DATA.generalIssued||[]).filter(x=>ids.includes(String(x.id)));
   if(!recs.length)return;
   recs.forEach(r=>logAuditEvent('EDIT','Inventory Issued',`ID:${r.id} · Item:${r.itemName} · Bulk edit`,r));
@@ -8689,7 +8697,7 @@ function _doOpenBulkEditMaizeRec(recs){
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Received (${n})</div>
     <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below (every field from the receive form is editable there).</div>
-    ${_bulkOverrideFieldHtml('date','Date',`<input class="fi" type="date" id="bulkedit-date" disabled/>`)}
+    ${_bulkOverrideFieldHtml('maizerec','date','Date',`<input class="fi" type="date" id="bulkedit-maizerec-date" disabled/>`)}
     <div class="sh" style="margin-top:14px">Or edit each record individually</div>
     <div style="max-height:38vh;overflow-y:auto;padding-right:4px">${rowsHtml}</div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkEditMaizeRec()">✓ Save Changes</button></div>`);
@@ -8697,8 +8705,8 @@ function _doOpenBulkEditMaizeRec(recs){
 function saveBulkEditMaizeRec(){
   const ids=window._bulkEditMaizeRecIds||[...bulkSet('maize-rec-table')];
   if(!ids.length)return;
-  const chkDate=document.getElementById('bulkedit-chk-date')?.checked;
-  const bulkDate=document.getElementById('bulkedit-date')?.value;
+  const chkDate=document.getElementById('bulkedit-maizerec-chk-date')?.checked;
+  const bulkDate=document.getElementById('bulkedit-maizerec-date')?.value;
   const cid=CCOM;
   const recs=((DATA.commodityReceived||{})[cid]||[]).filter(x=>ids.includes(String(x.id)));
   if(!recs.length)return;
@@ -8749,8 +8757,8 @@ function _doOpenBulkEditMaizeIss(recs){
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Issued (${n})</div>
     <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below (every field from the issue form is editable there).</div>
-    ${_bulkOverrideFieldHtml('date','Date',`<input class="fi" type="date" id="bulkedit-date" disabled/>`)}
-    ${_bulkOverrideFieldHtml('creditStatus','Payment Status',`<select class="fi" id="bulkedit-creditStatus" disabled><option value="paid">✅ PAID</option><option value="partial">🔶 PARTIAL</option><option value="credit">🔴 CREDIT</option></select>`)}
+    ${_bulkOverrideFieldHtml('maizeiss','date','Date',`<input class="fi" type="date" id="bulkedit-maizeiss-date" disabled/>`)}
+    ${_bulkOverrideFieldHtml('maizeiss','creditStatus','Payment Status',`<select class="fi" id="bulkedit-maizeiss-creditStatus" disabled><option value="paid">✅ PAID</option><option value="partial">🔶 PARTIAL</option><option value="credit">🔴 CREDIT</option></select>`)}
     <div class="sh" style="margin-top:14px">Or edit each record individually</div>
     <div style="max-height:38vh;overflow-y:auto;padding-right:4px">${rowsHtml}</div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn ba" onclick="saveBulkEditMaizeIss()">✓ Save Changes</button></div>`);
@@ -8758,10 +8766,10 @@ function _doOpenBulkEditMaizeIss(recs){
 function saveBulkEditMaizeIss(){
   const ids=window._bulkEditMaizeIssIds||[...bulkSet('maize-iss-table')];
   if(!ids.length)return;
-  const chkDate=document.getElementById('bulkedit-chk-date')?.checked;
-  const chkCredit=document.getElementById('bulkedit-chk-creditStatus')?.checked;
-  const bulkDate=document.getElementById('bulkedit-date')?.value;
-  const bulkCredit=document.getElementById('bulkedit-creditStatus')?.value;
+  const chkDate=document.getElementById('bulkedit-maizeiss-chk-date')?.checked;
+  const chkCredit=document.getElementById('bulkedit-maizeiss-chk-creditStatus')?.checked;
+  const bulkDate=document.getElementById('bulkedit-maizeiss-date')?.value;
+  const bulkCredit=document.getElementById('bulkedit-maizeiss-creditStatus')?.value;
   const cid=CCOM;
   const recs=((DATA.commodityIssued||{})[cid]||[]).filter(x=>ids.includes(String(x.id)));
   if(!recs.length)return;
@@ -8818,11 +8826,11 @@ function _doOpenBulkEditStaffLog(recs){
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Work Logs (${n})</div>
     <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below.</div>
-    ${_bulkOverrideFieldHtml('date','Date',`<input class="fi" type="date" id="bulkedit-date" disabled/>`)}
-    ${_bulkOverrideFieldHtml('qty',`Quantity ${mdmTip('Earnings are recalculated for each record using its own task rate.')}`,`<input class="fi" type="number" id="bulkedit-qty" inputmode="decimal" step="0.01" disabled/>`)}
-    ${_bulkOverrideFieldHtml('deduction',`Deduction (${cur()})`,`<input class="fi" type="number" id="bulkedit-deduction" inputmode="decimal" disabled/>`)}
-    ${_bulkOverrideFieldHtml('deductionReason','Deduction Reason',`<select class="fi" id="bulkedit-deductionReason" disabled><option value="">None</option>${DATA.deductionReasons.map(r=>`<option>${r}</option>`).join('')}</select>`)}
-    ${_bulkOverrideFieldHtml('notes','Notes',`<input class="fi" type="text" id="bulkedit-notes" placeholder="Notes for all selected records…" disabled/>`)}
+    ${_bulkOverrideFieldHtml('stafflog','date','Date',`<input class="fi" type="date" id="bulkedit-stafflog-date" disabled/>`)}
+    ${_bulkOverrideFieldHtml('stafflog','qty',`Quantity ${mdmTip('Earnings are recalculated for each record using its own task rate.')}`,`<input class="fi" type="number" id="bulkedit-stafflog-qty" inputmode="decimal" step="0.01" disabled/>`)}
+    ${_bulkOverrideFieldHtml('stafflog','deduction',`Deduction (${cur()})`,`<input class="fi" type="number" id="bulkedit-stafflog-deduction" inputmode="decimal" disabled/>`)}
+    ${_bulkOverrideFieldHtml('stafflog','deductionReason','Deduction Reason',`<select class="fi" id="bulkedit-stafflog-deductionReason" disabled><option value="">None</option>${DATA.deductionReasons.map(r=>`<option>${r}</option>`).join('')}</select>`)}
+    ${_bulkOverrideFieldHtml('stafflog','notes','Notes',`<input class="fi" type="text" id="bulkedit-stafflog-notes" placeholder="Notes for all selected records…" disabled/>`)}
     <div class="sh" style="margin-top:14px">Or edit each record individually</div>
     <div style="max-height:38vh;overflow-y:auto;padding-right:4px">${rowsHtml}</div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkEditStaffLog()">✓ Save Changes</button></div>`);
@@ -8830,16 +8838,16 @@ function _doOpenBulkEditStaffLog(recs){
 function saveBulkEditStaffLog(){
   const ids=window._bulkEditStaffLogIds||[...bulkSet('staff-log-table')];
   if(!ids.length)return;
-  const chkDate=document.getElementById('bulkedit-chk-date')?.checked;
-  const chkQty=document.getElementById('bulkedit-chk-qty')?.checked;
-  const chkDed=document.getElementById('bulkedit-chk-deduction')?.checked;
-  const chkReason=document.getElementById('bulkedit-chk-deductionReason')?.checked;
-  const chkNotes=document.getElementById('bulkedit-chk-notes')?.checked;
-  const bulkDate=document.getElementById('bulkedit-date')?.value;
-  const bulkQty=Number(document.getElementById('bulkedit-qty')?.value||0);
-  const bulkDed=Number(document.getElementById('bulkedit-deduction')?.value||0);
-  const bulkReason=document.getElementById('bulkedit-deductionReason')?.value||'';
-  const bulkNotes=document.getElementById('bulkedit-notes')?.value||'';
+  const chkDate=document.getElementById('bulkedit-stafflog-chk-date')?.checked;
+  const chkQty=document.getElementById('bulkedit-stafflog-chk-qty')?.checked;
+  const chkDed=document.getElementById('bulkedit-stafflog-chk-deduction')?.checked;
+  const chkReason=document.getElementById('bulkedit-stafflog-chk-deductionReason')?.checked;
+  const chkNotes=document.getElementById('bulkedit-stafflog-chk-notes')?.checked;
+  const bulkDate=document.getElementById('bulkedit-stafflog-date')?.value;
+  const bulkQty=Number(document.getElementById('bulkedit-stafflog-qty')?.value||0);
+  const bulkDed=Number(document.getElementById('bulkedit-stafflog-deduction')?.value||0);
+  const bulkReason=document.getElementById('bulkedit-stafflog-deductionReason')?.value||'';
+  const bulkNotes=document.getElementById('bulkedit-stafflog-notes')?.value||'';
   if(chkQty&&!(bulkQty>0)){alert('Enter a quantity greater than zero to apply to all.');return;}
   const recs=(DATA.staffLogs||[]).filter(l=>ids.includes(String(l.id)));
   if(!recs.length)return;
@@ -13452,8 +13460,8 @@ function setStaffStatusReason(id,status,fromModal=false){
   openModal(`
     <div class="mtitle">${label}</div>
     <div class="twobox">
-      <div class="fw"><div class="fl">Date</div><input class="fi" id="setstat-date" type="date" value="${today()}"/></div>
-      <div class="fw"><div class="fl">Time</div><input class="fi" id="setstat-time" type="time" value="${nowTime()}"/></div>
+      <div class="fw"><div class="fl">Date</div><input class="fi" id="setstatr-date" type="date" value="${today()}"/></div>
+      <div class="fw"><div class="fl">Time</div><input class="fi" id="setstatr-time" type="time" value="${nowTime()}"/></div>
     </div>
     <div class="fw">
       <div class="fl">${label} reason (optional)</div>
@@ -13470,7 +13478,7 @@ function setStaffStatusReason(id,status,fromModal=false){
 }
 function _confirmSetStaffStatusReason(id,status,fromModal){
   const reason=(document.getElementById('staffstatus-reason-input')?.value||'').trim();
-  const dateEl=document.getElementById('setstat-date'),timeEl=document.getElementById('setstat-time');
+  const dateEl=document.getElementById('setstatr-date'),timeEl=document.getElementById('setstatr-time');
   if(!dateEl||!dateEl.value){showToast('⚠️ Date is required.');return;}
   const statusDate=dateEl.value;
   const statusTime=timeEl&&timeEl.value?timeEl.value:nowTime();
@@ -14159,11 +14167,11 @@ function _renderStaffSettings(){
       <div class="fw">
         <div class="fl">Text Size</div>
         <div class="fs-ctrl">
-          <button class="fs-btn" id="fs-btn-minus" onclick="changeFontSize(-${FS_STEP})" title="Decrease font size">A−</button>
+          <button class="fs-btn fs-dec" onclick="changeFontSize(-${FS_STEP})" title="Decrease font size">A−</button>
           <div class="fs-divider"></div>
-          <div class="fs-label fs-lbl-all" id="fs-value-label">${_fsLabel(getFontSize())}</div>
+          <div class="fs-label fs-lbl-all">${_fsLabel(getFontSize())}</div>
           <div class="fs-divider"></div>
-          <button class="fs-btn" id="fs-btn-plus" onclick="changeFontSize(${FS_STEP})" title="Increase font size">A+</button>
+          <button class="fs-btn fs-inc" onclick="changeFontSize(${FS_STEP})" title="Increase font size">A+</button>
         </div>
       </div>
       <button class="btn bo bsm" style="width:100%;margin-top:4px" onclick="resetFontSize()">↺ Reset to Default (50%)</button>
@@ -14254,11 +14262,11 @@ function _renderAdminSettings(){
       <div class="fw">
         <div class="fl">Text Size</div>
         <div class="fs-ctrl">
-          <button class="fs-btn" id="fs-btn-minus" onclick="changeFontSize(-${FS_STEP})" title="Decrease font size">A−</button>
+          <button class="fs-btn fs-dec" onclick="changeFontSize(-${FS_STEP})" title="Decrease font size">A−</button>
           <div class="fs-divider"></div>
-          <div class="fs-label fs-lbl-all" id="fs-value-label">${_fsLabel(getFontSize())}</div>
+          <div class="fs-label fs-lbl-all">${_fsLabel(getFontSize())}</div>
           <div class="fs-divider"></div>
-          <button class="fs-btn" id="fs-btn-plus" onclick="changeFontSize(${FS_STEP})" title="Increase font size">A+</button>
+          <button class="fs-btn fs-inc" onclick="changeFontSize(${FS_STEP})" title="Increase font size">A+</button>
         </div>
       </div>
       <button class="btn bo bsm" style="width:100%;margin-top:4px" onclick="resetFontSize()">↺ Reset to Default (50%)</button>
@@ -14409,14 +14417,7 @@ function _renderAdminSettings(){
 
     ${_renderStaySignedInSection()}
 
-    <div class="sh">Change Password</div>
-    <div class="card">
-      <div id="pw-msg"></div>
-      <div class="fw"><div class="fl">Account</div><select class="fi" id="pw-target">${DATA.users.filter(u=>USER.role==='admin'||u.username===USER.username).map(u=>`<option value="${esc(u.username)}">${esc(u.username)} (${roleLabel(u.role)})</option>`).join('')}</select></div>
-      <div class="fw"><div class="fl">New Password</div><input class="fi" type="password" id="pw-new"/></div>
-      <div class="fw"><div class="fl">Confirm Password</div><input class="fi" type="password" id="pw-conf"/></div>
-      <button class="btn ba" onclick="changePw()">🔒 Update Password</button>
-    </div>
+    ${_renderChangePasswordCard()}
 
     ${_renderLoginHistoryCard()}
 
@@ -15728,9 +15729,9 @@ function applyFontSize(pct){
     }
   });
   localStorage.setItem(FS_KEY, pct);
-  document.querySelectorAll('.fs-lbl-all, #fs-value-label').forEach(el => el.textContent = _fsLabel(pct));
-  document.querySelectorAll('.fs-dec, #fs-btn-minus').forEach(btn => { btn.disabled = (pct <= FS_MIN); });
-  document.querySelectorAll('.fs-inc, #fs-btn-plus').forEach(btn => { btn.disabled = (pct >= FS_MAX); });
+  document.querySelectorAll('.fs-lbl-all').forEach(el => el.textContent = _fsLabel(pct));
+  document.querySelectorAll('.fs-dec').forEach(btn => { btn.disabled = (pct <= FS_MIN); });
+  document.querySelectorAll('.fs-inc').forEach(btn => { btn.disabled = (pct >= FS_MAX); });
 }
 function changeFontSize(delta){
   let cur=getFontSize();
@@ -16599,7 +16600,7 @@ setInterval(()=>{
   // every tick so a missed event can't wedge sync permanently.
   if (ONLINE !== navigator.onLine) { ONLINE = navigator.onLine; updPill(); updateConnStatus(); }
   if(location.hash!=='#recover' && navigator.onLine && USER){
-    flushOfflineQueue().then(() => scheduleFbSync());
+    flushOfflineQueue().then(() => scheduleFbSync()).catch(e => console.warn('[MDM] post-flush sync failed', e));
   }
   if(_fbSyncFailCount>=3 && !_fbSyncFailToastShown){
     _fbSyncFailToastShown = true;
@@ -16650,7 +16651,7 @@ document.addEventListener('visibilitychange', () => {
   const wasOnline = ONLINE;
   ONLINE = navigator.onLine;
   if (ONLINE !== wasOnline) { updPill(); updateConnStatus(); }
-  if (ONLINE && USER) flushOfflineQueue().then(() => scheduleFbSync());
+  if (ONLINE && USER) flushOfflineQueue().then(() => scheduleFbSync()).catch(e => console.warn('[MDM] post-flush sync failed', e));
 });
 // Fix: "staff edit reverts after reopening the app" — scheduleFbSync() debounces
 // the actual Firebase push by 2.5s so rapid edits don't flood the network. If the
@@ -17748,7 +17749,7 @@ function openContactForm(id){
     <div class="fw"><div class="fl">Email</div><input class="fi" id="ci-email" value="${esc(v.email||'')}" placeholder="email@example.com"></div>
     <div class="fw"><div class="fl">Address</div><input class="fi" id="ci-address" value="${esc(v.address||'')}" placeholder="Street, town"></div>
     <div class="fw"><div class="fl">Balance (${cur()||'currency'})</div><input class="fi" id="ci-balance" type="number" step="0.01" value="${v.balance||''}" placeholder="0.00 — positive = they owe you"></div>
-    <div class="fw"><div class="fl">Notes</div><textarea class="fi" id="ci-notes" rows="2" placeholder="Any extra info…">${esc(v.notes||'')}</textarea></div>
+    <div class="fw"><div class="fl">Notes</div><textarea class="fi" id="contact-notes" rows="2" placeholder="Any extra info…">${esc(v.notes||'')}</textarea></div>
     <!-- Supplier-specific fields -->
     <div id="ci-supplier-fields" style="${isSupplier?'':'display:none'}">
       <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px">
@@ -17802,7 +17803,7 @@ function saveContact(id){
     email:(document.getElementById('ci-email').value||'').trim(),
     address:(document.getElementById('ci-address').value||'').trim(),
     balance:Number(document.getElementById('ci-balance').value||0),
-    notes:(document.getElementById('ci-notes').value||'').trim()
+    notes:(document.getElementById('contact-notes').value||'').trim()
   };
   // Supplier-specific fields
   if(type==='supplier'){
