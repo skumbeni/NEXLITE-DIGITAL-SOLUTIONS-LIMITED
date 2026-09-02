@@ -3185,6 +3185,9 @@ navigate(ROUTES[initialRoute] ? initialRoute : 'dashboard');
     signInWithEmailAndPassword, createUserWithEmailAndPassword,
     signOut, sendPasswordResetEmail
   } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
+  import {
+    getDatabase, ref, set, get
+  } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-database.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyD1q9U8elKixUv3fxSPqf_RA5hihD3qNzY",
@@ -3204,6 +3207,24 @@ navigate(ROUTES[initialRoute] ? initialRoute : 'dashboard');
   window.currentUser = null;
   window.syncInProgress = false;
   window.pendingSyncQueue = [];
+
+  // Initialize Realtime Database. getDatabase() resolves the project's actual
+  // database URL automatically — never hardcode a *.firebaseio.com URL, since
+  // guessing it wrong (e.g. missing the "-default-rtdb" / region segment)
+  // makes every read and write fail silently, which is what was causing
+  // "Sync failed" and settings never round-tripping to the cloud.
+  const db = getDatabase(app);
+  // Low-level bridge so the classic (non-module) script below can read/write
+  // Realtime Database without needing its own `import`.
+  window.__rtdb = {
+    async setPath(path, value) {
+      await set(ref(db, path), value === undefined ? null : value);
+    },
+    async getPath(path) {
+      const snap = await get(ref(db, path));
+      return snap.exists() ? snap.val() : null;
+    }
+  };
   
   // Restore pending queue from localStorage
   if (typeof window.loadPendingQueue === 'function') {
@@ -3292,7 +3313,10 @@ navigate(ROUTES[initialRoute] ? initialRoute : 'dashboard');
     }
     try {
       await createUserWithEmailAndPassword(window.auth, email, password);
-      // Seed the business name the person entered on signup
+      // Seed the business name the person entered on signup. This only writes
+      // localStorage — the app's live `settings` object was already loaded
+      // into memory before signup happened, so a reload is needed for the
+      // UI (business name in the topbar, etc.) to actually pick it up.
       try {
         const settings = JSON.parse(localStorage.getItem('smeap_settings') || '{}');
         if (bizName) settings.businessName = bizName;
@@ -3301,8 +3325,8 @@ navigate(ROUTES[initialRoute] ? initialRoute : 'dashboard');
         } else {
           localStorage.setItem('smeap_settings', JSON.stringify(settings));
         }
-        if (typeof window.updateBizBar === 'function') window.updateBizBar();
       } catch (_) {}
+      setTimeout(() => location.reload(), 500);
     } catch (err) {
       showAuthError(friendlyAuthError(err));
     }
@@ -3387,23 +3411,17 @@ navigate(ROUTES[initialRoute] ? initialRoute : 'dashboard');
 // Pattern: localStorage first, sync to Firebase when online
 
 window.fb = {
-  dbUrl: 'https://sme-accounts-pro.firebaseio.com',
-  
-  // Write data to Realtime DB (user-scoped)
+  // Write data to Realtime DB (user-scoped) via the SDK — no URL guessing,
+  // no manual ID-token query param; the SDK attaches the signed-in user's
+  // auth context automatically so your database security rules see it.
   async write(path, data) {
     if (!window.currentUser) {
       console.warn('No user auth');
       return false;
     }
     try {
-      const token = await window.currentUser.getIdToken();
-      const url = `${this.dbUrl}/users/${window.currentUser.uid}/${path}.json?auth=${token}`;
-      const res = await fetch(url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-      });
-      return res.ok;
+      await window.__rtdb.setPath(`users/${window.currentUser.uid}/${path}`, data);
+      return true;
     } catch (err) {
       console.error('Firebase write failed:', err);
       return false;
@@ -3414,14 +3432,11 @@ window.fb = {
   async read(path) {
     if (!window.currentUser) return null;
     try {
-      const token = await window.currentUser.getIdToken();
-      const url = `${this.dbUrl}/users/${window.currentUser.uid}/${path}.json?auth=${token}`;
-      const res = await fetch(url);
-      if (res.ok) return await res.json();
+      return await window.__rtdb.getPath(`users/${window.currentUser.uid}/${path}`);
     } catch (err) {
       console.error('Firebase read failed:', err);
+      return null;
     }
-    return null;
   },
 
   // Queue a write for offline handling
@@ -3468,22 +3483,17 @@ window.fb = {
 
   // Pull latest data from Firebase (restore on device)
   async restoreFromFirebase() {
-    if (!window.currentUser) return;
+    if (!window.currentUser) return false;
     try {
-      const token = await window.currentUser.getIdToken();
-      const url = `${this.dbUrl}/users/${window.currentUser.uid}/data.json?auth=${token}`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        if (data) {
-          Object.entries(data).forEach(([k, v]) => {
-            localStorage.setItem(k, JSON.stringify(v));
-          });
-          window.dataCache = {};
-          window.dataVersion = (window.dataVersion || 0) + 1;
-          console.log('✓ Data restored from Firebase');
-          return true;
-        }
+      const data = await this.read('data');
+      if (data) {
+        Object.entries(data).forEach(([k, v]) => {
+          localStorage.setItem(k, JSON.stringify(v));
+        });
+        window.dataCache = {};
+        window.dataVersion = (window.dataVersion || 0) + 1;
+        console.log('✓ Data restored from Firebase');
+        return true;
       }
     } catch (err) {
       console.error('Restore failed:', err);
