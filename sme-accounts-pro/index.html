@@ -3427,13 +3427,18 @@ window.fb = {
   async write(path, data) {
     if (!window.currentUser) {
       console.warn('No user auth');
+      window.lastSyncError = 'Not signed in';
       return false;
     }
     try {
       await window.__rtdb.setPath(`users/${window.currentUser.uid}/${path}`, data);
       return true;
     } catch (err) {
-      console.error('Firebase write failed:', err);
+      // Keep the real Firebase error (e.g. PERMISSION_DENIED) so the UI
+      // can show it — don't just swallow it here, or syncAll() has no way
+      // to know a write actually failed.
+      console.error('Firebase write failed:', path, err);
+      window.lastSyncError = `${err.code || err.name || 'Error'}: ${err.message || err} (path: ${path})`;
       return false;
     }
   },
@@ -3466,25 +3471,35 @@ window.fb = {
     window.syncInProgress = true;
     updateSyncStatus('syncing');
     
+    let allOk = true;
     try {
       const dbKeys = Object.values(window.K || {});
       for (const key of dbKeys) {
         const localData = localStorage.getItem(key);
         if (localData) {
-          await this.write(`data/${key}`, JSON.parse(localData));
+          const ok = await this.write(`data/${key}`, JSON.parse(localData));
+          if (!ok) allOk = false; // write() swallows its own errors, so check its return value
         }
       }
       // Sync settings separately for easier access
       const settings = localStorage.getItem(window.K.settings);
       if (settings) {
-        await this.write('settings', JSON.parse(settings));
+        const ok = await this.write('settings', JSON.parse(settings));
+        if (!ok) allOk = false;
       }
       window.pendingSyncQueue = [];
       window.savePendingQueue();
-      console.log('✓ Data synced to Firebase');
-      updateSyncStatus('synced');
+      if (allOk) {
+        console.log('✓ Data synced to Firebase');
+        window.lastSyncError = null;
+        updateSyncStatus('synced');
+      } else {
+        console.error('Sync incomplete — see window.lastSyncError:', window.lastSyncError);
+        updateSyncStatus('error');
+      }
     } catch (err) {
       console.error('Sync error:', err);
+      window.lastSyncError = `${err.code || err.name || 'Error'}: ${err.message || err}`;
       updateSyncStatus('error');
     } finally {
       window.syncInProgress = false;
@@ -3554,6 +3569,17 @@ window.updateSyncStatus = (status) => {
   badge.textContent = s.text;
   badge.style.background = s.color;
   badge.style.color = s.textColor;
+
+  // Tap the badge on error to see the actual Firebase reason (no dev tools needed).
+  if (status === 'error') {
+    badge.style.cursor = 'pointer';
+    badge.title = window.lastSyncError || 'Unknown error — tap for details';
+    badge.onclick = () => alert('Sync error:\n\n' + (window.lastSyncError || 'Unknown error. Check the browser console for details.'));
+  } else {
+    badge.style.cursor = 'default';
+    badge.title = 'Cloud sync status';
+    badge.onclick = null;
+  }
 };
 
 // Online/offline listeners
