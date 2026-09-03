@@ -7322,7 +7322,7 @@ function renderDash(){
             <div style="background:${cBarColor};width:${cPct}%;height:100%;border-radius:20px;transition:width .4s"></div>
           </div>
           <div style="display:flex;justify-content:space-between;font-size:15px;color:var(--muted);margin-top:4px">
-            <span>0 ${comObj.unit||'units'}</span><span>${cRec.toLocaleString()} ${comObj.unit||'units'}</span>
+            <span>Issued: ${cIssTotal.toLocaleString()} ${comObj.unit||'units'}</span><span>Received: ${cRec.toLocaleString()} ${comObj.unit||'units'}</span>
           </div>
         </div>`:''}
       </div>`;
@@ -8550,11 +8550,25 @@ function _doOpenBulkEditGenRec(recs){
   const n=recs.length;
   window._bulkEditGenRecIds=recs.map(r=>String(r.id));
   const rowsHtml=recs.map(_genRecRowHtml).join('');
+  const sups=(DATA.contacts||[]).filter(c=>c.type==='supplier');
+  const supKey=sups.length>0?'supplierId':'supplierName';
+  const bulkSupHtml=sups.length>0
+    ?`<select class="fi" id="bulkedit-genrec-supplierId" disabled><option value="">— None / Unknown —</option>${sups.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>`
+    :`<input class="fi" id="bulkedit-genrec-supplierName" disabled placeholder="SUPPLIER NAME (optional)" oninput="this.value=this.value.toUpperCase()"/>`;
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Received (${n})</div>
-    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below (every field from the receive form is editable there).</div>
-    ${_bulkOverrideFieldHtml('genrec','date','Date',`<input class="fi" type="date" id="bulkedit-genrec-date" disabled/>`)}
+    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick any field to set the SAME value on all ${n} record(s) — leave it unticked and each record keeps its own value from the row below (every field from the receive form is editable there too).</div>
+    ${_bulkOverrideFieldHtml('genrec','itemName','Item Name',`<select class="fi" id="bulkedit-genrec-itemName" disabled>${_invNameOpts()}</select>`)}
+    ${_bulkOverrideFieldHtml('genrec','received','Qty Received',`<input class="fi" type="number" id="bulkedit-genrec-received" inputmode="numeric" disabled/>`)}
+    ${_bulkOverrideFieldHtml('genrec','good','Good Qty',`<input class="fi" type="number" id="bulkedit-genrec-good" inputmode="numeric" disabled/>`)}
+    ${_bulkOverrideFieldHtml('genrec','damaged','Damaged Qty',`<input class="fi" type="number" id="bulkedit-genrec-damaged" inputmode="numeric" disabled/>`)}
+    ${_bulkOverrideFieldHtml('genrec','purchasePrice',`Purchase Price (${cur()} per unit)`,`<input class="fi" type="number" id="bulkedit-genrec-purchasePrice" step="0.01" inputmode="decimal" disabled/>`)}
     ${_bulkOverrideFieldHtml('genrec','condition','Condition / Status',`<select class="fi" id="bulkedit-genrec-condition" disabled><option value="good">GOOD</option><option value="damaged">DAMAGED (SOME)</option><option value="all-damaged">ALL DAMAGED</option><option value="rejected">❌ REJECTED</option></select>`)}
+    ${_bulkOverrideFieldHtml('genrec','rejectionReason','Rejection Reason',`<input class="fi" id="bulkedit-genrec-rejectionReason" placeholder="REJECTION REASON…" oninput="this.value=this.value.toUpperCase()" disabled/>`)}
+    ${_bulkOverrideFieldHtml('genrec','date','Date',`<input class="fi" type="date" id="bulkedit-genrec-date" disabled/>`)}
+    ${_bulkOverrideFieldHtml('genrec','expiryDate','Best-Before / Expiry Date',`<input class="fi" type="date" id="bulkedit-genrec-expiryDate" disabled/>`)}
+    ${_bulkOverrideFieldHtml('genrec','notes','Notes',`<input class="fi" id="bulkedit-genrec-notes" oninput="this.value=this.value.toUpperCase()" disabled/>`)}
+    ${_bulkOverrideFieldHtml('genrec',supKey,'Supplier',bulkSupHtml)}
     ${_bulkOverrideFieldHtml('genrec','creditStatus','Purchase Payment Status',`<select class="fi" id="bulkedit-genrec-creditStatus" disabled><option value="paid">✅ PAID</option><option value="partial">🔶 PARTIAL</option><option value="credit">🔴 CREDIT</option></select>`)}
     <div class="sh" style="margin-top:14px">Or edit each record individually</div>
     <div style="max-height:38vh;overflow-y:auto;padding-right:4px">${rowsHtml}</div>
@@ -8563,12 +8577,21 @@ function _doOpenBulkEditGenRec(recs){
 function saveBulkEditGenRec(){
   const ids=window._bulkEditGenRecIds||[...bulkSet('gen-inv-table')];
   if(!ids.length)return;
-  const chkDate=document.getElementById('bulkedit-genrec-chk-date')?.checked;
-  const chkCond=document.getElementById('bulkedit-genrec-chk-condition')?.checked;
-  const chkCredit=document.getElementById('bulkedit-genrec-chk-creditStatus')?.checked;
-  const bulkDate=document.getElementById('bulkedit-genrec-date')?.value;
-  const bulkCond=document.getElementById('bulkedit-genrec-condition')?.value;
-  const bulkCredit=document.getElementById('bulkedit-genrec-creditStatus')?.value;
+  const chk=k=>document.getElementById('bulkedit-genrec-chk-'+k)?.checked;
+  const val=k=>document.getElementById('bulkedit-genrec-'+k)?.value;
+  const chkItemName=chk('itemName'),bulkItemName=val('itemName');
+  const chkReceived=chk('received'),bulkReceived=val('received');
+  const chkGood=chk('good'),bulkGood=val('good');
+  const chkDamaged=chk('damaged'),bulkDamaged=val('damaged');
+  const chkPrice=chk('purchasePrice'),bulkPrice=val('purchasePrice');
+  const chkCond=chk('condition'),bulkCond=val('condition');
+  const chkReject=chk('rejectionReason'),bulkReject=val('rejectionReason');
+  const chkDate=chk('date'),bulkDate=val('date');
+  const chkExpiry=chk('expiryDate'),bulkExpiry=val('expiryDate');
+  const chkNotes=chk('notes'),bulkNotes=val('notes');
+  const supKey=document.getElementById('bulkedit-genrec-chk-supplierId')?'supplierId':'supplierName';
+  const chkSupplier=chk(supKey),bulkSupplierRaw=val(supKey);
+  const chkCredit=chk('creditStatus'),bulkCredit=val('creditStatus');
   const recs=(DATA.generalInventory||[]).filter(x=>ids.includes(String(x.id)));
   if(!recs.length)return;
   recs.forEach(r=>logAuditEvent('EDIT','Inventory Received',`ID:${r.id} · Item:${r.itemName} · Bulk edit`,r));
@@ -8577,21 +8600,26 @@ function saveBulkEditGenRec(){
     const generalInventory=d.generalInventory.map(x=>{
       const id=String(x.id);
       if(!ids.includes(id))return x;
-      const itemName=uc(_bulkRowVal('bel-itemName',id))||x.itemName;
-      const received=Number(_bulkRowVal('bel-received',id)||0);
-      const good=Number(_bulkRowVal('bel-good',id)||0);
-      const damaged=Number(_bulkRowVal('bel-damaged',id)||0);
-      const purchasePrice=Number(_bulkRowVal('bel-purchasePrice',id)||0);
+      const itemName=chkItemName?uc(bulkItemName):(uc(_bulkRowVal('bel-itemName',id))||x.itemName);
+      const received=chkReceived?Number(bulkReceived||0):Number(_bulkRowVal('bel-received',id)||0);
+      const good=chkGood?Number(bulkGood||0):Number(_bulkRowVal('bel-good',id)||0);
+      const damaged=chkDamaged?Number(bulkDamaged||0):Number(_bulkRowVal('bel-damaged',id)||0);
+      const purchasePrice=chkPrice?Number(bulkPrice||0):Number(_bulkRowVal('bel-purchasePrice',id)||0);
       const condition=chkCond?bulkCond:_bulkRowVal('bel-condition',id);
-      const rejectionReason=uc(_bulkRowVal('bel-rejectionReason',id)||'');
+      const rejectionReason=uc(chkReject?bulkReject:(_bulkRowVal('bel-rejectionReason',id)||''));
       const date=chkDate?bulkDate:_bulkRowVal('bel-date',id);
-      const expiryDate=_bulkRowVal('bel-expiryDate',id)||'';
-      const notes=uc(_bulkRowVal('bel-notes',id)||'');
-      const supSelVal=_bulkRowVal('bel-supplierId',id);
-      const supInputVal=_bulkRowVal('bel-supplierName',id);
+      const expiryDate=chkExpiry?bulkExpiry:(_bulkRowVal('bel-expiryDate',id)||'');
+      const notes=uc(chkNotes?bulkNotes:(_bulkRowVal('bel-notes',id)||''));
       let supplierId=x.supplierId||'', supplierName=x.supplierName||'';
-      if(supSelVal!=null){supplierId=supSelVal;const c=(DATA.contacts||[]).find(cc=>cc.id===supSelVal);supplierName=c?c.name:'';}
-      else if(supInputVal!=null){supplierId='';supplierName=uc(supInputVal);}
+      if(chkSupplier){
+        if(supKey==='supplierId'){supplierId=bulkSupplierRaw||'';const c=(DATA.contacts||[]).find(cc=>cc.id===supplierId);supplierName=c?c.name:'';}
+        else{supplierId='';supplierName=uc(bulkSupplierRaw||'');}
+      } else {
+        const supSelVal=_bulkRowVal('bel-supplierId',id);
+        const supInputVal=_bulkRowVal('bel-supplierName',id);
+        if(supSelVal!=null){supplierId=supSelVal;const c=(DATA.contacts||[]).find(cc=>cc.id===supSelVal);supplierName=c?c.name:'';}
+        else if(supInputVal!=null){supplierId='';supplierName=uc(supInputVal);}
+      }
       const creditStatus=chkCredit?bulkCredit:_bulkRowVal('bel-creditStatus',id);
       if(purchasePrice>0)prices[itemName]={...(prices[itemName]||{}),purchasePrice};
       return{...x,itemName,received,good,damaged,purchasePrice,condition,rejectionReason,date,expiryDate,notes,supplierId,supplierName,creditStatus};
@@ -8630,9 +8658,14 @@ function _doOpenBulkEditGenIss(recs){
   const rowsHtml=recs.map(_genIssRowHtml).join('');
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Issued (${n})</div>
-    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below (every field from the issue form is editable there).</div>
+    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick any field to set the SAME value on all ${n} record(s) — leave it unticked and each record keeps its own value from the row below (every field from the issue form is editable there too).</div>
+    ${_bulkOverrideFieldHtml('geniss','itemName','Item Name',`<select class="fi" id="bulkedit-geniss-itemName" disabled>${_invNameOpts()}</select>`)}
+    ${_bulkOverrideFieldHtml('geniss','issued','Qty Issued',`<input class="fi" type="number" id="bulkedit-geniss-issued" inputmode="numeric" disabled/>`)}
+    ${_bulkOverrideFieldHtml('geniss','sellingPrice',`Selling Price (${cur()} per unit)`,`<input class="fi" type="number" id="bulkedit-geniss-sellingPrice" step="0.01" inputmode="decimal" disabled/>`)}
     ${_bulkOverrideFieldHtml('geniss','date','Date',`<input class="fi" type="date" id="bulkedit-geniss-date" disabled/>`)}
+    ${_bulkOverrideFieldHtml('geniss','notes','Notes',`<input class="fi" id="bulkedit-geniss-notes" oninput="this.value=this.value.toUpperCase()" disabled/>`)}
     ${_bulkOverrideFieldHtml('geniss','creditStatus','Payment Status',`<select class="fi" id="bulkedit-geniss-creditStatus" disabled><option value="paid">✅ PAID</option><option value="partial">🔶 PARTIAL</option><option value="credit">🔴 CREDIT</option></select>`)}
+    ${_bulkOverrideFieldHtml('geniss','partialPaid',`Amount Paid (${cur()} — for partial)`,`<input class="fi" type="number" id="bulkedit-geniss-partialPaid" step="0.01" inputmode="decimal" disabled/>`)}
     <div class="sh" style="margin-top:14px">Or edit each record individually</div>
     <div style="max-height:38vh;overflow-y:auto;padding-right:4px">${rowsHtml}</div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn ba" onclick="saveBulkEditGenIss()">✓ Save Changes</button></div>`);
@@ -8640,10 +8673,15 @@ function _doOpenBulkEditGenIss(recs){
 function saveBulkEditGenIss(){
   const ids=window._bulkEditGenIssIds||[...bulkSet('gen-iss-table')];
   if(!ids.length)return;
-  const chkDate=document.getElementById('bulkedit-geniss-chk-date')?.checked;
-  const chkCredit=document.getElementById('bulkedit-geniss-chk-creditStatus')?.checked;
-  const bulkDate=document.getElementById('bulkedit-geniss-date')?.value;
-  const bulkCredit=document.getElementById('bulkedit-geniss-creditStatus')?.value;
+  const chk=k=>document.getElementById('bulkedit-geniss-chk-'+k)?.checked;
+  const val=k=>document.getElementById('bulkedit-geniss-'+k)?.value;
+  const chkItemName=chk('itemName'),bulkItemName=val('itemName');
+  const chkIssued=chk('issued'),bulkIssued=val('issued');
+  const chkPrice=chk('sellingPrice'),bulkPrice=val('sellingPrice');
+  const chkDate=chk('date'),bulkDate=val('date');
+  const chkNotes=chk('notes'),bulkNotes=val('notes');
+  const chkCredit=chk('creditStatus'),bulkCredit=val('creditStatus');
+  const chkPartial=chk('partialPaid'),bulkPartial=val('partialPaid');
   const recs=(DATA.generalIssued||[]).filter(x=>ids.includes(String(x.id)));
   if(!recs.length)return;
   recs.forEach(r=>logAuditEvent('EDIT','Inventory Issued',`ID:${r.id} · Item:${r.itemName} · Bulk edit`,r));
@@ -8652,13 +8690,13 @@ function saveBulkEditGenIss(){
     const generalIssued=d.generalIssued.map(x=>{
       const id=String(x.id);
       if(!ids.includes(id))return x;
-      const itemName=uc(_bulkRowVal('bel-itemName',id))||x.itemName;
-      const issued=Number(_bulkRowVal('bel-issued',id)||0);
-      const sellingPrice=Number(_bulkRowVal('bel-sellingPrice',id)||0);
+      const itemName=chkItemName?uc(bulkItemName):(uc(_bulkRowVal('bel-itemName',id))||x.itemName);
+      const issued=chkIssued?Number(bulkIssued||0):Number(_bulkRowVal('bel-issued',id)||0);
+      const sellingPrice=chkPrice?Number(bulkPrice||0):Number(_bulkRowVal('bel-sellingPrice',id)||0);
       const date=chkDate?bulkDate:_bulkRowVal('bel-date',id);
-      const notes=uc(_bulkRowVal('bel-notes',id)||'');
+      const notes=uc(chkNotes?bulkNotes:(_bulkRowVal('bel-notes',id)||''));
       const creditStatus=chkCredit?bulkCredit:_bulkRowVal('bel-creditStatus',id);
-      const partialPaid=Number(_bulkRowVal('bel-partialPaid',id)||0);
+      const partialPaid=chkPartial?Number(bulkPartial||0):Number(_bulkRowVal('bel-partialPaid',id)||0);
       if(sellingPrice>0)prices[itemName]={...(prices[itemName]||{}),sellingPrice};
       return{...x,itemName,issued,sellingPrice,date,notes,creditStatus,partialPaid};
     });
@@ -8692,9 +8730,13 @@ function _doOpenBulkEditMaizeRec(recs){
   const n=recs.length;
   window._bulkEditMaizeRecIds=recs.map(r=>String(r.id));
   const rowsHtml=recs.map(_maizeRecRowHtml).join('');
+  const com=getCom(CCOM);
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Received (${n})</div>
-    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below (every field from the receive form is editable there).</div>
+    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick any field to set the SAME value on all ${n} record(s) — leave it unticked and each record keeps its own value from the row below (every field from the receive form is editable there too).</div>
+    ${_bulkOverrideFieldHtml('maizerec','batchName','Batch Name',`<input class="fi" id="bulkedit-maizerec-batchName" oninput="this.value=this.value.toUpperCase()" disabled/>`)}
+    ${_bulkOverrideFieldHtml('maizerec','received',`${com.unit.charAt(0).toUpperCase()+com.unit.slice(1)} Received`,`<input class="fi" type="number" id="bulkedit-maizerec-received" inputmode="numeric" disabled/>`)}
+    ${_bulkOverrideFieldHtml('maizerec','unitPrice',`Unit Price (${cur()} per ${com.unit.slice(0,-1)||com.unit})`,`<input class="fi" type="number" id="bulkedit-maizerec-unitPrice" step="0.01" inputmode="decimal" disabled/>`)}
     ${_bulkOverrideFieldHtml('maizerec','date','Date',`<input class="fi" type="date" id="bulkedit-maizerec-date" disabled/>`)}
     <div class="sh" style="margin-top:14px">Or edit each record individually</div>
     <div style="max-height:38vh;overflow-y:auto;padding-right:4px">${rowsHtml}</div>
@@ -8703,8 +8745,12 @@ function _doOpenBulkEditMaizeRec(recs){
 function saveBulkEditMaizeRec(){
   const ids=window._bulkEditMaizeRecIds||[...bulkSet('maize-rec-table')];
   if(!ids.length)return;
-  const chkDate=document.getElementById('bulkedit-maizerec-chk-date')?.checked;
-  const bulkDate=document.getElementById('bulkedit-maizerec-date')?.value;
+  const chk=k=>document.getElementById('bulkedit-maizerec-chk-'+k)?.checked;
+  const val=k=>document.getElementById('bulkedit-maizerec-'+k)?.value;
+  const chkBatch=chk('batchName'),bulkBatch=val('batchName');
+  const chkReceived=chk('received'),bulkReceived=val('received');
+  const chkPrice=chk('unitPrice'),bulkPrice=val('unitPrice');
+  const chkDate=chk('date'),bulkDate=val('date');
   const cid=CCOM;
   const recs=((DATA.commodityReceived||{})[cid]||[]).filter(x=>ids.includes(String(x.id)));
   if(!recs.length)return;
@@ -8712,9 +8758,9 @@ function saveBulkEditMaizeRec(){
   updateData(d=>{const cr={...(d.commodityReceived||{})};cr[cid]=(cr[cid]||[]).map(x=>{
     const id=String(x.id);
     if(!ids.includes(id))return x;
-    const batchName=uc(_bulkRowVal('bel-batchName',id))||x.batchName;
-    const received=Number(_bulkRowVal('bel-received',id)||0);
-    const unitPrice=Number(_bulkRowVal('bel-unitPrice',id)||0);
+    const batchName=chkBatch?uc(bulkBatch):(uc(_bulkRowVal('bel-batchName',id))||x.batchName);
+    const received=chkReceived?Number(bulkReceived||0):Number(_bulkRowVal('bel-received',id)||0);
+    const unitPrice=chkPrice?Number(bulkPrice||0):Number(_bulkRowVal('bel-unitPrice',id)||0);
     const date=chkDate?bulkDate:_bulkRowVal('bel-date',id);
     return{...x,batchName,received,unitPrice,date};
   });return{...d,commodityReceived:cr};});
@@ -8752,11 +8798,19 @@ function _doOpenBulkEditMaizeIss(recs){
   const n=recs.length;
   window._bulkEditMaizeIssIds=recs.map(r=>String(r.id));
   const rowsHtml=recs.map(_maizeIssRowHtml).join('');
+  const cid=CCOM;
+  const batches=[...new Set(cRec(cid).map(x=>x.batchName))];
+  const batchOpts=batches.map(b=>`<option value="${b}">${b}</option>`).join('');
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Issued (${n})</div>
-    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below (every field from the issue form is editable there).</div>
+    <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick any field to set the SAME value on all ${n} record(s) — leave it unticked and each record keeps its own value from the row below (every field from the issue form is editable there too).</div>
+    ${_bulkOverrideFieldHtml('maizeiss','batchName','Batch',`<select class="fi" id="bulkedit-maizeiss-batchName" disabled>${batchOpts}</select>`)}
+    ${_bulkOverrideFieldHtml('maizeiss','transporter','Transporter',`<input class="fi" id="bulkedit-maizeiss-transporter" oninput="this.value=this.value.toUpperCase()" disabled/>`)}
+    ${_bulkOverrideFieldHtml('maizeiss','issued','Qty Issued',`<input class="fi" type="number" id="bulkedit-maizeiss-issued" inputmode="numeric" disabled/>`)}
+    ${_bulkOverrideFieldHtml('maizeiss','salePrice',`Sale Price (${cur()})`,`<input class="fi" type="number" id="bulkedit-maizeiss-salePrice" step="0.01" inputmode="decimal" disabled/>`)}
     ${_bulkOverrideFieldHtml('maizeiss','date','Date',`<input class="fi" type="date" id="bulkedit-maizeiss-date" disabled/>`)}
     ${_bulkOverrideFieldHtml('maizeiss','creditStatus','Payment Status',`<select class="fi" id="bulkedit-maizeiss-creditStatus" disabled><option value="paid">✅ PAID</option><option value="partial">🔶 PARTIAL</option><option value="credit">🔴 CREDIT</option></select>`)}
+    ${_bulkOverrideFieldHtml('maizeiss','partialPaid',`Amount Paid (${cur()} — for partial)`,`<input class="fi" type="number" id="bulkedit-maizeiss-partialPaid" step="0.01" inputmode="decimal" disabled/>`)}
     <div class="sh" style="margin-top:14px">Or edit each record individually</div>
     <div style="max-height:38vh;overflow-y:auto;padding-right:4px">${rowsHtml}</div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn ba" onclick="saveBulkEditMaizeIss()">✓ Save Changes</button></div>`);
@@ -8764,10 +8818,15 @@ function _doOpenBulkEditMaizeIss(recs){
 function saveBulkEditMaizeIss(){
   const ids=window._bulkEditMaizeIssIds||[...bulkSet('maize-iss-table')];
   if(!ids.length)return;
-  const chkDate=document.getElementById('bulkedit-maizeiss-chk-date')?.checked;
-  const chkCredit=document.getElementById('bulkedit-maizeiss-chk-creditStatus')?.checked;
-  const bulkDate=document.getElementById('bulkedit-maizeiss-date')?.value;
-  const bulkCredit=document.getElementById('bulkedit-maizeiss-creditStatus')?.value;
+  const chk=k=>document.getElementById('bulkedit-maizeiss-chk-'+k)?.checked;
+  const val=k=>document.getElementById('bulkedit-maizeiss-'+k)?.value;
+  const chkBatch=chk('batchName'),bulkBatch=val('batchName');
+  const chkTransporter=chk('transporter'),bulkTransporter=val('transporter');
+  const chkIssued=chk('issued'),bulkIssued=val('issued');
+  const chkPrice=chk('salePrice'),bulkPrice=val('salePrice');
+  const chkDate=chk('date'),bulkDate=val('date');
+  const chkCredit=chk('creditStatus'),bulkCredit=val('creditStatus');
+  const chkPartial=chk('partialPaid'),bulkPartial=val('partialPaid');
   const cid=CCOM;
   const recs=((DATA.commodityIssued||{})[cid]||[]).filter(x=>ids.includes(String(x.id)));
   if(!recs.length)return;
@@ -8775,13 +8834,13 @@ function saveBulkEditMaizeIss(){
   updateData(d=>{const ci={...(d.commodityIssued||{})};ci[cid]=(ci[cid]||[]).map(x=>{
     const id=String(x.id);
     if(!ids.includes(id))return x;
-    const batchName=_bulkRowVal('bel-batchName',id)||x.batchName;
-    const transporter=uc(_bulkRowVal('bel-transporter',id));
-    const issued=Number(_bulkRowVal('bel-issued',id)||0);
-    const salePrice=Number(_bulkRowVal('bel-salePrice',id)||0);
+    const batchName=chkBatch?bulkBatch:(_bulkRowVal('bel-batchName',id)||x.batchName);
+    const transporter=uc(chkTransporter?bulkTransporter:_bulkRowVal('bel-transporter',id));
+    const issued=chkIssued?Number(bulkIssued||0):Number(_bulkRowVal('bel-issued',id)||0);
+    const salePrice=chkPrice?Number(bulkPrice||0):Number(_bulkRowVal('bel-salePrice',id)||0);
     const date=chkDate?bulkDate:_bulkRowVal('bel-date',id);
     const creditStatus=chkCredit?bulkCredit:_bulkRowVal('bel-creditStatus',id);
-    const partialPaid=Number(_bulkRowVal('bel-partialPaid',id)||0);
+    const partialPaid=chkPartial?Number(bulkPartial||0):Number(_bulkRowVal('bel-partialPaid',id)||0);
     return{...x,batchName,transporter,issued,salePrice,date,creditStatus,partialPaid};
   });return{...d,commodityIssued:ci};});
   bulkClear('maize-iss-table');
