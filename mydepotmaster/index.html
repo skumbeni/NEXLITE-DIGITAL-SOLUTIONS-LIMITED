@@ -9503,12 +9503,36 @@ function cIss(cid){ return (DATA.commodityIssued||{})[cid]||[]; }
 function cSC(cid){  return (DATA.commodityStockCounts||{})[cid]||[]; }
 function getCom(cid){ return (DATA.commodities||[]).find(c=>c.id===cid)||{id:cid,name:cid,icon:'📦',unit:'units'}; }
 
-// Helper: compute system-Available for a batch (all-time, not period-filtered)
+// Helper: compute system-Available for a batch (all-time, not period-filtered) —
+// this is the LIVE current balance, used for stock-validation/warnings (issue forms,
+// variance checks) where the true up-to-the-minute figure is required.
 function batchAvail(batchName, cid){
   cid=cid||CCOM;
   const rec=approvedArr(cRec(cid)).filter(r=>r.batchName===batchName).reduce((a,b)=>a+Number(b.received||0),0);
   const iss=approvedArr(cIss(cid)).filter(i=>i.batchName===batchName).reduce((a,b)=>a+Number(b.issued||0),0);
   return rec-iss;
+}
+
+// Helper: per-batch running Available balance, frozen at each entry's own date/time —
+// used ONLY for the "Available" column in the Received/Issued tables, so a new entry
+// added today never changes what an older row already shows. Walks every approved
+// receive+issue for the batch in chronological (date+time) order, accumulating
+// received-minus-issued, and records the balance AS OF each record — the same pattern
+// already used for the Cum.Rec/Cum.Iss columns, just netting both directions instead
+// of only counting one. Returns a map of record id -> balance-after-that-record.
+function batchAvailTimeline(cid){
+  cid=cid||CCOM;
+  const recs=approvedArr(cRec(cid)).map(r=>({id:r.id,batchName:r.batchName,date:r.date,time:r.time,delta:Number(r.received||0)}));
+  const isses=approvedArr(cIss(cid)).map(r=>({id:r.id,batchName:r.batchName,date:r.date,time:r.time,delta:-Number(r.issued||0)}));
+  const byBatch={};
+  [...recs,...isses].forEach(r=>{ (byBatch[r.batchName]=byBatch[r.batchName]||[]).push(r); });
+  const map={};
+  Object.keys(byBatch).forEach(bn=>{
+    const list=byBatch[bn].slice().sort((a,b)=>(a.date+(a.time||'')).localeCompare(b.date+(b.time||'')));
+    let bal=0;
+    list.forEach(r=>{ bal+=r.delta; map[r.id]=bal; });
+  });
+  return map;
 }
 
 // Helper: latest physical stock count for a batch
@@ -9585,6 +9609,7 @@ function renderMaizeRec(){
     cumMap[r.id]=runTotal;
     cumCostMap[r.id]=runCost;
   });
+  const availMap=batchAvailTimeline(CCOM);
   const sorted=items.slice().sort((a,b)=>(b.date+(b.time||'')).localeCompare(a.date+(a.time||'')));
   const rows=sorted.map(item=>{
     const qty=Number(item.received||0);
@@ -9602,7 +9627,7 @@ function renderMaizeRec(){
     <td style="color:var(--green);text-align:right;font-weight:700">${qty.toLocaleString()}</td>
     ${USER.role==='admin'?`<td style="color:var(--muted);text-align:right;font-size:17px">${up>0?zm(up):'—'}</td>
     <td style="color:var(--amber);text-align:right;font-size:17px">${up>0?zm(stockVal):'—'}</td>`:''}
-    <td style="color:var(--blue);text-align:right;font-size:17px">${batchAvail(item.batchName,CCOM).toLocaleString()}</td>
+    <td style="color:var(--blue);text-align:right;font-size:17px">${(availMap[item.id]||0).toLocaleString()}</td>
     <td style="color:var(--green);text-align:right;font-weight:700;border-left:2px solid var(--border)">${(cumMap[item.id]||0).toLocaleString()}</td>
     ${USER.role==='admin'?`<td style="color:var(--amber);text-align:right;font-size:16px;border-left:1px solid var(--border)">${cumCostMap[item.id]>0?zm(cumCostMap[item.id]):'—'}</td>`:''}
     ${USER.role==='admin'?`<td style="white-space:nowrap"><button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`openEditMaizeRec('${item.id}')`:''}\" title="${editable?'Edit':'Edit window closed (>'+_editWindowLabel()+')'}">✏️</button> <button class="delbtn" onclick="delMaizeRec('${item.id}')">🗑</button></td>`:''}
@@ -9670,6 +9695,7 @@ function renderMaizeIss(){
     cumMap[r.id]=runTotal;
     cumRevMap[r.id]=runRev;
   });
+  const availMap=batchAvailTimeline(CCOM);
   const sorted=items.slice().sort((a,b)=>(b.date+(b.time||'')).localeCompare(a.date+(a.time||'')));
   const rows=sorted.map(item=>{
     const qty=Number(item.issued||0);
@@ -9688,7 +9714,7 @@ function renderMaizeIss(){
     ${USER.role==='admin'?`<td style="color:var(--muted);text-align:right;font-size:17px">${sp>0?zm(sp):'—'}</td>
     <td style="color:var(--green);text-align:right;font-size:17px">${sp>0?zm(revenue):'—'}</td>
     <td>${(()=>{const cs=item.creditStatus||'paid';return cs==='paid'?'<span class="bdg bg2" style="font-size:14px">PAID</span>':cs==='partial'?`<span class="bdg ba2" style="font-size:14px">PARTIAL</span>${item.partialPaid>0?' <span style="font-size:15px;color:var(--muted)">'+zm(item.partialPaid)+' pd</span>':''}`:'<span class="bdg br2" style="font-size:14px">CREDIT</span>';})()}</td>`:''}
-    <td style="color:var(--blue);text-align:right;font-size:17px">${batchAvail(item.batchName,CCOM).toLocaleString()}</td>
+    <td style="color:var(--blue);text-align:right;font-size:17px">${(availMap[item.id]||0).toLocaleString()}</td>
     <td style="color:var(--amber);text-align:right;font-weight:700;border-left:2px solid var(--border)">${(cumMap[item.id]||0).toLocaleString()}</td>
     ${USER.role==='admin'?`<td style="color:var(--green);text-align:right;font-size:16px;border-left:1px solid var(--border)">${cumRevMap[item.id]>0?zm(cumRevMap[item.id]):'—'}</td>`:''}
     ${USER.role==='admin'?`<td style="white-space:nowrap"><button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`openEditMaizeIss('${item.id}')`:''}\" title="${editable?'Edit':'Edit window closed (>'+_editWindowLabel()+')'}">✏️</button> <button class="delbtn" onclick="delMaizeIss('${item.id}')">🗑</button></td>`:''}
