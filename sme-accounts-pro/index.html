@@ -667,6 +667,7 @@ tbody tr:last-child td { border-bottom: none; }
       <a class="nav-item" data-route="payroll"><i class="material-icons">groups</i><span>Payroll</span></a>
       <a class="nav-item" data-route="reports"><i class="material-icons">bar_chart</i><span>Reports</span></a>
       <div class="nav-section">Setup</div>
+      <a class="nav-item" data-route="subscription"><i class="material-icons">workspace_premium</i><span>Subscription</span></a>
       <a class="nav-item" data-route="settings"><i class="material-icons">settings</i><span>Settings</span></a>
     </nav>
     <div class="sidebar-footer">
@@ -700,6 +701,9 @@ tbody tr:last-child td { border-bottom: none; }
         <button class="btn btn-wa btn-sm" onclick="openWhatsAppHelp()"><i class="material-icons">chat</i>WhatsApp Help</button>
       </div>
     </header>
+    <div id="suspendBanner" style="display:none; background:#B33A2A; color:#fff; padding:10px 24px; font-size:13px; font-weight:600; text-align:center;">
+      Your subscription is suspended — you can view your data but can't make changes. <a href="#" onclick="navigate('subscription'); return false;" style="color:#fff; text-decoration:underline;">Go to Subscription</a>
+    </div>
     <div class="content" id="pageContent"></div>
   </div>
 </div>
@@ -1133,6 +1137,7 @@ const ROUTES = {
   tax: { title: 'Tax Centre', crumb: 'Compliance', render: renderTax },
   payroll: { title: 'Payroll', crumb: 'Compliance', render: renderPayroll },
   reports: { title: 'Reports', crumb: 'Insights', render: renderReports },
+  subscription: { title: 'Subscription', crumb: 'Account', render: renderSubscription },
   settings: { title: 'Settings', crumb: 'Setup', render: renderSettings }
 };
 
@@ -1160,6 +1165,7 @@ function navigate(route) {
   }
   currentRoute = route;
   updateInvoiceBadge();
+  if (typeof refreshSubscriptionBanner === 'function') refreshSubscriptionBanner();
   location.hash = route;
 }
 
@@ -2516,6 +2522,18 @@ function refreshPartiesView() {
 function setPartiesTab(t) { partiesTab = t; partiesPage = 1; refreshPartiesView(); }
 function goToPartiesPage(p) { partiesPage = p; refreshPartiesView(); }
 function openPartyModal(type, id) {
+  if (type === 'customers' && !id) {
+    if (typeof isSuspended === 'function' && isSuspended()) {
+      showUpgradePrompt('Your subscription is suspended — reactivate to add new customers.');
+      return;
+    }
+    if (typeof atCustomerCap === 'function' && atCustomerCap()) {
+      const cap = customerCap();
+      const tierName = getTier(window.subscription?.tier).name;
+      showUpgradePrompt(`You've reached the ${tierName} plan's limit of ${cap} customers — upgrade to add more.`);
+      return;
+    }
+  }
   const list = load(type === 'customers' ? K.customers : K.suppliers);
   const p = id ? list.find(x => x.id === id) : { id: uid(type === 'customers' ? 'c' : 's'), name:'', phone:'', email:'', address:'', openingBalance: 0 };
   const body = `
@@ -3356,6 +3374,11 @@ navigate(ROUTES[initialRoute] ? initialRoute : 'dashboard');
       try {
         const settings = JSON.parse(localStorage.getItem('smeap_settings') || '{}');
         if (bizName) settings.businessName = bizName;
+        // Also seed email + signup date — without these the admin panel's
+        // Users list has no way to identify or date a business, since these
+        // fields otherwise stay blank until someone visits Settings manually.
+        settings.email = email;
+        if (!settings.createdAt) settings.createdAt = new Date().toISOString();
         if (typeof window.save === 'function') {
           window.save('smeap_settings', settings);
         } else {
@@ -3421,6 +3444,11 @@ navigate(ROUTES[initialRoute] ? initialRoute : 'dashboard');
         await window.fb.restoreFromFirebase();
         localStorage.setItem('_fb_synced', 'true');
       }
+
+      // Pull the current tier catalog + this business's enforced subscription
+      // state — both are read-only from this side; only admin can change them.
+      if (typeof window.loadTierCatalog === 'function') await window.loadTierCatalog();
+      if (typeof window.loadSubscription === 'function') await window.loadSubscription();
       
       // Sync pending writes from offline queue
       if (window.pendingSyncQueue?.length > 0) {
@@ -3623,6 +3651,15 @@ window.addEventListener('offline', () => {
 // Hook into existing save() function to also queue for sync
 const originalSave = window.save;
 window.save = function(key, data) {
+  // Suspended accounts are read-only — this mirrors how the other NEXLITE
+  // apps freeze a lapsed/suspended license: existing data stays visible,
+  // but nothing new can be saved locally or synced until admin reactivates.
+  if (typeof isSuspended === 'function' && isSuspended()) {
+    if (typeof toast === 'function') toast('Your subscription is suspended — this change was not saved.', 'error');
+    if (typeof refreshSubscriptionBanner === 'function') refreshSubscriptionBanner();
+    return;
+  }
+
   // Call original localStorage save
   originalSave(key, data);
   
@@ -3640,6 +3677,232 @@ window.autoSyncInterval = setInterval(() => {
     window.fb.syncAll();
   }
 }, 45000); // Every 45 seconds
+</script>
+
+<!-- Subscription: tier catalog, enforcement, and the request/approval flow -->
+<script>
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// Mirrors today's admin-configured tiers — used only until the real
+// tierCatalog (published by the admin panel whenever tiers are edited) has
+// synced at least once, so a brand-new or offline device still enforces
+// sane limits instead of nothing at all.
+const FALLBACK_TIER_CATALOG = [
+  { id: 'free', name: 'Free', price: 0, maxCustomers: 10, color: '#8A8A8A', features: ['Up to 10 customers', 'Basic reports', 'Offline mode'] },
+  { id: 'starter', name: 'Starter', price: 150, maxCustomers: 50, color: '#2C5F8D', features: ['Up to 50 customers', 'Advanced reports', 'Cloud sync', 'Email support'] },
+  { id: 'growth', name: 'Growth', price: 450, maxCustomers: 500, color: '#D4A437', features: ['Up to 500 customers', 'Advanced analytics', 'Multi-user access', 'Priority support'] },
+  { id: 'pro', name: 'Pro', price: 1200, maxCustomers: null, color: '#2A6B43', features: ['Unlimited customers', 'Full API access', 'White-label option', '24/7 support'] }
+];
+
+window.tierCatalog = (() => {
+  try { const c = JSON.parse(localStorage.getItem('smeap_tierCatalog') || 'null'); return (c && c.length) ? c : FALLBACK_TIER_CATALOG; }
+  catch (_) { return FALLBACK_TIER_CATALOG; }
+})();
+
+// subscription.tier/status are enforced fields only the admin can set (see
+// firebase-rtdb-rules.json); subscription.request is what this business
+// submits and reads back to see the outcome.
+window.subscription = (() => {
+  try { return JSON.parse(localStorage.getItem('smeap_subscription') || 'null') || { tier: 'free', status: 'active', request: null }; }
+  catch (_) { return { tier: 'free', status: 'active', request: null }; }
+})();
+
+function getTier(tierId) {
+  return window.tierCatalog.find(t => t.id === tierId) || window.tierCatalog[0];
+}
+
+async function loadTierCatalog() {
+  try {
+    const remote = await window.__rtdb.getPath('tierCatalog');
+    const list = Array.isArray(remote) ? remote : (remote ? Object.values(remote) : null);
+    if (list && list.length) {
+      window.tierCatalog = list;
+      localStorage.setItem('smeap_tierCatalog', JSON.stringify(list));
+    }
+  } catch (err) {
+    console.error('Failed to load tier catalog:', err);
+  }
+}
+
+async function loadSubscription() {
+  if (!window.currentUser) return;
+  try {
+    const remote = await window.fb.read('subscription');
+    window.subscription = {
+      tier: remote?.tier || 'free',
+      status: remote?.status || 'active',
+      request: (remote?.request && remote.request.status) ? remote.request : null
+    };
+    localStorage.setItem('smeap_subscription', JSON.stringify(window.subscription));
+  } catch (err) {
+    console.error('Failed to load subscription:', err);
+  }
+  refreshSubscriptionBanner();
+  if (currentRoute === 'subscription') navigate('subscription');
+}
+
+function isSuspended() {
+  return window.subscription?.status === 'suspended';
+}
+
+function customerCap() {
+  return getTier(window.subscription?.tier).maxCustomers;
+}
+
+function atCustomerCap() {
+  const cap = customerCap();
+  if (cap == null) return false;
+  return load(K.customers).length >= cap;
+}
+
+function showUpgradePrompt(message) {
+  toast(message, 'warn');
+  navigate('subscription');
+}
+
+function refreshSubscriptionBanner() {
+  const banner = document.getElementById('suspendBanner');
+  if (!banner) return;
+  banner.style.display = isSuspended() ? 'block' : 'none';
+}
+
+async function submitSubscriptionRequest(e) {
+  e.preventDefault();
+  const tier = document.getElementById('subReqTier').value;
+  const method = document.getElementById('subReqMethod').value;
+  const reference = document.getElementById('subReqReference').value.trim();
+  const note = document.getElementById('subReqNote').value.trim();
+
+  if (!reference) {
+    toast('Enter the mobile money transaction reference', 'warn');
+    return;
+  }
+
+  const request = {
+    tier, method, reference,
+    note: note || null,
+    submittedAt: new Date().toISOString(),
+    status: 'pending'
+  };
+
+  const ok = await window.fb.write('subscription/request', request);
+  if (!ok) {
+    toast('Could not submit — check your connection and try again', 'error');
+    return;
+  }
+
+  window.subscription.request = request;
+  localStorage.setItem('smeap_subscription', JSON.stringify(window.subscription));
+  toast("Request submitted — we'll review it shortly", 'success');
+  navigate('subscription');
+}
+
+function renderSubscription(root) {
+  const current = getTier(window.subscription?.tier);
+  const status = window.subscription?.status || 'active';
+  const request = window.subscription?.request;
+  const usage = load(K.customers).length;
+
+  const tierCards = window.tierCatalog.map(t => {
+    const isCurrent = t.id === current.id;
+    const limit = t.maxCustomers ? `Up to ${t.maxCustomers.toLocaleString()} customers` : 'Unlimited customers';
+    return `
+      <div class="card" style="border:2px solid ${t.color};${isCurrent ? ` box-shadow:0 0 0 2px ${t.color} inset;` : ''}">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <span style="font-weight:700; color:${t.color};">${esc(t.name)}</span>
+          ${isCurrent ? '<span class="badge" style="background:rgba(42,107,67,0.15); color:#2A6B43;">CURRENT</span>' : ''}
+        </div>
+        <div style="font-size:20px; font-weight:700; margin:8px 0 2px;">${t.price ? `ZMW ${t.price.toLocaleString()}/mo` : 'Free'}</div>
+        <div style="font-size:12px; color:var(--ink-mute,#8A8A8A); margin-bottom:10px;">${limit}</div>
+        <ul style="font-size:12px; padding-left:18px; margin:0 0 12px;">${(t.features || []).map(f => `<li>${esc(f)}</li>`).join('')}</ul>
+        ${isCurrent ? '' : `<button class="btn btn-secondary btn-sm" style="width:100%;" onclick="document.getElementById('subReqTier').value='${t.id}'; document.getElementById('subReqForm').scrollIntoView({behavior:'smooth'});">Request this plan</button>`}
+      </div>
+    `;
+  }).join('');
+
+  let requestBanner = '';
+  if (request) {
+    const map = {
+      pending: { color: '#C77A1A', text: `Your request to move to ${esc(getTier(request.tier).name)} is pending review.` },
+      approved: { color: '#2A6B43', text: `Your request to move to ${esc(getTier(request.tier).name)} was approved.` },
+      rejected: { color: '#B33A2A', text: `Your request to move to ${esc(getTier(request.tier).name)} was declined.${request.decisionNote ? ' Reason: ' + esc(request.decisionNote) : ''}` }
+    };
+    const info = map[request.status];
+    if (info) {
+      requestBanner = `
+        <div class="card" style="border-left:4px solid ${info.color}; margin-bottom:20px;">
+          <div style="font-size:13px;">${info.text}</div>
+          <div style="font-size:11px; color:var(--ink-mute,#8A8A8A); margin-top:4px;">Submitted ${new Date(request.submittedAt).toLocaleString()} · Ref: ${esc(request.reference)}</div>
+        </div>
+      `;
+    }
+  }
+
+  root.innerHTML = `
+    <div class="page-header">
+      <div>
+        <h2>Subscription</h2>
+        <div class="sub">Manage your plan and usage limits.</div>
+      </div>
+    </div>
+
+    ${status === 'suspended' ? `
+      <div class="card" style="border-left:4px solid #B33A2A; margin-bottom:20px;">
+        <div style="font-weight:700; color:#B33A2A;">Account suspended</div>
+        <div style="font-size:13px; margin-top:4px;">You can still view your existing data, but new records and edits are blocked until this is resolved. Contact support if you believe this is a mistake.</div>
+      </div>
+    ` : ''}
+
+    ${requestBanner}
+
+    <div class="card mb-md">
+      <div class="kpi-label">Current Plan</div>
+      <div style="font-size:22px; font-weight:700; margin-top:6px;">${esc(current.name)}</div>
+      <div style="font-size:13px; color:var(--ink-mute,#8A8A8A); margin-top:4px;">
+        ${customerCap() != null ? `${usage} / ${customerCap()} customers used` : `${usage} customers (unlimited)`}
+      </div>
+    </div>
+
+    <h3 style="font-size:14px; margin:20px 0 12px;">Available Plans</h3>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:16px; margin-bottom:24px;">
+      ${tierCards}
+    </div>
+
+    <h3 style="font-size:14px; margin:20px 0 12px;">Request a Plan Change</h3>
+    <div class="card">
+      <form id="subReqForm" onsubmit="submitSubscriptionRequest(event)">
+        <div class="form-grid">
+          <div class="field">
+            <label>Plan</label>
+            <select id="subReqTier">
+              ${window.tierCatalog.map(t => `<option value="${t.id}" ${t.id === current.id ? 'selected' : ''}>${esc(t.name)}${t.price ? ` (ZMW ${t.price.toLocaleString()}/mo)` : ''}</option>`).join('')}
+            </select>
+          </div>
+          <div class="field">
+            <label>Payment Method</label>
+            <select id="subReqMethod">
+              <option value="mtn">MTN Mobile Money</option>
+              <option value="airtel">Airtel Money</option>
+            </select>
+          </div>
+          <div class="field full">
+            <label>Transaction Reference</label>
+            <input type="text" id="subReqReference" placeholder="e.g. MP240905.1234.A56789" required>
+          </div>
+          <div class="field full">
+            <label>Note (optional)</label>
+            <input type="text" id="subReqNote" placeholder="Anything the admin should know">
+          </div>
+        </div>
+        <button class="btn btn-primary" type="submit" style="margin-top:12px;" ${request?.status === 'pending' ? 'disabled' : ''}>
+          ${request?.status === 'pending' ? 'Request Pending' : 'Submit Request'}
+        </button>
+      </form>
+    </div>
+  `;
+}
 </script>
 
 </body>
