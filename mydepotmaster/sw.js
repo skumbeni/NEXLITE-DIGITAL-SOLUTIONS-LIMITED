@@ -25,7 +25,14 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.0.0 (2026-08-30)
+// Current version: v0.0.1 (2026-09-07)
+//
+// v0.0.1 changes (2026-09-07) — Depot Assistant topic-detection fix:
+//   - "staff" topic keyword regex was missing task-name terms (stitch,
+//     stitching, loader, loading, task), so a question comparing a work
+//     task (e.g. stitching) against stock (e.g. maize received) only
+//     pulled in the stock topic and left staffLogs out of scope.
+//   - Added those terms to COPILOT_TOPICS.staff.keywords in index.html.
 //
 // v0.0.0 changes (2026-08-30) — Versioning scheme reset:
 //   - Switched from the flat "v0.NN" counter to a three-segment "x.y.z"
@@ -1059,7 +1066,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.0.0';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.0.1';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
