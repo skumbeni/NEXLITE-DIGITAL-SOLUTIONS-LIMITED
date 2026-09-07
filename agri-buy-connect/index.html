@@ -525,6 +525,7 @@ window.__firebaseReadyPromise = new Promise((resolve) => { window.__firebaseRead
     <button class="nav-item" data-view="c-staff" onclick="setView('company','c-staff')">Field staff</button>
     <button class="nav-item" data-view="c-purchases" onclick="setView('company','c-purchases')">Purchases</button>
     <button class="nav-item" data-view="c-contracts" onclick="setView('company','c-contracts')">Contracts</button>
+    <button class="nav-item" data-view="c-impact" onclick="setView('company','c-impact')">Impact</button>
     <button class="nav-item" data-view="c-payroll" onclick="setView('company','c-payroll')">Payroll</button>
     <button class="nav-item" data-view="c-settings" onclick="setView('company','c-settings')">Settings</button>
     <button class="nav-item" data-view="c-billing" onclick="setView('company','c-billing')">Billing</button>
@@ -546,6 +547,7 @@ window.__firebaseReadyPromise = new Promise((resolve) => { window.__firebaseRead
     <button class="nav-item" data-view="a-companies" onclick="setView('agent','a-companies')">Companies</button>
     <button class="nav-item" data-view="a-staff" onclick="setView('agent','a-staff')">Field staff</button>
     <button class="nav-item" data-view="a-purchases" onclick="setView('agent','a-purchases')">Purchases</button>
+    <button class="nav-item" data-view="a-impact" onclick="setView('agent','a-impact')">Impact</button>
     <button class="nav-item" data-view="a-payroll" onclick="setView('agent','a-payroll')">Payroll</button>
     <button class="nav-item" data-view="a-settings" onclick="setView('agent','a-settings')">Settings</button>
     <button class="nav-item" data-view="a-messages" onclick="setView('agent','a-messages')"><span class="nav-item-label">💬 Messages</span><span class="nav-badge" id="badge-msg-agent" style="display:none;"></span></button>
@@ -570,7 +572,7 @@ window.__firebaseReadyPromise = new Promise((resolve) => { window.__firebaseRead
     <button class="nav-item" data-view="s-messages" onclick="setView('staff','s-messages')"><span class="nav-item-label">💬 Messages</span><span class="nav-badge" id="badge-msg-staff" style="display:none;"></span></button>
     <button class="nav-item" data-view="s-notifications" onclick="setView('staff','s-notifications')"><span class="nav-item-label">🔔 Notifications</span><span class="nav-badge" id="badge-notif-staff" style="display:none;"></span></button>
     <div class="sidebar-spacer"></div>
-    <div class="who"><div class="nm" id="staff-who-name"></div><div class="rl">Field staff</div></div>
+    <div class="who"><div class="nm" id="staff-who-name"></div><div class="rl" id="staff-who-companies">Field staff</div></div>
     <button class="logout-btn" onclick="logout()">Log out</button>
   </div>
   <div class="main" id="staff-main"></div>
@@ -980,6 +982,13 @@ function seedData(){
     // Each link = one agent's relationship with one buying company: own rate, own advances.
     agentLinks: [],
     fieldStaff: [],
+    // Many-to-many: which OTHER companies (beyond fieldStaff.companyId,
+    // kept as the staff member's original/"home" employer) a staff member
+    // also works directly for. A staff member hired through an agent
+    // already reaches multiple companies via agentLinks — this is the
+    // equivalent for staff hired directly, no agent involved. See
+    // DB.isStaffLinkedToCompany / DB.linkStaffToCompany.
+    staffLinks: [],
     farmers: [],
     // Many-to-many: which staff (and by extension, which company/agent)
     // a farmer has an active relationship with. A farmer can sell to
@@ -1013,6 +1022,7 @@ const DB = {
       if(!Array.isArray(l.advances)) l.advances = [];
       if(typeof l.commissionRate === 'undefined' || l.commissionRate===null) l.commissionRate = 0;
     });
+    if(!Array.isArray(this.data.staffLinks)) this.data.staffLinks = [];
     if(!Array.isArray(this.data.farmerLinks)) this.data.farmerLinks = [];
     // Legacy single-owner farmers (registeredBy) migrate forward into an
     // explicit farmerLinks row, so farmersForStaff/farmersForAgent see them
@@ -1021,6 +1031,17 @@ const DB = {
       if(f.registeredBy && !this.data.farmerLinks.some(l=>l.farmerId===f.id && l.staffId===f.registeredBy)){
         this.data.farmerLinks.push({ id:this.uid('fl'), farmerId:f.id, staffId:f.registeredBy, linkedDate:f.registeredDate||new Date().toISOString().slice(0,10) });
       }
+    });
+    // registrationMethod ('staff'|'self') records HOW a farmer originally
+    // signed up, independent of farmerLinks — which change over time as a
+    // self-registered farmer gets linked to buyers. Without this separate
+    // field, the proxy-registration stat would drift back toward 100% the
+    // moment any self-registered farmer makes their first sale, since
+    // they'd then look identical to a staff-registered farmer (both have
+    // 1+ links). Self-signup didn't exist before this field was added, so
+    // any farmer missing it was necessarily staff-registered.
+    this.data.farmers.forEach(f=>{
+      if(!f.registrationMethod) f.registrationMethod = 'staff';
     });
     this.data.purchases.forEach(p=>{
       if(!p.paymentStatus){
@@ -1320,11 +1341,37 @@ const DB = {
   linksForAgent(agentId){ return this.data.agentLinks.filter(l=>l.agentId===agentId); },
   linksForCompany(companyId){ return this.data.agentLinks.filter(l=>l.companyId===companyId); },
   staffForAgent(agentId){ return this.data.fieldStaff.filter(s=>s.agentId===agentId); },
-  staffForCompany(companyId){ return this.data.fieldStaff.filter(s=>s.companyId===companyId); },
+  // Direct staff (s.companyId===companyId) PLUS staff independently linked
+  // in via staffLinks (see linkStaffToCompany) — a staff member can be a
+  // "direct hire" at their home company and still show up in another
+  // company's staff list/payroll once linked.
+  staffForCompany(companyId){
+    const linkedIds = this.staffLinksForCompany(companyId).map(l=>l.staffId);
+    return this.data.fieldStaff.filter(s=>s.companyId===companyId || linkedIds.includes(s.id));
+  },
+  staffLink(staffId, companyId){ return this.data.staffLinks.find(l=>l.staffId===staffId && l.companyId===companyId); },
+  staffLinksForStaff(staffId){ return this.data.staffLinks.filter(l=>l.staffId===staffId); },
+  staffLinksForCompany(companyId){ return this.data.staffLinks.filter(l=>l.companyId===companyId); },
+  // True if this staff member can act for (log purchases against, be paid
+  // by) this company — either as their home employer or via a staffLink.
+  isStaffLinkedToCompany(staffId, companyId){
+    const s = this.fieldStaffById(staffId);
+    if(s && s.companyId===companyId) return true;
+    return this.data.staffLinks.some(l=>l.staffId===staffId && l.companyId===companyId);
+  },
+  // Creates the link if it doesn't already exist (including if the company
+  // is already their home employer); returns the new link, or null.
+  linkStaffToCompany(staffId, companyId){
+    if(this.isStaffLinkedToCompany(staffId, companyId)) return null;
+    const link = { id:this.uid('sl'), staffId, companyId, linkedDate:new Date().toISOString().slice(0,10) };
+    this.data.staffLinks.push(link);
+    return link;
+  },
   companiesForStaff(staffId){
     const s = this.fieldStaffById(staffId); if(!s) return [];
     const ids = [];
     if(s.companyId) ids.push(s.companyId);
+    this.staffLinksForStaff(staffId).forEach(l=>{ if(!ids.includes(l.companyId)) ids.push(l.companyId); });
     if(s.agentId) this.linksForAgent(s.agentId).forEach(l=>{ if(!ids.includes(l.companyId)) ids.push(l.companyId); });
     return this.data.companies.filter(c=>ids.includes(c.id));
   },
@@ -1379,6 +1426,88 @@ const DB = {
   // regardless of whether the company ultimately pays the agent or the farmer directly.
   purchaseValue(p){ return p.quantity * p.price; },
   isCommissionable(p){ return p.status==='approved' || p.status==='paid'; },
+
+  // ---- impact reporting (bank / funder / government audiences) ----
+  // Fields that weren't tracked before this feature existed come through as
+  // null/undefined. Percentages are always computed over the "known"
+  // subset, never by silently treating unknown as "no" — a small known-
+  // sample size is shown alongside each percentage so it isn't read as more
+  // solid than it is.
+  //
+  // Two adaptations from the original design worth noting for whoever
+  // ports impactStatsHTML/printImpactReport next:
+  //  - Proxy-registration uses farmer.registrationMethod ('self'|'staff'),
+  //    not a self-reported "do you have your own phone" checkbox. It's set
+  //    once at signup and never changes even after a self-registered
+  //    farmer later links to a buyer (see applyMigrations) — so it stays
+  //    meaningful over time instead of drifting toward 100%.
+  //  - "First-time sellers" isn't a stored checkbox either. It's computed
+  //    from purchase history system-wide: a farmer counts as first-time if
+  //    the earliest purchase ever recorded against them (across every
+  //    buyer, not just this scope) falls inside the current report's
+  //    purchase set. Avoids adding another field to the registration form,
+  //    and it's a fact the app can verify rather than a life-history claim
+  //    someone has to self-report.
+  impactStats(filter){
+    const purchases = this.purchasesFor(filter);
+    const farmerIds = [...new Set(purchases.map(p=>p.farmerId))];
+    const farmers = farmerIds.map(id=>this.farmer(id)).filter(Boolean);
+    const farmersReached = farmers.length;
+
+    const earliestPurchaseByFarmer = {};
+    this.data.purchases.forEach(p=>{
+      const t = p.loggedAt || 0;
+      if(!(p.farmerId in earliestPurchaseByFarmer) || t < earliestPurchaseByFarmer[p.farmerId]) earliestPurchaseByFarmer[p.farmerId] = t;
+    });
+    const scopeEarliestByFarmer = {};
+    purchases.forEach(p=>{
+      const t = p.loggedAt || 0;
+      if(!(p.farmerId in scopeEarliestByFarmer) || t < scopeEarliestByFarmer[p.farmerId]) scopeEarliestByFarmer[p.farmerId] = t;
+    });
+    const firstTimeSellers = farmerIds.filter(id => scopeEarliestByFarmer[id]===earliestPurchaseByFarmer[id]).length;
+    const firstTimeSellerPct = farmersReached ? Math.round(firstTimeSellers/farmersReached*100) : null;
+
+    const countByFarmer = {};
+    purchases.forEach(p=>{ countByFarmer[p.farmerId] = (countByFarmer[p.farmerId]||0)+1; });
+    const repeatSellers = Object.values(countByFarmer).filter(c=>c>1).length;
+    const repeatSellerPct = farmersReached ? Math.round(repeatSellers/farmersReached*100) : null;
+
+    const totalVolume = purchases.reduce((s,p)=>s+p.quantity,0);
+    const totalValue = purchases.reduce((s,p)=>s+this.purchaseValue(p),0);
+
+    const withRef = purchases.filter(p=>p.referencePrice);
+    let avgUpliftPct = null;
+    if(withRef.length){
+      const upliftSum = withRef.reduce((s,p)=> s + ((p.price - p.referencePrice)/p.referencePrice), 0);
+      avgUpliftPct = Math.round((upliftSum/withRef.length)*1000)/10;
+    }
+
+    const inclusionKnown = farmers.filter(f=>f.previouslyUnbanked===true || f.previouslyUnbanked===false);
+    const wasUnbanked = inclusionKnown.filter(f=>f.previouslyUnbanked===true);
+    const nowDigital = wasUnbanked.filter(f=> purchases.some(p=>p.farmerId===f.id && p.paymentMethod && p.paymentMethod!=='cash'));
+    const inclusionPct = wasUnbanked.length ? Math.round(nowDigital.length/wasUnbanked.length*100) : null;
+
+    const genderKnown = farmers.filter(f=>f.gender);
+    const genderSplit = {
+      female: genderKnown.length ? Math.round(genderKnown.filter(f=>f.gender==='female').length/genderKnown.length*100) : null,
+      male: genderKnown.length ? Math.round(genderKnown.filter(f=>f.gender==='male').length/genderKnown.length*100) : null,
+      other: genderKnown.length ? Math.round(genderKnown.filter(f=>f.gender==='other').length/genderKnown.length*100) : null
+    };
+
+    const proxyKnown = farmers.filter(f=>f.registrationMethod==='self' || f.registrationMethod==='staff');
+    const proxyRegisteredPct = proxyKnown.length ? Math.round(proxyKnown.filter(f=>f.registrationMethod==='staff').length/proxyKnown.length*100) : null;
+
+    return {
+      farmersReached, firstTimeSellers, firstTimeSellerPct, firstTimeSampleSize: farmersReached,
+      repeatSellers, repeatSellerPct,
+      totalVolume, totalValue,
+      avgUpliftPct, refPriceSampleSize: withRef.length,
+      inclusionPct, unbankedSampleSize: wasUnbanked.length,
+      genderSplit, genderSampleSize: genderKnown.length,
+      proxyRegisteredPct, proxySampleSize: proxyKnown.length,
+      purchases, farmers
+    };
+  },
   // AgriBuy's own revenue from a buying company under its partnership model —
   // separate from the agent<->company commission ledger below. Accrues only
   // on approved/paid volume (isCommissionable), so it's rejection-adjusted
@@ -1636,9 +1765,12 @@ function resolveOwnerAccount(role, record){
   if(!record) return null;
   if(role==='company' || role==='agent') return record;
   if(role==='staff'){
-    if(record.companyId) return DB.company(record.companyId);
-    if(record.agentId) return DB.data.agents.find(a=>a.id===record.agentId);
-    return null;
+    // A staff member can now work directly for several companies (home
+    // companyId + staffLinks) as well as through an agent — same
+    // "ok if any one is in good standing" array handling as farmers below.
+    const owners = DB.companiesForStaff(record.id).slice();
+    if(record.agentId){ const ag = DB.data.agents.find(a=>a.id===record.agentId); if(ag) owners.push(ag); }
+    return owners;
   }
   if(role==='farmer'){
     // A farmer can be linked to several staff (many-to-many) — return every
@@ -2101,12 +2233,13 @@ async function attemptFarmerSignup(err){
 
   const code = 'FM-' + name.split(' ')[0].toUpperCase() + Math.floor(Math.random()*90+10);
   const geo = await getGeo();
-  // registeredBy stays null — this farmer registered themselves rather
-  // than being provisioned by a company's field staff. Everything else
-  // matches the shape produced by registerFarmer()/submitPurchase() so
-  // this farmer looks identical to a staff-registered one everywhere else
-  // in the app (impact stats, farmer pickers, ledgers, etc).
-  const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop, crops: crop ? [crop] : [], code, geo, gender, previouslyUnbanked, registeredBy: null, registeredDate: new Date().toISOString().slice(0,10) };
+  // registeredBy stays null and registrationMethod is 'self' — this
+  // farmer registered themselves rather than being provisioned by a
+  // company's field staff. registrationMethod stays 'self' permanently
+  // even after this farmer links to a buyer later (see applyMigrations),
+  // so the proxy-registration stat still reflects how they actually
+  // signed up, not just their current link count.
+  const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop, crops: crop ? [crop] : [], code, geo, gender, previouslyUnbanked, registeredBy: null, registrationMethod: 'self', registeredDate: new Date().toISOString().slice(0,10) };
   DB.data.farmers.push(farmer);
   DB.save();
   createAuxAuthAccount(authEmailFor('fm', farmer.id), 'fm-' + farmer.id).then(uid=>{
@@ -2291,6 +2424,8 @@ function enterApp(){
     setView('agent','a-overview');
   } else if(role==='staff'){
     document.getElementById('staff-who-name').textContent = DB.fieldStaffById(id).name;
+    const companyCount = DB.companiesForStaff(id).length;
+    document.getElementById('staff-who-companies').textContent = 'Field staff' + (companyCount>1 ? ' · ' + companyCount + ' companies' : '');
     document.getElementById('app-staff').classList.add('active');
     document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
     setView('staff','s-log');
@@ -2328,6 +2463,42 @@ function setView(appKey, view, silent){
 /* ---------- helpers ---------- */
 const fmtK = n => 'K' + Number(n).toLocaleString('en-ZM',{minimumFractionDigits:2, maximumFractionDigits:2});
 const fmtQty = n => Number(n).toLocaleString('en-ZM');
+// Renders an impact-stat percentage with its sample size alongside it (or a
+// plain "no data yet" when the underlying field hasn't been recorded for
+// anyone in scope) — see DB.impactStats(), which returns null for any
+// percentage with zero known samples rather than guessing.
+function pctOrDash(pct, sampleSize, noun){
+  if(pct===null) return `<span style="color:var(--soil-40);">— no data yet</span>`;
+  return `${pct}%<span style="font-size:11px;color:var(--soil-40);"> (${sampleSize} ${noun})</span>`;
+}
+// Renders the in-app Impact Report panel (bank/funder/government-facing
+// stats) from a DB.impactStats() result. commissionValue/commissionOwner
+// are passed in by the caller since what "commission" means depends on
+// who's viewing — a company's commission owed to its agents vs. an
+// agent's own commission accrued — see step 6 for how each dashboard
+// supplies them.
+function impactStatsHTML(stats, commissionValue, commissionOwner){
+  return `
+    <div class="stat-grid">
+      <div class="stat-card"><div class="lbl">Farmers reached</div><div class="val">${fmtQty(stats.farmersReached)}</div><div class="sub">unique verified farmers transacted</div></div>
+      <div class="stat-card"><div class="lbl">First-time sellers</div><div class="val">${stats.firstTimeSellerPct===null?'—':stats.firstTimeSellerPct+'%'}</div><div class="sub">${stats.firstTimeSampleSize} farmers with data on file</div></div>
+      <div class="stat-card"><div class="lbl">Repeat-seller rate</div><div class="val">${stats.repeatSellerPct===null?'—':stats.repeatSellerPct+'%'}</div><div class="sub">sold more than once</div></div>
+      <div class="stat-card"><div class="lbl">Total volume moved</div><div class="val">${fmtQty(stats.totalVolume)}</div><div class="sub">${fmtK(stats.totalValue)} total value</div></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Farmer income &amp; financial inclusion</h3></div>
+      <div class="panel-body pad">
+        <table style="margin:0;">
+          <tr><td style="padding-left:0;">Average price vs. informal market reference</td><td style="text-align:right;padding-right:0;">${stats.avgUpliftPct===null?'<span style="color:var(--soil-40);">No reference prices logged yet</span>':(stats.avgUpliftPct>=0?'+':'')+stats.avgUpliftPct+'%<span style="font-size:11px;color:var(--soil-40);"> ('+stats.refPriceSampleSize+' purchases with a logged reference price)</span>'}</td></tr>
+          <tr><td style="padding-left:0;">Previously unbanked farmers now paid digitally</td><td style="text-align:right;padding-right:0;">${pctOrDash(stats.inclusionPct, stats.unbankedSampleSize, 'previously unbanked farmers')}</td></tr>
+          <tr><td style="padding-left:0;">Farmers registered by field staff without their own phone</td><td style="text-align:right;padding-right:0;">${pctOrDash(stats.proxyRegisteredPct, stats.proxySampleSize, 'farmers with data on file')}</td></tr>
+          <tr><td style="padding-left:0;">Gender split (of ${stats.genderSampleSize} farmers with data on file)</td><td style="text-align:right;padding-right:0;">${stats.genderSampleSize?`${stats.genderSplit.female}% female · ${stats.genderSplit.male}% male`:'<span style="color:var(--soil-40);">No data yet</span>'}</td></tr>
+          <tr><td style="padding-left:0;border-bottom:none;">Commission paid to ${commissionOwner}</td><td style="text-align:right;padding-right:0;border-bottom:none;font-weight:600;">${fmtK(commissionValue)}</td></tr>
+        </table>
+      </div>
+    </div>
+    <p class="sub" style="margin:-6px 0 0;">Percentages are calculated only over farmers with that field recorded — sample sizes are shown so partners can judge how complete the picture is.</p>`;
+}
 function statusBadge(s){
   const labels = {pending:'Pending', inspected:'Inspected', approved:'Approved', paid:'Paid'};
   return `<span class="badge badge-${s}">${labels[s]}</span>`;
@@ -2390,7 +2561,7 @@ function chatContactsFor(role, id){
     DB.staffForAgent(id).forEach(s=>add('staff', s.id));
   } else if(role==='staff'){
     const s = DB.fieldStaffById(id);
-    if(s){ if(s.companyId) add('company', s.companyId); if(s.agentId) add('agent', s.agentId); }
+    if(s){ DB.companiesForStaff(id).forEach(c=>add('company', c.id)); if(s.agentId) add('agent', s.agentId); }
     DB.farmersForStaff(id).forEach(f=>add('farmer', f.id));
   } else if(role==='farmer'){
     DB.staffForFarmer(id).forEach(s=>add('staff', s.id));
@@ -2648,6 +2819,19 @@ function renderCompany(view){
         <button class="action-btn" style="background:var(--olive)" onclick="openNewContractModal('${companyId}')">+ New contract</button>
       </div>
       <div class="panel"><div class="panel-body">${contractsTable(contracts)}</div></div>`;
+  }
+  if(view==='c-impact'){
+    const stats = DB.impactStats({companyId});
+    const totalCommission = links.reduce((s,l)=>s+DB.linkLedger(l.agentId, companyId).commissionAccrued,0);
+    main.innerHTML = syncBannerHTML() + `
+      <div class="main-head">
+        <div><h1>Impact</h1><p class="desc">Reach and inclusion metrics for banks, funders and government partners.</p></div>
+        <div style="display:flex;gap:8px;">
+          <button class="action-btn ghost" onclick="printImpactReport('company','${companyId}','internal')" title="Keeps the commission line — for your own records, not for sharing">Internal copy</button>
+          <button class="action-btn ghost" onclick="printImpactReport('company','${companyId}')">🖨 Export funder report</button>
+        </div>
+      </div>
+      ${impactStatsHTML(stats, totalCommission, 'agents')}`;
   }
   if(view==='c-payroll'){
     const period = currentPayrollPeriod();
@@ -3209,6 +3393,42 @@ function buildPrintableDocument(company, title, bodyHtml){
   </body></html>`;
 }
 
+// variant: 'external' (default) strips the commission line — this is the
+// copy meant to leave the building, so a bank/funder/government partner
+// never sees the take-rate. 'internal' keeps it, for the company's/agent's
+// own filing. Reuses the same buildPrintableDocument()/openPrintableDocument()
+// shell as printAgentLedger.
+function printImpactReport(scopeType, scopeId, variant){
+  variant = variant || 'external';
+  const isCompany = scopeType==='company';
+  const entity = isCompany ? DB.company(scopeId) : DB.agent(scopeId);
+  const stats = isCompany ? DB.impactStats({companyId:scopeId}) : DB.impactStats({agentId:scopeId});
+  const commissionValue = isCompany
+    ? DB.linksForCompany(scopeId).reduce((s,l)=>s+DB.linkLedger(l.agentId, scopeId).commissionAccrued,0)
+    : DB.agentOverallLedger(scopeId).commissionAccrued;
+  const commissionLabel = isCompany ? 'Commission accrued to agents' : 'Commission accrued (this agent)';
+
+  const rows = `
+    <tr><td>Farmers reached</td><td>${fmtQty(stats.farmersReached)}</td></tr>
+    <tr><td>First-time sellers</td><td>${stats.firstTimeSellerPct===null?'No data':stats.firstTimeSellerPct+'% ('+stats.firstTimeSampleSize+' farmers with data)'}</td></tr>
+    <tr><td>Repeat-seller rate</td><td>${stats.repeatSellerPct===null?'No data':stats.repeatSellerPct+'%'}</td></tr>
+    <tr><td>Total volume moved</td><td>${fmtQty(stats.totalVolume)}</td></tr>
+    <tr><td>Total transaction value</td><td>${fmtK(stats.totalValue)}</td></tr>
+    <tr><td>Average price vs. informal market reference</td><td>${stats.avgUpliftPct===null?'No reference prices logged yet':(stats.avgUpliftPct>=0?'+':'')+stats.avgUpliftPct+'% ('+stats.refPriceSampleSize+' purchases sampled)'}</td></tr>
+    <tr><td>Previously unbanked farmers now paid digitally</td><td>${stats.inclusionPct===null?'No data':stats.inclusionPct+'% (of '+stats.unbankedSampleSize+' previously unbanked farmers)'}</td></tr>
+    <tr><td>Farmers registered without their own phone (field-staff assisted)</td><td>${stats.proxyRegisteredPct===null?'No data':stats.proxyRegisteredPct+'% (of '+stats.proxySampleSize+' farmers with data)'}</td></tr>
+    <tr><td>Gender split</td><td>${stats.genderSampleSize?stats.genderSplit.female+'% female · '+stats.genderSplit.male+'% male (of '+stats.genderSampleSize+' farmers with data)':'No data'}</td></tr>
+    ${variant==='internal' ? `<tr><td>${commissionLabel}</td><td>${fmtK(commissionValue)}</td></tr>` : ''}`;
+
+  const body = `
+    <p class="doc-title">Impact Report${variant==='internal'?' — Internal Copy':''}</p>
+    <p class="doc-sub">${entity.name} — as at ${new Date().toISOString().slice(0,10)}</p>
+    <table><tr><th>Metric</th><th>Value</th></tr>${rows}</table>
+    <p style="font-size:11.5px;color:#5A4E3C;">Percentages are calculated only over farmers with that field recorded on the AgriBuy Connect platform; sample sizes are shown alongside each figure. This report is generated directly from operational transaction records, not survey data.</p>`;
+
+  openPrintableDocument(buildPrintableDocument(entity, 'Impact Report — ' + entity.name, body));
+}
+
 function printAgentLedger(agentId, companyId){
   const company = DB.company(companyId);
   const agent = DB.agent(agentId);
@@ -3274,12 +3494,12 @@ function companyPayrollHistoryTable(companyId){
   return `<table><tr><th>Period</th><th>Staff</th><th>Gross</th><th>Net paid</th><th>Method</th><th>Date</th></tr>${rows}</table>`;
 }
 function openCompanyPayrollModal(staffId){
-  const s=DB.fieldStaffById(staffId); if(!s || s.companyId!==session.id){toast('You can only pay your direct staff');return;}
+  const s=DB.fieldStaffById(staffId); if(!s || !DB.isStaffLinkedToCompany(staffId, session.id)){toast('You can only pay your direct staff');return;}
   const calc=calcPayroll(s.monthlySalary||0), period=currentPayrollPeriod();
   openModal(`<button class="modal-close" onclick="closeModal()">&times;</button><h3>Payslip — ${periodLabel(period)}</h3><p class="sub">${s.name}</p><div class="ledger-row"><span class="k">Gross salary</span><span class="v">${fmtK(calc.gross)}</span></div><div class="ledger-row"><span class="k">NAPSA (5%)</span><span class="v">-${fmtK(calc.napsaEmployee)}</span></div><div class="ledger-row"><span class="k">NHIMA (1%)</span><span class="v">-${fmtK(calc.nhimaEmployee)}</span></div><div class="ledger-row"><span class="k">PAYE</span><span class="v">-${fmtK(calc.paye)}</span></div><div class="ledger-row"><span class="k" style="font-weight:600;">Net pay</span><span class="v" style="font-size:16px;">${fmtK(calc.net)}</span></div><div class="hint-box">Employer cost including statutory contributions: ${fmtK(calc.employerCost)}.</div><div class="field"><label>Payment method</label><select id="cpr-method">${paymentMethodOptions('mobile_money_mtn')}</select></div><div class="field"><label>Mobile number / reference</label><input id="cpr-ref" placeholder="e.g. ${s.phone||''}"></div><button class="submit-btn" style="background:var(--rust)" onclick="confirmCompanyPayroll('${staffId}')">Pay ${fmtK(calc.net)}</button>`);
 }
 function confirmCompanyPayroll(staffId){
-  const s=DB.fieldStaffById(staffId); if(!s || s.companyId!==session.id)return;
+  const s=DB.fieldStaffById(staffId); if(!s || !DB.isStaffLinkedToCompany(staffId, session.id))return;
   const calc=calcPayroll(s.monthlySalary||0), period=currentPayrollPeriod();
   if(DB.data.payrollRuns.some(r=>r.staffId===staffId && r.period===period)){toast('Payroll already run for this staff member');return;}
   const run={id:DB.uid('pr'),staffId,companyId:session.id,agentId:null,period,gross:calc.gross,napsaEmployee:calc.napsaEmployee,nhimaEmployee:calc.nhimaEmployee,paye:calc.paye,net:calc.net,paymentMethod:document.getElementById('cpr-method').value,paymentRef:document.getElementById('cpr-ref').value.trim(),date:new Date().toISOString().slice(0,10)};
@@ -3332,6 +3552,18 @@ function renderAgent(view){
     main.innerHTML = syncBannerHTML() + `
       <div class="main-head"><div><h1>Purchases</h1><p class="desc">Everything your field staff has logged.</p></div></div>
       <div class="panel"><div class="panel-body">${purchasesTable(purchases.slice().reverse(), {showCompany:true})}</div></div>`;
+  }
+  if(view==='a-impact'){
+    const stats = DB.impactStats({agentId});
+    main.innerHTML = syncBannerHTML() + `
+      <div class="main-head">
+        <div><h1>Impact</h1><p class="desc">Reach and inclusion metrics across all the companies you buy for.</p></div>
+        <div style="display:flex;gap:8px;">
+          <button class="action-btn ghost" onclick="printImpactReport('agent','${agentId}','internal')" title="Keeps the commission line — for your own records, not for sharing">Internal copy</button>
+          <button class="action-btn ghost" onclick="printImpactReport('agent','${agentId}')">🖨 Export funder report</button>
+        </div>
+      </div>
+      ${impactStatsHTML(stats, overall.commissionAccrued, 'you')}`;
   }
   if(view==='a-settings'){
     const agent = DB.agent(agentId);
@@ -3508,16 +3740,34 @@ function companyStaffTable(companyId){
   if(!staff.length) return `<table><tr class="empty-row"><td>No direct field staff yet. Add staff to operate without an agent.</td></tr></table>`;
   const rows = staff.map(s=>{
     const count = DB.purchasesFor({companyId, fieldStaffId:s.id}).length;
-    return `<tr><td><strong>${s.name}</strong><br><span style="color:var(--soil-40);font-size:12px;">${s.phone||'No phone'}</span></td><td class="mono">${s.code}</td><td>${s.monthlySalary?fmtK(s.monthlySalary):'—'}</td><td>${count} purchases</td><td><button class="mini-btn" onclick="generateCompanyStaffLogin('${s.id}')">Regenerate PIN</button> <button class="mini-btn" onclick="openEditCompanyStaffModal('${s.id}')">Edit</button></td></tr>`;
+    const isHome = s.companyId===companyId;
+    // Linked (non-home) staff share one login/identity with their home
+    // company, so this company can pay them and see their activity here,
+    // but can't rename them or reset their shared PIN — only unlink.
+    const nameCell = isHome ? `<strong>${s.name}</strong>` : `<strong>${s.name}</strong> <span class="badge" style="background:var(--olive-tint);color:var(--olive-dark);font-size:11px;">linked · home: ${DB.company(s.companyId)?.name||'—'}</span>`;
+    const actions = isHome
+      ? `<button class="mini-btn" onclick="generateCompanyStaffLogin('${s.id}')">Regenerate PIN</button> <button class="mini-btn" onclick="openEditCompanyStaffModal('${s.id}')">Edit</button>`
+      : `<button class="mini-btn" onclick="unlinkCompanyStaff('${s.id}','${companyId}')">Unlink</button>`;
+    return `<tr><td>${nameCell}<br><span style="color:var(--soil-40);font-size:12px;">${s.phone||'No phone'}</span></td><td class="mono">${s.code}</td><td>${s.monthlySalary?fmtK(s.monthlySalary):'—'}</td><td>${count} purchases</td><td>${actions}</td></tr>`;
   }).join('');
   return `<table><tr><th>Field staff</th><th>Staff ID</th><th>Salary</th><th>Activity</th><th></th></tr>${rows}</table>`;
 }
 function openAddCompanyStaffModal(companyId){
-  openModal(`<button class="modal-close" onclick="closeModal()">&times;</button><h3>Add direct field staff</h3><p class="sub">This staff member works directly for your company. No agent is required.</p><div class="field"><label>Full name</label><input id="csf-name" placeholder="e.g. Mwape Chola"></div><div class="field"><label>Phone number</label><input id="csf-phone" placeholder="e.g. 0977 000 000"></div><div class="field"><label>Monthly gross salary (K)</label><input id="csf-salary" type="number" placeholder="e.g. 4000"></div><button class="submit-btn" style="background:var(--olive)" onclick="confirmAddCompanyStaff('${companyId}')">Create staff account</button>`);
+  openModal(`<button class="modal-close" onclick="closeModal()">&times;</button><h3>Add direct field staff</h3><p class="sub">Link a field staff member already on AgriBuy Connect (they'll keep working for their other companies too), or create a brand-new one.</p><div class="field"><label>Existing staff ID (optional)</label><input id="csf-code" placeholder="e.g. FS-MWAPE123" class="mono"></div><div class="hint-box">Leave the ID blank to create a brand-new staff account instead.</div><div class="field"><label>Full name</label><input id="csf-name" placeholder="Only needed for a new staff account"></div><div class="field"><label>Phone number</label><input id="csf-phone" placeholder="e.g. 0977 000 000"></div><div class="field"><label>Monthly gross salary (K)</label><input id="csf-salary" type="number" placeholder="e.g. 4000"></div><button class="submit-btn" style="background:var(--olive)" onclick="confirmAddCompanyStaff('${companyId}')">Add staff</button>`);
 }
 function confirmAddCompanyStaff(companyId){
+  const code=document.getElementById('csf-code').value.trim().toUpperCase();
   const name=document.getElementById('csf-name').value.trim(), phone=document.getElementById('csf-phone').value.trim(), salary=Number(document.getElementById('csf-salary').value)||0;
-  if(!name){toast('Enter a name');return;}
+  if(code){
+    const s = DB.data.fieldStaff.find(x=>x.code.toUpperCase()===code);
+    if(!s){ toast('No staff member found with that ID'); return; }
+    if(DB.isStaffLinkedToCompany(s.id, companyId)){ toast(s.name+' already works with your company'); return; }
+    DB.linkStaffToCompany(s.id, companyId);
+    const c=DB.company(companyId); c.operatingMode = c.operatingMode==='agent' ? 'hybrid' : 'direct';
+    DB.save(); closeModal(); toast(s.name+' linked to your company'); setView('company','c-staff');
+    return;
+  }
+  if(!name){toast('Enter a name for the new staff account, or an existing staff ID');return;}
   addCompanyStaffAsync(companyId, name, phone, salary);
 }
 async function addCompanyStaffAsync(companyId, name, phone, salary){
@@ -3530,12 +3780,20 @@ async function addCompanyStaffAsync(companyId, name, phone, salary){
   const c=DB.company(companyId); c.operatingMode = c.operatingMode==='agent' ? 'hybrid' : 'direct';
   DB.save(); closeModal(); toast('Direct field staff created — ID: '+code+'  PIN: '+pin+' (write it down, it won\'t be shown again)'); setView('company','c-staff');
 }
+// Removes this company's staffLink only — never touches a staff member's
+// home employment (s.companyId) or their shared login/PIN.
+function unlinkCompanyStaff(staffId, companyId){
+  const s=DB.fieldStaffById(staffId); if(!s || s.companyId===companyId) return; // home link can't be removed here
+  const link = DB.staffLink(staffId, companyId); if(!link) return;
+  DB.data.staffLinks = DB.data.staffLinks.filter(l=>l.id!==link.id);
+  DB.save(); toast(s.name+' unlinked from your company'); setView('company','c-staff');
+}
 function generateCompanyStaffLogin(staffId){
-  const s=DB.fieldStaffById(staffId); if(!s || s.companyId!==session.id){toast('You can only manage your company staff');return;}
+  const s=DB.fieldStaffById(staffId); if(!s || s.companyId!==session.id){toast('Only the staff member\'s home company can reset their shared login PIN');return;}
   regenerateStaffPinAsync(s, 'company','c-staff');
 }
 function openEditCompanyStaffModal(staffId){
-  const s=DB.fieldStaffById(staffId); if(!s || s.companyId!==session.id){toast('You can only manage your company staff');return;}
+  const s=DB.fieldStaffById(staffId); if(!s || s.companyId!==session.id){toast('Only the staff member\'s home company can edit their profile — other linked companies can unlink instead');return;}
   openModal(`<button class="modal-close" onclick="closeModal()">&times;</button><h3>Edit field staff</h3><div class="field"><label>Full name</label><input id="ecs-name" value="${s.name}"></div><div class="field"><label>Phone</label><input id="ecs-phone" value="${s.phone||''}"></div><div class="field"><label>Monthly gross salary (K)</label><input id="ecs-salary" type="number" value="${s.monthlySalary||0}"></div><button class="submit-btn" style="background:var(--olive)" onclick="confirmEditCompanyStaff('${staffId}')">Save changes</button>`);
 }
 function confirmEditCompanyStaff(staffId){
@@ -3606,9 +3864,15 @@ function renderStaff(view){
   const staff = DB.fieldStaffById(staffId);
   const main = document.getElementById('staff-main');
   const links = staff.agentId ? DB.linksForAgent(staff.agentId) : [];
-  const directCompanies = staff.companyId ? [DB.company(staff.companyId)].filter(Boolean) : [];
+  // Home company, plus any other companies directly linked via staffLinks
+  // (see linkStaffToCompany), plus any companies reachable through an
+  // agent this staff member works under. All three sources feed the same
+  // "which company is this purchase/action for" picker below.
+  const homeCompany = staff.companyId ? [DB.company(staff.companyId)].filter(Boolean) : [];
+  const linkedCompanies = DB.staffLinksForStaff(staffId).map(l=>DB.company(l.companyId)).filter(Boolean);
+  const directCompanies = [...homeCompany, ...linkedCompanies];
   const companyIds = new Set(directCompanies.map(c=>c.id));
-  const companyOptions = [...directCompanies, ...links.map(l=>DB.company(l.companyId)).filter(Boolean).filter(c=>!companyIds.has(c.id))].map(c=>`<option value="${c.id}">${c.name}${staff.companyId===c.id?' — direct':''}</option>`).join('');
+  const companyOptions = [...directCompanies, ...links.map(l=>DB.company(l.companyId)).filter(Boolean).filter(c=>!companyIds.has(c.id))].map(c=>`<option value="${c.id}">${c.name}${staff.companyId===c.id?' — home':''}</option>`).join('');
 
   if(view==='s-log'){
 
@@ -4006,7 +4270,7 @@ async function registerFarmer(){
   if(!crop){ toast('Select or enter the crop to be bought'); return; }
   const code = 'FM-' + name.split(' ')[0].toUpperCase() + Math.floor(Math.random()*90+10);
   const geo = await getGeo();
-  const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop, crops: crop ? [crop] : [], code, geo, gender, previouslyUnbanked, registeredDate: new Date().toISOString().slice(0,10) };
+  const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop, crops: crop ? [crop] : [], code, geo, gender, previouslyUnbanked, registrationMethod: 'staff', registeredDate: new Date().toISOString().slice(0,10) };
   DB.data.farmers.push(farmer);
   DB.linkFarmerToStaff(farmer.id, staff.id);
   SYNC.markSaved(farmer, 'farmers');
@@ -4122,7 +4386,7 @@ async function confirmBulkImport(){
     const farmer = {
       id: DB.uid('fm'), name: r.name, nrc: r.nrc, phone: r.phone, location: r.location,
       crop: r.crop, crops: r.crop ? [r.crop] : [], code, geo,
-      gender: null, previouslyUnbanked: null,
+      gender: null, previouslyUnbanked: null, registrationMethod: 'staff',
       registeredDate: today, syncStatus: SYNC.isOnline ? 'synced' : 'pending'
     };
     DB.data.farmers.push(farmer);
@@ -4155,7 +4419,7 @@ async function submitPurchase(){
     if(!name){ toast('Search for an existing farmer or register a new one'); return; }
     const code = 'FM-' + name.split(' ')[0].toUpperCase() + Math.floor(Math.random()*90+10);
     const farmerGeo = await getGeo();
-    const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop: farmerCrop || commodity, crops: [farmerCrop || commodity], code, geo: farmerGeo, gender, previouslyUnbanked, registeredDate: new Date().toISOString().slice(0,10) };
+    const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop: farmerCrop || commodity, crops: [farmerCrop || commodity], code, geo: farmerGeo, gender, previouslyUnbanked, registrationMethod: 'staff', registeredDate: new Date().toISOString().slice(0,10) };
     DB.data.farmers.push(farmer);
     DB.linkFarmerToStaff(farmer.id, staff.id);
     SYNC.markSaved(farmer, 'farmers');
