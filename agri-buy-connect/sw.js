@@ -10,7 +10,7 @@
  * Bump CACHE_NAME on every deploy so returning users pick up the new
  * shell instead of a stale cached copy.
  */
-const CACHE_NAME = 'agribuy-shell-v2';
+const CACHE_NAME = 'agribuy-shell-v3';
 const APP_SHELL = [
   './',
   './index.html',

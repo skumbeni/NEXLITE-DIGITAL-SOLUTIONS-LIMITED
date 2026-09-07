@@ -981,6 +981,11 @@ function seedData(){
     agentLinks: [],
     fieldStaff: [],
     farmers: [],
+    // Many-to-many: which staff (and by extension, which company/agent)
+    // a farmer has an active relationship with. A farmer can sell to
+    // several buyers over time; farmer.registeredBy (legacy, single-owner)
+    // is migrated into this table on load and no longer written to.
+    farmerLinks: [],
     purchases: [],
     contracts: [],
     payrollRuns: [],
@@ -1007,6 +1012,15 @@ const DB = {
     this.data.agentLinks.forEach(l=>{
       if(!Array.isArray(l.advances)) l.advances = [];
       if(typeof l.commissionRate === 'undefined' || l.commissionRate===null) l.commissionRate = 0;
+    });
+    if(!Array.isArray(this.data.farmerLinks)) this.data.farmerLinks = [];
+    // Legacy single-owner farmers (registeredBy) migrate forward into an
+    // explicit farmerLinks row, so farmersForStaff/farmersForAgent see them
+    // without any caller needing to know the old field still exists.
+    this.data.farmers.forEach(f=>{
+      if(f.registeredBy && !this.data.farmerLinks.some(l=>l.farmerId===f.id && l.staffId===f.registeredBy)){
+        this.data.farmerLinks.push({ id:this.uid('fl'), farmerId:f.id, staffId:f.registeredBy, linkedDate:f.registeredDate||new Date().toISOString().slice(0,10) });
+      }
     });
     this.data.purchases.forEach(p=>{
       if(!p.paymentStatus){
@@ -1314,10 +1328,28 @@ const DB = {
     if(s.agentId) this.linksForAgent(s.agentId).forEach(l=>{ if(!ids.includes(l.companyId)) ids.push(l.companyId); });
     return this.data.companies.filter(c=>ids.includes(c.id));
   },
-  farmersForStaff(staffId){ return this.data.farmers.filter(f=>f.registeredBy===staffId); },
+  farmerLinksForStaff(staffId){ return this.data.farmerLinks.filter(l=>l.staffId===staffId); },
+  farmerLinksForFarmer(farmerId){ return this.data.farmerLinks.filter(l=>l.farmerId===farmerId); },
+  isFarmerLinkedToStaff(farmerId, staffId){ return this.data.farmerLinks.some(l=>l.farmerId===farmerId && l.staffId===staffId); },
+  // Creates the link if it doesn't already exist; returns the new link, or
+  // null if this farmer/staff pair was already linked. A farmer can have
+  // many of these (one per buyer they sell to) — this is many-to-many, not
+  // a replacement of an existing relationship.
+  linkFarmerToStaff(farmerId, staffId){
+    if(this.isFarmerLinkedToStaff(farmerId, staffId)) return null;
+    const link = { id:this.uid('fl'), farmerId, staffId, linkedDate:new Date().toISOString().slice(0,10) };
+    this.data.farmerLinks.push(link);
+    return link;
+  },
+  staffForFarmer(farmerId){ return this.farmerLinksForFarmer(farmerId).map(l=>this.fieldStaffById(l.staffId)).filter(Boolean); },
+  farmersForStaff(staffId){
+    const ids = this.farmerLinksForStaff(staffId).map(l=>l.farmerId);
+    return this.data.farmers.filter(f=>ids.includes(f.id));
+  },
   farmersForAgent(agentId){
     const staffIds = this.staffForAgent(agentId).map(s=>s.id);
-    return this.data.farmers.filter(f=>staffIds.includes(f.registeredBy));
+    const ids = this.data.farmerLinks.filter(l=>staffIds.includes(l.staffId)).map(l=>l.farmerId);
+    return this.data.farmers.filter(f=>ids.includes(f.id));
   },
   payrollRunsForAgent(agentId){ return this.data.payrollRuns.filter(r=>r.agentId===agentId).sort((a,b)=> b.period.localeCompare(a.period)); },
   payrollRunsForCompany(companyId){ return this.data.payrollRuns.filter(r=>r.companyId===companyId).sort((a,b)=> b.period.localeCompare(a.period)); },
@@ -1560,9 +1592,11 @@ async function verifySecret(record, secret){
        expiresAt, notes }
    Records with no `subscription` field at all (legacy data, or internal
    record types like field staff/farmers) are always let through — this
-   only gates the account types the admin panel manages. Staff and
-   farmers inherit their parent company/agent's status, so suspending a
-   company also locks out its field staff and the farmers they registered.
+   only gates the account types the admin panel manages. Staff inherit
+   their parent company/agent's status. Farmers can be linked to several
+   staff across different companies (see farmerLinks) — suspending one
+   company only locks a farmer out if it's the only buyer they're linked
+   to; see subscriptionGate()'s array handling.
    ========================================================================= */
 const TRIAL_DAYS = 14;
 function defaultSubscription(){
@@ -1607,12 +1641,22 @@ function resolveOwnerAccount(role, record){
     return null;
   }
   if(role==='farmer'){
-    const staff = DB.fieldStaffById(record.registeredBy);
-    return staff ? resolveOwnerAccount('staff', staff) : null;
+    // A farmer can be linked to several staff (many-to-many) — return every
+    // owner account they touch; subscriptionGate() below treats an array
+    // as "ok if any one of these is in good standing", and an empty array
+    // (a self-registered farmer with no links yet) as unrestricted.
+    return DB.staffForFarmer(record.id).map(s=>resolveOwnerAccount('staff', s)).filter(Boolean);
   }
   return null;
 }
 function subscriptionGate(ownerAccount){
+  if(Array.isArray(ownerAccount)){
+    if(!ownerAccount.length) return { ok:true }; // no linked owner accounts at all — nothing to gate on
+    // Let the farmer in if at least one of their linked buyers is in good
+    // standing; only block if every single one of them is not.
+    const gates = ownerAccount.map(subscriptionGate);
+    return gates.find(g=>g.ok) || gates[0];
+  }
   if(!ownerAccount || !ownerAccount.subscription) return { ok:true };
   // Free if this is a company buying through an AgriBuy-linked agent —
   // billing only applies to companies buying direct with no agent.
@@ -1950,12 +1994,13 @@ const roleMeta = {
   company: { title:'Buying company sign in', sub:'Sign in with your company ID and password.', btnClass:'btn-company', idLabel:'Company ID', idPlaceholder:'e.g. AGRIFOODS', hasSecond:true, secondLabel:'Password', secondPlaceholder:'Your password', canSignup:true },
   agent:   { title:'Agent sign in', sub:'Sign in with your agent ID and password.', btnClass:'btn-agent', idLabel:'Agent ID', idPlaceholder:'e.g. AG-BWALYA', hasSecond:true, secondLabel:'Password', secondPlaceholder:'Your password', canSignup:true },
   staff:   { title:'Field staff sign in', sub:'Enter your staff ID and the PIN given to you by whoever added you.', btnClass:'btn-staff', idLabel:'Staff ID', idPlaceholder:'e.g. FS-MUTALE23', hasSecond:true, secondLabel:'PIN', secondPlaceholder:'6-digit PIN', numeric:true },
-  farmer:  { title:'Farmer sign in', sub:'Enter the code given to you when you sold your crop.', btnClass:'btn-farmer', idLabel:'Code', idPlaceholder:'Enter your code', hasSecond:false }
+  farmer:  { title:'Farmer sign in', sub:'Enter the code given to you when you sold your crop, or the code from your own sign-up.', btnClass:'btn-farmer', idLabel:'Code', idPlaceholder:'Enter your code', hasSecond:false, canSignup:true }
 };
 
 const signupMeta = {
   company: { title:'Create your company account', sub:'Set up your buying company on AgriBuy Connect — no one needs to create this for you.', btnClass:'btn-company' },
-  agent:   { title:'Create your agent account', sub:"Set up your own login. Buying companies can link you afterwards using the ID you choose below.", btnClass:'btn-agent' }
+  agent:   { title:'Create your agent account', sub:"Set up your own login. Buying companies can link you afterwards using the ID you choose below.", btnClass:'btn-agent' },
+  farmer:  { title:'Register yourself as a farmer', sub:"No field agent nearby? Register yourself — you'll get a code to sign in with, the same as if a buyer's staff had registered you.", btnClass:'btn-farmer' }
 };
 
 let selectedPlan = JSON.parse(localStorage.getItem('agribuy_selected_plan') || 'null');
@@ -1992,7 +2037,7 @@ function goLogin(role, silent){
 }
 
 function goSignup(role, silent){
-  if(role!=='company' && role!=='agent') return; // field staff and farmers are provisioned by whoever adds them, not self-signup
+  if(role!=='company' && role!=='agent' && role!=='farmer') return; // field staff are provisioned by whoever adds them, not self-signup — they need a PIN issued by that employer
   pendingRole = role;
   const meta = signupMeta[role];
   document.getElementById('signup-title').textContent = meta.title;
@@ -2009,21 +2054,72 @@ function goSignup(role, silent){
     <div class="hint-box">This is the ID you'll sign in with — letters and numbers, no spaces.</div>
     <div class="field"><label>Choose a password</label><input id="su-pass" type="password" placeholder="At least 6 characters" autocomplete="new-password"></div>
     <div class="field"><label>Confirm password</label><input id="su-pass2" type="password" placeholder="Re-enter password" autocomplete="new-password"></div>
-  ` : `
+  ` : role==='agent' ? `
     <div class="field"><label>Full name</label><input id="su-name" placeholder="e.g. Chanda Bwalya" autocomplete="off"></div>
     <div class="field"><label>Phone</label><input id="su-phone" placeholder="e.g. 0977 000 000" autocomplete="off"></div>
     <div class="field"><label>Choose an agent ID</label><input id="su-code" class="mono" placeholder="e.g. AG-BWALYA" autocomplete="off"></div>
     <div class="hint-box">This is the ID you'll sign in with, and the ID buying companies use to link you. If a company already added you under an ID, enter that same ID here to claim it.</div>
     <div class="field"><label>Choose a password</label><input id="su-pass" type="password" placeholder="At least 6 characters" autocomplete="new-password"></div>
     <div class="field"><label>Confirm password</label><input id="su-pass2" type="password" placeholder="Re-enter password" autocomplete="new-password"></div>
+  ` : `
+    <div class="two-col">
+      <div class="field"><label>Full name</label><input id="su-f-name" placeholder="e.g. Peter Chileshe" autocomplete="off"></div>
+      <div class="field"><label>NRC number (optional)</label><input id="su-f-nrc" placeholder="e.g. 123456/10/1" autocomplete="off"></div>
+    </div>
+    <div class="two-col">
+      <div class="field"><label>Location</label><input id="su-f-location" placeholder="e.g. Mkushi" autocomplete="off"></div>
+      <div class="field"><label>Phone number</label><input id="su-f-phone" placeholder="e.g. 0977 000 000" autocomplete="off"></div>
+    </div>
+    <div class="field"><label>Crop you sell</label><input id="su-f-crop" list="su-f-crop-list" placeholder="e.g. Maize" autocomplete="off"><datalist id="su-f-crop-list"></datalist></div>
+    <div class="two-col">
+      <div class="field"><label>Gender (optional)</label><select id="su-f-gender"><option value="">Prefer not to say</option><option value="female">Female</option><option value="male">Male</option></select></div>
+      <div class="field"><label>Banking status (optional)</label><select id="su-f-unbanked"><option value="">Not asked</option><option value="yes">I had no bank/mobile money account before</option><option value="no">I already had one</option></select></div>
+    </div>
+    <div class="hint-box">We'll give you a code at the end — that's what you'll use to sign in from now on, so keep it somewhere safe.</div>
   `;
   const btn = document.getElementById('signup-submit');
   btn.className = 'submit-btn ' + meta.btnClass;
-  btn.textContent = 'Create account';
+  btn.textContent = role==='farmer' ? 'Register' : 'Create account';
   show('screen-signup');
-  document.getElementById('su-name').focus();
+  document.getElementById(role==='farmer' ? 'su-f-name' : 'su-name').focus();
   if(!silent) NAV.push({screen:'signup', role});
   DB.ensureLoaded();
+}
+
+async function attemptFarmerSignup(err){
+  const name = document.getElementById('su-f-name').value.trim();
+  const nrc = document.getElementById('su-f-nrc').value.trim();
+  const phone = document.getElementById('su-f-phone').value.trim();
+  const location = document.getElementById('su-f-location').value.trim();
+  const crop = document.getElementById('su-f-crop').value.trim();
+  const gender = document.getElementById('su-f-gender').value || null;
+  const unbankedVal = document.getElementById('su-f-unbanked').value;
+  const previouslyUnbanked = unbankedVal === '' ? null : (unbankedVal === 'yes');
+
+  if(!name){ err.textContent = 'Enter your name.'; err.style.display='block'; return; }
+  if(!crop){ err.textContent = 'Enter the crop you sell.'; err.style.display='block'; return; }
+
+  const code = 'FM-' + name.split(' ')[0].toUpperCase() + Math.floor(Math.random()*90+10);
+  const geo = await getGeo();
+  // registeredBy stays null — this farmer registered themselves rather
+  // than being provisioned by a company's field staff. Everything else
+  // matches the shape produced by registerFarmer()/submitPurchase() so
+  // this farmer looks identical to a staff-registered one everywhere else
+  // in the app (impact stats, farmer pickers, ledgers, etc).
+  const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop, crops: crop ? [crop] : [], code, geo, gender, previouslyUnbanked, registeredBy: null, registeredDate: new Date().toISOString().slice(0,10) };
+  DB.data.farmers.push(farmer);
+  DB.save();
+  createAuxAuthAccount(authEmailFor('fm', farmer.id), 'fm-' + farmer.id).then(uid=>{
+    if(uid){ farmer.uid = uid; DB.save(['farmers']); }
+  });
+  setSession({ role: 'farmer', id: farmer.id });
+  enterApp();
+  openModal(`
+    <h3 style="margin-top:0;">You're registered!</h3>
+    <p class="sub">Save this code — it's how you'll sign in from now on. There's no separate password.</p>
+    <div class="mono" style="font-size:22px;font-weight:700;text-align:center;padding:14px;background:var(--sand-10, #F4EFE4);border-radius:10px;margin:14px 0;">${code}</div>
+    <button class="action-btn" style="background:var(--olive);width:100%;justify-content:center;" onclick="closeModal()">Got it</button>
+  `);
 }
 
 async function attemptSignup(){
@@ -2036,6 +2132,7 @@ async function attemptSignup(){
   btn.disabled = false; btn.textContent = originalBtnText;
 
   const role = pendingRole;
+  if(role==='farmer'){ await attemptFarmerSignup(err); return; }
   const name = document.getElementById('su-name').value.trim();
   const phone = document.getElementById('su-phone').value.trim();
   const code = document.getElementById('su-code').value.trim().toUpperCase().replace(/\s+/g,'');
@@ -2259,8 +2356,8 @@ function openModal(html){
    IN-APP CHAT & NOTIFICATIONS
    ---------------------------------------------------------------------
    Chat contacts fall out of relationships already in the data model —
-   an agent link, a staff assignment, a farmer's registeredBy — rather
-   than a separate contacts list. A "party" is {role,id}; role strings
+   an agent link, a staff assignment, a farmer link — rather than a
+   separate contacts list. A "party" is {role,id}; role strings
    match the app keys (company/agent/staff/farmer) used everywhere else.
    ========================================================================= */
 const ROLE_LABEL = { company:'Buying company', agent:'Agent', staff:'Field staff', farmer:'Farmer' };
@@ -2296,8 +2393,7 @@ function chatContactsFor(role, id){
     if(s){ if(s.companyId) add('company', s.companyId); if(s.agentId) add('agent', s.agentId); }
     DB.farmersForStaff(id).forEach(f=>add('farmer', f.id));
   } else if(role==='farmer'){
-    const f = DB.farmer(id);
-    if(f && f.registeredBy) add('staff', f.registeredBy);
+    DB.staffForFarmer(id).forEach(s=>add('staff', s.id));
   }
   return list;
 }
@@ -3537,6 +3633,10 @@ function renderStaff(view){
             <div class="field"><label>Phone number</label><input id="lp-farmer-phone" placeholder="e.g. 0977 000 000"></div>
           </div>
           <div class="field"><label>Crop to be bought</label><input id="lp-farmer-crop" list="lp-farmer-crop-list" placeholder="e.g. Maize"><datalist id="lp-farmer-crop-list"></datalist></div>
+          <div class="two-col">
+            <div class="field"><label>Gender (optional)</label><select id="lp-farmer-gender"><option value="">Prefer not to say</option><option value="female">Female</option><option value="male">Male</option></select></div>
+            <div class="field"><label>Banking status (optional)</label><select id="lp-farmer-unbanked"><option value="">Not asked</option><option value="yes">Had no bank/mobile money account before</option><option value="no">Already had one</option></select></div>
+          </div>
         </div>
         <div class="field" id="lp-contract-field" style="display:none;">
           <label>Link to a forward contract (optional)</label>
@@ -3551,6 +3651,7 @@ function renderStaff(view){
           <div class="field"><label>Quantity</label><input id="lp-qty" type="number" placeholder="e.g. 50" oninput="updateWeightExpected()"></div>
           <div class="field"><label>Price per unit (K)</label><input id="lp-price" type="number" placeholder="e.g. 280"></div>
         </div>
+        <div class="field"><label>Informal market reference price per unit (K, optional)</label><input id="lp-ref-price" type="number" placeholder="e.g. 250 — what farmers typically get locally"></div>
         <details style="margin:10px 0 4px;">
           <summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--soil-70);">Scale weight check (optional)</summary>
           <p class="sub" style="margin:8px 0;">If you weighed the load, enter the scale readings — we'll flag it for review if it's off from what the quantity above implies.</p>
@@ -3580,15 +3681,19 @@ function renderStaff(view){
           <div class="field"><label>Phone number</label><input id="rf-phone" placeholder="e.g. 0977 000 000"></div>
         </div>
         <div class="field"><label>Crop to be bought</label><input id="rf-crop" list="rf-crop-list" placeholder="e.g. Maize"><datalist id="rf-crop-list"></datalist></div>
+        <div class="two-col">
+          <div class="field"><label>Gender (optional)</label><select id="rf-gender"><option value="">Prefer not to say</option><option value="female">Female</option><option value="male">Male</option></select></div>
+          <div class="field"><label>Banking status (optional)</label><select id="rf-unbanked"><option value="">Not asked</option><option value="yes">Had no bank/mobile money account before</option><option value="no">Already had one</option></select></div>
+        </div>
         <button class="action-btn" style="background:var(--olive);width:100%;justify-content:center;margin-top:6px;" onclick="registerFarmer()">Register farmer</button>
       </div></div>`;
     updateCommodityOptions();
   }
   if(view==='s-farmers'){
-    const farmers = DB.data.farmers.filter(f=>f.registeredBy===staffId);
+    const farmers = DB.farmersForStaff(staffId);
     main.innerHTML = syncBannerHTML() + `
       <div class="main-head">
-        <div><h1>My farmers</h1><p class="desc">Farmers you've registered.</p></div>
+        <div><h1>My farmers</h1><p class="desc">Farmers linked to you — registered by you, or linked the first time you bought from them.</p></div>
         <button class="action-btn" style="background:var(--navy)" onclick="openBulkImportModal()">⇪ Bulk import (CSV)</button>
       </div>
       <div class="panel"><div class="panel-body">${farmersTable(farmers)}</div></div>`;
@@ -3685,7 +3790,14 @@ function createContract(companyId){
   const contract = { id: DB.uid('ct'), companyId, farmerId, commodity, unit, committedQty: qty, agreedPrice: price, startDate, deadlineDate, status:'active', createdDate:new Date().toISOString().slice(0,10), notes };
   DB.data.contracts.push(contract);
   const contractFarmer = DB.farmer(farmerId);
-  if(contractFarmer && contractFarmer.registeredBy) DB.addNotification('staff', contractFarmer.registeredBy, 'contract', 'New contract created', `${DB.company(companyId).name} created a forward contract with ${contractFarmer.name}`, null);
+  if(contractFarmer){
+    // A farmer can be linked to staff across several companies now — only
+    // notify staff whose chain (direct, or via a linked agent) actually
+    // includes this contract's company, not every staff member they sell to.
+    DB.staffForFarmer(farmerId)
+      .filter(s=>DB.companiesForStaff(s.id).some(c=>c.id===companyId))
+      .forEach(s=>DB.addNotification('staff', s.id, 'contract', 'New contract created', `${DB.company(companyId).name} created a forward contract with ${contractFarmer.name}`, null));
+  }
   DB.save();
   closeModal();
   toast('Contract created');
@@ -3795,13 +3907,36 @@ function renderFarmerPicker(){
   if(!box) return;
   const q = (document.getElementById('lp-farmer-search').value||'').trim().toLowerCase();
   const selectedId = document.getElementById('lp-farmer-id').value;
-  const farmers = (staff.agentId ? DB.farmersForAgent(staff.agentId) : DB.farmersForStaff(staff.id)).filter(f =>
+  const own = (staff.agentId ? DB.farmersForAgent(staff.agentId) : DB.farmersForStaff(staff.id));
+  const ownIds = new Set(own.map(f=>f.id));
+  let farmers = own.filter(f =>
     !q || f.name.toLowerCase().includes(q) || (f.nrc||'').toLowerCase().includes(q) || (f.phone||'').includes(q)
-  ).slice(0,8);
-  let html = farmers.map(f=>`
+  );
+  // Many-to-many: a farmer not yet linked to THIS staff member is still a
+  // valid pick — they may already sell to other buyers, or to no one at
+  // all. Only surface them once the search is specific enough (3+ chars);
+  // an empty query should never dump every other buyer's farmers in here.
+  if(q.length >= 3){
+    const others = DB.data.farmers.filter(f => !ownIds.has(f.id) &&
+      (f.name.toLowerCase().includes(q) || (f.nrc||'').toLowerCase().includes(q) || (f.phone||'').includes(q))
+    );
+    farmers = farmers.concat(others);
+  }
+  farmers = farmers.slice(0,8);
+  let html = farmers.map(f=>{
+    let badge = '';
+    if(!ownIds.has(f.id)){
+      const linkCount = DB.farmerLinksForFarmer(f.id).length;
+      badge = linkCount
+        ? ' <span style="font-size:11px;font-weight:600;color:var(--olive);">· sells to other buyers already — not linked to you yet</span>'
+        : ' <span style="font-size:11px;font-weight:600;color:var(--olive);">· self-registered, not linked to any buyer yet</span>';
+    }
+    return `
     <div class="farmer-opt ${f.id===selectedId?'selected':''}" onclick="selectFarmerForPurchase('${f.id}')">
-      <div class="nm">${f.name}</div><div class="meta">${f.location||'—'} ${f.nrc?'· '+f.nrc:''}</div>
-    </div>`).join('');
+      <div class="nm">${f.name}${badge}</div>
+      <div class="meta">${f.location||'—'} ${f.nrc?'· '+f.nrc:''}</div>
+    </div>`;
+  }).join('');
   html += `<div class="new-farmer-opt" onclick="selectNewFarmer()">+ Register a new farmer</div>`;
   box.innerHTML = html;
 }
@@ -3864,13 +3999,18 @@ async function registerFarmer(){
   const location = document.getElementById('rf-location').value.trim();
   const phone = document.getElementById('rf-phone').value.trim();
   const crop = document.getElementById('rf-crop').value.trim();
+  const gender = document.getElementById('rf-gender').value || null;
+  const unbankedVal = document.getElementById('rf-unbanked').value;
+  const previouslyUnbanked = unbankedVal === '' ? null : (unbankedVal === 'yes');
   if(!name){ toast("Enter the farmer's name"); return; }
   if(!crop){ toast('Select or enter the crop to be bought'); return; }
   const code = 'FM-' + name.split(' ')[0].toUpperCase() + Math.floor(Math.random()*90+10);
   const geo = await getGeo();
-  const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop, crops: crop ? [crop] : [], code, geo, registeredBy: staff.id, registeredDate: new Date().toISOString().slice(0,10) };
+  const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop, crops: crop ? [crop] : [], code, geo, gender, previouslyUnbanked, registeredDate: new Date().toISOString().slice(0,10) };
   DB.data.farmers.push(farmer);
+  DB.linkFarmerToStaff(farmer.id, staff.id);
   SYNC.markSaved(farmer, 'farmers');
+  DB.save(['farmerLinks']);
   toast('Farmer registered — code ' + code + (SYNC.isOnline ? '' : ' (will sync when back online)'));
   setView('staff','s-farmers');
   // Best-effort Firebase Auth account for this farmer, created in the
@@ -3982,11 +4122,13 @@ async function confirmBulkImport(){
     const farmer = {
       id: DB.uid('fm'), name: r.name, nrc: r.nrc, phone: r.phone, location: r.location,
       crop: r.crop, crops: r.crop ? [r.crop] : [], code, geo,
-      registeredBy: staff.id, registeredDate: today, syncStatus: SYNC.isOnline ? 'synced' : 'pending'
+      gender: null, previouslyUnbanked: null,
+      registeredDate: today, syncStatus: SYNC.isOnline ? 'synced' : 'pending'
     };
     DB.data.farmers.push(farmer);
+    DB.linkFarmerToStaff(farmer.id, staff.id);
   });
-  DB.save(['farmers']); // one delta save for the whole batch, not one per row
+  DB.save(['farmers', 'farmerLinks']); // one delta save for the whole batch, not one per row
   closeModal();
   toast(`Imported ${toImport.length} farmer(s)` + (SYNC.isOnline ? '' : ' — will sync when back online'));
   setView('staff','s-farmers');
@@ -4007,18 +4149,35 @@ async function submitPurchase(){
     const location = document.getElementById('lp-farmer-location').value.trim();
     const phone = document.getElementById('lp-farmer-phone').value.trim();
     const farmerCrop = document.getElementById('lp-farmer-crop').value.trim();
+    const gender = document.getElementById('lp-farmer-gender').value || null;
+    const unbankedVal = document.getElementById('lp-farmer-unbanked').value;
+    const previouslyUnbanked = unbankedVal === '' ? null : (unbankedVal === 'yes');
     if(!name){ toast('Search for an existing farmer or register a new one'); return; }
     const code = 'FM-' + name.split(' ')[0].toUpperCase() + Math.floor(Math.random()*90+10);
     const farmerGeo = await getGeo();
-    const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop: farmerCrop || commodity, crops: [farmerCrop || commodity], code, geo: farmerGeo, registeredBy: staff.id, registeredDate: new Date().toISOString().slice(0,10) };
+    const farmer = { id: DB.uid('fm'), name, nrc, phone, location, crop: farmerCrop || commodity, crops: [farmerCrop || commodity], code, geo: farmerGeo, gender, previouslyUnbanked, registeredDate: new Date().toISOString().slice(0,10) };
     DB.data.farmers.push(farmer);
+    DB.linkFarmerToStaff(farmer.id, staff.id);
     SYNC.markSaved(farmer, 'farmers');
+    DB.save(['farmerLinks']);
     farmerId = farmer.id;
     createAuxAuthAccount(authEmailFor('fm', farmer.id), 'fm-' + farmer.id).then(uid=>{
       if(uid){ farmer.uid = uid; DB.save(['farmers']); }
     });
   }
   if(!qty || !price){ toast('Enter quantity and price'); return; }
+
+  // A farmer picked from the search box may already be linked to other
+  // staff (or to no one, if self-registered — see renderFarmerPicker), but
+  // not yet to THIS staff member. Buying from them is what creates that
+  // link — many-to-many, so any existing links to other buyers are left
+  // untouched.
+  let claimedFarmer = null;
+  if(!DB.isFarmerLinkedToStaff(farmerId, staff.id)){
+    DB.linkFarmerToStaff(farmerId, staff.id);
+    DB.save(['farmerLinks']);
+    claimedFarmer = DB.farmer(farmerId);
+  }
 
   const geo = await getGeo();
   const contractId = document.getElementById('lp-contract-id') ? (document.getElementById('lp-contract-id').value || null) : null;
@@ -4027,11 +4186,13 @@ async function submitPurchase(){
   const grossWeight = grossVal !== '' ? Number(grossVal) : null;
   const tareWeight = tareVal !== '' ? Number(tareVal) : null;
   const netWeight = (grossWeight != null && tareWeight != null) ? grossWeight - tareWeight : null;
+  const refPriceVal = document.getElementById('lp-ref-price').value;
+  const referencePrice = refPriceVal !== '' ? Number(refPriceVal) : null;
   const purchase = {
     id: DB.uid('p'), companyId, agentId: staff.agentId || null, fieldStaffId: staff.id, farmerId,
     commodity, quantity: qty, unit, price, crop: commodity, date: new Date().toISOString().slice(0,10),
     status: 'pending', paymentStatus: 'unpaid', paidTo: staff.agentId ? 'agent' : 'farmer', paymentMethod: null, paymentRef: null,
-    geo, loggedAt: Date.now(), contractId, grossWeight, tareWeight, netWeight
+    geo, loggedAt: Date.now(), contractId, grossWeight, tareWeight, netWeight, referencePrice
   };
   purchase.flags = computePurchaseFlags(purchase, DB.farmer(farmerId));
   DB.data.purchases.push(purchase);
@@ -4040,7 +4201,7 @@ async function submitPurchase(){
   if(staff.agentId) DB.addNotification('agent', staff.agentId, 'purchase', 'New purchase logged', `${fmtQty(qty)} ${unit} of ${commodity} logged by ${staff.name}`, null);
   // addNotification() now persists itself straight to each recipient's
   // own /inbox/{uid} node — no separate DB.save(['notifications']) needed.
-  toast(SYNC.isOnline ? 'Purchase logged and synced' : 'Saved on this device — will sync when back online');
+  toast((claimedFarmer ? claimedFarmer.name + ' linked to you. ' : '') + (SYNC.isOnline ? 'Purchase logged and synced' : 'Saved on this device — will sync when back online'));
   setView('staff','s-log');
 }
 
