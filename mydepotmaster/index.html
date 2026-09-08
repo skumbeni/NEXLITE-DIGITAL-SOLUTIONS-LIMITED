@@ -19197,6 +19197,50 @@ function _inferContextRange(question){
   return null;
 }
 
+// Sums each staff member's shifts/qty/gross/deduction/net over the given
+// (already date-filtered) staffLogs slice. Excludes non-work entries (leave,
+// absence) since those aren't earnings. Returns an array sorted by net pay
+// descending, so "who earned the most" is just the first element.
+function _computeStaffTotals(logs, staffSafe){
+  const nameById = {};
+  (staffSafe||[]).forEach(s=>{ nameById[String(s.id)] = s.name || s.fullName || ('Staff #'+s.id); });
+  const totals = {};
+  (logs||[]).filter(l=>l && (!l.entryType || l.entryType==='work')).forEach(l=>{
+    const id = String(l.staffId);
+    if(!totals[id]) totals[id] = { staffId:id, name: nameById[id]||('Staff #'+id), shifts:0, qty:0, gross:0, deduction:0, net:0 };
+    const t = totals[id];
+    t.shifts++;
+    t.qty += Number(l.bags ?? l.qty ?? 0);
+    t.gross += Number(l.earnings||0);
+    t.deduction += Number(l.deduction||0);
+  });
+  return Object.values(totals).map(t=>{
+    t.gross = +t.gross.toFixed(2); t.deduction = +t.deduction.toFixed(2);
+    t.net = +(t.gross - t.deduction).toFixed(2);
+    return t;
+  }).sort((a,b)=>b.net-a.net);
+}
+
+// Sums each commodity's received/issued qty and issue revenue over the given
+// (already date-filtered) commodityReceived/commodityIssued slices. Same
+// purpose as _computeStaffTotals: a real pre-summed number for "which
+// commodity sold the most" / "compare maize to X" type questions.
+function _computeCommodityTotals(receivedObj, issuedObj, commodities){
+  const nameById = {};
+  (commodities||[]).forEach(c=>{ nameById[String(c.id)] = c.name || ('Commodity #'+c.id); });
+  const ids = new Set([...Object.keys(receivedObj||{}), ...Object.keys(issuedObj||{})]);
+  const out = [];
+  ids.forEach(cid=>{
+    const rec = (receivedObj||{})[cid]||[];
+    const iss = (issuedObj||{})[cid]||[];
+    const received = rec.reduce((a,r)=>a+Number(r.received||0),0);
+    const issued = iss.reduce((a,r)=>a+Number(r.issued||0),0);
+    const revenue = iss.reduce((a,r)=>a+Number(r.issued||0)*Number(r.salePrice||0),0);
+    out.push({ commodityId:cid, name: nameById[cid]||cid, received:+received.toFixed(2), issued:+issued.toFixed(2), revenue:+revenue.toFixed(2) });
+  });
+  return out.sort((a,b)=>b.issued-a.issued);
+}
+
 // Groups the operational dataset into topics, each with the keywords that
 // pull it in and a builder that assembles its slice of context. Lets
 // buildCopilotContext send only what a question is actually about instead of
@@ -19210,6 +19254,13 @@ const COPILOT_TOPICS = {
       staffPayments: ctx.cap(DATA.staffPayments),
       staffWarnings: ctx.cap(DATA.staffWarnings),
       staffLogs: ctx.cap(DATA.staffLogs),
+      // Pre-summed per-staff totals (shifts, qty, gross, deduction, net) over
+      // the same date range as staffLogs above. Comparing staff by hand-adding
+      // dozens of individual log rows is exactly the kind of arithmetic an LLM
+      // gets wrong at scale — this hands over the already-correct sums so
+      // "who earned more" / "top 3 loaders" type questions cite real numbers
+      // instead of a re-summed guess. Sorted by net pay, highest first.
+      staffTotals: _computeStaffTotals(ctx.cap(DATA.staffLogs), ctx.staffSafe),
       leaveLog: ctx.cap(DATA.leaveLog),
       attendance: ctx.cap(DATA.attendance||DATA.clockLogs),
       deductionReasons: DATA.deductionReasons||[]
@@ -19222,6 +19273,11 @@ const COPILOT_TOPICS = {
       commodities: DATA.commodities||[],
       commodityReceived: ctx.capObj(DATA.commodityReceived||{}),
       commodityIssued: ctx.capObj(DATA.commodityIssued||{}),
+      // Pre-summed per-commodity totals (qty received, qty issued, revenue)
+      // over the same range as the raw records above — same reasoning as
+      // staffTotals: comparisons across commodities should read off a real
+      // sum, not one assembled turn-by-turn from raw batch records.
+      commodityTotals: _computeCommodityTotals(ctx.capObj(DATA.commodityReceived||{}), ctx.capObj(DATA.commodityIssued||{}), DATA.commodities||[]),
       commodityStockCounts: DATA.commodityStockCounts||{},
       maizeReceived: ctx.cap(DATA.maizeReceived),
       maizeIssued: ctx.cap(DATA.maizeIssued),
@@ -19258,9 +19314,21 @@ const COPILOT_TOPICS = {
 // Returns the list of matched topic keys, or null when nothing matched
 // (or there's no question, e.g. reconciliation) — null means "no signal,
 // include everything", same safety fallback pattern as the date inference.
+// Comparison-style questions ("compare X and Y", "X vs Y", "which staff
+// earned more", "top 3 commodities", "best/worst", "difference between")
+// often only name one side of the comparison explicitly, so a plain keyword
+// match can miss the other side's topic entirely (e.g. "compare Titus and
+// Exodus's pay to what we spent on transport this month" — the model needs
+// staff AND transport AND finance, but "compare"/"vs" itself isn't a topic
+// keyword). When this pattern is detected, skip topic-gating altogether and
+// fall back to sending every topic, same as the "nothing matched" case,
+// so a comparison is never silently missing one side's numbers.
+const COMPARISON_SIGNAL = /\bcompar(e|ing|ison)\b|\bvs\.?\b|\bversus\b|\bdifference between\b|\bwhich (staff|commodity|item|month|week)\b|\b(best|worst|top|highest|lowest|most|least)\b|\bbetter than\b|\bworse than\b|\brank(ed|ing)?\b/;
+
 function _inferTopics(question){
   if(!question) return null;
   const q = question.toLowerCase();
+  if(COMPARISON_SIGNAL.test(q)) return null; // comparison question — send everything, don't gate by topic
   const matched = Object.keys(COPILOT_TOPICS).filter(k => COPILOT_TOPICS[k].keywords.test(q));
   return matched.length ? matched : null;
 }
@@ -19542,7 +19610,21 @@ function _copilotSystemPrompt(mode){
     'stock, transport, finance, books, contacts, audit) were sent for this '+
     'question, or "all" if everything was sent. If a follow-up needs a topic '+
     'not in dataScope, say so plainly and ask the user to ask about that '+
-    'topic directly, rather than guessing. Also check "dataCoversFrom" — '+
+    'topic directly, rather than guessing.\n\n'+
+    'For any question comparing two or more things — staff members, '+
+    'commodities, time periods, roles, etc. — first look for a pre-summed '+
+    '"staffTotals" or "commodityTotals" array in the data: each entry is '+
+    'already correctly summed (shifts/qty/gross/deduction/net for staff; '+
+    'received/issued/revenue for commodities) over the same date range as '+
+    'the raw logs. Read comparison figures from there instead of re-adding '+
+    'raw log rows yourself — that avoids arithmetic mistakes. Only fall '+
+    'back to summing raw records yourself when comparing something those '+
+    'totals don\'t cover (e.g. a custom date split, or a field they don\'t '+
+    'track), and double-check that arithmetic before answering. Present '+
+    'comparisons plainly — a short list or table of the figures side by '+
+    'side, then a one-line takeaway — and if two things aren\'t really '+
+    'comparable (different units, one has far less data than the other), '+
+    'say so rather than forcing a verdict. Also check "dataCoversFrom" — '+
     'logs and payments older than that date were not sent to you. If the '+
     'question needs data from before that date, say plainly that you only '+
     'have data from dataCoversFrom onward and suggest asking again with a '+
