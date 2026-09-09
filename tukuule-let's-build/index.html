@@ -1,0 +1,1632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tukule — Let's Build | Land in squares, paid your way</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Karla:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- Firebase (compat SDKs — loaded before the app script so `firebase` is ready) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<style>
+  :root{
+    --soil:#6B4226; --soil-dark:#4B2E19;
+    --river:#2F6E62; --river-dark:#1F4B43;
+    --gold:#C88A2E; --gold-dark:#9C6A1E;
+    --ink:#26201A; --paper:#EDE4D3; --paper-line:rgba(107,66,38,0.10);
+    --card:#F7F2E7; --available:#3F7D4F; --reserved:#C88A2E; --sold:#8B3A3A; --line:#D8CBAE;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background-color:var(--paper);
+    background-image:linear-gradient(var(--paper-line) 1px, transparent 1px),linear-gradient(90deg, var(--paper-line) 1px, transparent 1px);
+    background-size:24px 24px; color:var(--ink); font-family:'Karla',sans-serif; line-height:1.5; min-height:100vh;
+  }
+  h1,h2,h3,.display{font-family:'Fraunces',serif;font-weight:600;letter-spacing:-0.01em;}
+  a{color:inherit;} button{font-family:'Karla',sans-serif;cursor:pointer;}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 20px;}
+  .topbar{background:var(--soil-dark);color:#f2e9d8;font-size:0.8rem;padding:6px 0;text-align:center;}
+  .topbar a{color:#f2e9d8;font-weight:700;text-decoration:none;}
+  header.site{border-bottom:1px solid var(--line);background:rgba(247,242,231,0.9);backdrop-filter:blur(4px);position:sticky;top:0;z-index:40;}
+  .site-bar{display:flex;align-items:center;justify-content:space-between;padding:14px 0;gap:16px;flex-wrap:wrap;}
+  .brand{display:flex;align-items:baseline;gap:10px;}
+  .brand .mark{width:34px;height:34px;border:2px solid var(--soil);display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;flex:none;}
+  .brand .mark span{border:1px solid var(--soil);}
+  .brand .mark span:nth-child(1){background:var(--gold);} .brand .mark span:nth-child(4){background:var(--river);}
+  .brand-name{font-family:'Fraunces',serif;font-weight:700;font-size:1.15rem;}
+  .brand-sub{font-size:0.78rem;color:var(--soil-dark);}
+  nav.tabs{display:flex;gap:4px;flex-wrap:wrap;}
+  nav.tabs button{background:none;border:1px solid transparent;padding:8px 13px;font-size:0.9rem;color:var(--soil-dark);border-radius:4px;}
+  nav.tabs button.active{background:var(--soil);color:#fff;}
+  nav.tabs button:not(.active):hover{border-color:var(--line);}
+  main{padding:36px 0 70px;}
+  section.view{display:none;} section.view.active{display:block;}
+  .hero{display:grid;grid-template-columns:1.15fr 0.85fr;gap:36px;align-items:start;margin-bottom:44px;}
+  @media(max-width:760px){.hero{grid-template-columns:1fr;}}
+  .hero h1{font-size:2.3rem;line-height:1.1;margin:0 0 16px;}
+  .hero p.lede{font-size:1.05rem;color:var(--soil-dark);max-width:48ch;margin:0 0 22px;}
+  .cta-row{display:flex;gap:12px;flex-wrap:wrap;}
+  .btn{display:inline-block;padding:11px 20px;border-radius:4px;border:1px solid transparent;font-size:0.94rem;font-weight:600;text-decoration:none;}
+  .btn-primary{background:var(--gold);color:#241a09;border-color:var(--gold-dark);}
+  .btn-primary:hover{background:var(--gold-dark);}
+  .btn-secondary{background:transparent;border-color:var(--soil);color:var(--soil-dark);}
+  .btn-secondary:hover{background:rgba(107,66,38,0.08);}
+  .btn-ghost{background:transparent;border-color:var(--line);color:var(--ink);}
+  .btn-sm{padding:6px 12px;font-size:0.8rem;}
+  .btn:disabled{opacity:0.45;cursor:not-allowed;}
+  .deed-card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:22px;box-shadow:2px 3px 0 rgba(107,66,38,0.12);}
+  .deed-card .stamp{font-size:0.72rem;letter-spacing:0.03em;color:var(--river-dark);border:1px solid var(--river);display:inline-block;padding:3px 8px;border-radius:3px;margin-bottom:10px;}
+  h2.section-title{font-size:1.45rem;margin:0 0 6px;}
+  p.section-sub{color:var(--soil-dark);margin:0 0 22px;font-size:0.94rem;}
+  .site-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:18px;margin-bottom:40px;}
+  .site-card{border:1px solid var(--line);border-radius:6px;background:var(--card);padding:18px;box-shadow:2px 3px 0 rgba(107,66,38,0.08);}
+  .site-card h3{margin:0 0 4px;font-size:1.08rem;}
+  .site-card .loc{font-size:0.84rem;color:var(--soil-dark);margin-bottom:10px;}
+  .site-card .price{font-family:'Fraunces',serif;font-weight:600;font-size:1.25rem;margin:6px 0;}
+  .site-card .avail{font-size:0.82rem;color:#4a4238;margin-bottom:12px;}
+  .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin:10px 0 20px;}
+  @media(max-width:700px){.steps{grid-template-columns:1fr;}}
+  .step{border-top:2px solid var(--soil);padding-top:12px;}
+  .step .num{font-family:'Fraunces',serif;font-size:1.5rem;color:var(--gold-dark);}
+  .step h3{margin:4px 0 6px;font-size:1.02rem;} .step p{margin:0;font-size:0.9rem;color:#4a4238;}
+  .plot-panel{display:grid;grid-template-columns:1fr 340px;gap:28px;align-items:start;}
+  @media(max-width:840px){.plot-panel{grid-template-columns:1fr;}}
+  .grid-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--card);padding:16px;}
+  .plot-grid{display:grid;gap:4px;width:max-content;}
+  .plot{width:34px;height:34px;border-radius:2px;border:1px solid rgba(0,0,0,0.15);display:flex;align-items:center;justify-content:center;font-size:0.6rem;color:#fff;font-weight:600;background:var(--available);}
+  .plot.reserved{background:var(--reserved);cursor:not-allowed;} .plot.sold{background:var(--sold);cursor:not-allowed;}
+  .plot.available{cursor:pointer;} .plot.selected{outline:2px solid var(--ink);outline-offset:1px;}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;font-size:0.82rem;}
+  .legend span{display:inline-flex;align-items:center;gap:6px;} .legend i{width:12px;height:12px;border-radius:2px;display:inline-block;}
+  .side-card{border:1px solid var(--line);border-radius:6px;background:var(--card);padding:18px;margin-bottom:16px;}
+  .side-card h3{margin:0 0 10px;font-size:1rem;}
+  .selected-list{list-style:none;margin:0 0 10px;padding:0;font-size:0.88rem;}
+  .selected-list li{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed var(--line);}
+  .row-total{display:flex;justify-content:space-between;font-weight:700;padding-top:8px;font-size:0.95rem;}
+  .plan-tabs{display:flex;gap:6px;margin-bottom:14px;}
+  .plan-tabs button{flex:1;padding:8px 6px;font-size:0.84rem;border:1px solid var(--line);background:#fff;border-radius:4px;}
+  .plan-tabs button.active{background:var(--river);color:#fff;border-color:var(--river-dark);}
+  select, input[type=text], input[type=tel], input[type=number], textarea{
+    width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:4px;font-family:'Karla',sans-serif;font-size:0.9rem;background:#fff;color:var(--ink);
+  }
+  textarea{resize:vertical;min-height:70px;}
+  label.field{display:block;font-size:0.82rem;font-weight:600;color:var(--soil-dark);margin:10px 0 4px;}
+  .schedule-line{display:flex;justify-content:space-between;font-size:0.87rem;padding:5px 0;border-bottom:1px solid var(--paper-line);}
+  .schedule-line strong{font-weight:700;}
+  .note{font-size:0.8rem;color:#6b6153;margin-top:8px;}
+  .login-box{max-width:420px;}
+  .balance-hero{display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:16px;margin-bottom:20px;}
+  .progress-track{height:10px;background:#e3d9c2;border-radius:5px;overflow:hidden;margin:8px 0 4px;}
+  .progress-fill{height:100%;background:var(--river);}
+  table.ledger{width:100%;border-collapse:collapse;font-size:0.87rem;margin-top:10px;}
+  table.ledger th, table.ledger td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line);}
+  table.ledger th{color:var(--soil-dark);font-weight:700;font-size:0.78rem;}
+  .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;}
+  .pill.pending{background:#f1dcae;color:#6b4c0a;} .pill.confirmed{background:#cfe4d3;color:#1f4b2c;}
+  .pill.active{background:#cfe4d3;color:#1f4b2c;}
+  .grid-two{display:grid;grid-template-columns:1fr 1fr;gap:16px;} @media(max-width:700px){.grid-two{grid-template-columns:1fr;}}
+  .grid-three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;} @media(max-width:700px){.grid-three{grid-template-columns:1fr;}}
+  footer{border-top:1px solid var(--line);padding:24px 0;text-align:center;font-size:0.82rem;color:#6b6153;}
+  .empty{border:1px dashed var(--line);border-radius:6px;padding:26px;text-align:center;color:#6b6153;font-size:0.9rem;}
+  .msg{padding:10px 14px;border-radius:4px;font-size:0.86rem;margin-bottom:14px;}
+  .msg.ok{background:#dcead9;color:#204a25;border:1px solid #a9cba3;}
+  .msg.err{background:#f2d9d3;color:#6b2323;border:1px solid #dba898;}
+  .hidden{display:none !important;}
+  .toggle-link{background:none;border:none;color:var(--river-dark);text-decoration:underline;font-size:0.85rem;padding:0;}
+  .back-link{background:none;border:none;color:var(--soil-dark);font-size:0.85rem;padding:0;margin-bottom:14px;text-decoration:underline;}
+  #app-loading{position:fixed;inset:0;background:var(--paper);display:flex;align-items:center;justify-content:center;z-index:100;flex-direction:column;gap:10px;}
+  #app-loading .spinner{width:34px;height:34px;border:3px solid var(--line);border-top-color:var(--soil);border-radius:50%;animation:spin 0.8s linear infinite;}
+  #app-loading p{color:var(--soil-dark);font-size:0.9rem;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .sync-pill{font-size:0.72rem;padding:2px 9px;border-radius:20px;font-weight:700;display:inline-flex;align-items:center;gap:5px;}
+  .sync-pill.online{background:#cfe4d3;color:#1f4b2c;}
+  .sync-pill.offline{background:#f2d9d3;color:#6b2323;}
+  .sync-pill.connecting{background:#f1dcae;color:#6b4c0a;}
+</style>
+</head>
+<body>
+
+<div id="app-loading"><div class="spinner"></div><p>Connecting to Tukule…</p></div>
+
+<div class="topbar">Talk to us about any listing: <a href="tel:0977638790">0977 638 790</a> <span class="sync-pill connecting" id="sync-pill" style="margin-left:8px;">Connecting…</span></div>
+
+<header class="site">
+  <div class="wrap site-bar">
+    <div class="brand">
+      <div class="mark"><span></span><span></span><span></span><span></span></div>
+      <div><div class="brand-name">Tukule — Let's Build</div><div class="brand-sub">Land in squares, paid your way</div></div>
+    </div>
+    <nav class="tabs">
+      <button data-view="home" class="active">Home</button>
+      <button data-view="buy">Buy a plot</button>
+      <button data-view="sell">List a property</button>
+      <button data-view="account">My account</button>
+      <button data-view="admin">Admin</button>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- HOME -->
+  <section class="view active" id="view-home">
+    <div class="hero">
+      <div>
+        <h1>Own a plot, one square at a time.</h1>
+        <p class="lede">Browse land on sale across Zambia and pay the way that suits you — outright, daily, or monthly. No bank, no bond, just a plan you can keep.</p>
+        <div class="cta-row">
+          <button class="btn btn-primary" data-goto="buy">Browse plots on sale</button>
+          <button class="btn btn-secondary" data-goto="sell">List your property with us</button>
+        </div>
+      </div>
+      <div class="deed-card">
+        <span class="stamp">Selling with Tukule</span>
+        <p style="margin:6px 0 0;font-size:0.92rem;">Any landowner can list a site with us. Buyers pay you directly — we handle plot sales, instalment tracking, and buyer contracts, and you forward our 10% commission once payments come in.</p>
+        <button class="btn btn-secondary" style="margin-top:14px;width:100%;" data-goto="sell">List a property</button>
+      </div>
+    </div>
+
+    <h2 class="section-title">Sites on sale</h2>
+    <p class="section-sub">Tap a site to see its plan and pick your square.</p>
+    <div class="site-cards" id="home-site-cards"></div>
+
+    <h2 class="section-title">How Tukule works</h2>
+    <div class="steps">
+      <div class="step"><div class="num">1</div><h3>Pick your square</h3><p>Choose a site, then an available plot on its plan. Reserved and sold plots are shown too.</p></div>
+      <div class="step"><div class="num">2</div><h3>Choose your pace</h3><p>Pay the full price now, or set a daily or monthly plan. Tukule works out your deposit and instalment.</p></div>
+      <div class="step"><div class="num">3</div><h3>Pay, print, and own</h3><p>Log each payment, print your agreement any time, and once your balance is zero your plot is marked sold.</p></div>
+    </div>
+  </section>
+
+  <!-- BUY -->
+  <section class="view" id="view-buy">
+    <div id="buy-site-picker">
+      <h2 class="section-title">Choose a site</h2>
+      <p class="section-sub">Pick which property you'd like to buy a plot on.</p>
+      <div class="site-cards" id="buy-site-cards"></div>
+    </div>
+
+    <div id="buy-plot-area" class="hidden">
+      <button class="back-link" id="back-to-sites">&larr; Choose a different site</button>
+      <h2 class="section-title" id="buy-site-title">Site plan</h2>
+      <p class="section-sub" id="buy-site-loc"></p>
+      <div class="plot-panel">
+        <div>
+          <div class="grid-scroll"><div class="plot-grid" id="plot-grid"></div></div>
+          <div class="legend">
+            <span><i style="background:var(--available)"></i> Available</span>
+            <span><i style="background:var(--reserved)"></i> Reserved</span>
+            <span><i style="background:var(--sold)"></i> Sold</span>
+            <span><i style="background:var(--ink)"></i> Your selection</span>
+          </div>
+        </div>
+        <div>
+          <div class="side-card">
+            <h3>Your selection</h3>
+            <ul class="selected-list" id="selected-list"><li style="border:none;color:#6b6153;">No plots selected yet</li></ul>
+            <div class="row-total"><span>Total</span><span id="selection-total">K0.00</span></div>
+          </div>
+          <div class="side-card">
+            <h3>Payment plan</h3>
+            <div class="plan-tabs">
+              <button class="plan-tab active" data-plan="outright">Outright</button>
+              <button class="plan-tab" data-plan="daily">Daily</button>
+              <button class="plan-tab" data-plan="monthly">Monthly</button>
+            </div>
+            <div id="term-field" class="hidden">
+              <label class="field" id="term-label">Term</label>
+              <select id="term-select"></select>
+            </div>
+            <div id="schedule-box" style="margin-top:12px;"></div>
+          </div>
+          <div id="reserve-account-check"></div>
+          <button class="btn btn-primary" style="width:100%;" id="reserve-btn" disabled>Select plots to continue</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SELL -->
+  <section class="view" id="view-sell">
+    <h2 class="section-title">List your property with Tukule</h2>
+    <p class="section-sub">We'll handle plot sales, instalment tracking, and buyer contracts for you. Buyers pay you directly — you forward our 10% commission once payments are confirmed. Nothing upfront.</p>
+    <div class="side-card" style="max-width:560px;">
+      <div id="sell-msg"></div>
+      <label class="field">Property name</label>
+      <input type="text" id="sell-name" placeholder="e.g. Kabunda Farms Plots">
+      <label class="field">Location</label>
+      <input type="text" id="sell-location" placeholder="e.g. Off Kabunda Road, Mansa">
+      <label class="field">Description (optional)</label>
+      <textarea id="sell-description" placeholder="What makes this site worth buying into?"></textarea>
+      <div class="grid-two">
+        <div><label class="field">Price per plot (K)</label><input type="number" id="sell-price" min="1" max="10000000"></div>
+        <div><label class="field">Plot size</label><input type="text" id="sell-plotsize" placeholder="e.g. 30 x 30" value="30 x 30"></div>
+      </div>
+      <label class="field">Total number of plots on site</label>
+      <input type="number" id="sell-total" min="1" max="2000" value="50">
+      <div class="grid-two">
+        <div><label class="field">Your name</label><input type="text" id="sell-owner-name"></div>
+        <div><label class="field">Your phone number</label><input type="tel" id="sell-owner-phone"></div>
+      </div>
+      <label class="field">Owner PIN (4–6 digits)</label>
+      <input type="password" inputmode="numeric" id="sell-owner-pin" maxlength="6" autocomplete="new-password">
+      <p class="note" style="margin-top:-4px;">First listing under this number sets your PIN; later listings need the same one. You'll use it to log in and manage your listings.</p>
+      <p class="note">Buyers will be offered outright, daily, and monthly plans on your default terms — you can fine-tune these once your listing is approved.</p>
+      <button class="btn btn-primary" style="width:100%;margin-top:14px;" id="submit-listing-btn">Submit listing for review</button>
+      <p class="note">Or call us directly on <a href="tel:0977638790">0977 638 790</a> and we'll set it up with you.</p>
+    </div>
+
+    <h2 class="section-title" style="margin-top:40px;">Already listed with us?</h2>
+    <p class="section-sub">Log in with your phone number to see your listing status, buyer activity, and commission balance.</p>
+    <div class="side-card login-box" id="owner-login-panel">
+      <div id="owner-login-msg"></div>
+      <label class="field">Phone number</label>
+      <input type="tel" id="owner-login-phone">
+      <label class="field">Owner PIN</label>
+      <input type="password" inputmode="numeric" id="owner-login-pin" maxlength="6" autocomplete="current-password">
+      <button class="btn btn-secondary" style="width:100%;margin-top:14px;" id="owner-login-btn">View my listings</button>
+    </div>
+    <div id="owner-dashboard" class="hidden"></div>
+  </section>
+
+  <!-- ACCOUNT -->
+  <section class="view" id="view-account">
+    <div id="account-guest-box">
+      <h2 class="section-title">My account</h2>
+      <p class="section-sub" id="account-mode-sub">Log in with the phone number you registered with.</p>
+      <div class="login-box side-card" id="login-panel">
+        <div id="login-msg"></div>
+        <label class="field">Phone number</label>
+        <input type="tel" id="login-phone">
+        <label class="field">PIN</label>
+        <input type="password" inputmode="numeric" id="login-pin" maxlength="6" autocomplete="current-password">
+        <button class="btn btn-primary" style="width:100%;margin-top:14px;" id="login-btn">Log in</button>
+        <p class="note">New here? <button class="toggle-link" id="show-create-account">Create an account</button></p>
+      </div>
+      <div class="login-box side-card hidden" id="create-panel">
+        <div id="create-msg"></div>
+        <label class="field">Full name</label>
+        <input type="text" id="create-name">
+        <label class="field">Phone number (this becomes your login)</label>
+        <input type="tel" id="create-phone">
+        <label class="field">NRC (optional)</label>
+        <input type="text" id="create-nrc">
+        <label class="field">Create a PIN (4–6 digits)</label>
+        <input type="password" inputmode="numeric" id="create-pin" maxlength="6" autocomplete="new-password">
+        <p class="note" style="margin-top:-4px;">You'll need this PIN to log in — don't share it.</p>
+        <button class="btn btn-primary" style="width:100%;margin-top:14px;" id="create-account-btn">Create account</button>
+        <p class="note">Already registered? <button class="toggle-link" id="show-login">Log in instead</button></p>
+      </div>
+    </div>
+    <div id="account-dashboard" class="hidden"></div>
+  </section>
+
+  <!-- ADMIN -->
+  <section class="view" id="view-admin">
+    <div id="admin-gate">
+      <h2 class="section-title">Admin</h2>
+      <p class="section-sub">Enter the admin PIN to manage sites, listings, and payments.</p>
+      <div class="side-card login-box">
+        <div id="admin-msg"></div>
+        <label class="field">PIN</label>
+        <input type="password" inputmode="numeric" id="admin-pin" maxlength="12" autocomplete="current-password">
+        <button class="btn btn-primary" style="width:100%;margin-top:14px;" id="admin-login-btn">Enter</button>
+      </div>
+    </div>
+    <div id="admin-change-pin" class="hidden">
+      <h2 class="section-title">Set a new admin PIN</h2>
+      <p class="section-sub">This account is still on the factory default PIN. Choose a new one before continuing — it's the only thing gating site approvals, payment confirmations, and platform settings.</p>
+      <div class="side-card login-box">
+        <div id="admin-change-msg"></div>
+        <label class="field">New PIN (4–12 digits)</label>
+        <input type="password" inputmode="numeric" id="admin-new-pin" maxlength="12" autocomplete="new-password">
+        <label class="field">Confirm new PIN</label>
+        <input type="password" inputmode="numeric" id="admin-new-pin-confirm" maxlength="12" autocomplete="new-password">
+        <button class="btn btn-primary" style="width:100%;margin-top:14px;" id="admin-set-pin-btn">Set PIN and continue</button>
+      </div>
+    </div>
+    <div id="admin-dashboard" class="hidden"></div>
+  </section>
+
+</main>
+
+<footer>Nexlite Digital Solutions Limited · Tukule — Let's Build · Enquiries: 0977 638 790 · Data syncs live across devices via Tukule's cloud</footer>
+
+<script>
+/* ---------- state ---------- */
+/* ====== FIREBASE SETUP — paste your project's config values below.
+   Steps to get them are in the chat reply that delivered this file. ====== */
+const firebaseConfig = {
+  apiKey: "AIzaSyBBr_VnwmEcEJ-x66sG2BWoKOE8qKGZxLk",
+  authDomain: "tukuule-let-s-build.firebaseapp.com",
+  databaseURL: "https://tukuule-let-s-build-default-rtdb.firebaseio.com",
+  projectId: "tukuule-let-s-build",
+  appId: "1:141747891324:web:c3e89d4cb8e96d7133edf9"
+};
+const DATA_PATH = 'tukule_state_v2';
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.database();
+/* ====== end Firebase setup ====== */
+
+function buildPlots(rows, cols, seedPattern){
+  const total = rows*cols;
+  const plots = [];
+  for(let i=0;i<total;i++) plots.push({ id:i+1, status:'available', buyerPhone:null });
+  (seedPattern||[]).forEach((n,idx)=>{ if(plots[n-1]) plots[n-1].status = idx % 3 === 0 ? 'sold' : 'reserved'; });
+  return plots;
+}
+
+function defaultState(){
+  return {
+    settings:{ nexliteContact:'0977638790', defaultCommissionPct:10, adminPinHash:'0889c39fbe2987060378014caac47694cde6e56370261a504b33109674f15e7b', adminPinIsDefault:true },
+    sites:{
+      'mansa-riverside':{
+        id:'mansa-riverside', name:'Mansa Riverside', location:'Opposite Kapanda Mini-Hospital, 6km from Mansa CBD, off Kabunda Road',
+        description:'Riverside plots close to town, sold square by square.',
+        pricePerPlot:9500, plotLabel:'30 x 30', rows:8, cols:10,
+        outrightDiscountPct:5, depositPct:20, dailyTerms:[90,180,365], monthlyTerms:[6,12,18,24,36],
+        ownerName:'Nexlite Digital Solutions Limited', ownerPhone:'0977638790', ownerPinHash:'', isNexliteOwned:true, commissionPct:0,
+        status:'active', createdAt:new Date().toISOString().slice(0,10),
+        plots: buildPlots(8,10,[3,4,17,22,38,51,52,65]),
+        commissionSettlements: []
+      }
+    },
+    buyers:{}
+  };
+}
+
+/* ---------- cloud sync ----------
+   Whole-blob pattern: the entire `state` object lives at one Realtime
+   Database path. saveState() pushes the full object up; a live `on('value')`
+   listener pulls any change (from this device or any other) back down and
+   re-renders. Every existing call site that already calls saveState() after
+   a mutation keeps working unchanged. */
+let state = null;
+let syncSuppressUntil = 0; // timestamp: ignore the next incoming echo of our own write
+
+/* ---------- session persistence ----------
+   currentAccountPhone/currentOwnerPhone/isAdmin are plain JS variables that
+   would normally reset on every refresh even though `state` itself survives
+   in the cloud. We mirror the *logged-in identity* (not any secret) into
+   sessionStorage so a refresh doesn't force everyone to log back in — it
+   clears when the tab/browser closes, so it doesn't linger like a permanent
+   "remember me" would. */
+const SESSION_KEY = 'tukule_session_v1';
+function loadSessionRaw(){
+  try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || '{}'); } catch(e){ return {}; }
+}
+function updateSession(patch){
+  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ ...loadSessionRaw(), ...patch })); }
+  catch(e){ /* storage unavailable (private browsing etc.) — session just won't persist */ }
+}
+let sessionRestored = false;
+function restoreSessionOnce(){
+  if(sessionRestored || !state) return;
+  sessionRestored = true;
+  const session = loadSessionRaw();
+  if(session.accountPhone && state.buyers[session.accountPhone]){
+    currentAccountPhone = session.accountPhone;
+    renderAccount();
+  }
+  if(session.ownerPhone && Object.values(state.sites).some(s=>normPhone(s.ownerPhone)===session.ownerPhone)){
+    currentOwnerPhone = session.ownerPhone;
+    renderOwnerDashboard();
+  }
+  if(session.isAdmin && !state.settings.adminPinIsDefault){
+    isAdmin = true;
+    document.getElementById('admin-gate').classList.add('hidden');
+    document.getElementById('admin-dashboard').classList.remove('hidden');
+    renderAdmin();
+  }
+}
+
+function saveState(){
+  if(!state) return;
+  syncSuppressUntil = Date.now() + 2000;
+  db.ref(DATA_PATH).set(state).catch(err=>{
+    console.error('Tukule: cloud save failed', err);
+    setSyncPill('offline', 'Save failed — retrying');
+  });
+}
+
+function setSyncPill(mode, label){
+  const pill = document.getElementById('sync-pill');
+  if(!pill) return;
+  pill.className = 'sync-pill ' + mode;
+  pill.textContent = label;
+}
+
+function hideLoadingOverlay(){
+  const el = document.getElementById('app-loading');
+  if(el) el.remove();
+}
+
+function rerenderCurrentView(){
+  const active = document.querySelector('section.view.active');
+  if(!active) return;
+  const name = active.id.replace('view-', '');
+  if(name==='home') renderHome();
+  else if(name==='buy'){ renderBuySitePicker(); if(currentSiteId) renderPlotGrid(); }
+  else if(name==='sell' && currentOwnerPhone) renderOwnerDashboard();
+  else if(name==='account' && currentAccountPhone) renderAccount();
+  else if(name==='admin' && isAdmin) renderAdmin();
+}
+
+function attachCloudListener(){
+  db.ref(DATA_PATH).on('value', snap=>{
+    const val = snap.val();
+    if(val){
+      state = val;
+    } else if(!state){
+      state = defaultState();
+      db.ref(DATA_PATH).set(state);
+    }
+    const firstLoad = document.getElementById('app-loading');
+    if(firstLoad){ hideLoadingOverlay(); renderHome(); }
+    else if(Date.now() > syncSuppressUntil){ rerenderCurrentView(); }
+    restoreSessionOnce();
+  }, err=>{
+    console.error('Tukule: cloud sync error', err);
+    setSyncPill('offline', 'Offline');
+  });
+  db.ref('.info/connected').on('value', snap=>{
+    if(snap.val()===true) setSyncPill('online', 'Synced');
+    else setSyncPill('connecting', 'Reconnecting…');
+  });
+}
+
+function initApp(){
+  setSyncPill('connecting', 'Connecting…');
+  // If sign-in stalls (e.g. first-ever offline launch), don't leave the
+  // person staring at a spinner forever — start locally and merge once
+  // the cloud connection actually comes up.
+  const fallbackTimer = setTimeout(()=>{
+    if(!state){
+      state = defaultState();
+      hideLoadingOverlay();
+      renderHome();
+      setSyncPill('offline', 'Offline — retrying');
+      restoreSessionOnce();
+    }
+  }, 8000);
+
+  auth.onAuthStateChanged(user=>{
+    if(user){
+      clearTimeout(fallbackTimer);
+      attachCloudListener();
+    }
+  });
+  auth.signInAnonymously().catch(err=>{
+    console.error('Tukule: anonymous sign-in failed', err);
+    setSyncPill('offline', 'Offline');
+  });
+}
+let selectedPlots = [];
+let currentPlan = 'outright';
+let currentSiteId = null;
+let currentAccountPhone = null;
+let isAdmin = false;
+
+/* ---------- helpers ---------- */
+function esc(str){
+  return String(str??'').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+function money(n){ return 'K' + Number(n||0).toLocaleString('en-ZM', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+// normPhone() is a lookup-key normalizer, not a validator — it strips the
+// formatting differences people commonly type (spaces, dashes, brackets,
+// a +260/260 country code) so "+260 977 638 790" and "0977638790" resolve
+// to the same account. It intentionally does NOT reject anything; garbage
+// input just won't match validPhone() below and gets caught at the call
+// site before it's ever used as an account key.
+function normPhone(p){
+  let s = (p||'').replace(/[\s\-()]/g,'').trim();
+  if(s.startsWith('+260')) s = '0' + s.slice(4);
+  else if(/^260\d{9}$/.test(s)) s = '0' + s.slice(3);
+  return s;
+}
+// The single source of truth for "is this a real Zambian mobile number" —
+// every place that creates or looks up an account by phone should validate
+// through this function rather than its own inline regex, so the rule can
+// only ever be defined (and fixed, if it's ever wrong) in one place.
+function validPhone(p){ return /^0\d{9}$/.test(p); }
+function validPin(pin){ return /^\d{4,6}$/.test(pin); }
+function validAdminPin(pin){ return /^\d{4,12}$/.test(pin); }
+// Sanity bounds for the business numbers owners/admin can set. These exist
+// so a stray keystroke (or a deliberately hostile owner) can't turn a price
+// into 0, a discount into 500%, or a commission into a negative number that
+// would flip the accounting the wrong way. Bounds are generous on purpose —
+// this is guarding against nonsense values, not enforcing pricing policy.
+const NUMERIC_BOUNDS = {
+  pricePerPlot: [1, 10000000],
+  outrightDiscountPct: [0, 100],
+  depositPct: [0, 100],
+  commissionPct: [0, 100],
+  defaultCommissionPct: [0, 100],
+  totalPlots: [1, 2000]
+};
+function inRange(n, [min,max]){ return Number.isFinite(n) && n>=min && n<=max; }
+async function hashPin(pin){
+  const enc = new TextEncoder().encode('tukule:' + String(pin));
+  const buf = await crypto.subtle.digest('SHA-256', enc);
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function addDays(dateStr, days){ const d=new Date(dateStr); d.setDate(d.getDate()+days); return d.toISOString().slice(0,10); }
+function addMonths(dateStr, months){ const d=new Date(dateStr); d.setMonth(d.getMonth()+months); return d.toISOString().slice(0,10); }
+function daysSince(dateStr){ return Math.max(0, Math.floor((new Date() - new Date(dateStr)) / 86400000)); }
+function activeSites(){ return Object.values(state.sites).filter(s=>s.status==='active'); }
+function siteAvailableCount(site){ return site.plots.filter(p=>p.status==='available').length; }
+
+/* ---------- nav ---------- */
+document.querySelectorAll('nav.tabs button').forEach(btn=>btn.addEventListener('click', ()=>showView(btn.dataset.view)));
+document.querySelectorAll('[data-goto]').forEach(btn=>btn.addEventListener('click', ()=>showView(btn.dataset.goto)));
+function showView(name){
+  document.querySelectorAll('section.view').forEach(s=>s.classList.remove('active'));
+  document.getElementById('view-'+name).classList.add('active');
+  document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.toggle('active', b.dataset.view===name));
+  if(name==='home') renderHome();
+  if(name==='buy') renderBuySitePicker();
+  if(name==='admin') renderAdmin();
+  if(name==='sell' && currentOwnerPhone) renderOwnerDashboard();
+}
+
+/* ---------- home ---------- */
+function siteCardHtml(site, ctaLabel){
+  return `
+    <div class="site-card">
+      <h3>${esc(site.name)}</h3>
+      <div class="loc">${esc(site.location)}</div>
+      <div class="price">${money(site.pricePerPlot)} <span style="font-family:'Karla',sans-serif;font-size:0.72rem;font-weight:600;">/ ${esc(site.plotLabel)}</span></div>
+      <div class="avail">${siteAvailableCount(site)} of ${site.plots.length} plots available</div>
+      <button class="btn btn-secondary btn-sm" data-open-site="${site.id}">${ctaLabel}</button>
+    </div>
+  `;
+}
+function renderHome(){
+  const wrap = document.getElementById('home-site-cards');
+  const sites = activeSites();
+  wrap.innerHTML = sites.length ? sites.map(s=>siteCardHtml(s,'View site plan')).join('') : '<div class="empty">No sites listed yet.</div>';
+  wrap.querySelectorAll('[data-open-site]').forEach(btn=>btn.addEventListener('click', ()=>{
+    openSite(btn.dataset.openSite);
+    showView('buy');
+  }));
+}
+
+/* ---------- buy ---------- */
+function renderBuySitePicker(){
+  const wrap = document.getElementById('buy-site-cards');
+  const sites = activeSites();
+  wrap.innerHTML = sites.length ? sites.map(s=>siteCardHtml(s,'Select this site')).join('') : '<div class="empty">No sites listed yet.</div>';
+  wrap.querySelectorAll('[data-open-site]').forEach(btn=>btn.addEventListener('click', ()=>openSite(btn.dataset.openSite)));
+  if(!currentSiteId){
+    document.getElementById('buy-site-picker').classList.remove('hidden');
+    document.getElementById('buy-plot-area').classList.add('hidden');
+  }
+}
+document.getElementById('back-to-sites').addEventListener('click', ()=>{
+  currentSiteId = null; selectedPlots = [];
+  document.getElementById('buy-site-picker').classList.remove('hidden');
+  document.getElementById('buy-plot-area').classList.add('hidden');
+  renderBuySitePicker();
+});
+
+function openSite(siteId){
+  currentSiteId = siteId; selectedPlots = [];
+  document.getElementById('buy-site-picker').classList.add('hidden');
+  document.getElementById('buy-plot-area').classList.remove('hidden');
+  const site = state.sites[siteId];
+  document.getElementById('buy-site-title').textContent = site.name;
+  document.getElementById('buy-site-loc').textContent = site.location + ' · ' + site.plotLabel + ' plots'; // textContent — already safe, no HTML parsing
+  document.querySelector('.plan-tab[data-plan="outright"]').click();
+  renderPlotGrid();
+}
+
+function renderPlotGrid(){
+  const site = state.sites[currentSiteId];
+  if(!site) return;
+  const grid = document.getElementById('plot-grid');
+  grid.style.gridTemplateColumns = `repeat(${site.cols}, 34px)`;
+  grid.innerHTML = '';
+  site.plots.forEach(p=>{
+    const el = document.createElement('div');
+    el.className = 'plot ' + p.status + (selectedPlots.includes(p.id) ? ' selected' : '');
+    el.textContent = String(p.id).padStart(2,'0');
+    el.title = 'Plot ' + p.id + ' — ' + p.status;
+    if(p.status === 'available') el.addEventListener('click', ()=>toggleSelectPlot(p.id));
+    grid.appendChild(el);
+  });
+  renderSelection();
+}
+function toggleSelectPlot(id){
+  const i = selectedPlots.indexOf(id);
+  if(i>-1) selectedPlots.splice(i,1); else selectedPlots.push(id);
+  renderPlotGrid();
+}
+function renderSelection(){
+  const site = state.sites[currentSiteId];
+  const list = document.getElementById('selected-list');
+  const totalEl = document.getElementById('selection-total');
+  const price = site.pricePerPlot;
+  list.innerHTML = selectedPlots.length===0
+    ? '<li style="border:none;color:#6b6153;">No plots selected yet</li>'
+    : selectedPlots.map(id=>`<li><span>Plot ${String(id).padStart(2,'0')}</span><span>${money(price)}</span></li>`).join('');
+  totalEl.textContent = money(selectedPlots.length * price);
+
+  const check = document.getElementById('reserve-account-check');
+  check.innerHTML = currentAccountPhone ? '' : '<p class="note">Log in or create an account to reserve a plot.</p>';
+
+  const btn = document.getElementById('reserve-btn');
+  btn.disabled = selectedPlots.length===0;
+  btn.textContent = selectedPlots.length===0 ? 'Select plots to continue' : (currentAccountPhone ? 'Reserve these plots' : 'Log in to reserve');
+  renderSchedule();
+}
+
+document.querySelectorAll('.plan-tab').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.plan-tab').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active'); currentPlan = btn.dataset.plan;
+    const site = state.sites[currentSiteId];
+    const termField = document.getElementById('term-field');
+    const termSelect = document.getElementById('term-select');
+    const termLabel = document.getElementById('term-label');
+    if(currentPlan==='outright'){ termField.classList.add('hidden'); }
+    else{
+      termField.classList.remove('hidden');
+      const terms = currentPlan==='daily' ? site.dailyTerms : site.monthlyTerms;
+      const unit = currentPlan==='daily' ? 'days' : 'months';
+      termLabel.textContent = currentPlan==='daily' ? 'Daily plan — term' : 'Monthly plan — term';
+      termSelect.innerHTML = terms.map(t=>`<option value="${t}">${t} ${unit}</option>`).join('');
+    }
+    renderSchedule();
+  });
+});
+document.getElementById('term-select').addEventListener('change', renderSchedule);
+
+function computePlanFor(plotCount){
+  const site = state.sites[currentSiteId];
+  if(!site || plotCount<=0) return null;
+  const total = plotCount * site.pricePerPlot;
+  if(currentPlan==='outright'){
+    const discounted = total * (1 - site.outrightDiscountPct/100);
+    return { type:'outright', total: Math.round(discounted*100)/100, listTotal: total, deposit: discounted, installment:0, installments:0, unit:'once', startDate: todayISO() };
+  }
+  const terms = currentPlan==='daily' ? site.dailyTerms : site.monthlyTerms;
+  const term = Number(document.getElementById('term-select').value || terms[0]);
+  const deposit = Math.round(total * site.depositPct/100 * 100)/100;
+  const balance = total - deposit;
+  const installment = Math.round((balance/term) * 100)/100;
+  const completionDate = currentPlan==='daily' ? addDays(todayISO(), term) : addMonths(todayISO(), term);
+  return { type:currentPlan, total, listTotal: total, deposit, installment, installments: term, unit: currentPlan==='daily'?'day':'month', startDate: todayISO(), completionDate };
+}
+// computePlan() previews pricing for whatever's currently selected in the UI.
+// The reserve handler below calls computePlanFor(claimedCount) separately
+// once it knows exactly how many plots were actually won, since a race
+// against another buyer can shrink that number between click and commit.
+function computePlan(){ return computePlanFor(selectedPlots.length); }
+
+function renderSchedule(){
+  const box = document.getElementById('schedule-box');
+  const site = state.sites[currentSiteId];
+  const plan = computePlan();
+  if(!plan || !site){ box.innerHTML = ''; return; }
+  if(plan.type==='outright'){
+    box.innerHTML = `
+      <div class="schedule-line"><span>List price</span><span>${money(plan.listTotal)}</span></div>
+      <div class="schedule-line"><span>Outright discount</span><span>-${money(plan.listTotal-plan.total)}</span></div>
+      <div class="schedule-line"><strong>Due today</strong><strong>${money(plan.total)}</strong></div>
+      <p class="note">Pay the full amount to the property owner and your plot is marked sold as soon as it's confirmed.</p>`;
+  } else {
+    box.innerHTML = `
+      <div class="schedule-line"><span>Total price</span><span>${money(plan.total)}</span></div>
+      <div class="schedule-line"><span>Deposit (${site.depositPct}%)</span><span>${money(plan.deposit)}</span></div>
+      <div class="schedule-line"><strong>${plan.type==='daily'?'Daily':'Monthly'} instalment</strong><strong>${money(plan.installment)} × ${plan.installments} ${plan.unit}${plan.installments>1?'s':''}</strong></div>
+      <div class="schedule-line"><span>Projected paid-off date</span><span>${plan.completionDate}</span></div>
+      <p class="note">Deposit is due first, paid to the property owner and logged the same way as any other payment.</p>`;
+  }
+}
+
+// Claiming a plot is the one action two different buyers can genuinely race
+// on at the same moment from two different devices. A plain "read state,
+// flip status locally, saveState()" (the old approach) has no protection
+// against that: both clients could each see the plot as 'available' and
+// both write 'reserved', with whichever save lands last silently winning
+// and the other buyer never finding out their reservation didn't really
+// happen. To close that gap we claim each plot with its own Firebase
+// transaction directly against that plot's own database path. The
+// transaction callback runs against the server's current value and is
+// retried by the SDK if another write lands first, and returning undefined
+// aborts it — so exactly one buyer can ever win a given plot, and the loser
+// finds out immediately rather than silently overwriting/being overwritten.
+async function claimPlot(site, plotId, buyerPhone){
+  const idx = site.plots.findIndex(pp=>pp.id===plotId);
+  if(idx===-1) return false;
+  const plotRef = db.ref(`${DATA_PATH}/sites/${site.id}/plots/${idx}`);
+  try{
+    const result = await plotRef.transaction(current=>{
+      if(!current || current.status !== 'available') return; // someone else got it first — abort, don't touch it
+      return { ...current, status:'reserved', buyerPhone };
+    });
+    return !!(result.committed && result.snapshot.val() && result.snapshot.val().buyerPhone===buyerPhone);
+  } catch(err){
+    console.error('Tukule: plot claim failed', err);
+    return false;
+  }
+}
+
+// Persist the buyer's new plan without the risk that comes with saveState()'s
+// whole-object overwrite: if we pushed the entire `state` blob right after
+// the transactions above, our local copy of `site.plots` (still showing the
+// pre-transaction statuses, since the live listener echo hasn't arrived yet)
+// would blow away the very reservations we just won. Updating only this
+// buyer's `plans` path leaves every other path — including the plots we
+// just claimed and anything anyone else changed in between — untouched.
+function saveBuyerPlans(phone, plans){
+  syncSuppressUntil = Date.now() + 2000;
+  const updates = {};
+  updates[`buyers/${phone}/plans`] = plans;
+  db.ref(DATA_PATH).update(updates).catch(err=>{
+    console.error('Tukule: cloud save failed', err);
+    setSyncPill('offline', 'Save failed — retrying');
+  });
+}
+
+// A reserved plot with no timeout or cancel path can get stuck unsellable
+// forever if the buyer never follows through with payment. releasePlot()
+// gives buyers, owners, and admin a way out — same transaction pattern as
+// claimPlot(), so it can never accidentally release a plot that's already
+// been sold (or already released by someone else) out from under a
+// legitimate owner.
+async function releasePlot(site, plotId){
+  const idx = site.plots.findIndex(pp=>pp.id===plotId);
+  if(idx===-1) return false;
+  const plotRef = db.ref(`${DATA_PATH}/sites/${site.id}/plots/${idx}`);
+  try{
+    const result = await plotRef.transaction(current=>{
+      if(!current || current.status !== 'reserved') return; // already sold, or already released — leave it alone
+      return { id: current.id, status:'available', buyerPhone:null };
+    });
+    return !!result.committed;
+  } catch(err){
+    console.error('Tukule: plot release failed', err);
+    return false;
+  }
+}
+
+// Shared by the buyer's own "cancel reservation" button and the owner/admin
+// "release" override — releases every plot tied to one plan and marks the
+// plan cancelled so it stops counting toward the buyer's active holdings.
+async function cancelPlan(buyerPhone, planId){
+  const buyer = state.buyers[buyerPhone];
+  const plan = buyer && buyer.plans.find(p=>p.id===planId);
+  if(!plan || plan.status!=='active') return false;
+  const site = state.sites[plan.siteId];
+  if(site){
+    for(const plotId of plan.plots){
+      const released = await releasePlot(site, plotId);
+      if(released){
+        const p = site.plots.find(pp=>pp.id===plotId);
+        if(p){ p.status='available'; p.buyerPhone=null; }
+      }
+    }
+  }
+  plan.status = 'cancelled';
+  plan.cancelledAt = todayISO();
+  saveBuyerPlans(buyerPhone, buyer.plans);
+  return true;
+}
+
+document.getElementById('reserve-btn').addEventListener('click', async ()=>{
+  if(!currentAccountPhone){ showView('account'); return; }
+  const buyer = state.buyers[currentAccountPhone];
+  const site = state.sites[currentSiteId];
+  const requested = [...selectedPlots];
+  if(!buyer || !site || requested.length===0 || !computePlanFor(requested.length)) return;
+
+  const btn = document.getElementById('reserve-btn');
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Reserving…';
+
+  const claimed = [];
+  const lost = [];
+  for(const plotId of requested){
+    const won = await claimPlot(site, plotId, currentAccountPhone);
+    (won ? claimed : lost).push(plotId);
+  }
+
+  if(claimed.length===0){
+    btn.disabled = false; btn.textContent = originalLabel;
+    alert((lost.length===1 ? 'That plot was' : 'Those plots were') + ' just taken by another buyer. Pick different plots and try again.');
+    selectedPlots = [];
+    renderPlotGrid();
+    return;
+  }
+
+  // Reflect the claimed plots locally right away so the UI is correct even
+  // before the live listener's echo of our own transactions arrives.
+  claimed.forEach(id=>{
+    const p = site.plots.find(pp=>pp.id===id);
+    if(p){ p.status='reserved'; p.buyerPhone=currentAccountPhone; }
+  });
+
+  // Price the plan on exactly what was actually won, not what was clicked —
+  // if another buyer beat us to some of the plots, the buyer should only be
+  // billed and scheduled for the ones that are genuinely theirs.
+  const plan = computePlanFor(claimed.length);
+  const planRecord = {
+    id: 'plan' + Date.now(),
+    siteId: site.id, siteName: site.name, commissionPct: site.commissionPct,
+    plots: claimed, type: plan.type, total: plan.total, deposit: plan.deposit,
+    installment: plan.installment, installments: plan.installments, unit: plan.unit,
+    startDate: plan.startDate, completionDate: plan.completionDate || plan.startDate,
+    balance: plan.total, status:'active'
+  };
+  buyer.plans.push(planRecord);
+  saveBuyerPlans(currentAccountPhone, buyer.plans);
+
+  selectedPlots = [];
+  btn.disabled = false; btn.textContent = originalLabel;
+
+  if(lost.length){
+    alert('Heads up: ' + lost.map(id=>'Plot '+String(id).padStart(2,'0')).join(', ') + ' ' +
+      (lost.length===1 ? 'was' : 'were') + ' taken by another buyer moments ago, so ' +
+      (lost.length===1 ? "it wasn't" : "they weren't") + ' included. The rest of your reservation went through.');
+  }
+
+  showView('account'); renderAccount();
+});
+
+/* ---------- sell (listing submissions) ---------- */
+function findSiteForOwnerPhone(phone){
+  return Object.values(state.sites).find(s=>normPhone(s.ownerPhone)===phone && s.ownerPinHash);
+}
+
+document.getElementById('submit-listing-btn').addEventListener('click', async ()=>{
+  const msg = document.getElementById('sell-msg');
+  const btn = document.getElementById('submit-listing-btn');
+  const name = document.getElementById('sell-name').value.trim();
+  const location = document.getElementById('sell-location').value.trim();
+  const description = document.getElementById('sell-description').value.trim();
+  const price = Number(document.getElementById('sell-price').value);
+  const plotLabel = document.getElementById('sell-plotsize').value.trim() || 'per plot';
+  const total = Number(document.getElementById('sell-total').value);
+  const ownerName = document.getElementById('sell-owner-name').value.trim();
+  const ownerPhone = normPhone(document.getElementById('sell-owner-phone').value);
+  const ownerPin = document.getElementById('sell-owner-pin').value.trim();
+
+  if(!name || !location || !price || !total || !ownerName || !ownerPhone){
+    msg.innerHTML = '<div class="msg err">Fill in the property details, price, plot count, and your contact details.</div>';
+    return;
+  }
+  if(!inRange(price, NUMERIC_BOUNDS.pricePerPlot)){
+    msg.innerHTML = `<div class="msg err">Price per plot must be between K${NUMERIC_BOUNDS.pricePerPlot[0]} and K${NUMERIC_BOUNDS.pricePerPlot[1].toLocaleString()}.</div>`;
+    return;
+  }
+  if(!Number.isInteger(total) || !inRange(total, NUMERIC_BOUNDS.totalPlots)){
+    msg.innerHTML = `<div class="msg err">Total plots must be a whole number between ${NUMERIC_BOUNDS.totalPlots[0]} and ${NUMERIC_BOUNDS.totalPlots[1]}.</div>`;
+    return;
+  }
+  if(!validPhone(ownerPhone)){ msg.innerHTML = '<div class="msg err">Enter a valid 10-digit phone number starting with 0.</div>'; return; }
+  if(!validPin(ownerPin)){ msg.innerHTML = '<div class="msg err">Enter a 4–6 digit owner PIN.</div>'; return; }
+
+  btn.disabled = true;
+  const ownerPinHash = await hashPin(ownerPin);
+  const existingOwnerSite = findSiteForOwnerPhone(ownerPhone);
+  if(existingOwnerSite && existingOwnerSite.ownerPinHash !== ownerPinHash){
+    btn.disabled = false;
+    msg.innerHTML = '<div class="msg err">That PIN doesn\'t match the one on file for this phone number. Use the PIN from your first listing, or call us if you\'ve forgotten it.</div>';
+    return;
+  }
+
+  const cols = Math.ceil(Math.sqrt(total));
+  const rows = Math.ceil(total/cols);
+  const id = 'site' + Date.now();
+  state.sites[id] = {
+    id, name, location, description, pricePerPlot: price, plotLabel, rows, cols,
+    outrightDiscountPct:5, depositPct:20, dailyTerms:[90,180,365], monthlyTerms:[6,12,18,24,36],
+    ownerName, ownerPhone, ownerPinHash, isNexliteOwned:false, commissionPct: state.settings.defaultCommissionPct,
+    status:'pending', createdAt: todayISO(), plots: buildPlots(rows, cols, []),
+    commissionSettlements: []
+  };
+  saveState();
+  msg.innerHTML = `<div class="msg ok">Thanks, ${esc(ownerName)}. Your listing is under review — we'll confirm on ${esc(ownerPhone)}, or call us on 0977 638 790.</div>`;
+  ['sell-name','sell-location','sell-description','sell-price','sell-owner-name','sell-owner-phone','sell-owner-pin'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('sell-total').value='50';
+  document.getElementById('sell-plotsize').value='30 x 30';
+  btn.disabled = false;
+});
+
+/* ---------- owner dashboard ---------- */
+let currentOwnerPhone = null;
+
+document.getElementById('owner-login-btn').addEventListener('click', async ()=>{
+  const phone = normPhone(document.getElementById('owner-login-phone').value);
+  const msg = document.getElementById('owner-login-msg');
+  const btn = document.getElementById('owner-login-btn');
+  const pin = document.getElementById('owner-login-pin').value.trim();
+  const mySites = Object.values(state.sites).filter(s=>normPhone(s.ownerPhone)===phone);
+  const pinnedSite = mySites.find(s=>s.ownerPinHash);
+  if(!phone || !pin || mySites.length===0 || !pinnedSite){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
+  btn.disabled = true;
+  const pinHash = await hashPin(pin);
+  btn.disabled = false;
+  if(pinHash !== pinnedSite.ownerPinHash){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
+  currentOwnerPhone = phone;
+  updateSession({ ownerPhone: phone });
+  document.getElementById('owner-login-pin').value='';
+  renderOwnerDashboard();
+});
+
+function renderOwnerDashboard(){
+  const phone = currentOwnerPhone;
+  const mySites = Object.values(state.sites).filter(s=>normPhone(s.ownerPhone)===phone);
+  document.getElementById('owner-login-panel').classList.add('hidden');
+  const dash = document.getElementById('owner-dashboard');
+  dash.classList.remove('hidden');
+
+  const siteBlocks = mySites.map(site=>{
+    const counts = {available:0,reserved:0,sold:0};
+    site.plots.forEach(p=>counts[p.status]++);
+    const comm = computeSiteCommission(site);
+
+    const pendingForSite = [];
+    Object.values(state.buyers).forEach(b=>b.payments.forEach((p,idx)=>{
+      if(p.status==='pending' && p.siteId===site.id) pendingForSite.push({buyer:b, payment:p, idx});
+    }));
+    const pendingHtml = pendingForSite.length ? pendingForSite.map(({buyer,payment,idx})=>`
+      <div class="schedule-line">
+        <span>${payment.date} — ${esc(buyer.name)} — ${money(payment.amount)} (${esc(payment.method)}${payment.reference?' · ref: '+esc(payment.reference):''})</span>
+        <span><button class="btn btn-secondary btn-sm" data-owner-confirm="${esc(buyer.phone)}:${idx}">Confirm received</button></span>
+      </div>`).join('') : '<p class="note">No payments awaiting your confirmation.</p>';
+
+    // Reserved plots with nobody paying it off can otherwise sit locked up
+    // forever. Surface every open reservation here — flagged once it's gone
+    // a week without payment — so the owner can release a plot back to
+    // available if the buyer never follows through.
+    const openReservations = [];
+    Object.values(state.buyers).forEach(b=>b.plans.forEach(pl=>{
+      if(pl.siteId===site.id && pl.status==='active') openReservations.push({buyer:b, plan:pl});
+    }));
+    const reservationsHtml = openReservations.length ? openReservations.map(({buyer,plan})=>{
+      const days = daysSince(plan.startDate);
+      const stale = days >= 7;
+      const paidSoFar = Math.round((plan.total - planBalance(plan))*100)/100;
+      const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
+      return `
+        <div class="schedule-line">
+          <span>${stale?'⚠️ ':''}Plot${plan.plots.length>1?'s':''} ${plotLabels} — ${esc(buyer.name)} — reserved ${days} day${days===1?'':'s'} ago${paidSoFar>0?' · '+money(paidSoFar)+' paid':''}</span>
+          <span><button class="btn btn-ghost btn-sm" data-release-plan="${esc(buyer.phone)}:${plan.id}">Release</button></span>
+        </div>`;
+    }).join('') : '<p class="note">No open reservations.</p>';
+
+    return `
+      <div class="side-card">
+        <h3>${esc(site.name)} <span class="pill ${site.status==='active'?'active':'pending'}">${site.status}</span></h3>
+        <div class="schedule-line"><span>Plots</span><span>${counts.available} available · ${counts.reserved} reserved · ${counts.sold} sold</span></div>
+        <div class="schedule-line"><span>Commission rate</span><span>${site.commissionPct}%</span></div>
+        <div class="schedule-line"><span>Commission accrued</span><span>${money(comm.accrued)}</span></div>
+        <div class="schedule-line"><span>Commission you've forwarded</span><span>${money(comm.settled)}</span></div>
+        <div class="schedule-line"><strong>Commission still owed to Nexlite</strong><strong>${money(comm.outstanding)}</strong></div>
+        <p class="note" style="margin:10px 0 4px;"><strong>Payments awaiting your confirmation</strong></p>
+        ${pendingHtml}
+        <p class="note" style="margin:10px 0 4px;"><strong>Open reservations</strong></p>
+        ${reservationsHtml}
+      </div>`;
+  }).join('');
+
+  dash.innerHTML = `
+    <div class="balance-hero">
+      <h2 class="section-title" style="margin-bottom:0;">Your listings</h2>
+      <button class="btn btn-ghost" id="owner-logout-btn">Log out</button>
+    </div>
+    <p class="note">When a buyer pays you directly, confirm it here so their balance and your commission update. Forward your commission to Nexlite on 0977 638 790 — we'll mark it received on our side.</p>
+    <div class="grid-two" style="margin-top:16px;">${siteBlocks}</div>
+  `;
+
+  document.getElementById('owner-logout-btn').addEventListener('click', ()=>{
+    currentOwnerPhone = null;
+    updateSession({ ownerPhone: null });
+    dash.classList.add('hidden');
+    document.getElementById('owner-login-panel').classList.remove('hidden');
+    document.getElementById('owner-login-phone').value='';
+    document.getElementById('owner-login-msg').innerHTML='';
+  });
+  dash.querySelectorAll('[data-owner-confirm]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [buyerPhone, idxStr] = btn.dataset.ownerConfirm.split(':');
+      confirmPayment(buyerPhone, Number(idxStr));
+      saveState();
+      renderOwnerDashboard();
+    });
+  });
+  dash.querySelectorAll('[data-release-plan]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const [buyerPhone, planId] = btn.dataset.releasePlan.split(':');
+      const buyer = state.buyers[buyerPhone];
+      const plan = buyer && buyer.plans.find(p=>p.id===planId);
+      if(!plan) return;
+      const paidSoFar = Math.round((plan.total - planBalance(plan))*100)/100;
+      const warn = paidSoFar>0 ? ` This buyer has already paid ${money(paidSoFar)} toward it — make sure that's been sorted out with them before releasing.` : '';
+      if(!confirm(`Release this reservation back to available?${warn}`)) return;
+      btn.disabled = true;
+      const ok = await cancelPlan(buyerPhone, planId);
+      if(ok) renderOwnerDashboard();
+      else { btn.disabled = false; alert('Could not release — please check your connection and try again.'); }
+    });
+  });
+}
+
+/* ---------- account ---------- */
+document.getElementById('show-create-account').addEventListener('click', ()=>{
+  document.getElementById('login-panel').classList.add('hidden');
+  document.getElementById('create-panel').classList.remove('hidden');
+});
+document.getElementById('show-login').addEventListener('click', ()=>{
+  document.getElementById('create-panel').classList.add('hidden');
+  document.getElementById('login-panel').classList.remove('hidden');
+});
+
+document.getElementById('create-account-btn').addEventListener('click', async ()=>{
+  const msg = document.getElementById('create-msg');
+  const btn = document.getElementById('create-account-btn');
+  const name = document.getElementById('create-name').value.trim();
+  const phone = normPhone(document.getElementById('create-phone').value);
+  const nrc = document.getElementById('create-nrc').value.trim();
+  const pin = document.getElementById('create-pin').value.trim();
+  if(!name || !phone){ msg.innerHTML = '<div class="msg err">Enter your name and phone number.</div>'; return; }
+  if(!validPhone(phone)){ msg.innerHTML = '<div class="msg err">Enter a valid 10-digit phone number starting with 0.</div>'; return; }
+  if(!validPin(pin)){ msg.innerHTML = '<div class="msg err">PIN must be 4–6 digits.</div>'; return; }
+  if(state.buyers[phone]){ msg.innerHTML = '<div class="msg err">An account already exists for that number. Log in instead.</div>'; return; }
+  btn.disabled = true;
+  const pinHash = await hashPin(pin);
+  state.buyers[phone] = { phone, name, nrc, pinHash, plans:[], payments:[] };
+  saveState();
+  document.getElementById('create-pin').value='';
+  currentAccountPhone = phone;
+  updateSession({ accountPhone: phone });
+  btn.disabled = false;
+  renderAccount();
+});
+
+document.getElementById('login-btn').addEventListener('click', async ()=>{
+  const phone = normPhone(document.getElementById('login-phone').value);
+  const pin = document.getElementById('login-pin').value.trim();
+  const msg = document.getElementById('login-msg');
+  const btn = document.getElementById('login-btn');
+  const buyer = state.buyers[phone];
+  if(!phone || !pin || !buyer){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
+  btn.disabled = true;
+  const pinHash = await hashPin(pin);
+  btn.disabled = false;
+  if(pinHash !== buyer.pinHash){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
+  currentAccountPhone = phone;
+  updateSession({ accountPhone: phone });
+  document.getElementById('login-pin').value='';
+  renderAccount();
+});
+
+function planBalance(plan){ return Math.max(0, Math.round(plan.balance*100)/100); }
+
+function confirmPayment(buyerPhone, idx){
+  const buyer = state.buyers[buyerPhone];
+  const payment = buyer.payments[idx];
+  if(!payment || payment.status==='confirmed') return;
+  payment.status = 'confirmed';
+  const plan = buyer.plans.find(p=>p.id===payment.planId);
+  if(plan){
+    plan.balance = Math.max(0, Math.round((plan.balance - payment.amount)*100)/100);
+    if(planBalance(plan)<=0){
+      plan.status = 'paid';
+      const site = state.sites[plan.siteId];
+      if(site) plan.plots.forEach(id=>{
+        const p = site.plots.find(pp=>pp.id===id);
+        if(p) p.status = 'sold';
+      });
+    }
+    payment.commissionAmount = Math.round(payment.amount * (plan.commissionPct/100) * 100)/100;
+  }
+}
+
+function computeSiteCommission(site){
+  let accrued = 0;
+  Object.values(state.buyers).forEach(b=>b.payments.forEach(p=>{
+    if(p.status==='confirmed' && p.siteId===site.id) accrued += (p.commissionAmount||0);
+  }));
+  const settled = (site.commissionSettlements||[]).reduce((s,st)=>s+st.amount,0);
+  return { accrued, settled, outstanding: Math.round((accrued-settled)*100)/100 };
+}
+
+function renderAccount(){
+  const buyer = state.buyers[currentAccountPhone];
+  if(!buyer) return;
+  document.getElementById('account-guest-box').classList.add('hidden');
+  const dash = document.getElementById('account-dashboard');
+  dash.classList.remove('hidden');
+
+  const livePlans = buyer.plans.filter(p=>p.status!=='cancelled');
+  const totalBalance = livePlans.reduce((s,p)=>s+planBalance(p),0);
+  const totalPaid = livePlans.reduce((s,p)=>s + (p.total - planBalance(p)),0);
+  const totalValue = livePlans.reduce((s,p)=>s+p.total,0);
+  const pct = totalValue>0 ? Math.min(100, Math.round((totalPaid/totalValue)*100)) : 0;
+
+  const plansHtml = buyer.plans.map(plan=>{
+    const bal = planBalance(plan);
+    const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
+    const paidSoFar = Math.round((plan.total - bal)*100)/100;
+    // Self-service cancel only while nothing's been paid yet — once money's
+    // changed hands, unwinding it needs an owner/admin involved, not a
+    // one-click button.
+    const cancellable = plan.status==='active' && paidSoFar<=0;
+    const statusHtml = plan.status==='cancelled'
+      ? '<span class="pill">Cancelled</span>'
+      : `<span class="pill ${bal<=0?'confirmed':'pending'}">${bal<=0?'Paid off — title processing':'In progress'}</span>`;
+    return `
+      <div class="side-card">
+        <h3>${esc(plan.siteName)} — Plot${plan.plots.length>1?'s':''} ${plotLabels}</h3>
+        <div class="schedule-line"><span>Plan</span><span>${plan.type}${plan.installments>0?' · '+plan.installments+' '+plan.unit+'s':''}</span></div>
+        <div class="schedule-line"><span>Total price</span><span>${money(plan.total)}</span></div>
+        <div class="schedule-line"><span>Outstanding balance</span><span>${money(bal)}</span></div>
+        <div class="schedule-line"><span>Status</span><span>${statusHtml}</span></div>
+        ${plan.status==='active' ? `<button class="btn btn-secondary btn-sm" style="margin-top:10px;" data-print-plan="${plan.id}">Generate &amp; print contract</button>` : ''}
+        ${cancellable ? `<button class="btn btn-ghost btn-sm" style="margin-top:6px;" data-cancel-plan="${plan.id}">Cancel reservation</button>` : ''}
+      </div>`;
+  }).join('') || '<div class="empty">No plots reserved yet. <button class="toggle-link" data-goto2="buy">Browse sites</button></div>';
+
+  const payHistory = buyer.payments.length ? `
+    <table class="ledger"><thead><tr><th>Date</th><th>Plot</th><th>Amount</th><th>Method</th><th>Reference</th><th>Status</th></tr></thead>
+    <tbody>${buyer.payments.slice().reverse().map(p=>{
+      const plan = buyer.plans.find(pl=>pl.id===p.planId);
+      const label = plan ? esc(plan.siteName) + ' ' + plan.plots.map(id=>String(id).padStart(2,'0')).join(',') : '—';
+      return `<tr><td>${p.date}</td><td>${label}</td><td>${money(p.amount)}</td><td>${esc(p.method)}</td><td>${esc(p.reference||'—')}</td><td><span class="pill ${p.status}">${p.status}</span></td></tr>`;
+    }).join('')}</tbody></table>`
+    : '<div class="empty">No payments logged yet.</div>';
+
+  dash.innerHTML = `
+    <div class="balance-hero">
+      <div><h2 class="section-title" style="margin-bottom:2px;">Welcome back, ${esc(buyer.name)}</h2><p class="section-sub" style="margin-bottom:0;">Account: ${esc(buyer.phone)}</p></div>
+      <button class="btn btn-ghost" id="logout-btn">Log out</button>
+    </div>
+    <div class="side-card">
+      <h3>Overall progress</h3>
+      <div class="progress-track"><div class="progress-fill" style="width:${pct}%;"></div></div>
+      <div class="schedule-line"><span>Paid so far</span><span>${money(totalPaid)}</span></div>
+      <div class="schedule-line"><span>Remaining balance</span><span>${money(totalBalance)}</span></div>
+    </div>
+    <div class="grid-two" style="margin:16px 0;">${plansHtml}</div>
+    <div class="side-card">
+      <h3>Log a payment</h3>
+      <p class="note" style="margin-top:-4px;">Pay the property owner directly, then log it here. It's marked pending until the owner (or Nexlite, for Nexlite's own sites) confirms it went through.</p>
+      <div id="pay-msg"></div>
+      <label class="field">Which plot is this for?</label>
+      <select id="pay-plan">${buyer.plans.map(p=>`<option value="${p.id}">${esc(p.siteName)} — Plot${p.plots.length>1?'s':''} ${p.plots.map(id=>String(id).padStart(2,'0')).join(', ')}</option>`).join('')}</select>
+      <label class="field">Amount (K)</label><input type="number" id="pay-amount" min="1" step="0.01">
+      <label class="field">Payment method</label>
+      <select id="pay-method"><option>Mobile money</option><option>Bank deposit</option><option>Cash</option></select>
+      <label class="field" id="pay-reference-label">Mobile money reference / transaction ID</label>
+      <input type="text" id="pay-reference" maxlength="40" placeholder="e.g. the confirmation code from the SMS">
+      <p class="note" id="pay-reference-hint" style="margin-top:-6px;">This is what the owner will check your payment against — copy it exactly from your mobile money confirmation SMS.</p>
+      <button class="btn btn-primary" style="width:100%;margin-top:14px;" id="log-payment-btn" ${buyer.plans.length===0?'disabled':''}>Log this payment</button>
+    </div>
+    <h3 style="margin-top:24px;">Payment history</h3>${payHistory}
+  `;
+
+  dash.querySelectorAll('[data-goto2]').forEach(b=>b.addEventListener('click', ()=>showView(b.dataset.goto2)));
+  document.getElementById('logout-btn').addEventListener('click', ()=>{
+    currentAccountPhone = null;
+    updateSession({ accountPhone: null });
+    dash.classList.add('hidden');
+    document.getElementById('account-guest-box').classList.remove('hidden');
+    document.getElementById('login-phone').value=''; document.getElementById('login-msg').innerHTML='';
+  });
+  // The reference field's label/hint/requirement change with the method,
+  // since "prove it" means something different for each: mobile money and
+  // bank deposits always produce a reference number, cash usually doesn't.
+  function updateReferenceField(){
+    const method = document.getElementById('pay-method').value;
+    const label = document.getElementById('pay-reference-label');
+    const hint = document.getElementById('pay-reference-hint');
+    if(method==='Mobile money'){
+      label.textContent = 'Mobile money reference / transaction ID (required)';
+      hint.textContent = "This is what the owner will check your payment against — copy it exactly from your mobile money confirmation SMS.";
+    } else if(method==='Bank deposit'){
+      label.textContent = 'Bank deposit slip / reference number (required)';
+      hint.textContent = 'The reference number printed on your deposit slip or bank SMS.';
+    } else {
+      label.textContent = 'Receipt number (if the owner gave you one)';
+      hint.textContent = "Optional for cash, but add it if you got a receipt — it makes disputes easier to resolve.";
+    }
+  }
+  document.getElementById('pay-method').addEventListener('change', updateReferenceField);
+  updateReferenceField();
+  document.getElementById('log-payment-btn').addEventListener('click', ()=>{
+    const amt = Number(document.getElementById('pay-amount').value);
+    const method = document.getElementById('pay-method').value;
+    const reference = document.getElementById('pay-reference').value.trim();
+    const planId = document.getElementById('pay-plan').value;
+    const msg = document.getElementById('pay-msg');
+    if(!amt || amt<=0){ msg.innerHTML = '<div class="msg err">Enter a valid amount.</div>'; return; }
+    if(method!=='Cash' && reference.length<4){ msg.innerHTML = '<div class="msg err">Enter the reference number from your ' + (method==='Mobile money'?'mobile money confirmation':'deposit slip') + ' — the owner needs it to confirm your payment.</div>'; return; }
+    const plan = buyer.plans.find(p=>p.id===planId);
+    if(!plan){ msg.innerHTML = '<div class="msg err">Select which plot this payment is for.</div>'; return; }
+    buyer.payments.push({ date: todayISO(), amount: amt, method, reference: reference || null, status:'pending', planId: plan.id, siteId: plan.siteId });
+    saveState();
+    msg.innerHTML = '<div class="msg ok">Payment logged. It will reflect once confirmed.</div>';
+    document.getElementById('pay-amount').value='';
+    document.getElementById('pay-reference').value='';
+    renderAccount();
+  });
+  dash.querySelectorAll('[data-cancel-plan]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const planId = btn.dataset.cancelPlan;
+      const plan = buyer.plans.find(p=>p.id===planId);
+      if(!plan) return;
+      const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
+      if(!confirm(`Cancel your reservation for Plot${plan.plots.length>1?'s':''} ${plotLabels} at ${plan.siteName}? They'll go back to available — you'd need to reserve again if you change your mind.`)) return;
+      btn.disabled = true;
+      const ok = await cancelPlan(currentAccountPhone, planId);
+      if(ok) renderAccount();
+      else { btn.disabled = false; alert('Could not cancel — please check your connection and try again.'); }
+    });
+  });
+  dash.querySelectorAll('[data-print-plan]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const plan = buyer.plans.find(p=>p.id===btn.dataset.printPlan);
+      printContract(buyer, plan);
+    });
+  });
+}
+
+/* ---------- contract generator ---------- */
+function printContract(buyer, plan){
+  const site = state.sites[plan.siteId];
+  const seller = site && site.isNexliteOwned ? 'Nexlite Digital Solutions Limited' : (site ? esc(site.ownerName) + ' (via Nexlite Digital Solutions Limited, agent)' : 'Nexlite Digital Solutions Limited');
+  const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
+  const bal = planBalance(plan);
+  const scheduleRow = plan.type==='outright'
+    ? `<tr><td>Payment terms</td><td>Outright — full amount due on signing</td></tr>`
+    : `<tr><td>Payment terms</td><td>${plan.type==='daily'?'Daily':'Monthly'} plan: deposit of ${money(plan.deposit)}, then ${money(plan.installment)} per ${plan.unit} for ${plan.installments} ${plan.unit}s</td></tr>`;
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><title>Sale Agreement — ${plotLabels}</title>
+    <style>
+      body{font-family:Georgia,'Times New Roman',serif;color:#241a09;max-width:760px;margin:40px auto;padding:0 20px;line-height:1.6;}
+      h1{font-size:1.4rem;border-bottom:2px solid #241a09;padding-bottom:10px;}
+      table{width:100%;border-collapse:collapse;margin:18px 0;}
+      td{padding:7px 4px;border-bottom:1px solid #ccc;vertical-align:top;}
+      td:first-child{width:220px;color:#555;}
+      .sign{display:flex;justify-content:space-between;margin-top:60px;}
+      .sign div{width:45%;border-top:1px solid #241a09;padding-top:6px;font-size:0.85rem;}
+      .note{font-size:0.8rem;color:#666;margin-top:30px;}
+      @media print{ button{display:none;} }
+    </style></head><body>
+    <h1>Land Sale Agreement</h1>
+    <p>Generated by Tukule — Let's Build, a Nexlite Digital Solutions Limited platform. Enquiries: 0977 638 790.</p>
+    <table>
+      <tr><td>Date issued</td><td>${todayISO()}</td></tr>
+      <tr><td>Seller</td><td>${seller}</td></tr>
+      <tr><td>Buyer</td><td>${esc(buyer.name)}${buyer.nrc ? ' — NRC ' + esc(buyer.nrc) : ''}, ${esc(buyer.phone)}</td></tr>
+      <tr><td>Site</td><td>${site ? esc(site.name) + ' — ' + esc(site.location) : esc(plan.siteName)}</td></tr>
+      <tr><td>Plot(s)</td><td>${plotLabels} (${site ? esc(site.plotLabel) : ''} each)</td></tr>
+      <tr><td>Total price</td><td>${money(plan.total)}</td></tr>
+      ${scheduleRow}
+      <tr><td>Outstanding balance</td><td>${money(bal)}</td></tr>
+      <tr><td>Status</td><td>${bal<=0 ? 'Paid in full — title processing' : 'Instalments in progress'}</td></tr>
+    </table>
+    <p>All payments under this agreement are made directly between the Buyer and the Seller; Tukule / Nexlite Digital Solutions Limited does not collect or hold buyer funds. The Buyer agrees to keep instalments up to date as scheduled above. Ownership and title processing begin once the full price has been paid and confirmed. Where the Seller is a third party, the Seller separately owes Nexlite Digital Solutions Limited a commission on amounts collected under this agreement, payable as agreed between Seller and Nexlite. This document is a summary of the agreed sale and does not replace formal conveyancing — the buyer and seller are encouraged to finalise transfer documents with a lawyer or conveyancer once the plot is paid off.</p>
+    <div class="sign"><div>Buyer's signature</div><div>Seller / Agent signature</div></div>
+    <p class="note">Printed from Tukule — Let's Build on ${todayISO()}.</p>
+    <button onclick="window.print()" style="margin-top:20px;padding:10px 18px;">Print this agreement</button>
+    </body></html>`;
+  const w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+}
+
+/* ---------- admin ---------- */
+document.getElementById('admin-login-btn').addEventListener('click', async ()=>{
+  const pin = document.getElementById('admin-pin').value.trim();
+  const msg = document.getElementById('admin-msg');
+  const btn = document.getElementById('admin-login-btn');
+  if(!pin){ msg.innerHTML = '<div class="msg err">Incorrect PIN.</div>'; return; }
+  btn.disabled = true;
+  const pinHash = await hashPin(pin);
+  btn.disabled = false;
+  if(pinHash !== state.settings.adminPinHash){ msg.innerHTML = '<div class="msg err">Incorrect PIN.</div>'; return; }
+  isAdmin = true;
+  document.getElementById('admin-pin').value=''; msg.innerHTML='';
+  document.getElementById('admin-gate').classList.add('hidden');
+  if(state.settings.adminPinIsDefault){
+    document.getElementById('admin-change-pin').classList.remove('hidden');
+  } else {
+    updateSession({ isAdmin: true });
+    document.getElementById('admin-dashboard').classList.remove('hidden');
+    renderAdmin();
+  }
+});
+
+document.getElementById('admin-set-pin-btn').addEventListener('click', async ()=>{
+  const msg = document.getElementById('admin-change-msg');
+  const btn = document.getElementById('admin-set-pin-btn');
+  const newPin = document.getElementById('admin-new-pin').value.trim();
+  const confirmPin = document.getElementById('admin-new-pin-confirm').value.trim();
+  if(!validAdminPin(newPin)){ msg.innerHTML = '<div class="msg err">PIN must be 4–12 digits.</div>'; return; }
+  if(newPin !== confirmPin){ msg.innerHTML = '<div class="msg err">PINs don\'t match.</div>'; return; }
+  if(newPin === '9500'){ msg.innerHTML = '<div class="msg err">Choose something other than the factory default.</div>'; return; }
+  btn.disabled = true;
+  state.settings.adminPinHash = await hashPin(newPin);
+  state.settings.adminPinIsDefault = false;
+  saveState();
+  btn.disabled = false;
+  document.getElementById('admin-new-pin').value=''; document.getElementById('admin-new-pin-confirm').value='';
+  document.getElementById('admin-change-pin').classList.add('hidden');
+  document.getElementById('admin-dashboard').classList.remove('hidden');
+  updateSession({ isAdmin: true });
+  renderAdmin();
+});
+
+function renderAdmin(){
+  if(!isAdmin) return;
+  const dash = document.getElementById('admin-dashboard');
+  const sites = Object.values(state.sites);
+  const buyers = Object.values(state.buyers);
+
+  let confirmedTotal=0, pendingCount=0, commissionAccrued=0, commissionCollected=0;
+  const accruedBySite = {};
+  buyers.forEach(b=>b.payments.forEach(p=>{
+    if(p.status==='pending') pendingCount++;
+    else{
+      confirmedTotal += p.amount;
+      commissionAccrued += (p.commissionAmount||0);
+      if(p.siteId){ accruedBySite[p.siteId] = (accruedBySite[p.siteId]||0) + (p.commissionAmount||0); }
+    }
+  }));
+  sites.forEach(s=>{
+    (s.commissionSettlements||[]).forEach(st=>{ commissionCollected += st.amount; });
+  });
+  const commissionOutstanding = Math.round((commissionAccrued - commissionCollected)*100)/100;
+
+  const pendingSites = sites.filter(s=>s.status==='pending');
+  const activeSitesList = sites.filter(s=>s.status==='active');
+
+  const pendingSitesHtml = pendingSites.length ? pendingSites.map(s=>`
+    <div class="side-card">
+      <h3>${esc(s.name)}</h3>
+      <div class="schedule-line"><span>Location</span><span>${esc(s.location)}</span></div>
+      <div class="schedule-line"><span>Owner</span><span>${esc(s.ownerName)} · ${esc(s.ownerPhone)}</span></div>
+      <div class="schedule-line"><span>Price / plot</span><span>${money(s.pricePerPlot)} (${esc(s.plotLabel)})</span></div>
+      <div class="schedule-line"><span>Total plots</span><span>${s.plots.length}</span></div>
+      <div style="margin-top:10px;display:flex;gap:8px;">
+        <button class="btn btn-primary btn-sm" data-approve-site="${s.id}">Approve listing</button>
+        <button class="btn btn-ghost btn-sm" data-reject-site="${s.id}">Reject</button>
+      </div>
+    </div>`).join('') : '<div class="empty">No pending listings.</div>';
+
+  const activeSitesHtml = activeSitesList.map(s=>{
+    const counts = {available:0,reserved:0,sold:0};
+    s.plots.forEach(p=>counts[p.status]++);
+    const accrued = accruedBySite[s.id] || 0;
+    const settled = (s.commissionSettlements||[]).reduce((sum,st)=>sum+st.amount,0);
+    const outstanding = Math.round((accrued-settled)*100)/100;
+    const settlementHistory = (s.commissionSettlements||[]).length
+      ? (s.commissionSettlements||[]).slice().reverse().map(st=>`<div class="schedule-line"><span>${st.date} — ${esc(st.method)}</span><span>${money(st.amount)}</span></div>`).join('')
+      : '<p class="note">No commission received from this owner yet.</p>';
+
+    // Same stuck-reservation override as the owner dashboard — admin needs
+    // this too for sites where the owner isn't logging in themselves.
+    const openReservations = [];
+    Object.values(state.buyers).forEach(b=>b.plans.forEach(pl=>{
+      if(pl.siteId===s.id && pl.status==='active') openReservations.push({buyer:b, plan:pl});
+    }));
+    const reservationsHtml = openReservations.length ? openReservations.map(({buyer,plan})=>{
+      const days = daysSince(plan.startDate);
+      const stale = days >= 7;
+      const paidSoFar = Math.round((plan.total - planBalance(plan))*100)/100;
+      const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
+      return `
+        <div class="schedule-line">
+          <span>${stale?'⚠️ ':''}Plot${plan.plots.length>1?'s':''} ${plotLabels} — ${esc(buyer.name)} — reserved ${days} day${days===1?'':'s'} ago${paidSoFar>0?' · '+money(paidSoFar)+' paid':''}</span>
+          <span><button class="btn btn-ghost btn-sm" data-release-plan="${esc(buyer.phone)}:${plan.id}">Release</button></span>
+        </div>`;
+    }).join('') : '<p class="note">No open reservations.</p>';
+
+    return `
+    <div class="side-card">
+      <h3>${esc(s.name)} ${s.isNexliteOwned ? '<span class="pill active">Nexlite-owned</span>' : ''}</h3>
+      <div class="schedule-line"><span>Location</span><span><input type="text" data-site-field="location:${s.id}" value="${esc(s.location)}"></span></div>
+      <div class="schedule-line"><span>Price / plot (K)</span><span><input type="number" data-site-field="pricePerPlot:${s.id}" value="${s.pricePerPlot}" min="1" max="10000000"></span></div>
+      <div class="schedule-line"><span>Outright discount %</span><span><input type="number" data-site-field="outrightDiscountPct:${s.id}" value="${s.outrightDiscountPct}" min="0" max="100"></span></div>
+      <div class="schedule-line"><span>Deposit %</span><span><input type="number" data-site-field="depositPct:${s.id}" value="${s.depositPct}" min="0" max="100"></span></div>
+      <div class="schedule-line"><span>Commission %</span><span><input type="number" data-site-field="commissionPct:${s.id}" value="${s.commissionPct}" min="0" max="100"></span></div>
+      <div class="schedule-line"><span>Plots</span><span>${counts.available} available · ${counts.reserved} reserved · ${counts.sold} sold</span></div>
+      <div class="schedule-line"><strong>Commission owed to Nexlite</strong><strong>${money(outstanding)}</strong></div>
+      <p class="note" style="margin:8px 0 4px;"><strong>Commission received from owner</strong></p>
+      ${settlementHistory}
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button class="btn btn-secondary btn-sm" data-save-site="${s.id}">Save changes</button>
+        <button class="btn btn-primary btn-sm" data-record-commission="${s.id}">Record commission received</button>
+      </div>
+      <p class="note" style="margin:10px 0 4px;"><strong>Open reservations</strong></p>
+      ${reservationsHtml}
+    </div>`;
+  }).join('');
+
+  const buyerRows = buyers.map(b=>{
+    const pending = b.payments.map((p,idx)=>({...p, idx})).filter(p=>p.status==='pending');
+    const pendingHtml = pending.length ? pending.map(p=>`
+      <div class="schedule-line"><span>${p.date} — ${money(p.amount)} (${esc(p.method)}${p.reference?' · ref: '+esc(p.reference):''})</span>
+      <span><button class="btn btn-secondary btn-sm" data-confirm="${esc(b.phone)}:${p.idx}">Confirm</button></span></div>`).join('') : '<p class="note">No pending payments.</p>';
+    const plotList = b.plans.map(pl=>`${esc(pl.siteName)}: ${pl.plots.map(id=>String(id).padStart(2,'0')).join(', ')}`).join(' · ') || '—';
+    const balance = b.plans.reduce((s,p)=>s+planBalance(p),0);
+    return `
+      <div class="side-card">
+        <h3>${esc(b.name)} · ${esc(b.phone)}</h3>
+        <div class="schedule-line"><span>Plots</span><span>${plotList}</span></div>
+        <div class="schedule-line"><span>Outstanding balance</span><span>${money(balance)}</span></div>
+        <p class="note" style="margin-top:10px;margin-bottom:4px;"><strong>Pending payments</strong></p>
+        ${pendingHtml}
+      </div>`;
+  }).join('') || '<div class="empty">No buyers registered yet.</div>';
+
+  dash.innerHTML = `
+    <div class="balance-hero">
+      <h2 class="section-title" style="margin-bottom:0;">Admin overview</h2>
+      <button class="btn btn-ghost" id="admin-logout-btn">Log out</button>
+    </div>
+    <p class="note" style="margin:-6px 0 14px;">Buyers pay property owners directly — Tukule never holds buyer funds. These figures track what's owed to Nexlite, not money in hand.</p>
+    <div class="grid-three" style="margin-bottom:16px;">
+      <div class="side-card"><h3>Commission accrued</h3><div class="price" style="font-size:1.3rem;">${money(commissionAccrued)}</div></div>
+      <div class="side-card"><h3>Commission outstanding</h3><div class="price" style="font-size:1.3rem;">${money(commissionOutstanding)}</div></div>
+      <div class="side-card"><h3>Payments awaiting confirmation</h3><div class="price" style="font-size:1.3rem;">${pendingCount}</div></div>
+    </div>
+
+    <div class="side-card" style="margin-bottom:16px;">
+      <h3>Platform settings</h3>
+      <div class="grid-two">
+        <div><label class="field">Default commission % for new listings</label><input type="number" id="set-commission" value="${state.settings.defaultCommissionPct}" min="0" max="100"></div>
+        <div><label class="field">Nexlite contact number</label><input type="text" id="set-contact" value="${esc(state.settings.nexliteContact)}"></div>
+      </div>
+      <button class="btn btn-primary" style="margin-top:14px;" id="save-platform-btn">Save settings</button>
+      <span id="platform-msg"></span>
+      <h3 style="margin-top:18px;">Change admin PIN</h3>
+      <p class="note" style="margin-top:-4px;">Leave both blank to keep your current PIN.</p>
+      <div class="grid-two">
+        <div><label class="field">New PIN (4–12 digits)</label><input type="password" inputmode="numeric" id="set-pin-new" maxlength="12" autocomplete="new-password"></div>
+        <div><label class="field">Confirm new PIN</label><input type="password" inputmode="numeric" id="set-pin-confirm" maxlength="12" autocomplete="new-password"></div>
+      </div>
+      <button class="btn btn-secondary" style="margin-top:10px;" id="save-pin-btn">Update PIN</button>
+      <span id="pin-msg"></span>
+    </div>
+
+    <h3>Pending property listings</h3>
+    <div class="grid-two" style="margin-bottom:16px;">${pendingSitesHtml}</div>
+
+    <h3>Active sites</h3>
+    <div class="grid-two" style="margin-bottom:16px;">${activeSitesHtml}</div>
+
+    <h3>Buyers</h3>
+    <div class="grid-two">${buyerRows}</div>
+  `;
+
+  document.getElementById('admin-logout-btn').addEventListener('click', ()=>{
+    isAdmin = false;
+    updateSession({ isAdmin: false });
+    document.getElementById('admin-dashboard').classList.add('hidden');
+    document.getElementById('admin-change-pin').classList.add('hidden');
+    document.getElementById('admin-gate').classList.remove('hidden');
+    document.getElementById('admin-pin').value=''; document.getElementById('admin-msg').innerHTML='';
+  });
+
+  dash.querySelectorAll('[data-approve-site]').forEach(btn=>btn.addEventListener('click', ()=>{
+    state.sites[btn.dataset.approveSite].status = 'active';
+    saveState(); renderAdmin();
+  }));
+  dash.querySelectorAll('[data-reject-site]').forEach(btn=>btn.addEventListener('click', ()=>{
+    delete state.sites[btn.dataset.rejectSite];
+    saveState(); renderAdmin();
+  }));
+  dash.querySelectorAll('[data-save-site]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const siteId = btn.dataset.saveSite;
+      const site = state.sites[siteId];
+      const problems = [];
+      const pending = {};
+      dash.querySelectorAll(`[data-site-field$=":${siteId}"]`).forEach(input=>{
+        const field = input.dataset.siteField.split(':')[0];
+        if(field==='location'){
+          const loc = input.value.trim();
+          if(!loc) problems.push('Location cannot be blank');
+          else pending.location = loc;
+          return;
+        }
+        const bounds = NUMERIC_BOUNDS[field];
+        const n = Number(input.value);
+        if(bounds && !inRange(n, bounds)){
+          problems.push(`${field.replace(/([A-Z])/g,' $1').toLowerCase()} must be between ${bounds[0]} and ${bounds[1]}`);
+          return;
+        }
+        pending[field] = n;
+      });
+      if(problems.length){
+        alert("Couldn't save — " + problems.join('; ') + '.');
+        renderAdmin(); // reset the form back to last-saved values
+        return;
+      }
+      Object.assign(site, pending);
+      saveState(); renderAdmin();
+    });
+  });
+  dash.querySelectorAll('[data-confirm]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [phone, idxStr] = btn.dataset.confirm.split(':');
+      confirmPayment(phone, Number(idxStr));
+      saveState(); renderAdmin();
+    });
+  });
+  dash.querySelectorAll('[data-release-plan]').forEach(btn=>{
+    btn.addEventListener('click', async ()=>{
+      const [buyerPhone, planId] = btn.dataset.releasePlan.split(':');
+      const buyer = state.buyers[buyerPhone];
+      const plan = buyer && buyer.plans.find(p=>p.id===planId);
+      if(!plan) return;
+      const paidSoFar = Math.round((plan.total - planBalance(plan))*100)/100;
+      const warn = paidSoFar>0 ? ` This buyer has already paid ${money(paidSoFar)} toward it — make sure that's been sorted out with them before releasing.` : '';
+      if(!confirm(`Release this reservation back to available?${warn}`)) return;
+      btn.disabled = true;
+      const ok = await cancelPlan(buyerPhone, planId);
+      if(ok) renderAdmin();
+      else { btn.disabled = false; alert('Could not release — please check your connection and try again.'); }
+    });
+  });
+  dash.querySelectorAll('[data-record-commission]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const siteId = btn.dataset.recordCommission;
+      const site = state.sites[siteId];
+      const amountStr = prompt(`Amount received from ${site.ownerName} (K):`);
+      const amount = Number(amountStr);
+      if(!amountStr || !amount || amount<=0) return;
+      const method = prompt('Method (e.g. Cash, Mobile money, Bank deposit):', 'Cash') || 'Cash';
+      if(!site.commissionSettlements) site.commissionSettlements = [];
+      site.commissionSettlements.push({ date: todayISO(), amount, method });
+      saveState(); renderAdmin();
+    });
+  });
+
+  document.getElementById('save-platform-btn').addEventListener('click', ()=>{
+    const platformMsg = document.getElementById('platform-msg');
+    const commission = Number(document.getElementById('set-commission').value);
+    if(!inRange(commission, NUMERIC_BOUNDS.defaultCommissionPct)){
+      platformMsg.innerHTML = ` <span style="color:#6b2323;font-size:0.85rem;">Commission must be between ${NUMERIC_BOUNDS.defaultCommissionPct[0]} and ${NUMERIC_BOUNDS.defaultCommissionPct[1]}.</span>`;
+      return;
+    }
+    state.settings.defaultCommissionPct = commission;
+    state.settings.nexliteContact = document.getElementById('set-contact').value.trim() || state.settings.nexliteContact;
+    saveState();
+    platformMsg.innerHTML = ' <span style="color:#1f4b2c;font-size:0.85rem;">Saved.</span>';
+  });
+
+  document.getElementById('save-pin-btn').addEventListener('click', async ()=>{
+    const pinMsg = document.getElementById('pin-msg');
+    const btn = document.getElementById('save-pin-btn');
+    const newPin = document.getElementById('set-pin-new').value.trim();
+    const confirmPin = document.getElementById('set-pin-confirm').value.trim();
+    if(!newPin && !confirmPin){ pinMsg.innerHTML = ''; return; }
+    if(!validAdminPin(newPin)){ pinMsg.innerHTML = ' <span style="color:#6b2323;font-size:0.85rem;">PIN must be 4–12 digits.</span>'; return; }
+    if(newPin !== confirmPin){ pinMsg.innerHTML = ' <span style="color:#6b2323;font-size:0.85rem;">PINs don\'t match.</span>'; return; }
+    btn.disabled = true;
+    state.settings.adminPinHash = await hashPin(newPin);
+    state.settings.adminPinIsDefault = false;
+    saveState();
+    btn.disabled = false;
+    document.getElementById('set-pin-new').value=''; document.getElementById('set-pin-confirm').value='';
+    pinMsg.innerHTML = ' <span style="color:#1f4b2c;font-size:0.85rem;">PIN updated.</span>';
+  });
+}
+
+/* ---------- init ---------- */
+initApp();
+</script>
+</body>
+</html>
