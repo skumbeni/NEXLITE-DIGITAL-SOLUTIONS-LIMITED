@@ -62,11 +62,13 @@
   h2.section-title{font-size:1.45rem;margin:0 0 6px;}
   p.section-sub{color:var(--soil-dark);margin:0 0 22px;font-size:0.94rem;}
   .site-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:18px;margin-bottom:40px;}
-  .site-card{border:1px solid var(--line);border-radius:6px;background:var(--card);padding:18px;box-shadow:2px 3px 0 rgba(107,66,38,0.08);}
+  .site-card{border:1px solid var(--line);border-radius:6px;background:var(--card);padding:18px;box-shadow:2px 3px 0 rgba(107,66,38,0.08);overflow:hidden;}
+  .site-card .thumb{width:calc(100% + 36px);margin:-18px -18px 12px;height:140px;object-fit:cover;display:block;}
   .site-card h3{margin:0 0 4px;font-size:1.08rem;}
   .site-card .loc{font-size:0.84rem;color:var(--soil-dark);margin-bottom:10px;}
   .site-card .price{font-family:'Fraunces',serif;font-weight:600;font-size:1.25rem;margin:6px 0;}
   .site-card .avail{font-size:0.82rem;color:#4a4238;margin-bottom:12px;}
+  .site-photo-large{width:100%;max-height:260px;object-fit:cover;border-radius:6px;margin-bottom:16px;border:1px solid var(--line);}
   .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin:10px 0 20px;}
   @media(max-width:700px){.steps{grid-template-columns:1fr;}}
   .step{border-top:2px solid var(--soil);padding-top:12px;}
@@ -106,7 +108,7 @@
   table.ledger th{color:var(--soil-dark);font-weight:700;font-size:0.78rem;}
   .pill{display:inline-block;padding:2px 9px;border-radius:20px;font-size:0.72rem;font-weight:700;}
   .pill.pending{background:#f1dcae;color:#6b4c0a;} .pill.confirmed{background:#cfe4d3;color:#1f4b2c;}
-  .pill.active{background:#cfe4d3;color:#1f4b2c;}
+  .pill.active{background:#cfe4d3;color:#1f4b2c;} .pill.rejected{background:#f2d9d3;color:#6b2323;}
   .grid-two{display:grid;grid-template-columns:1fr 1fr;gap:16px;} @media(max-width:700px){.grid-two{grid-template-columns:1fr;}}
   .grid-three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;} @media(max-width:700px){.grid-three{grid-template-columns:1fr;}}
   footer{border-top:1px solid var(--line);padding:24px 0;text-align:center;font-size:0.82rem;color:#6b6153;}
@@ -186,6 +188,15 @@
     <div id="buy-site-picker">
       <h2 class="section-title">Choose a site</h2>
       <p class="section-sub">Pick which property you'd like to buy a plot on.</p>
+      <div class="side-card" style="margin-bottom:16px;">
+        <div class="grid-two">
+          <div><label class="field">Search by name or location</label><input type="text" id="buy-filter-search" placeholder="e.g. Mansa, Kabunda"></div>
+          <div><label class="field">Minimum plots available</label><input type="number" id="buy-filter-minavail" min="0" placeholder="Any"></div>
+          <div><label class="field">Min price per plot (K)</label><input type="number" id="buy-filter-minprice" min="0" placeholder="No minimum"></div>
+          <div><label class="field">Max price per plot (K)</label><input type="number" id="buy-filter-maxprice" min="0" placeholder="No maximum"></div>
+        </div>
+        <button class="btn btn-ghost btn-sm" style="margin-top:10px;" id="buy-filter-clear">Clear filters</button>
+      </div>
       <div class="site-cards" id="buy-site-cards"></div>
     </div>
 
@@ -193,6 +204,7 @@
       <button class="back-link" id="back-to-sites">&larr; Choose a different site</button>
       <h2 class="section-title" id="buy-site-title">Site plan</h2>
       <p class="section-sub" id="buy-site-loc"></p>
+      <img id="buy-site-photo" class="site-photo-large hidden" alt="Site photo">
       <div class="plot-panel">
         <div>
           <div class="grid-scroll"><div class="plot-grid" id="plot-grid"></div></div>
@@ -247,10 +259,17 @@
       </div>
       <label class="field">Total number of plots on site</label>
       <input type="number" id="sell-total" min="1" max="2000" value="50">
+      <label class="field">Cover photo (optional)</label>
+      <input type="file" accept="image/*" id="sell-photo">
+      <p class="note" style="margin-top:-4px;">A clear photo of the site helps buyers trust the listing. We'll shrink it automatically to keep the app fast on mobile data.</p>
+      <div id="sell-photo-preview" style="margin:6px 0 10px;"></div>
       <div class="grid-two">
         <div><label class="field">Your name</label><input type="text" id="sell-owner-name"></div>
         <div><label class="field">Your phone number</label><input type="tel" id="sell-owner-phone"></div>
       </div>
+      <label class="field">NRC / National ID (optional)</label>
+      <input type="text" id="sell-owner-nrc" placeholder="e.g. 123456/78/1">
+      <p class="note" style="margin-top:-4px;">Helps us verify you're the rightful owner and strengthens the paper trail on buyer contracts. Not shown to buyers.</p>
       <label class="field">Owner PIN (4–6 digits)</label>
       <input type="password" inputmode="numeric" id="sell-owner-pin" maxlength="6" autocomplete="new-password">
       <p class="note" style="margin-top:-4px;">First listing under this number sets your PIN; later listings need the same one. You'll use it to log in and manage your listings.</p>
@@ -311,6 +330,8 @@
       <p class="section-sub">Enter the admin PIN to manage sites, listings, and payments.</p>
       <div class="side-card login-box">
         <div id="admin-msg"></div>
+        <label class="field">Staff phone (leave blank if you're the main admin)</label>
+        <input type="tel" id="admin-staff-phone" placeholder="e.g. 0977123456">
         <label class="field">PIN</label>
         <input type="password" inputmode="numeric" id="admin-pin" maxlength="12" autocomplete="current-password">
         <button class="btn btn-primary" style="width:100%;margin-top:14px;" id="admin-login-btn">Enter</button>
@@ -363,6 +384,8 @@ function buildPlots(rows, cols, seedPattern){
 function defaultState(){
   return {
     settings:{ nexliteContact:'0977638790', defaultCommissionPct:10, adminPinHash:'0889c39fbe2987060378014caac47694cde6e56370261a504b33109674f15e7b', adminPinIsDefault:true },
+    staff:{},
+    auditLog:[],
     sites:{
       'mansa-riverside':{
         id:'mansa-riverside', name:'Mansa Riverside', location:'Opposite Kapanda Mini-Hospital, 6km from Mansa CBD, off Kabunda Road',
@@ -417,10 +440,24 @@ function restoreSessionOnce(){
     renderOwnerDashboard();
   }
   if(session.isAdmin && !state.settings.adminPinIsDefault){
-    isAdmin = true;
-    document.getElementById('admin-gate').classList.add('hidden');
-    document.getElementById('admin-dashboard').classList.remove('hidden');
-    renderAdmin();
+    if(session.adminPhone){
+      const staffRecord = (state.staff||{})[session.adminPhone];
+      if(staffRecord && staffRecord.active){
+        isAdmin = true;
+        currentAdminActor = { phone: staffRecord.phone, name: staffRecord.name, role: staffRecord.role||'staff' };
+        document.getElementById('admin-gate').classList.add('hidden');
+        document.getElementById('admin-dashboard').classList.remove('hidden');
+        renderAdmin();
+      }
+      // else: staff account was deactivated/removed since this session was
+      // created — leave isAdmin false and let them log back in via the gate.
+    } else {
+      isAdmin = true;
+      currentAdminActor = null;
+      document.getElementById('admin-gate').classList.add('hidden');
+      document.getElementById('admin-dashboard').classList.remove('hidden');
+      renderAdmin();
+    }
   }
 }
 
@@ -461,6 +498,10 @@ function attachCloudListener(){
     const val = snap.val();
     if(val){
       state = val;
+      // Backfill fields added after this database was first created, so
+      // older deployments don't crash on state.staff/state.auditLog being undefined.
+      if(!state.staff) state.staff = {};
+      if(!state.auditLog) state.auditLog = [];
     } else if(!state){
       state = defaultState();
       db.ref(DATA_PATH).set(state);
@@ -510,12 +551,63 @@ let currentPlan = 'outright';
 let currentSiteId = null;
 let currentAccountPhone = null;
 let isAdmin = false;
+// Which admin/staff identity is currently logged in — null when it's the
+// single shared super-admin PIN, otherwise the staff record from state.staff.
+// Used to attribute actions in the audit log.
+let currentAdminActor = null; // { phone, name, role } or null for super admin
+
+function adminActorLabel(){
+  return currentAdminActor ? currentAdminActor.name : 'Super Admin';
+}
+function logAudit(action){
+  if(!state.auditLog) state.auditLog = [];
+  state.auditLog.push({
+    ts: new Date().toISOString(),
+    actorName: adminActorLabel(),
+    actorPhone: currentAdminActor ? currentAdminActor.phone : '',
+    action
+  });
+  // Keep the log from growing forever inside the whole-blob sync payload.
+  if(state.auditLog.length > 300) state.auditLog = state.auditLog.slice(-300);
+}
 
 /* ---------- helpers ---------- */
 function esc(str){
   return String(str??'').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 }
 function money(n){ return 'K' + Number(n||0).toLocaleString('en-ZM', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+
+// Listing photos are compressed client-side and stored inline as base64 in
+// Realtime Database — there's no Firebase Storage bucket configured for
+// this project, and shipping one just for a handful of small cover photos
+// would mean a second billable service for an app built to stay cheap.
+// Capping the longest side at 900px and re-encoding as JPEG keeps each
+// photo in roughly the 40–120KB range, which is fine for a single field on
+// a site record and still light on the mobile data buyers/owners are on.
+const MAX_PHOTO_SOURCE_BYTES = 8 * 1024 * 1024; // reject absurdly large originals before even trying to decode them
+function compressImageFile(file, maxDim = 900, quality = 0.72){
+  return new Promise((resolve, reject) => {
+    if(!file.type.startsWith('image/')) { reject(new Error('That file is not an image.')); return; }
+    if(file.size > MAX_PHOTO_SOURCE_BYTES) { reject(new Error('Photo is too large — please use one under 8MB.')); return; }
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onload = () => { img.onload = () => {
+      let { width, height } = img;
+      if(width > maxDim || height > maxDim){
+        if(width > height){ height = Math.round(height * (maxDim/width)); width = maxDim; }
+        else { width = Math.round(width * (maxDim/height)); height = maxDim; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => reject(new Error('Could not read that image.'));
+    img.src = reader.result; };
+    reader.onerror = () => reject(new Error('Could not read that file.'));
+    reader.readAsDataURL(file);
+  });
+}
 // normPhone() is a lookup-key normalizer, not a validator — it strips the
 // formatting differences people commonly type (spaces, dashes, brackets,
 // a +260/260 country code) so "+260 977 638 790" and "0977638790" resolve
@@ -561,6 +653,31 @@ function daysSince(dateStr){ return Math.max(0, Math.floor((new Date() - new Dat
 function activeSites(){ return Object.values(state.sites).filter(s=>s.status==='active'); }
 function siteAvailableCount(site){ return site.plots.filter(p=>p.status==='available').length; }
 
+// There's no fixed instalment-schedule record — a plan just carries a
+// running balance. So "is this buyer behind?" is worked out on the fly:
+// how many instalments SHOULD have landed by today given the plan's start
+// date and cadence, versus how much has actually been confirmed as paid.
+// A gap between those two numbers means a payment reminder is due.
+function planDueStatus(plan){
+  if(plan.status !== 'active' || plan.type === 'outright') return null;
+  const elapsedUnits = plan.unit === 'day' ? daysSince(plan.startDate)
+    : (()=>{ const start=new Date(plan.startDate), now=new Date();
+        return Math.max(0, (now.getFullYear()-start.getFullYear())*12 + (now.getMonth()-start.getMonth()) - (now.getDate()<start.getDate()?1:0)); })();
+  const dueInstalments = Math.min(plan.installments, elapsedUnits + 1); // the deposit covers "instalment 0"; the next one is due from day/month 1
+  const expectedPaid = Math.min(plan.total, plan.deposit + Math.max(0, dueInstalments - 1) * plan.installment);
+  const actualPaid = Math.round((plan.total - plan.balance)*100)/100;
+  const shortfall = Math.round((expectedPaid - actualPaid)*100)/100;
+  const unitsBehind = shortfall > 0.01 ? Math.max(1, Math.ceil(shortfall / plan.installment)) : 0;
+  const nextDueDate = plan.unit === 'day' ? addDays(plan.startDate, elapsedUnits + 1) : addMonths(plan.startDate, elapsedUnits + 1);
+  return {
+    overdue: shortfall > 0.01,
+    shortfall: Math.max(0, shortfall),
+    unitsBehind,
+    nextDueDate,
+    nextDueAmount: plan.installment
+  };
+}
+
 /* ---------- nav ---------- */
 document.querySelectorAll('nav.tabs button').forEach(btn=>btn.addEventListener('click', ()=>showView(btn.dataset.view)));
 document.querySelectorAll('[data-goto]').forEach(btn=>btn.addEventListener('click', ()=>showView(btn.dataset.goto)));
@@ -578,6 +695,7 @@ function showView(name){
 function siteCardHtml(site, ctaLabel){
   return `
     <div class="site-card">
+      ${site.photoUrl ? `<img class="thumb" src="${site.photoUrl}" alt="${esc(site.name)}">` : ''}
       <h3>${esc(site.name)}</h3>
       <div class="loc">${esc(site.location)}</div>
       <div class="price">${money(site.pricePerPlot)} <span style="font-family:'Karla',sans-serif;font-size:0.72rem;font-weight:600;">/ ${esc(site.plotLabel)}</span></div>
@@ -597,16 +715,39 @@ function renderHome(){
 }
 
 /* ---------- buy ---------- */
+function filteredActiveSites(){
+  const search = (document.getElementById('buy-filter-search')?.value || '').trim().toLowerCase();
+  const minAvail = Number(document.getElementById('buy-filter-minavail')?.value) || 0;
+  const minPrice = document.getElementById('buy-filter-minprice')?.value === '' ? null : Number(document.getElementById('buy-filter-minprice')?.value);
+  const maxPrice = document.getElementById('buy-filter-maxprice')?.value === '' ? null : Number(document.getElementById('buy-filter-maxprice')?.value);
+  return activeSites().filter(s=>{
+    if(search && !(s.name.toLowerCase().includes(search) || s.location.toLowerCase().includes(search))) return false;
+    if(minAvail>0 && siteAvailableCount(s) < minAvail) return false;
+    if(minPrice!==null && !Number.isNaN(minPrice) && s.pricePerPlot < minPrice) return false;
+    if(maxPrice!==null && !Number.isNaN(maxPrice) && s.pricePerPlot > maxPrice) return false;
+    return true;
+  });
+}
 function renderBuySitePicker(){
   const wrap = document.getElementById('buy-site-cards');
-  const sites = activeSites();
-  wrap.innerHTML = sites.length ? sites.map(s=>siteCardHtml(s,'Select this site')).join('') : '<div class="empty">No sites listed yet.</div>';
+  const sites = filteredActiveSites();
+  wrap.innerHTML = sites.length ? sites.map(s=>siteCardHtml(s,'Select this site')).join('') : '<div class="empty">No sites match your filters.</div>';
   wrap.querySelectorAll('[data-open-site]').forEach(btn=>btn.addEventListener('click', ()=>openSite(btn.dataset.openSite)));
   if(!currentSiteId){
     document.getElementById('buy-site-picker').classList.remove('hidden');
     document.getElementById('buy-plot-area').classList.add('hidden');
   }
 }
+['buy-filter-search','buy-filter-minavail','buy-filter-minprice','buy-filter-maxprice'].forEach(id=>{
+  document.getElementById(id).addEventListener('input', renderBuySitePicker);
+});
+document.getElementById('buy-filter-clear').addEventListener('click', ()=>{
+  document.getElementById('buy-filter-search').value='';
+  document.getElementById('buy-filter-minavail').value='';
+  document.getElementById('buy-filter-minprice').value='';
+  document.getElementById('buy-filter-maxprice').value='';
+  renderBuySitePicker();
+});
 document.getElementById('back-to-sites').addEventListener('click', ()=>{
   currentSiteId = null; selectedPlots = [];
   document.getElementById('buy-site-picker').classList.remove('hidden');
@@ -621,6 +762,9 @@ function openSite(siteId){
   const site = state.sites[siteId];
   document.getElementById('buy-site-title').textContent = site.name;
   document.getElementById('buy-site-loc').textContent = site.location + ' · ' + site.plotLabel + ' plots'; // textContent — already safe, no HTML parsing
+  const photo = document.getElementById('buy-site-photo');
+  if(site.photoUrl){ photo.src = site.photoUrl; photo.classList.remove('hidden'); }
+  else { photo.classList.add('hidden'); photo.removeAttribute('src'); }
   document.querySelector('.plan-tab[data-plan="outright"]').click();
   renderPlotGrid();
 }
@@ -885,6 +1029,22 @@ function findSiteForOwnerPhone(phone){
   return Object.values(state.sites).find(s=>normPhone(s.ownerPhone)===phone && s.ownerPinHash);
 }
 
+let pendingListingPhoto = null;
+document.getElementById('sell-photo').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  const preview = document.getElementById('sell-photo-preview');
+  if(!file){ pendingListingPhoto = null; preview.innerHTML = ''; return; }
+  preview.innerHTML = '<p class="note">Compressing photo…</p>';
+  try{
+    pendingListingPhoto = await compressImageFile(file);
+    preview.innerHTML = `<img src="${pendingListingPhoto}" alt="Listing preview" style="max-width:220px;border-radius:6px;border:1px solid var(--line);display:block;">`;
+  }catch(err){
+    pendingListingPhoto = null;
+    preview.innerHTML = `<div class="msg err">${esc(err.message)}</div>`;
+    e.target.value = '';
+  }
+});
+
 document.getElementById('submit-listing-btn').addEventListener('click', async ()=>{
   const msg = document.getElementById('sell-msg');
   const btn = document.getElementById('submit-listing-btn');
@@ -896,6 +1056,7 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
   const total = Number(document.getElementById('sell-total').value);
   const ownerName = document.getElementById('sell-owner-name').value.trim();
   const ownerPhone = normPhone(document.getElementById('sell-owner-phone').value);
+  const ownerNrc = document.getElementById('sell-owner-nrc').value.trim();
   const ownerPin = document.getElementById('sell-owner-pin').value.trim();
 
   if(!name || !location || !price || !total || !ownerName || !ownerPhone){
@@ -928,15 +1089,18 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
   state.sites[id] = {
     id, name, location, description, pricePerPlot: price, plotLabel, rows, cols,
     outrightDiscountPct:5, depositPct:20, dailyTerms:[90,180,365], monthlyTerms:[6,12,18,24,36],
-    ownerName, ownerPhone, ownerPinHash, isNexliteOwned:false, commissionPct: state.settings.defaultCommissionPct,
+    ownerName, ownerPhone, ownerNrc: ownerNrc || null, ownerPinHash, isNexliteOwned:false, commissionPct: state.settings.defaultCommissionPct,
     status:'pending', createdAt: todayISO(), plots: buildPlots(rows, cols, []),
-    commissionSettlements: []
+    commissionSettlements: [], photoUrl: pendingListingPhoto || null
   };
   saveState();
   msg.innerHTML = `<div class="msg ok">Thanks, ${esc(ownerName)}. Your listing is under review — we'll confirm on ${esc(ownerPhone)}, or call us on 0977 638 790.</div>`;
-  ['sell-name','sell-location','sell-description','sell-price','sell-owner-name','sell-owner-phone','sell-owner-pin'].forEach(id=>document.getElementById(id).value='');
+  ['sell-name','sell-location','sell-description','sell-price','sell-owner-name','sell-owner-phone','sell-owner-nrc','sell-owner-pin'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('sell-total').value='50';
   document.getElementById('sell-plotsize').value='30 x 30';
+  document.getElementById('sell-photo').value='';
+  document.getElementById('sell-photo-preview').innerHTML='';
+  pendingListingPhoto = null;
   btn.disabled = false;
 });
 
@@ -967,6 +1131,20 @@ function renderOwnerDashboard(){
   document.getElementById('owner-login-panel').classList.add('hidden');
   const dash = document.getElementById('owner-dashboard');
   dash.classList.remove('hidden');
+
+  // Surface a one-time banner for listings whose status changed since the
+  // owner last checked in, so approvals/rejections don't go unnoticed until
+  // they happen to scroll down. Cleared once shown.
+  const unseenChanges = mySites.filter(s=>s.statusUnread);
+  const statusBanner = unseenChanges.length ? `
+    <div class="side-card" style="border:1px solid var(--gold-dark);background:#fbf2df;margin-bottom:16px;">
+      <h3 style="margin-top:0;">What's new</h3>
+      ${unseenChanges.map(s=>s.status==='active'
+        ? `<div class="schedule-line"><span>${esc(s.name)}</span><span style="color:#1f4b2c;">Approved — now live</span></div>`
+        : `<div class="schedule-line"><span>${esc(s.name)}</span><span style="color:#6b2323;">Not approved: ${esc(s.rejectionReason||'see below')}</span></div>`
+      ).join('')}
+    </div>` : '';
+  if(unseenChanges.length){ unseenChanges.forEach(s=>{ s.statusUnread = false; }); saveState(); }
 
   const siteBlocks = mySites.map(site=>{
     const counts = {available:0,reserved:0,sold:0};
@@ -1003,9 +1181,41 @@ function renderOwnerDashboard(){
         </div>`;
     }).join('') : '<p class="note">No open reservations.</p>';
 
+    // Buyers who've fallen behind their instalment schedule on this site —
+    // surfaced with a one-tap WhatsApp nudge so the owner doesn't have to
+    // hunt for the buyer's number or draft the message themselves.
+    const overdueForSite = [];
+    Object.values(state.buyers).forEach(b=>b.plans.forEach(pl=>{
+      if(pl.siteId!==site.id) return;
+      const due = planDueStatus(pl);
+      if(due && due.overdue) overdueForSite.push({buyer:b, plan:pl, due});
+    }));
+    const overdueHtml = overdueForSite.length ? overdueForSite.map(({buyer,plan,due})=>{
+      const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
+      const waPhone = normPhone(buyer.phone).replace(/^0/, '260');
+      const msg = encodeURIComponent(`Hi ${buyer.name}, this is a reminder from ${site.name} that your ${plan.unit}ly instalment of ${money(due.nextDueAmount)} is overdue (${money(due.shortfall)} behind). Please arrange payment when you can. Thank you!`);
+      return `
+        <div class="schedule-line">
+          <span>⚠️ Plot${plan.plots.length>1?'s':''} ${plotLabels} — ${esc(buyer.name)} — ${money(due.shortfall)} overdue</span>
+          <span><a class="btn btn-secondary btn-sm" href="https://wa.me/${waPhone}?text=${msg}" target="_blank" rel="noopener">Send reminder</a></span>
+        </div>`;
+    }).join('') : '<p class="note">No buyers currently behind schedule.</p>';
+
+    const rejectionHtml = site.status==='rejected' ? `
+        <div class="msg err" style="margin:10px 0;">
+          <strong>Not approved:</strong> ${esc(site.rejectionReason||'No reason given.')}<br>
+          <span style="font-size:0.85rem;">Update the details below if needed, then resubmit for review.</span>
+        </div>
+        <div class="grid-two" style="margin-bottom:10px;">
+          <div><label class="field">Location</label><input type="text" data-resubmit-field="location:${site.id}" value="${esc(site.location)}"></div>
+          <div><label class="field">Price / plot (K)</label><input type="number" data-resubmit-field="pricePerPlot:${site.id}" value="${site.pricePerPlot}"></div>
+        </div>
+        <button class="btn btn-primary btn-sm" data-resubmit-site="${site.id}">Resubmit for review</button>` : '';
+
     return `
       <div class="side-card">
-        <h3>${esc(site.name)} <span class="pill ${site.status==='active'?'active':'pending'}">${site.status}</span></h3>
+        <h3>${esc(site.name)} <span class="pill ${site.status}">${site.status}</span></h3>
+        ${rejectionHtml}
         <div class="schedule-line"><span>Plots</span><span>${counts.available} available · ${counts.reserved} reserved · ${counts.sold} sold</span></div>
         <div class="schedule-line"><span>Commission rate</span><span>${site.commissionPct}%</span></div>
         <div class="schedule-line"><span>Commission accrued</span><span>${money(comm.accrued)}</span></div>
@@ -1013,6 +1223,8 @@ function renderOwnerDashboard(){
         <div class="schedule-line"><strong>Commission still owed to Nexlite</strong><strong>${money(comm.outstanding)}</strong></div>
         <p class="note" style="margin:10px 0 4px;"><strong>Payments awaiting your confirmation</strong></p>
         ${pendingHtml}
+        <p class="note" style="margin:10px 0 4px;"><strong>Buyers behind schedule</strong></p>
+        ${overdueHtml}
         <p class="note" style="margin:10px 0 4px;"><strong>Open reservations</strong></p>
         ${reservationsHtml}
       </div>`;
@@ -1023,6 +1235,7 @@ function renderOwnerDashboard(){
       <h2 class="section-title" style="margin-bottom:0;">Your listings</h2>
       <button class="btn btn-ghost" id="owner-logout-btn">Log out</button>
     </div>
+    ${statusBanner}
     <p class="note">When a buyer pays you directly, confirm it here so their balance and your commission update. Forward your commission to Nexlite on 0977 638 790 — we'll mark it received on our side.</p>
     <div class="grid-two" style="margin-top:16px;">${siteBlocks}</div>
   `;
@@ -1056,6 +1269,36 @@ function renderOwnerDashboard(){
       const ok = await cancelPlan(buyerPhone, planId);
       if(ok) renderOwnerDashboard();
       else { btn.disabled = false; alert('Could not release — please check your connection and try again.'); }
+    });
+  });
+  dash.querySelectorAll('[data-resubmit-site]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const siteId = btn.dataset.resubmitSite;
+      const site = state.sites[siteId];
+      if(!site) return;
+      const problems = [];
+      const pending = {};
+      dash.querySelectorAll(`[data-resubmit-field$=":${siteId}"]`).forEach(input=>{
+        const field = input.dataset.resubmitField.split(':')[0];
+        if(field==='location'){
+          const loc = input.value.trim();
+          if(!loc) problems.push('Location cannot be blank');
+          else pending.location = loc;
+          return;
+        }
+        const bounds = NUMERIC_BOUNDS[field];
+        const n = Number(input.value);
+        if(bounds && !inRange(n, bounds)){
+          problems.push(`Price per plot must be between K${bounds[0]} and K${bounds[1].toLocaleString()}`);
+          return;
+        }
+        pending[field] = n;
+      });
+      if(problems.length){ alert("Couldn't resubmit — " + problems.join('; ') + '.'); return; }
+      Object.assign(site, pending);
+      site.status = 'pending';
+      delete site.rejectionReason;
+      saveState(); renderOwnerDashboard();
     });
   });
 }
@@ -1153,6 +1396,7 @@ function renderAccount(){
   const totalValue = livePlans.reduce((s,p)=>s+p.total,0);
   const pct = totalValue>0 ? Math.min(100, Math.round((totalPaid/totalValue)*100)) : 0;
 
+  const dueSummary = []; // collected across plans for the top-of-page reminder banner
   const plansHtml = buyer.plans.map(plan=>{
     const bal = planBalance(plan);
     const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
@@ -1164,6 +1408,16 @@ function renderAccount(){
     const statusHtml = plan.status==='cancelled'
       ? '<span class="pill">Cancelled</span>'
       : `<span class="pill ${bal<=0?'confirmed':'pending'}">${bal<=0?'Paid off — title processing':'In progress'}</span>`;
+    const due = planDueStatus(plan);
+    let dueHtml = '';
+    if(due){
+      if(due.overdue){
+        dueHtml = `<div class="schedule-line" style="color:#8B3A3A;"><strong>Overdue</strong><strong>${money(due.shortfall)} · ${due.unitsBehind} ${plan.unit}${due.unitsBehind>1?'s':''} behind</strong></div>`;
+        dueSummary.push({ plotLabels, siteName: plan.siteName, shortfall: due.shortfall });
+      } else {
+        dueHtml = `<div class="schedule-line"><span>Next payment due</span><span>${money(due.nextDueAmount)} on ${due.nextDueDate}</span></div>`;
+      }
+    }
     return `
       <div class="side-card">
         <h3>${esc(plan.siteName)} — Plot${plan.plots.length>1?'s':''} ${plotLabels}</h3>
@@ -1171,17 +1425,25 @@ function renderAccount(){
         <div class="schedule-line"><span>Total price</span><span>${money(plan.total)}</span></div>
         <div class="schedule-line"><span>Outstanding balance</span><span>${money(bal)}</span></div>
         <div class="schedule-line"><span>Status</span><span>${statusHtml}</span></div>
+        ${dueHtml}
         ${plan.status==='active' ? `<button class="btn btn-secondary btn-sm" style="margin-top:10px;" data-print-plan="${plan.id}">Generate &amp; print contract</button>` : ''}
         ${cancellable ? `<button class="btn btn-ghost btn-sm" style="margin-top:6px;" data-cancel-plan="${plan.id}">Cancel reservation</button>` : ''}
       </div>`;
   }).join('') || '<div class="empty">No plots reserved yet. <button class="toggle-link" data-goto2="buy">Browse sites</button></div>';
 
+  const reminderBanner = dueSummary.length ? `
+    <div class="side-card" style="border:1px solid #8B3A3A;background:#fbeeee;margin-bottom:16px;">
+      <h3 style="color:#8B3A3A;margin-top:0;">Payment reminder</h3>
+      ${dueSummary.map(d=>`<div class="schedule-line"><span>${esc(d.siteName)} — Plot${d.plotLabels.includes(',')?'s':''} ${d.plotLabels}</span><span>${money(d.shortfall)} overdue</span></div>`).join('')}
+      <p class="note" style="margin-bottom:0;">Log a payment below once you've paid the property owner, or call ${esc(state.settings.nexliteContact)} if you need help sorting out your schedule.</p>
+    </div>` : '';
+
   const payHistory = buyer.payments.length ? `
-    <table class="ledger"><thead><tr><th>Date</th><th>Plot</th><th>Amount</th><th>Method</th><th>Reference</th><th>Status</th></tr></thead>
-    <tbody>${buyer.payments.slice().reverse().map(p=>{
+    <table class="ledger"><thead><tr><th>Date</th><th>Plot</th><th>Amount</th><th>Method</th><th>Reference</th><th>Status</th><th></th></tr></thead>
+    <tbody>${buyer.payments.map((p,i)=>({p,i})).reverse().map(({p,i})=>{
       const plan = buyer.plans.find(pl=>pl.id===p.planId);
       const label = plan ? esc(plan.siteName) + ' ' + plan.plots.map(id=>String(id).padStart(2,'0')).join(',') : '—';
-      return `<tr><td>${p.date}</td><td>${label}</td><td>${money(p.amount)}</td><td>${esc(p.method)}</td><td>${esc(p.reference||'—')}</td><td><span class="pill ${p.status}">${p.status}</span></td></tr>`;
+      return `<tr><td>${p.date}</td><td>${label}</td><td>${money(p.amount)}</td><td>${esc(p.method)}</td><td>${esc(p.reference||'—')}</td><td><span class="pill ${p.status}">${p.status}</span></td><td><button class="btn btn-ghost btn-sm" data-print-receipt="${i}">Receipt</button></td></tr>`;
     }).join('')}</tbody></table>`
     : '<div class="empty">No payments logged yet.</div>';
 
@@ -1190,6 +1452,7 @@ function renderAccount(){
       <div><h2 class="section-title" style="margin-bottom:2px;">Welcome back, ${esc(buyer.name)}</h2><p class="section-sub" style="margin-bottom:0;">Account: ${esc(buyer.phone)}</p></div>
       <button class="btn btn-ghost" id="logout-btn">Log out</button>
     </div>
+    ${reminderBanner}
     <div class="side-card">
       <h3>Overall progress</h3>
       <div class="progress-track"><div class="progress-fill" style="width:${pct}%;"></div></div>
@@ -1278,12 +1541,18 @@ function renderAccount(){
       printContract(buyer, plan);
     });
   });
+  dash.querySelectorAll('[data-print-receipt]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const payment = buyer.payments[Number(btn.dataset.printReceipt)];
+      if(payment) printReceipt(buyer, payment);
+    });
+  });
 }
 
 /* ---------- contract generator ---------- */
 function printContract(buyer, plan){
   const site = state.sites[plan.siteId];
-  const seller = site && site.isNexliteOwned ? 'Nexlite Digital Solutions Limited' : (site ? esc(site.ownerName) + ' (via Nexlite Digital Solutions Limited, agent)' : 'Nexlite Digital Solutions Limited');
+  const seller = site && site.isNexliteOwned ? 'Nexlite Digital Solutions Limited' : (site ? esc(site.ownerName) + (site.ownerNrc ? ' — NRC ' + esc(site.ownerNrc) : '') + ' (via Nexlite Digital Solutions Limited, agent)' : 'Nexlite Digital Solutions Limited');
   const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
   const bal = planBalance(plan);
   const scheduleRow = plan.type==='outright'
@@ -1325,8 +1594,49 @@ function printContract(buyer, plan){
   w.document.close();
 }
 
+/* ---------- receipt generator ---------- */
+function printReceipt(buyer, payment){
+  const plan = buyer.plans.find(p=>p.id===payment.planId);
+  const site = state.sites[payment.siteId];
+  const plotLabels = plan ? plan.plots.map(id=>String(id).padStart(2,'0')).join(', ') : '—';
+  const statusLabel = payment.status==='confirmed' ? 'Confirmed by owner'
+    : payment.status==='rejected' ? 'Rejected — contact the owner for details'
+    : 'Pending owner confirmation';
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><title>Payment Receipt — ${esc(buyer.name)}</title>
+    <style>
+      body{font-family:Georgia,'Times New Roman',serif;color:#241a09;max-width:620px;margin:40px auto;padding:0 20px;line-height:1.6;}
+      h1{font-size:1.3rem;border-bottom:2px solid #241a09;padding-bottom:10px;}
+      table{width:100%;border-collapse:collapse;margin:18px 0;}
+      td{padding:7px 4px;border-bottom:1px solid #ccc;vertical-align:top;}
+      td:first-child{width:200px;color:#555;}
+      .note{font-size:0.8rem;color:#666;margin-top:24px;}
+      @media print{ button{display:none;} }
+    </style></head><body>
+    <h1>Payment Receipt</h1>
+    <p>Generated by Tukule — Let's Build, a Nexlite Digital Solutions Limited platform. Enquiries: 0977 638 790.</p>
+    <table>
+      <tr><td>Date logged</td><td>${payment.date}</td></tr>
+      <tr><td>Buyer</td><td>${esc(buyer.name)}${buyer.nrc ? ' — NRC ' + esc(buyer.nrc) : ''}, ${esc(buyer.phone)}</td></tr>
+      <tr><td>Site</td><td>${site ? esc(site.name) + ' — ' + esc(site.location) : (plan ? esc(plan.siteName) : '—')}</td></tr>
+      <tr><td>Plot(s)</td><td>${plotLabels}</td></tr>
+      <tr><td>Amount paid</td><td>${money(payment.amount)}</td></tr>
+      <tr><td>Method</td><td>${esc(payment.method)}</td></tr>
+      <tr><td>Reference</td><td>${esc(payment.reference || '—')}</td></tr>
+      <tr><td>Status</td><td>${statusLabel}</td></tr>
+      ${plan ? `<tr><td>Balance remaining</td><td>${money(planBalance(plan))} of ${money(plan.total)}</td></tr>` : ''}
+    </table>
+    <p class="note">This receipt records a payment the buyer logged in the Tukule app as made directly to the seller. Tukule / Nexlite Digital Solutions Limited does not collect or hold buyer funds and is not a party to the underlying payment — this is not proof of the seller's receipt unless the status above says confirmed. Keep your original mobile money or bank confirmation as well.</p>
+    <button onclick="window.print()" style="margin-top:20px;padding:10px 18px;">Print this receipt</button>
+    </body></html>`;
+  const w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+}
+
 /* ---------- admin ---------- */
 document.getElementById('admin-login-btn').addEventListener('click', async ()=>{
+  const staffPhoneRaw = document.getElementById('admin-staff-phone').value.trim();
   const pin = document.getElementById('admin-pin').value.trim();
   const msg = document.getElementById('admin-msg');
   const btn = document.getElementById('admin-login-btn');
@@ -1334,15 +1644,38 @@ document.getElementById('admin-login-btn').addEventListener('click', async ()=>{
   btn.disabled = true;
   const pinHash = await hashPin(pin);
   btn.disabled = false;
+
+  if(staffPhoneRaw){
+    // Staff login: looked up by phone in state.staff, own PIN, own audit identity.
+    const staffPhone = normPhone(staffPhoneRaw);
+    const staffRecord = (state.staff||{})[staffPhone];
+    if(!staffRecord || !staffRecord.active || pinHash !== staffRecord.pinHash){
+      msg.innerHTML = '<div class="msg err">Incorrect phone or PIN, or this account is inactive.</div>';
+      return;
+    }
+    isAdmin = true;
+    currentAdminActor = { phone: staffRecord.phone, name: staffRecord.name, role: staffRecord.role||'staff' };
+    document.getElementById('admin-staff-phone').value='';
+    document.getElementById('admin-pin').value=''; msg.innerHTML='';
+    document.getElementById('admin-gate').classList.add('hidden');
+    updateSession({ isAdmin: true, adminPhone: staffRecord.phone });
+    document.getElementById('admin-dashboard').classList.remove('hidden');
+    logAudit('Logged in'); saveState();
+    renderAdmin();
+    return;
+  }
+
   if(pinHash !== state.settings.adminPinHash){ msg.innerHTML = '<div class="msg err">Incorrect PIN.</div>'; return; }
   isAdmin = true;
+  currentAdminActor = null; // super admin
   document.getElementById('admin-pin').value=''; msg.innerHTML='';
   document.getElementById('admin-gate').classList.add('hidden');
   if(state.settings.adminPinIsDefault){
     document.getElementById('admin-change-pin').classList.remove('hidden');
   } else {
-    updateSession({ isAdmin: true });
+    updateSession({ isAdmin: true, adminPhone: '' });
     document.getElementById('admin-dashboard').classList.remove('hidden');
+    logAudit('Logged in'); saveState();
     renderAdmin();
   }
 });
@@ -1363,7 +1696,8 @@ document.getElementById('admin-set-pin-btn').addEventListener('click', async ()=
   document.getElementById('admin-new-pin').value=''; document.getElementById('admin-new-pin-confirm').value='';
   document.getElementById('admin-change-pin').classList.add('hidden');
   document.getElementById('admin-dashboard').classList.remove('hidden');
-  updateSession({ isAdmin: true });
+  updateSession({ isAdmin: true, adminPhone: '' });
+  logAudit('Set new admin PIN (first-time setup)'); saveState();
   renderAdmin();
 });
 
@@ -1393,9 +1727,11 @@ function renderAdmin(){
 
   const pendingSitesHtml = pendingSites.length ? pendingSites.map(s=>`
     <div class="side-card">
+      ${s.photoUrl ? `<img src="${s.photoUrl}" alt="${esc(s.name)}" style="width:100%;max-height:160px;object-fit:cover;border-radius:6px;margin-bottom:10px;">` : ''}
       <h3>${esc(s.name)}</h3>
       <div class="schedule-line"><span>Location</span><span>${esc(s.location)}</span></div>
       <div class="schedule-line"><span>Owner</span><span>${esc(s.ownerName)} · ${esc(s.ownerPhone)}</span></div>
+      <div class="schedule-line"><span>Owner ID</span><span>${s.ownerNrc ? esc(s.ownerNrc) : 'Not provided'}</span></div>
       <div class="schedule-line"><span>Price / plot</span><span>${money(s.pricePerPlot)} (${esc(s.plotLabel)})</span></div>
       <div class="schedule-line"><span>Total plots</span><span>${s.plots.length}</span></div>
       <div style="margin-top:10px;display:flex;gap:8px;">
@@ -1470,18 +1806,36 @@ function renderAdmin(){
       </div>`;
   }).join('') || '<div class="empty">No buyers registered yet.</div>';
 
+  const isSuperAdmin = !currentAdminActor;
+  const staffList = Object.values(state.staff||{});
+  const staffRowsHtml = staffList.length ? staffList.map(st=>`
+      <div class="schedule-line">
+        <span>${esc(st.name)} · ${esc(st.phone)} ${st.active===false ? '<span class="pill rejected">Inactive</span>' : '<span class="pill active">Active</span>'}</span>
+        <span style="display:flex;gap:6px;">
+          <button class="btn btn-ghost btn-sm" data-staff-reset="${esc(st.phone)}">Reset PIN</button>
+          <button class="btn btn-ghost btn-sm" data-staff-toggle="${esc(st.phone)}">${st.active===false ? 'Reactivate' : 'Deactivate'}</button>
+        </span>
+      </div>`).join('') : '<p class="note">No staff accounts yet — you\'re the only one with admin access.</p>';
+
+  const recentActivity = (state.auditLog||[]).slice(-15).reverse();
+  const activityHtml = recentActivity.length ? recentActivity.map(a=>`
+      <div class="schedule-line"><span>${esc(a.actorName)} — ${esc(a.action)}</span><span class="note">${new Date(a.ts).toLocaleString('en-ZM',{dateStyle:'short',timeStyle:'short'})}</span></div>`).join('')
+    : '<p class="note">No activity logged yet.</p>';
+
   dash.innerHTML = `
     <div class="balance-hero">
       <h2 class="section-title" style="margin-bottom:0;">Admin overview</h2>
       <button class="btn btn-ghost" id="admin-logout-btn">Log out</button>
     </div>
-    <p class="note" style="margin:-6px 0 14px;">Buyers pay property owners directly — Tukule never holds buyer funds. These figures track what's owed to Nexlite, not money in hand.</p>
+    <p class="note" style="margin:-6px 0 6px;">Logged in as <strong>${esc(adminActorLabel())}</strong>${isSuperAdmin ? '' : ' (staff)'}.</p>
+    <p class="note" style="margin:0 0 14px;">Buyers pay property owners directly — Tukule never holds buyer funds. These figures track what's owed to Nexlite, not money in hand.</p>
     <div class="grid-three" style="margin-bottom:16px;">
       <div class="side-card"><h3>Commission accrued</h3><div class="price" style="font-size:1.3rem;">${money(commissionAccrued)}</div></div>
       <div class="side-card"><h3>Commission outstanding</h3><div class="price" style="font-size:1.3rem;">${money(commissionOutstanding)}</div></div>
       <div class="side-card"><h3>Payments awaiting confirmation</h3><div class="price" style="font-size:1.3rem;">${pendingCount}</div></div>
     </div>
 
+    ${isSuperAdmin ? `
     <div class="side-card" style="margin-bottom:16px;">
       <h3>Platform settings</h3>
       <div class="grid-two">
@@ -1491,13 +1845,35 @@ function renderAdmin(){
       <button class="btn btn-primary" style="margin-top:14px;" id="save-platform-btn">Save settings</button>
       <span id="platform-msg"></span>
       <h3 style="margin-top:18px;">Change admin PIN</h3>
-      <p class="note" style="margin-top:-4px;">Leave both blank to keep your current PIN.</p>
+      <p class="note" style="margin-top:-4px;">Leave both blank to keep your current PIN. This is the main shared admin PIN — staff accounts below have their own.</p>
       <div class="grid-two">
         <div><label class="field">New PIN (4–12 digits)</label><input type="password" inputmode="numeric" id="set-pin-new" maxlength="12" autocomplete="new-password"></div>
         <div><label class="field">Confirm new PIN</label><input type="password" inputmode="numeric" id="set-pin-confirm" maxlength="12" autocomplete="new-password"></div>
       </div>
       <button class="btn btn-secondary" style="margin-top:10px;" id="save-pin-btn">Update PIN</button>
       <span id="pin-msg"></span>
+    </div>
+
+    <div class="side-card" style="margin-bottom:16px;">
+      <h3>Staff accounts</h3>
+      <p class="note" style="margin-top:-4px;">Give each staff member their own login so you can see who approved, confirmed, or rejected what — instead of everyone sharing the main admin PIN.</p>
+      ${staffRowsHtml}
+      <h3 style="margin-top:16px;">Add a staff member</h3>
+      <div id="staff-add-msg"></div>
+      <div class="grid-two">
+        <div><label class="field">Full name</label><input type="text" id="staff-new-name"></div>
+        <div><label class="field">Phone (their login)</label><input type="tel" id="staff-new-phone"></div>
+      </div>
+      <div class="grid-two">
+        <div><label class="field">Temporary PIN (4–12 digits)</label><input type="password" inputmode="numeric" id="staff-new-pin" maxlength="12" autocomplete="new-password"></div>
+      </div>
+      <button class="btn btn-primary" style="margin-top:10px;" id="staff-add-btn">Add staff account</button>
+    </div>` : ''}
+
+    <div class="side-card" style="margin-bottom:16px;">
+      <h3>Recent activity</h3>
+      <p class="note" style="margin-top:-4px;">Who did what, most recent first.</p>
+      ${activityHtml}
     </div>
 
     <h3>Pending property listings</h3>
@@ -1512,7 +1888,8 @@ function renderAdmin(){
 
   document.getElementById('admin-logout-btn').addEventListener('click', ()=>{
     isAdmin = false;
-    updateSession({ isAdmin: false });
+    currentAdminActor = null;
+    updateSession({ isAdmin: false, adminPhone: '' });
     document.getElementById('admin-dashboard').classList.add('hidden');
     document.getElementById('admin-change-pin').classList.add('hidden');
     document.getElementById('admin-gate').classList.remove('hidden');
@@ -1520,12 +1897,30 @@ function renderAdmin(){
   });
 
   dash.querySelectorAll('[data-approve-site]').forEach(btn=>btn.addEventListener('click', ()=>{
-    state.sites[btn.dataset.approveSite].status = 'active';
+    const site = state.sites[btn.dataset.approveSite];
+    logAudit(`Approved listing "${site.name}"`);
+    site.status = 'active';
+    site.statusUnread = true;
+    delete site.rejectionReason;
     saveState(); renderAdmin();
+    const waPhone = normPhone(site.ownerPhone).replace(/^0/, '260');
+    const waMsg = encodeURIComponent(`Hi ${site.ownerName}, good news from Tukule — your listing "${site.name}" has been approved and is now live for buyers. - Nexlite Digital Solutions`);
+    window.open(`https://wa.me/${waPhone}?text=${waMsg}`, '_blank');
   }));
   dash.querySelectorAll('[data-reject-site]').forEach(btn=>btn.addEventListener('click', ()=>{
-    delete state.sites[btn.dataset.rejectSite];
+    const site = state.sites[btn.dataset.rejectSite];
+    if(!site) return;
+    const reason = prompt(`Reason for rejecting "${site.name}"? The owner will see this.`);
+    if(reason===null) return; // cancelled
+    if(!reason.trim()){ alert('Please give a reason so the owner knows what to fix.'); return; }
+    site.status = 'rejected';
+    site.rejectionReason = reason.trim();
+    site.statusUnread = true;
+    logAudit(`Rejected listing "${site.name}" — ${site.rejectionReason}`);
     saveState(); renderAdmin();
+    const waPhone = normPhone(site.ownerPhone).replace(/^0/, '260');
+    const waMsg = encodeURIComponent(`Hi ${site.ownerName}, your Tukule listing "${site.name}" wasn't approved: ${site.rejectionReason}. Update the details in the app and resubmit anytime. - Nexlite Digital Solutions`);
+    window.open(`https://wa.me/${waPhone}?text=${waMsg}`, '_blank');
   }));
   dash.querySelectorAll('[data-save-site]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
@@ -1555,13 +1950,17 @@ function renderAdmin(){
         return;
       }
       Object.assign(site, pending);
+      logAudit(`Updated site settings for "${site.name}"`);
       saveState(); renderAdmin();
     });
   });
   dash.querySelectorAll('[data-confirm]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const [phone, idxStr] = btn.dataset.confirm.split(':');
+      const buyer = state.buyers[phone];
+      const payment = buyer && buyer.payments[Number(idxStr)];
       confirmPayment(phone, Number(idxStr));
+      if(payment) logAudit(`Confirmed payment of ${money(payment.amount)} from ${buyer.name} (${buyer.phone})`);
       saveState(); renderAdmin();
     });
   });
@@ -1576,7 +1975,7 @@ function renderAdmin(){
       if(!confirm(`Release this reservation back to available?${warn}`)) return;
       btn.disabled = true;
       const ok = await cancelPlan(buyerPhone, planId);
-      if(ok) renderAdmin();
+      if(ok){ logAudit(`Released reservation for ${buyer.name} (${buyer.phone})`); saveState(); renderAdmin(); }
       else { btn.disabled = false; alert('Could not release — please check your connection and try again.'); }
     });
   });
@@ -1590,11 +1989,13 @@ function renderAdmin(){
       const method = prompt('Method (e.g. Cash, Mobile money, Bank deposit):', 'Cash') || 'Cash';
       if(!site.commissionSettlements) site.commissionSettlements = [];
       site.commissionSettlements.push({ date: todayISO(), amount, method });
+      logAudit(`Recorded commission of ${money(amount)} received from ${site.ownerName} (${site.name}) via ${method}`);
       saveState(); renderAdmin();
     });
   });
 
-  document.getElementById('save-platform-btn').addEventListener('click', ()=>{
+  const savePlatformBtn = document.getElementById('save-platform-btn');
+  if(savePlatformBtn) savePlatformBtn.addEventListener('click', ()=>{
     const platformMsg = document.getElementById('platform-msg');
     const commission = Number(document.getElementById('set-commission').value);
     if(!inRange(commission, NUMERIC_BOUNDS.defaultCommissionPct)){
@@ -1603,11 +2004,13 @@ function renderAdmin(){
     }
     state.settings.defaultCommissionPct = commission;
     state.settings.nexliteContact = document.getElementById('set-contact').value.trim() || state.settings.nexliteContact;
+    logAudit('Updated platform settings');
     saveState();
     platformMsg.innerHTML = ' <span style="color:#1f4b2c;font-size:0.85rem;">Saved.</span>';
   });
 
-  document.getElementById('save-pin-btn').addEventListener('click', async ()=>{
+  const savePinBtn = document.getElementById('save-pin-btn');
+  if(savePinBtn) savePinBtn.addEventListener('click', async ()=>{
     const pinMsg = document.getElementById('pin-msg');
     const btn = document.getElementById('save-pin-btn');
     const newPin = document.getElementById('set-pin-new').value.trim();
@@ -1618,11 +2021,53 @@ function renderAdmin(){
     btn.disabled = true;
     state.settings.adminPinHash = await hashPin(newPin);
     state.settings.adminPinIsDefault = false;
+    logAudit('Changed main admin PIN');
     saveState();
     btn.disabled = false;
     document.getElementById('set-pin-new').value=''; document.getElementById('set-pin-confirm').value='';
     pinMsg.innerHTML = ' <span style="color:#1f4b2c;font-size:0.85rem;">PIN updated.</span>';
   });
+
+  const staffAddBtn = document.getElementById('staff-add-btn');
+  if(staffAddBtn) staffAddBtn.addEventListener('click', async ()=>{
+    const msg = document.getElementById('staff-add-msg');
+    const name = document.getElementById('staff-new-name').value.trim();
+    const phoneRaw = document.getElementById('staff-new-phone').value.trim();
+    const pin = document.getElementById('staff-new-pin').value.trim();
+    if(!name){ msg.innerHTML = '<div class="msg err">Enter a name.</div>'; return; }
+    const phone = normPhone(phoneRaw);
+    if(!phone){ msg.innerHTML = '<div class="msg err">Enter a valid phone number.</div>'; return; }
+    if(!validAdminPin(pin)){ msg.innerHTML = '<div class="msg err">PIN must be 4–12 digits.</div>'; return; }
+    if(state.staff && state.staff[phone]){ msg.innerHTML = '<div class="msg err">A staff account with this phone already exists.</div>'; return; }
+    staffAddBtn.disabled = true;
+    const pinHash = await hashPin(pin);
+    staffAddBtn.disabled = false;
+    if(!state.staff) state.staff = {};
+    state.staff[phone] = { phone, name, pinHash, role:'staff', active:true, createdAt: todayISO() };
+    logAudit(`Added staff account for ${name} (${phone})`);
+    saveState(); renderAdmin();
+  });
+
+  dash.querySelectorAll('[data-staff-toggle]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const phone = btn.dataset.staffToggle;
+    const rec = state.staff && state.staff[phone];
+    if(!rec) return;
+    rec.active = rec.active===false ? true : false;
+    logAudit(`${rec.active ? 'Reactivated' : 'Deactivated'} staff account for ${rec.name} (${rec.phone})`);
+    saveState(); renderAdmin();
+  }));
+
+  dash.querySelectorAll('[data-staff-reset]').forEach(btn=>btn.addEventListener('click', async ()=>{
+    const phone = btn.dataset.staffReset;
+    const rec = state.staff && state.staff[phone];
+    if(!rec) return;
+    const newPin = prompt(`New temporary PIN for ${rec.name} (4–12 digits):`);
+    if(newPin===null) return;
+    if(!validAdminPin(newPin.trim())){ alert('PIN must be 4–12 digits.'); return; }
+    rec.pinHash = await hashPin(newPin.trim());
+    logAudit(`Reset PIN for staff account ${rec.name} (${rec.phone})`);
+    saveState(); renderAdmin();
+  }));
 }
 
 /* ---------- init ---------- */
