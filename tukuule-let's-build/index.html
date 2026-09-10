@@ -4,12 +4,33 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Tukule — Let's Build | Land in squares, paid your way</title>
+<!-- PWA installability: manifest + icons + service worker (registered near
+     the bottom of the script). See manifest.json and sw.js — both must sit
+     alongside this HTML file wherever it's deployed (adjust the paths below
+     and inside manifest.json/sw.js if it ends up nested in a subfolder). -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#4B2E19">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tukule">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Karla:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- Firebase (compat SDKs — loaded before the app script so `firebase` is ready) -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<!-- Leaflet (free, no API key) + Leaflet.draw for sellers to draw their site boundary -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<!-- Turf.js (free, no API key) — used to clip plot rectangles to the actual drawn
+     boundary instead of just its bounding box. Loaded from CDN; if it fails to
+     load (e.g. offline), the plot map gracefully falls back to bounding-box
+     rectangles — see computePlotGeoCells(). -->
+<script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
 <style>
   :root{
     --soil:#6B4226; --soil-dark:#4B2E19;
@@ -111,6 +132,11 @@
   .pill.active{background:#cfe4d3;color:#1f4b2c;} .pill.rejected{background:#f2d9d3;color:#6b2323;}
   .grid-two{display:grid;grid-template-columns:1fr 1fr;gap:16px;} @media(max-width:700px){.grid-two{grid-template-columns:1fr;}}
   .grid-three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;} @media(max-width:700px){.grid-three{grid-template-columns:1fr;}}
+  .velocity-chart{display:flex;align-items:flex-end;gap:6px;height:70px;margin:16px 0 4px;}
+  .velocity-bar{flex:1;background:var(--river);border-radius:3px 3px 0 0;min-height:3px;position:relative;}
+  .velocity-bar .val{position:absolute;top:-16px;left:0;right:0;text-align:center;font-size:0.66rem;color:var(--soil-dark);font-weight:600;}
+  .velocity-labels{display:flex;gap:6px;font-size:0.68rem;color:#6b6153;text-align:center;margin-bottom:6px;}
+  .velocity-labels span{flex:1;}
   footer{border-top:1px solid var(--line);padding:24px 0;text-align:center;font-size:0.82rem;color:#6b6153;}
   .empty{border:1px dashed var(--line);border-radius:6px;padding:26px;text-align:center;color:#6b6153;font-size:0.9rem;}
   .msg{padding:10px 14px;border-radius:4px;font-size:0.86rem;margin-bottom:14px;}
@@ -133,7 +159,7 @@
 
 <div id="app-loading"><div class="spinner"></div><p>Connecting to Tukule…</p></div>
 
-<div class="topbar">Talk to us about any listing: <a href="tel:0977638790">0977 638 790</a> <span class="sync-pill connecting" id="sync-pill" style="margin-left:8px;">Connecting…</span></div>
+<div class="topbar">Talk to us about any listing: <a href="tel:0977638790">0977 638 790</a> / <a href="tel:0960271128">0960 271 128</a> <span class="sync-pill connecting" id="sync-pill" style="margin-left:8px;">Connecting…</span> <button id="pwa-install-btn" class="btn btn-ghost btn-sm hidden" style="margin-left:8px;padding:2px 10px;">Install app</button></div>
 
 <header class="site">
   <div class="wrap site-bar">
@@ -205,6 +231,7 @@
       <h2 class="section-title" id="buy-site-title">Site plan</h2>
       <p class="section-sub" id="buy-site-loc"></p>
       <img id="buy-site-photo" class="site-photo-large hidden" alt="Site photo">
+      <div id="buy-site-map" class="hidden" style="height:220px;border:1px solid var(--line);border-radius:6px;margin-bottom:16px;"></div>
       <div class="plot-panel">
         <div>
           <div class="grid-scroll"><div class="plot-grid" id="plot-grid"></div></div>
@@ -251,6 +278,20 @@
       <input type="text" id="sell-name" placeholder="e.g. Kabunda Farms Plots">
       <label class="field">Location</label>
       <input type="text" id="sell-location" placeholder="e.g. Off Kabunda Road, Mansa">
+      <label class="field">Draw your site boundary on the map (optional)</label>
+      <div id="sell-map" style="height:260px;border:1px solid var(--line);border-radius:6px;"></div>
+      <div style="display:flex;align-items:center;gap:10px;margin:8px 0;">
+        <button type="button" class="btn btn-ghost btn-sm" id="sell-map-clear">Clear boundary</button>
+        <span class="note" id="sell-map-status" style="margin:0;"></span>
+      </div>
+      <p class="note" style="margin-top:-4px;">Zoom to your site, then tap the polygon tool (top-left of the map) and trace its edges. We'll fill in the coordinates below automatically.</p>
+      <div class="grid-two">
+        <div><label class="field">GPS latitude (optional)</label><input type="number" step="any" id="sell-lat" placeholder="e.g. -11.2000"></div>
+        <div><label class="field">GPS longitude (optional)</label><input type="number" step="any" id="sell-lng" placeholder="e.g. 28.8944"></div>
+      </div>
+      <label class="field">Or paste a Google Maps link (optional)</label>
+      <input type="text" id="sell-maps-link" placeholder="e.g. https://maps.app.goo.gl/...">
+      <p class="note" style="margin-top:-4px;">Any of the three works — a drawn boundary, coordinates, or a Maps link. This gives buyers a one-tap "Get directions" to the site, and a boundary also shows on the site plan.</p>
       <label class="field">Description (optional)</label>
       <textarea id="sell-description" placeholder="What makes this site worth buying into?"></textarea>
       <div class="grid-two">
@@ -275,7 +316,7 @@
       <p class="note" style="margin-top:-4px;">First listing under this number sets your PIN; later listings need the same one. You'll use it to log in and manage your listings.</p>
       <p class="note">Buyers will be offered outright, daily, and monthly plans on your default terms — you can fine-tune these once your listing is approved.</p>
       <button class="btn btn-primary" style="width:100%;margin-top:14px;" id="submit-listing-btn">Submit listing for review</button>
-      <p class="note">Or call us directly on <a href="tel:0977638790">0977 638 790</a> and we'll set it up with you.</p>
+      <p class="note">Or call us directly on <a href="tel:0977638790">0977 638 790</a> / <a href="tel:0960271128">0960 271 128</a> and we'll set it up with you.</p>
     </div>
 
     <h2 class="section-title" style="margin-top:40px;">Already listed with us?</h2>
@@ -287,6 +328,7 @@
       <label class="field">Owner PIN</label>
       <input type="password" inputmode="numeric" id="owner-login-pin" maxlength="6" autocomplete="current-password">
       <button class="btn btn-secondary" style="width:100%;margin-top:14px;" id="owner-login-btn">View my listings</button>
+      <p class="note">Forgotten your PIN? <button class="toggle-link" id="owner-forgot-pin-btn">Request a reset</button></p>
     </div>
     <div id="owner-dashboard" class="hidden"></div>
   </section>
@@ -304,6 +346,7 @@
         <input type="password" inputmode="numeric" id="login-pin" maxlength="6" autocomplete="current-password">
         <button class="btn btn-primary" style="width:100%;margin-top:14px;" id="login-btn">Log in</button>
         <p class="note">New here? <button class="toggle-link" id="show-create-account">Create an account</button></p>
+        <p class="note">Forgotten your PIN? <button class="toggle-link" id="forgot-pin-btn">Request a reset</button></p>
       </div>
       <div class="login-box side-card hidden" id="create-panel">
         <div id="create-msg"></div>
@@ -354,7 +397,7 @@
 
 </main>
 
-<footer>Nexlite Digital Solutions Limited · Tukule — Let's Build · Enquiries: 0977 638 790 · Data syncs live across devices via Tukule's cloud</footer>
+<footer>Nexlite Digital Solutions Limited · Tukule — Let's Build · Enquiries: 0977 638 790 / 0960 271 128 · Data syncs live across devices via Tukule's cloud</footer>
 
 <script>
 /* ---------- state ---------- */
@@ -376,29 +419,44 @@ const db = firebase.database();
 function buildPlots(rows, cols, seedPattern){
   const total = rows*cols;
   const plots = [];
-  for(let i=0;i<total;i++) plots.push({ id:i+1, status:'available', buyerPhone:null });
+  for(let i=0;i<total;i++) plots.push({ id:i+1, status:'available', buyerPhone:null, price:null, sizeLabel:null });
   (seedPattern||[]).forEach((n,idx)=>{ if(plots[n-1]) plots[n-1].status = idx % 3 === 0 ? 'sold' : 'reserved'; });
   return plots;
 }
 
+// A "site" is one physical property subdivided into a grid of plots that
+// all share the site's price/size by default — but any plot can carry its
+// own override (set via the owner's "Plot pricing & sizes" panel), so a
+// single bulk listing can still price a corner or river-view plot
+// differently from the rest. These helpers resolve the effective value.
+function plotPrice(site, plot){ return (plot && plot.price!=null && !Number.isNaN(plot.price)) ? plot.price : site.pricePerPlot; }
+function plotSizeLabel(site, plot){ return (plot && plot.sizeLabel) ? plot.sizeLabel : site.plotLabel; }
+function plotsTotalPrice(site, plotIds){
+  return plotIds.reduce((sum,id)=>{
+    const p = site.plots.find(pp=>pp.id===id);
+    return sum + plotPrice(site, p);
+  }, 0);
+}
+function siteMinMaxPrice(site){
+  const pool = site.plots.filter(p=>p.status==='available');
+  const prices = (pool.length?pool:site.plots).map(p=>plotPrice(site,p));
+  return [Math.min(...prices), Math.max(...prices)];
+}
+function plotSizeSummary(site, plotIds){
+  const labels = plotIds.map(id=>{ const p = site.plots.find(pp=>pp.id===id); return plotSizeLabel(site,p); });
+  const unique = [...new Set(labels)];
+  if(unique.length<=1) return unique[0] || site.plotLabel;
+  return plotIds.map((id,i)=>`Plot ${String(id).padStart(2,'0')} (${esc(labels[i])})`).join(', ');
+}
+
 function defaultState(){
   return {
-    settings:{ nexliteContact:'0977638790', defaultCommissionPct:10, adminPinHash:'0889c39fbe2987060378014caac47694cde6e56370261a504b33109674f15e7b', adminPinIsDefault:true },
+    settings:{ nexliteContact:'0977638790 / 0960271128', defaultCommissionPct:10, adminPinHash:'0889c39fbe2987060378014caac47694cde6e56370261a504b33109674f15e7b', adminPinIsDefault:true },
     staff:{},
     auditLog:[],
-    sites:{
-      'mansa-riverside':{
-        id:'mansa-riverside', name:'Mansa Riverside', location:'Opposite Kapanda Mini-Hospital, 6km from Mansa CBD, off Kabunda Road',
-        description:'Riverside plots close to town, sold square by square.',
-        pricePerPlot:9500, plotLabel:'30 x 30', rows:8, cols:10,
-        outrightDiscountPct:5, depositPct:20, dailyTerms:[90,180,365], monthlyTerms:[6,12,18,24,36],
-        ownerName:'Nexlite Digital Solutions Limited', ownerPhone:'0977638790', ownerPinHash:'', isNexliteOwned:true, commissionPct:0,
-        status:'active', createdAt:new Date().toISOString().slice(0,10),
-        plots: buildPlots(8,10,[3,4,17,22,38,51,52,65]),
-        commissionSettlements: []
-      }
-    },
-    buyers:{}
+    sites:{},
+    buyers:{},
+    pinResetRequests:{}
   };
 }
 
@@ -487,7 +545,7 @@ function rerenderCurrentView(){
   if(!active) return;
   const name = active.id.replace('view-', '');
   if(name==='home') renderHome();
-  else if(name==='buy'){ renderBuySitePicker(); if(currentSiteId) renderPlotGrid(); }
+  else if(name==='buy'){ renderBuySitePicker(); if(currentSiteId){ renderPlotGrid(); refreshBuySiteMapStyles(); } }
   else if(name==='sell' && currentOwnerPhone) renderOwnerDashboard();
   else if(name==='account' && currentAccountPhone) renderAccount();
   else if(name==='admin' && isAdmin) renderAdmin();
@@ -577,6 +635,57 @@ function esc(str){
 }
 function money(n){ return 'K' + Number(n||0).toLocaleString('en-ZM', {minimumFractionDigits:2, maximumFractionDigits:2}); }
 
+/* ---------- backup & export ---------- */
+function csvEscape(val){
+  const s = String(val??'');
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s;
+}
+function toCSV(headers, rows){
+  return [headers, ...rows].map(r=>r.map(csvEscape).join(',')).join('\r\n');
+}
+function downloadFile(filename, content, mime){
+  const blob = new Blob([content], {type: mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 2000);
+}
+function exportFullBackupJson(){
+  downloadFile(`tukule-backup-${todayISO()}.json`, JSON.stringify(state, null, 2), 'application/json');
+  logAudit('Downloaded full data backup (JSON)');
+  saveState();
+}
+function exportPaymentsCsv(){
+  const headers = ['Date','Buyer','Buyer phone','Site','Plot(s)','Amount (K)','Method','Reference','Status','Commission (K)'];
+  const rows = [];
+  Object.values(state.buyers).forEach(b=>{
+    b.payments.forEach(p=>{
+      const plan = b.plans.find(pl=>pl.id===p.planId);
+      const site = state.sites[p.siteId];
+      const plotLabels = plan ? plan.plots.map(id=>String(id).padStart(2,'0')).join(' ') : '';
+      rows.push([p.date, b.name, b.phone, site?site.name:'', plotLabels, p.amount, p.method, p.reference||'', p.status, p.commissionAmount||0]);
+    });
+  });
+  downloadFile(`tukule-payments-${todayISO()}.csv`, toCSV(headers, rows), 'text/csv');
+  logAudit('Exported payments CSV');
+  saveState();
+}
+function exportSitesCsv(){
+  const headers = ['Site','Location','Owner','Owner phone','Status','Total plots','Available','Reserved','Sold','Commission %','Commission accrued (K)','Commission settled (K)','Commission outstanding (K)'];
+  const rows = Object.values(state.sites).map(s=>{
+    const counts = {available:0,reserved:0,sold:0};
+    s.plots.forEach(p=>counts[p.status]++);
+    let accrued = 0;
+    Object.values(state.buyers).forEach(b=>b.payments.forEach(p=>{ if(p.siteId===s.id && p.status==='confirmed') accrued += (p.commissionAmount||0); }));
+    const settled = (s.commissionSettlements||[]).reduce((sum,st)=>sum+st.amount,0);
+    return [s.name, s.location, s.ownerName, s.ownerPhone, s.status, s.plots.length, counts.available, counts.reserved, counts.sold, s.commissionPct, accrued, settled, Math.round((accrued-settled)*100)/100];
+  });
+  downloadFile(`tukule-sites-${todayISO()}.csv`, toCSV(headers, rows), 'text/csv');
+  logAudit('Exported sites & commission CSV');
+  saveState();
+}
+
 // Listing photos are compressed client-side and stored inline as base64 in
 // Realtime Database — there's no Firebase Storage bucket configured for
 // this project, and shipping one just for a handful of small cover photos
@@ -652,6 +761,11 @@ function addMonths(dateStr, months){ const d=new Date(dateStr); d.setMonth(d.get
 function daysSince(dateStr){ return Math.max(0, Math.floor((new Date() - new Date(dateStr)) / 86400000)); }
 function activeSites(){ return Object.values(state.sites).filter(s=>s.status==='active'); }
 function siteAvailableCount(site){ return site.plots.filter(p=>p.status==='available').length; }
+function siteMapsUrl(site){
+  if(site.mapsLink) return site.mapsLink;
+  if(site.lat!=null && site.lng!=null && !Number.isNaN(site.lat) && !Number.isNaN(site.lng)) return `https://www.google.com/maps?q=${site.lat},${site.lng}`;
+  return null;
+}
 
 // There's no fixed instalment-schedule record — a plan just carries a
 // running balance. So "is this buyer behind?" is worked out on the fly:
@@ -688,17 +802,294 @@ function showView(name){
   if(name==='home') renderHome();
   if(name==='buy') renderBuySitePicker();
   if(name==='admin') renderAdmin();
-  if(name==='sell' && currentOwnerPhone) renderOwnerDashboard();
+  if(name==='sell'){ if(currentOwnerPhone) renderOwnerDashboard(); initSellMap(); }
+  if(name==='buy' && currentSiteId) renderBuySiteMap();
+}
+
+/* ---------- shared base layers (street + free satellite) ---------- */
+function makeBaseLayers(){
+  const street = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
+  });
+  const satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+    maxZoom: 19, attribution: 'Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics'
+  });
+  return { 'Street': street, 'Satellite': satellite };
+}
+
+/* ---------- seller boundary-drawing map (Leaflet, free/no API key) ---------- */
+let sellMap, sellDrawnItems, sellBoundaryLatLngs = null;
+function initSellMap(){
+  if(sellMap){ setTimeout(()=>sellMap.invalidateSize(), 80); return; }
+  sellMap = L.map('sell-map').setView([-13.133897, 27.849332], 6); // Zambia-wide default view
+  const baseLayers = makeBaseLayers();
+  baseLayers['Street'].addTo(sellMap);
+  L.control.layers(baseLayers).addTo(sellMap);
+  sellDrawnItems = new L.FeatureGroup();
+  sellMap.addLayer(sellDrawnItems);
+  const drawControl = new L.Control.Draw({
+    draw: { polygon:{allowIntersection:false, showArea:true}, polyline:false, circle:false, circlemarker:false, marker:false, rectangle:false },
+    edit: { featureGroup: sellDrawnItems, remove:true }
+  });
+  sellMap.addControl(drawControl);
+  sellMap.on(L.Draw.Event.CREATED, (e)=>{
+    sellDrawnItems.clearLayers(); // one boundary per listing
+    sellDrawnItems.addLayer(e.layer);
+    updateSellBoundaryFromLayer(e.layer);
+  });
+  sellMap.on(L.Draw.Event.EDITED, (e)=>{ e.layers.eachLayer(layer=>updateSellBoundaryFromLayer(layer)); });
+  sellMap.on(L.Draw.Event.DELETED, ()=>{ sellBoundaryLatLngs = null; document.getElementById('sell-map-status').textContent = ''; });
+  setTimeout(()=>sellMap.invalidateSize(), 150);
+}
+function updateSellBoundaryFromLayer(layer){
+  const latlngs = layer.getLatLngs()[0].map(ll=>[Number(ll.lat.toFixed(6)), Number(ll.lng.toFixed(6))]);
+  sellBoundaryLatLngs = latlngs;
+  const centroid = latlngs.reduce((acc,p)=>[acc[0]+p[0], acc[1]+p[1]], [0,0]).map(v=>v/latlngs.length);
+  document.getElementById('sell-lat').value = centroid[0].toFixed(6);
+  document.getElementById('sell-lng').value = centroid[1].toFixed(6);
+  document.getElementById('sell-map-status').textContent = `Boundary set (${latlngs.length} points) — coordinates filled in below.`;
+}
+function resetSellMap(){
+  if(sellDrawnItems) sellDrawnItems.clearLayers();
+  sellBoundaryLatLngs = null;
+  const statusEl = document.getElementById('sell-map-status');
+  if(statusEl) statusEl.textContent = '';
+}
+document.getElementById('sell-map-clear').addEventListener('click', resetSellMap);
+
+/* ---------- buyer read-only boundary map ---------- */
+/* ---------- geo-referenced plot grid (subdivides the drawn boundary into
+   real plot rectangles, so numbered plots correspond to actual sub-areas
+   instead of just an abstract count).
+   Base grid: divides the boundary's bounding box evenly into rows x cols —
+   matches the "land in squares" model. For irregular hand-drawn boundaries,
+   each rectangle is then CLIPPED to the actual boundary polygon using
+   Turf.js (turf.intersect), so edge plots hug the true outline instead of
+   overflowing it. Plots that fall entirely outside the boundary (or whose
+   overlap is a negligible sliver) are dropped from the map — they still
+   exist in the numbered grid below, just with nothing meaningful to draw.
+   If Turf.js isn't available (e.g. failed to load offline) or the boundary
+   geometry is invalid, this falls back to the plain bounding-box rectangle
+   for every plot, same as before. ---------- */
+function boundaryToTurfPolygon(boundary){
+  const ring = boundary.map(([lat,lng])=>[lng,lat]);
+  if(ring.length && (ring[0][0]!==ring[ring.length-1][0] || ring[0][1]!==ring[ring.length-1][1])){
+    ring.push(ring[0]);
+  }
+  if(ring.length < 4) return null;
+  try{ return turf.polygon([ring]); }catch(e){ return null; }
+}
+function rectToTurfPolygon(corners){
+  const ring = corners.map(([lat,lng])=>[lng,lat]);
+  ring.push(ring[0]);
+  return turf.polygon([ring]);
+}
+function turfGeomToLatLngParts(geom){
+  // Returns an array of "parts" — one per disjoint polygon piece — each part
+  // being an array of [lat,lng] outer-ring points (holes are ignored; plot
+  // slivers clipped against a simple boundary won't have meaningful holes).
+  if(!geom) return [];
+  if(geom.type === 'Polygon') return [geom.coordinates[0].map(([lng,lat])=>[lat,lng])];
+  if(geom.type === 'MultiPolygon') return geom.coordinates.map(poly=>poly[0].map(([lng,lat])=>[lat,lng]));
+  return [];
+}
+function computePlotGeoCells(site){
+  if(!site.boundary || !site.boundary.length || !site.rows || !site.cols) return null;
+  let minLat=Infinity,maxLat=-Infinity,minLng=Infinity,maxLng=-Infinity;
+  site.boundary.forEach(([lat,lng])=>{
+    if(lat<minLat) minLat=lat; if(lat>maxLat) maxLat=lat;
+    if(lng<minLng) minLng=lng; if(lng>maxLng) maxLng=lng;
+  });
+  const rows=site.rows, cols=site.cols;
+  const latStep=(maxLat-minLat)/rows, lngStep=(maxLng-minLng)/cols;
+  const boundaryPoly = (typeof turf!=='undefined' && site.boundary.length>=3) ? boundaryToTurfPolygon(site.boundary) : null;
+  const cells = {};
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      const id = r*cols + c + 1;
+      const north = maxLat - r*latStep, south = maxLat - (r+1)*latStep;
+      const west = minLng + c*lngStep, east = minLng + (c+1)*lngStep;
+      const rectCorners = [[north,west],[north,east],[south,east],[south,west]];
+      let parts = [rectCorners]; // fallback: plain bounding-box rectangle
+
+      if(boundaryPoly){
+        try{
+          const rectPoly = rectToTurfPolygon(rectCorners);
+          const clip = turf.intersect(boundaryPoly, rectPoly);
+          if(!clip){
+            parts = null; // rectangle doesn't overlap the boundary at all — drop it
+          } else {
+            const cellArea = turf.area(rectPoly);
+            const clipArea = turf.area(clip);
+            // Drop slivers under ~8% of the cell — not a meaningful plot shape.
+            if(cellArea > 0 && (clipArea/cellArea) < 0.08){
+              parts = null;
+            } else {
+              const clippedParts = turfGeomToLatLngParts(clip.geometry);
+              parts = clippedParts.length ? clippedParts : null;
+            }
+          }
+        }catch(e){ /* geometry error — keep the bounding-box rectangle fallback */ }
+      }
+      cells[id] = parts; // array of parts, or null if nothing to draw
+    }
+  }
+  return cells;
+}
+function plotMapStyle(status, selected){
+  const fill = status==='available' ? '#3F7D4F' : status==='reserved' ? '#C88A2E' : '#8B3A3A';
+  return { color: selected ? '#26201A' : 'rgba(0,0,0,0.35)', weight: selected?3:1, fillColor: fill, fillOpacity: 0.55 };
+}
+function refreshBuySiteMapStyles(){
+  const site = state.sites[currentSiteId];
+  if(!site || !buySiteMapPlotLayers) return;
+  Object.entries(buySiteMapPlotLayers).forEach(([idStr, layer])=>{
+    const id = Number(idStr);
+    const p = site.plots.find(pp=>pp.id===id);
+    if(!p) return;
+    layer.setStyle(plotMapStyle(p.status, selectedPlots.includes(id)));
+  });
+}
+
+let buySiteMap, buySiteMapBoundaryLayer, buySiteMapPlotGroup, buySiteMapPlotLayers = {};
+function renderBuySiteMap(){
+  const mapDiv = document.getElementById('buy-site-map');
+  const site = state.sites[currentSiteId];
+  if(!site || !site.boundary || !site.boundary.length){ mapDiv.classList.add('hidden'); return; }
+  mapDiv.classList.remove('hidden');
+  if(!buySiteMap){
+    buySiteMap = L.map('buy-site-map', { zoomControl:true, dragging:true, scrollWheelZoom:false });
+    const baseLayers = makeBaseLayers();
+    baseLayers['Satellite'].addTo(buySiteMap); // satellite default helps buyers judge the actual land
+    L.control.layers(baseLayers).addTo(buySiteMap);
+  }
+  if(buySiteMapBoundaryLayer) buySiteMap.removeLayer(buySiteMapBoundaryLayer);
+  if(buySiteMapPlotGroup) buySiteMap.removeLayer(buySiteMapPlotGroup);
+  buySiteMapBoundaryLayer = L.polygon(site.boundary, { color:'#2F6E62', weight:2, fill:false, dashArray:'4,4' }).addTo(buySiteMap);
+
+  buySiteMapPlotLayers = {};
+  const cells = computePlotGeoCells(site);
+  buySiteMapPlotGroup = new L.FeatureGroup();
+  if(cells){
+    site.plots.forEach(p=>{
+      const parts = cells[p.id];
+      if(!parts) return; // no overlap with the drawn boundary — nothing to show on the map
+      // Leaflet takes a single ring directly, or [[ring1],[ring2],...] for
+      // disjoint multi-part shapes (which can happen when a boundary clip
+      // splits a rectangle in two around a concave edge).
+      const latlngs = parts.length === 1 ? parts[0] : parts.map(ring=>[ring]);
+      const layer = L.polygon(latlngs, plotMapStyle(p.status, selectedPlots.includes(p.id)));
+      layer.bindTooltip(`Plot ${String(p.id).padStart(2,'0')} — ${p.status}`, { sticky:true });
+      if(p.status==='available') layer.on('click', ()=>toggleSelectPlot(p.id));
+      buySiteMapPlotLayers[p.id] = layer;
+      buySiteMapPlotGroup.addLayer(layer);
+    });
+  }
+  buySiteMapPlotGroup.addTo(buySiteMap);
+  setTimeout(()=>{ buySiteMap.invalidateSize(); buySiteMap.fitBounds(buySiteMapBoundaryLayer.getBounds(), {padding:[16,16]}); }, 100);
+}
+
+/* ---------- shared owner/admin site-boundary editor ---------- */
+const boundaryEditMaps = {}; // key `${prefix}:${siteId}` -> {map, drawnItems}
+function boundaryDetailsHtml(site, prefix){
+  return `
+    <details style="margin-top:10px;" data-boundary-details="${prefix}:${site.id}">
+      <summary style="cursor:pointer;font-weight:600;color:var(--soil-dark);">Site boundary</summary>
+      <p class="note" style="margin-top:6px;">${site.boundary && site.boundary.length ? 'Drag the corner markers to adjust, or clear and redraw.' : 'Draw the site boundary on the map — this also updates the GPS coordinates.'}</p>
+      <div id="${prefix}-map-${site.id}" style="height:220px;border:1px solid var(--line);border-radius:6px;margin:6px 0;"></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <button class="btn btn-ghost btn-sm" type="button" data-boundary-clear="${prefix}:${site.id}">Clear boundary</button>
+        <button class="btn btn-secondary btn-sm" type="button" data-boundary-save="${prefix}:${site.id}">Save boundary</button>
+        <span class="note" id="${prefix}-map-status-${site.id}" style="margin:0;"></span>
+      </div>
+    </details>`;
+}
+function initBoundaryEditMap(prefix, siteId){
+  const key = `${prefix}:${siteId}`;
+  if(boundaryEditMaps[key]){ setTimeout(()=>boundaryEditMaps[key].map.invalidateSize(), 80); return; }
+  const site = state.sites[siteId];
+  const mapDivId = `${prefix}-map-${siteId}`;
+  if(!site || !document.getElementById(mapDivId)) return;
+  const map = L.map(mapDivId).setView(
+    site.lat!=null && site.lng!=null ? [site.lat, site.lng] : [-13.133897, 27.849332],
+    site.boundary && site.boundary.length ? 15 : 6
+  );
+  const baseLayers = makeBaseLayers();
+  baseLayers['Satellite'].addTo(map);
+  L.control.layers(baseLayers).addTo(map);
+  const drawnItems = new L.FeatureGroup();
+  map.addLayer(drawnItems);
+  if(site.boundary && site.boundary.length){
+    const poly = L.polygon(site.boundary, { color:'#2F6E62' });
+    drawnItems.addLayer(poly);
+    setTimeout(()=>{ map.invalidateSize(); map.fitBounds(poly.getBounds(), {padding:[16,16]}); }, 120);
+  }
+  const drawControl = new L.Control.Draw({
+    draw: { polygon:{allowIntersection:false, showArea:true}, polyline:false, circle:false, circlemarker:false, marker:false, rectangle:false },
+    edit: { featureGroup: drawnItems, remove:true }
+  });
+  map.addControl(drawControl);
+  map.on(L.Draw.Event.CREATED, (e)=>{ drawnItems.clearLayers(); drawnItems.addLayer(e.layer); });
+  boundaryEditMaps[key] = { map, drawnItems };
+  setTimeout(()=>map.invalidateSize(), 150);
+}
+function clearBoundaryEditMaps(prefix){
+  Object.keys(boundaryEditMaps).forEach(key=>{
+    if(key.startsWith(prefix+':')){
+      try{ boundaryEditMaps[key].map.remove(); }catch(e){}
+      delete boundaryEditMaps[key];
+    }
+  });
+}
+function wireBoundaryEditors(container, prefix){
+  container.querySelectorAll(`[data-boundary-details^="${prefix}:"]`).forEach(det=>{
+    const siteId = det.dataset.boundaryDetails.split(':').slice(1).join(':');
+    det.addEventListener('toggle', ()=>{ if(det.open) initBoundaryEditMap(prefix, siteId); });
+  });
+  container.querySelectorAll(`[data-boundary-clear^="${prefix}:"]`).forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const siteId = btn.dataset.boundaryClear.split(':').slice(1).join(':');
+      const entry = boundaryEditMaps[`${prefix}:${siteId}`];
+      if(entry) entry.drawnItems.clearLayers();
+      const statusEl = document.getElementById(`${prefix}-map-status-${siteId}`);
+      if(statusEl) statusEl.textContent = '';
+    });
+  });
+  container.querySelectorAll(`[data-boundary-save^="${prefix}:"]`).forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const siteId = btn.dataset.boundarySave.split(':').slice(1).join(':');
+      const site = state.sites[siteId];
+      const entry = boundaryEditMaps[`${prefix}:${siteId}`];
+      if(!site || !entry) return;
+      const layers = entry.drawnItems.getLayers();
+      if(layers.length){
+        const latlngs = layers[0].getLatLngs()[0].map(ll=>[Number(ll.lat.toFixed(6)), Number(ll.lng.toFixed(6))]);
+        site.boundary = latlngs;
+        const centroid = latlngs.reduce((acc,p)=>[acc[0]+p[0], acc[1]+p[1]], [0,0]).map(v=>v/latlngs.length);
+        site.lat = Number(centroid[0].toFixed(6));
+        site.lng = Number(centroid[1].toFixed(6));
+      } else {
+        site.boundary = null;
+      }
+      logAudit(`Updated site boundary for "${site.name}"`);
+      saveState();
+      const statusEl = document.getElementById(`${prefix}-map-status-${siteId}`);
+      if(statusEl) statusEl.textContent = 'Saved.';
+    });
+  });
 }
 
 /* ---------- home ---------- */
 function siteCardHtml(site, ctaLabel){
+  const mapsUrl = siteMapsUrl(site);
+  const [minP,maxP] = siteMinMaxPrice(site);
+  const priceLabel = minP===maxP ? money(minP) : `${money(minP)} – ${money(maxP)}`;
   return `
     <div class="site-card">
       ${site.photoUrl ? `<img class="thumb" src="${site.photoUrl}" alt="${esc(site.name)}">` : ''}
       <h3>${esc(site.name)}</h3>
-      <div class="loc">${esc(site.location)}</div>
-      <div class="price">${money(site.pricePerPlot)} <span style="font-family:'Karla',sans-serif;font-size:0.72rem;font-weight:600;">/ ${esc(site.plotLabel)}</span></div>
+      <div class="loc">${esc(site.location)}${mapsUrl ? ` · <a href="${esc(mapsUrl)}" target="_blank" rel="noopener">📍 Get directions</a>` : ''}</div>
+      <div class="price">${priceLabel} <span style="font-family:'Karla',sans-serif;font-size:0.72rem;font-weight:600;">/ ${esc(site.plotLabel)}</span></div>
       <div class="avail">${siteAvailableCount(site)} of ${site.plots.length} plots available</div>
       <button class="btn btn-secondary btn-sm" data-open-site="${site.id}">${ctaLabel}</button>
     </div>
@@ -723,8 +1114,19 @@ function filteredActiveSites(){
   return activeSites().filter(s=>{
     if(search && !(s.name.toLowerCase().includes(search) || s.location.toLowerCase().includes(search))) return false;
     if(minAvail>0 && siteAvailableCount(s) < minAvail) return false;
-    if(minPrice!==null && !Number.isNaN(minPrice) && s.pricePerPlot < minPrice) return false;
-    if(maxPrice!==null && !Number.isNaN(maxPrice) && s.pricePerPlot > maxPrice) return false;
+    if(minPrice!==null && !Number.isNaN(minPrice) || maxPrice!==null && !Number.isNaN(maxPrice)){
+      // Match if at least one available plot falls in range — a site with
+      // mixed pricing shouldn't be hidden just because its cheapest or
+      // priciest plot sits outside the buyer's stated range.
+      const inRangePlot = s.plots.some(p=>{
+        if(p.status!=='available') return false;
+        const price = plotPrice(s,p);
+        if(minPrice!==null && !Number.isNaN(minPrice) && price < minPrice) return false;
+        if(maxPrice!==null && !Number.isNaN(maxPrice) && price > maxPrice) return false;
+        return true;
+      });
+      if(!inRangePlot) return false;
+    }
     return true;
   });
 }
@@ -761,12 +1163,14 @@ function openSite(siteId){
   document.getElementById('buy-plot-area').classList.remove('hidden');
   const site = state.sites[siteId];
   document.getElementById('buy-site-title').textContent = site.name;
-  document.getElementById('buy-site-loc').textContent = site.location + ' · ' + site.plotLabel + ' plots'; // textContent — already safe, no HTML parsing
+  const mapsUrl = siteMapsUrl(site);
+  document.getElementById('buy-site-loc').innerHTML = `${esc(site.location)} · ${esc(site.plotLabel)} plots${mapsUrl ? ` · <a href="${esc(mapsUrl)}" target="_blank" rel="noopener">📍 Get directions</a>` : ''}`;
   const photo = document.getElementById('buy-site-photo');
   if(site.photoUrl){ photo.src = site.photoUrl; photo.classList.remove('hidden'); }
   else { photo.classList.add('hidden'); photo.removeAttribute('src'); }
   document.querySelector('.plan-tab[data-plan="outright"]').click();
   renderPlotGrid();
+  renderBuySiteMap();
 }
 
 function renderPlotGrid(){
@@ -779,7 +1183,7 @@ function renderPlotGrid(){
     const el = document.createElement('div');
     el.className = 'plot ' + p.status + (selectedPlots.includes(p.id) ? ' selected' : '');
     el.textContent = String(p.id).padStart(2,'0');
-    el.title = 'Plot ' + p.id + ' — ' + p.status;
+    el.title = `Plot ${p.id} — ${p.status} — ${money(plotPrice(site,p))} (${plotSizeLabel(site,p)})`;
     if(p.status === 'available') el.addEventListener('click', ()=>toggleSelectPlot(p.id));
     grid.appendChild(el);
   });
@@ -789,16 +1193,19 @@ function toggleSelectPlot(id){
   const i = selectedPlots.indexOf(id);
   if(i>-1) selectedPlots.splice(i,1); else selectedPlots.push(id);
   renderPlotGrid();
+  refreshBuySiteMapStyles();
 }
 function renderSelection(){
   const site = state.sites[currentSiteId];
   const list = document.getElementById('selected-list');
   const totalEl = document.getElementById('selection-total');
-  const price = site.pricePerPlot;
   list.innerHTML = selectedPlots.length===0
     ? '<li style="border:none;color:#6b6153;">No plots selected yet</li>'
-    : selectedPlots.map(id=>`<li><span>Plot ${String(id).padStart(2,'0')}</span><span>${money(price)}</span></li>`).join('');
-  totalEl.textContent = money(selectedPlots.length * price);
+    : selectedPlots.map(id=>{
+        const p = site.plots.find(pp=>pp.id===id);
+        return `<li><span>Plot ${String(id).padStart(2,'0')}</span><span>${money(plotPrice(site,p))}</span></li>`;
+      }).join('');
+  totalEl.textContent = money(plotsTotalPrice(site, selectedPlots));
 
   const check = document.getElementById('reserve-account-check');
   check.innerHTML = currentAccountPhone ? '' : '<p class="note">Log in or create an account to reserve a plot.</p>';
@@ -830,10 +1237,10 @@ document.querySelectorAll('.plan-tab').forEach(btn=>{
 });
 document.getElementById('term-select').addEventListener('change', renderSchedule);
 
-function computePlanFor(plotCount){
+function computePlanFor(plotIds){
   const site = state.sites[currentSiteId];
-  if(!site || plotCount<=0) return null;
-  const total = plotCount * site.pricePerPlot;
+  if(!site || !plotIds || plotIds.length===0) return null;
+  const total = plotsTotalPrice(site, plotIds);
   if(currentPlan==='outright'){
     const discounted = total * (1 - site.outrightDiscountPct/100);
     return { type:'outright', total: Math.round(discounted*100)/100, listTotal: total, deposit: discounted, installment:0, installments:0, unit:'once', startDate: todayISO() };
@@ -847,10 +1254,10 @@ function computePlanFor(plotCount){
   return { type:currentPlan, total, listTotal: total, deposit, installment, installments: term, unit: currentPlan==='daily'?'day':'month', startDate: todayISO(), completionDate };
 }
 // computePlan() previews pricing for whatever's currently selected in the UI.
-// The reserve handler below calls computePlanFor(claimedCount) separately
-// once it knows exactly how many plots were actually won, since a race
-// against another buyer can shrink that number between click and commit.
-function computePlan(){ return computePlanFor(selectedPlots.length); }
+// The reserve handler below calls computePlanFor(claimed) separately once it
+// knows exactly which plots were actually won, since a race against another
+// buyer can shrink that set between click and commit.
+function computePlan(){ return computePlanFor(selectedPlots); }
 
 function renderSchedule(){
   const box = document.getElementById('schedule-box');
@@ -968,7 +1375,7 @@ document.getElementById('reserve-btn').addEventListener('click', async ()=>{
   const buyer = state.buyers[currentAccountPhone];
   const site = state.sites[currentSiteId];
   const requested = [...selectedPlots];
-  if(!buyer || !site || requested.length===0 || !computePlanFor(requested.length)) return;
+  if(!buyer || !site || requested.length===0 || !computePlanFor(requested)) return;
 
   const btn = document.getElementById('reserve-btn');
   const originalLabel = btn.textContent;
@@ -987,6 +1394,7 @@ document.getElementById('reserve-btn').addEventListener('click', async ()=>{
     alert((lost.length===1 ? 'That plot was' : 'Those plots were') + ' just taken by another buyer. Pick different plots and try again.');
     selectedPlots = [];
     renderPlotGrid();
+    refreshBuySiteMapStyles();
     return;
   }
 
@@ -1000,7 +1408,7 @@ document.getElementById('reserve-btn').addEventListener('click', async ()=>{
   // Price the plan on exactly what was actually won, not what was clicked —
   // if another buyer beat us to some of the plots, the buyer should only be
   // billed and scheduled for the ones that are genuinely theirs.
-  const plan = computePlanFor(claimed.length);
+  const plan = computePlanFor(claimed);
   const planRecord = {
     id: 'plan' + Date.now(),
     siteId: site.id, siteName: site.name, commissionPct: site.commissionPct,
@@ -1050,6 +1458,11 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
   const btn = document.getElementById('submit-listing-btn');
   const name = document.getElementById('sell-name').value.trim();
   const location = document.getElementById('sell-location').value.trim();
+  const latRaw = document.getElementById('sell-lat').value.trim();
+  const lngRaw = document.getElementById('sell-lng').value.trim();
+  const lat = latRaw === '' ? null : Number(latRaw);
+  const lng = lngRaw === '' ? null : Number(lngRaw);
+  const mapsLink = document.getElementById('sell-maps-link').value.trim();
   const description = document.getElementById('sell-description').value.trim();
   const price = Number(document.getElementById('sell-price').value);
   const plotLabel = document.getElementById('sell-plotsize').value.trim() || 'per plot';
@@ -1073,6 +1486,8 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
   }
   if(!validPhone(ownerPhone)){ msg.innerHTML = '<div class="msg err">Enter a valid 10-digit phone number starting with 0.</div>'; return; }
   if(!validPin(ownerPin)){ msg.innerHTML = '<div class="msg err">Enter a 4–6 digit owner PIN.</div>'; return; }
+  if(latRaw !== '' && (Number.isNaN(lat) || lat < -90 || lat > 90)){ msg.innerHTML = '<div class="msg err">Latitude must be a number between -90 and 90.</div>'; return; }
+  if(lngRaw !== '' && (Number.isNaN(lng) || lng < -180 || lng > 180)){ msg.innerHTML = '<div class="msg err">Longitude must be a number between -180 and 180.</div>'; return; }
 
   btn.disabled = true;
   const ownerPinHash = await hashPin(ownerPin);
@@ -1088,19 +1503,24 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
   const id = 'site' + Date.now();
   state.sites[id] = {
     id, name, location, description, pricePerPlot: price, plotLabel, rows, cols,
+    lat: (latRaw!=='' && !Number.isNaN(lat)) ? lat : null,
+    lng: (lngRaw!=='' && !Number.isNaN(lng)) ? lng : null,
+    mapsLink: mapsLink || null,
+    boundary: sellBoundaryLatLngs && sellBoundaryLatLngs.length ? sellBoundaryLatLngs : null,
     outrightDiscountPct:5, depositPct:20, dailyTerms:[90,180,365], monthlyTerms:[6,12,18,24,36],
     ownerName, ownerPhone, ownerNrc: ownerNrc || null, ownerPinHash, isNexliteOwned:false, commissionPct: state.settings.defaultCommissionPct,
     status:'pending', createdAt: todayISO(), plots: buildPlots(rows, cols, []),
     commissionSettlements: [], photoUrl: pendingListingPhoto || null
   };
   saveState();
-  msg.innerHTML = `<div class="msg ok">Thanks, ${esc(ownerName)}. Your listing is under review — we'll confirm on ${esc(ownerPhone)}, or call us on 0977 638 790.</div>`;
-  ['sell-name','sell-location','sell-description','sell-price','sell-owner-name','sell-owner-phone','sell-owner-nrc','sell-owner-pin'].forEach(id=>document.getElementById(id).value='');
+  msg.innerHTML = `<div class="msg ok">Thanks, ${esc(ownerName)}. Your listing is under review — we'll confirm on ${esc(ownerPhone)}, or call us on 0977 638 790 / 0960 271 128.</div>`;
+  ['sell-name','sell-location','sell-lat','sell-lng','sell-maps-link','sell-description','sell-price','sell-owner-name','sell-owner-phone','sell-owner-nrc','sell-owner-pin'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('sell-total').value='50';
   document.getElementById('sell-plotsize').value='30 x 30';
   document.getElementById('sell-photo').value='';
   document.getElementById('sell-photo-preview').innerHTML='';
   pendingListingPhoto = null;
+  resetSellMap();
   btn.disabled = false;
 });
 
@@ -1125,7 +1545,51 @@ document.getElementById('owner-login-btn').addEventListener('click', async ()=>{
   renderOwnerDashboard();
 });
 
+document.getElementById('owner-forgot-pin-btn').addEventListener('click', ()=>{
+  const phoneRaw = prompt('Phone number on your listing:');
+  if(phoneRaw===null) return;
+  const phone = normPhone(phoneRaw);
+  const ownerSites = Object.values(state.sites).filter(s=>normPhone(s.ownerPhone)===phone);
+  if(!phone || ownerSites.length===0){ alert("We couldn't find a listing under that number. Call 0977 638 790 / 0960 271 128 for help."); return; }
+  if(!state.pinResetRequests) state.pinResetRequests = {};
+  const key = 'owner:' + phone;
+  state.pinResetRequests[key] = { id:key, type:'owner', phone, name: ownerSites[0].ownerName, requestedAt: todayISO(), resolved:false };
+  saveState();
+  alert(`Reset requested for ${ownerSites[0].ownerName}. Nexlite will contact you on ${phone} with a new PIN shortly, or call 0977 638 790 / 0960 271 128 for immediate help.`);
+});
+
+// Plots reserved per month, last 6 months — a simple stand-in for "sales
+// velocity" the owner can glance at without digging through payment logs.
+// Counted by reservation date (plan.startDate) rather than final payoff,
+// since instalment plans can take months to pay off but the reservation
+// itself is the meaningful signal of buyer demand.
+function siteMonthlyVelocity(site, months){
+  months = months || 6;
+  const now = new Date();
+  const buckets = [];
+  for(let i=months-1;i>=0;i--){
+    const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+    buckets.push({ key: d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'), label: d.toLocaleString('en',{month:'short'}), count:0 });
+  }
+  const byKey = {};
+  buckets.forEach(b=>byKey[b.key]=b);
+  Object.values(state.buyers).forEach(b=>b.plans.forEach(pl=>{
+    if(pl.siteId!==site.id || pl.status==='cancelled') return;
+    const key = (pl.startDate||'').slice(0,7);
+    if(byKey[key]) byKey[key].count += pl.plots.length;
+  }));
+  return buckets;
+}
+function velocityChartHtml(buckets){
+  const max = Math.max(1, ...buckets.map(b=>b.count));
+  const bars = buckets.map(b=>`<div class="velocity-bar" style="height:${b.count ? Math.max(6, Math.round((b.count/max)*56)) : 3}px;">${b.count ? `<span class="val">${b.count}</span>` : ''}</div>`).join('');
+  const labels = buckets.map(b=>`<span>${b.label}</span>`).join('');
+  const total = buckets.reduce((s,b)=>s+b.count,0);
+  return `<div class="velocity-chart">${bars}</div><div class="velocity-labels">${labels}</div><p class="note" style="margin-top:2px;">${total} plot${total===1?'':'s'} reserved in the last ${buckets.length} months.</p>`;
+}
+
 function renderOwnerDashboard(){
+  clearBoundaryEditMaps('owner');
   const phone = currentOwnerPhone;
   const mySites = Object.values(state.sites).filter(s=>normPhone(s.ownerPhone)===phone);
   document.getElementById('owner-login-panel').classList.add('hidden');
@@ -1150,6 +1614,30 @@ function renderOwnerDashboard(){
     const counts = {available:0,reserved:0,sold:0};
     site.plots.forEach(p=>counts[p.status]++);
     const comm = computeSiteCommission(site);
+
+    // Bulk-created plots default to the site's price/size, but any plot can
+    // be given its own — a corner or river-view plot priced differently
+    // from the rest, without needing a separate listing. Only available
+    // plots are editable here; changing price on a reserved/sold plot would
+    // be confusing after a buyer has already committed to a figure.
+    const availablePlots = site.plots.filter(p=>p.status==='available');
+    const plotDetailsHtml = availablePlots.length ? `
+      <details style="margin-top:10px;">
+        <summary style="cursor:pointer;font-weight:600;color:var(--soil-dark);">Plot pricing &amp; sizes (${availablePlots.length} available)</summary>
+        <p class="note" style="margin-top:6px;">Leave a field blank to use the site default — ${money(site.pricePerPlot)}, ${esc(site.plotLabel)}.</p>
+        <div style="max-height:280px;overflow:auto;margin-top:6px;">
+          <table class="ledger"><thead><tr><th>Plot</th><th>Price (K)</th><th>Size</th></tr></thead>
+          <tbody>${availablePlots.map(p=>`
+            <tr>
+              <td>${String(p.id).padStart(2,'0')}</td>
+              <td><input type="number" min="1" style="width:100px;" data-plot-price="${site.id}:${p.id}" value="${p.price!=null?p.price:''}" placeholder="${site.pricePerPlot}"></td>
+              <td><input type="text" style="width:100px;" data-plot-size="${site.id}:${p.id}" value="${esc(p.sizeLabel||'')}" placeholder="${esc(site.plotLabel)}"></td>
+            </tr>`).join('')}</tbody></table>
+        </div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-save-plot-details="${site.id}">Save plot changes</button>
+      </details>` : '';
+
+    const boundaryHtml = boundaryDetailsHtml(site, 'owner');
 
     const pendingForSite = [];
     Object.values(state.buyers).forEach(b=>b.payments.forEach((p,idx)=>{
@@ -1221,6 +1709,10 @@ function renderOwnerDashboard(){
         <div class="schedule-line"><span>Commission accrued</span><span>${money(comm.accrued)}</span></div>
         <div class="schedule-line"><span>Commission you've forwarded</span><span>${money(comm.settled)}</span></div>
         <div class="schedule-line"><strong>Commission still owed to Nexlite</strong><strong>${money(comm.outstanding)}</strong></div>
+        ${plotDetailsHtml}
+        ${boundaryHtml}
+        <p class="note" style="margin:10px 0 0;"><strong>Sales velocity (plots reserved/month)</strong></p>
+        ${velocityChartHtml(siteMonthlyVelocity(site))}
         <p class="note" style="margin:10px 0 4px;"><strong>Payments awaiting your confirmation</strong></p>
         ${pendingHtml}
         <p class="note" style="margin:10px 0 4px;"><strong>Buyers behind schedule</strong></p>
@@ -1236,7 +1728,7 @@ function renderOwnerDashboard(){
       <button class="btn btn-ghost" id="owner-logout-btn">Log out</button>
     </div>
     ${statusBanner}
-    <p class="note">When a buyer pays you directly, confirm it here so their balance and your commission update. Forward your commission to Nexlite on 0977 638 790 — we'll mark it received on our side.</p>
+    <p class="note">When a buyer pays you directly, confirm it here so their balance and your commission update. Forward your commission to Nexlite on 0977 638 790 / 0960 271 128 — we'll mark it received on our side.</p>
     <div class="grid-two" style="margin-top:16px;">${siteBlocks}</div>
   `;
 
@@ -1251,8 +1743,37 @@ function renderOwnerDashboard(){
   dash.querySelectorAll('[data-owner-confirm]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const [buyerPhone, idxStr] = btn.dataset.ownerConfirm.split(':');
-      confirmPayment(buyerPhone, Number(idxStr));
+      const buyer = state.buyers[buyerPhone];
+      const payment = buyer && buyer.payments[Number(idxStr)];
+      const wasConfirmed = confirmPayment(buyerPhone, Number(idxStr));
       saveState();
+      renderOwnerDashboard();
+      if(wasConfirmed && buyer && payment) notifyBuyerPaymentConfirmed(buyer, payment);
+    });
+  });
+  dash.querySelectorAll('[data-save-plot-details]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const siteId = btn.dataset.savePlotDetails;
+      const site = state.sites[siteId];
+      if(!site) return;
+      let changed = 0;
+      dash.querySelectorAll(`[data-plot-price^="${siteId}:"]`).forEach(input=>{
+        const plotId = Number(input.dataset.plotPrice.split(':')[1]);
+        const p = site.plots.find(pp=>pp.id===plotId);
+        if(!p) return;
+        const val = input.value.trim();
+        const newPrice = val==='' ? null : Number(val);
+        if(newPrice!==null && (Number.isNaN(newPrice) || newPrice<=0)) return; // ignore junk input, keep prior value
+        if(p.price !== newPrice){ p.price = newPrice; changed++; }
+      });
+      dash.querySelectorAll(`[data-plot-size^="${siteId}:"]`).forEach(input=>{
+        const plotId = Number(input.dataset.plotSize.split(':')[1]);
+        const p = site.plots.find(pp=>pp.id===plotId);
+        if(!p) return;
+        const val = input.value.trim() || null;
+        if(p.sizeLabel !== val){ p.sizeLabel = val; changed++; }
+      });
+      if(changed){ logAudit(`Updated per-plot pricing/size for "${site.name}" (${changed} field${changed===1?'':'s'})`); saveState(); }
       renderOwnerDashboard();
     });
   });
@@ -1301,6 +1822,7 @@ function renderOwnerDashboard(){
       saveState(); renderOwnerDashboard();
     });
   });
+  wireBoundaryEditors(dash, 'owner');
 }
 
 /* ---------- account ---------- */
@@ -1352,18 +1874,32 @@ document.getElementById('login-btn').addEventListener('click', async ()=>{
   renderAccount();
 });
 
+document.getElementById('forgot-pin-btn').addEventListener('click', ()=>{
+  const phoneRaw = prompt('Phone number on your account:');
+  if(phoneRaw===null) return;
+  const phone = normPhone(phoneRaw);
+  const buyer = phone ? state.buyers[phone] : null;
+  if(!buyer){ alert("We couldn't find an account under that number. Call 0977 638 790 / 0960 271 128 for help."); return; }
+  if(!state.pinResetRequests) state.pinResetRequests = {};
+  const key = 'buyer:' + phone;
+  state.pinResetRequests[key] = { id:key, type:'buyer', phone, name: buyer.name, requestedAt: todayISO(), resolved:false };
+  saveState();
+  alert(`Reset requested for ${buyer.name}. Nexlite will contact you on ${phone} with a new PIN shortly, or call 0977 638 790 / 0960 271 128 for immediate help.`);
+});
+
 function planBalance(plan){ return Math.max(0, Math.round(plan.balance*100)/100); }
 
 function confirmPayment(buyerPhone, idx){
   const buyer = state.buyers[buyerPhone];
   const payment = buyer.payments[idx];
-  if(!payment || payment.status==='confirmed') return;
+  if(!payment || payment.status==='confirmed') return false;
   payment.status = 'confirmed';
   const plan = buyer.plans.find(p=>p.id===payment.planId);
   if(plan){
     plan.balance = Math.max(0, Math.round((plan.balance - payment.amount)*100)/100);
     if(planBalance(plan)<=0){
       plan.status = 'paid';
+      plan.paidOffDate = todayISO();
       const site = state.sites[plan.siteId];
       if(site) plan.plots.forEach(id=>{
         const p = site.plots.find(pp=>pp.id===id);
@@ -1372,6 +1908,24 @@ function confirmPayment(buyerPhone, idx){
     }
     payment.commissionAmount = Math.round(payment.amount * (plan.commissionPct/100) * 100)/100;
   }
+  return true;
+}
+
+// Automatic WhatsApp nudge to the buyer the moment their payment is
+// confirmed — mirrors the existing owner-facing listing-approved/rejected
+// nudges below, since a confirmed payment (like an approved listing) is a
+// status change that shouldn't just sit as an in-app banner the buyer might
+// not see for days.
+function notifyBuyerPaymentConfirmed(buyer, payment){
+  const plan = buyer.plans.find(p=>p.id===payment.planId);
+  const plotLabels = plan ? plan.plots.map(id=>String(id).padStart(2,'0')).join(', ') : '';
+  const paidOff = plan && planBalance(plan)<=0;
+  const balLine = !plan ? ''
+    : paidOff ? "Your plot is now paid in full — congratulations! We'll follow up about title processing."
+    : `Outstanding balance: ${money(planBalance(plan))}.`;
+  const waMsg = `Hi ${buyer.name}, good news from Tukule — your payment of ${money(payment.amount)} for Plot${plan && plan.plots.length>1?'s':''} ${plotLabels}${plan ? ' at ' + plan.siteName : ''} has been confirmed. ${balLine} - Nexlite Digital Solutions`;
+  const waPhone = normPhone(buyer.phone).replace(/^0/, '260');
+  window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(waMsg)}`, '_blank');
 }
 
 function computeSiteCommission(site){
@@ -1427,6 +1981,7 @@ function renderAccount(){
         <div class="schedule-line"><span>Status</span><span>${statusHtml}</span></div>
         ${dueHtml}
         ${plan.status==='active' ? `<button class="btn btn-secondary btn-sm" style="margin-top:10px;" data-print-plan="${plan.id}">Generate &amp; print contract</button>` : ''}
+        ${plan.status==='paid' ? `<button class="btn btn-secondary btn-sm" style="margin-top:10px;" data-print-certificate="${plan.id}">Print certificate of purchase</button>` : ''}
         ${cancellable ? `<button class="btn btn-ghost btn-sm" style="margin-top:6px;" data-cancel-plan="${plan.id}">Cancel reservation</button>` : ''}
       </div>`;
   }).join('') || '<div class="empty">No plots reserved yet. <button class="toggle-link" data-goto2="buy">Browse sites</button></div>';
@@ -1541,6 +2096,12 @@ function renderAccount(){
       printContract(buyer, plan);
     });
   });
+  dash.querySelectorAll('[data-print-certificate]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const plan = buyer.plans.find(p=>p.id===btn.dataset.printCertificate);
+      if(plan) printCertificate(buyer, plan);
+    });
+  });
   dash.querySelectorAll('[data-print-receipt]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const payment = buyer.payments[Number(btn.dataset.printReceipt)];
@@ -1554,6 +2115,11 @@ function printContract(buyer, plan){
   const site = state.sites[plan.siteId];
   const seller = site && site.isNexliteOwned ? 'Nexlite Digital Solutions Limited' : (site ? esc(site.ownerName) + (site.ownerNrc ? ' — NRC ' + esc(site.ownerNrc) : '') + ' (via Nexlite Digital Solutions Limited, agent)' : 'Nexlite Digital Solutions Limited');
   const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
+  const sizeLabels = site ? plan.plots.map(id=>{ const p = site.plots.find(pp=>pp.id===id); return plotSizeLabel(site,p); }) : [];
+  const uniformSize = sizeLabels.length>0 && sizeLabels.every(l=>l===sizeLabels[0]);
+  const plotSizeRow = !site ? plotLabels
+    : uniformSize ? `${plotLabels} (${esc(sizeLabels[0])} each)`
+    : plan.plots.map((id,i)=>`Plot ${String(id).padStart(2,'0')} (${esc(sizeLabels[i])})`).join(', ');
   const bal = planBalance(plan);
   const scheduleRow = plan.type==='outright'
     ? `<tr><td>Payment terms</td><td>Outright — full amount due on signing</td></tr>`
@@ -1572,13 +2138,13 @@ function printContract(buyer, plan){
       @media print{ button{display:none;} }
     </style></head><body>
     <h1>Land Sale Agreement</h1>
-    <p>Generated by Tukule — Let's Build, a Nexlite Digital Solutions Limited platform. Enquiries: 0977 638 790.</p>
+    <p>Generated by Tukule — Let's Build, a Nexlite Digital Solutions Limited platform. Enquiries: 0977 638 790 / 0960 271 128.</p>
     <table>
       <tr><td>Date issued</td><td>${todayISO()}</td></tr>
       <tr><td>Seller</td><td>${seller}</td></tr>
       <tr><td>Buyer</td><td>${esc(buyer.name)}${buyer.nrc ? ' — NRC ' + esc(buyer.nrc) : ''}, ${esc(buyer.phone)}</td></tr>
       <tr><td>Site</td><td>${site ? esc(site.name) + ' — ' + esc(site.location) : esc(plan.siteName)}</td></tr>
-      <tr><td>Plot(s)</td><td>${plotLabels} (${site ? esc(site.plotLabel) : ''} each)</td></tr>
+      <tr><td>Plot(s)</td><td>${plotSizeRow}</td></tr>
       <tr><td>Total price</td><td>${money(plan.total)}</td></tr>
       ${scheduleRow}
       <tr><td>Outstanding balance</td><td>${money(bal)}</td></tr>
@@ -1588,6 +2154,60 @@ function printContract(buyer, plan){
     <div class="sign"><div>Buyer's signature</div><div>Seller / Agent signature</div></div>
     <p class="note">Printed from Tukule — Let's Build on ${todayISO()}.</p>
     <button onclick="window.print()" style="margin-top:20px;padding:10px 18px;">Print this agreement</button>
+    </body></html>`;
+  const w = window.open('', '_blank');
+  w.document.write(html);
+  w.document.close();
+}
+
+/* ---------- certificate of purchase generator (issued once a plan's
+   balance hits zero — a distinct document from the instalment-plan sale
+   agreement above and from individual payment receipts, since none of
+   those actually state that the plot is now fully owned). ---------- */
+function printCertificate(buyer, plan){
+  if(plan.status!=='paid') return;
+  const site = state.sites[plan.siteId];
+  const seller = site && site.isNexliteOwned ? 'Nexlite Digital Solutions Limited' : (site ? esc(site.ownerName) + (site.ownerNrc ? ' — NRC ' + esc(site.ownerNrc) : '') + ' (via Nexlite Digital Solutions Limited, agent)' : 'Nexlite Digital Solutions Limited');
+  const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
+  const sizeLabels = site ? plan.plots.map(id=>{ const p = site.plots.find(pp=>pp.id===id); return plotSizeLabel(site,p); }) : [];
+  const uniformSize = sizeLabels.length>0 && sizeLabels.every(l=>l===sizeLabels[0]);
+  const plotSizeRow = !site ? plotLabels
+    : uniformSize ? `${plotLabels} (${esc(sizeLabels[0])} each)`
+    : plan.plots.map((id,i)=>`Plot ${String(id).padStart(2,'0')} (${esc(sizeLabels[i])})`).join(', ');
+  const certNo = 'TKL-CERT-' + plan.id.replace(/[^0-9]/g,'').slice(-8);
+  const payoffDate = plan.paidOffDate || todayISO();
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="UTF-8"><title>Certificate of Purchase — ${plotLabels}</title>
+    <style>
+      body{font-family:Georgia,'Times New Roman',serif;color:#241a09;max-width:760px;margin:40px auto;padding:0 20px;line-height:1.6;}
+      h1{font-size:1.4rem;border-bottom:2px solid #241a09;padding-bottom:10px;}
+      .cert-no{font-size:0.8rem;color:#666;letter-spacing:0.05em;margin-top:-6px;}
+      table{width:100%;border-collapse:collapse;margin:18px 0;}
+      td{padding:7px 4px;border-bottom:1px solid #ccc;vertical-align:top;}
+      td:first-child{width:220px;color:#555;}
+      .seal{display:inline-block;border:2px solid #3F7D4F;color:#3F7D4F;border-radius:50%;width:90px;height:90px;text-align:center;line-height:1.1;font-size:0.7rem;font-weight:700;text-transform:uppercase;padding-top:28px;box-sizing:border-box;float:right;margin:-70px 0 0 0;}
+      .sign{display:flex;justify-content:space-between;margin-top:60px;}
+      .sign div{width:45%;border-top:1px solid #241a09;padding-top:6px;font-size:0.85rem;}
+      .note{font-size:0.8rem;color:#666;margin-top:30px;}
+      @media print{ button{display:none;} }
+    </style></head><body>
+    <div class="seal">Paid in&nbsp;full</div>
+    <h1>Certificate of Purchase</h1>
+    <p class="cert-no">Certificate No. ${certNo}</p>
+    <p>Generated by Tukule — Let's Build, a Nexlite Digital Solutions Limited platform. Enquiries: 0977 638 790 / 0960 271 128.</p>
+    <table>
+      <tr><td>Date issued</td><td>${todayISO()}</td></tr>
+      <tr><td>Paid in full on</td><td>${payoffDate}</td></tr>
+      <tr><td>Seller</td><td>${seller}</td></tr>
+      <tr><td>Buyer</td><td>${esc(buyer.name)}${buyer.nrc ? ' — NRC ' + esc(buyer.nrc) : ''}, ${esc(buyer.phone)}</td></tr>
+      <tr><td>Site</td><td>${site ? esc(site.name) + ' — ' + esc(site.location) : esc(plan.siteName)}</td></tr>
+      <tr><td>Plot(s)</td><td>${plotSizeRow}</td></tr>
+      <tr><td>Total price paid</td><td>${money(plan.total)}</td></tr>
+    </table>
+    <p>This certifies that the Buyer named above has paid the full purchase price for the plot(s) listed above, and that the Seller acknowledges the Buyer as the plot(s)' rightful owner as of the date paid in full. All payments under this purchase were made directly between the Buyer and the Seller; Tukule / Nexlite Digital Solutions Limited does not collect or hold buyer funds and is not a party to the underlying sale. This certificate is evidence of full payment and a basis to begin formal transfer of title — it is not itself a title deed. The Buyer and Seller are strongly encouraged to complete formal conveyancing (transfer forms, stamp duty, and registration with the relevant lands authority) with a lawyer or conveyancer, using this certificate as proof that the price has been paid in full.</p>
+    <div class="sign"><div>Buyer's signature</div><div>Seller / Agent signature</div></div>
+    <p class="note">Printed from Tukule — Let's Build on ${todayISO()}.</p>
+    <button onclick="window.print()" style="margin-top:20px;padding:10px 18px;">Print this certificate</button>
     </body></html>`;
   const w = window.open('', '_blank');
   w.document.write(html);
@@ -1614,7 +2234,7 @@ function printReceipt(buyer, payment){
       @media print{ button{display:none;} }
     </style></head><body>
     <h1>Payment Receipt</h1>
-    <p>Generated by Tukule — Let's Build, a Nexlite Digital Solutions Limited platform. Enquiries: 0977 638 790.</p>
+    <p>Generated by Tukule — Let's Build, a Nexlite Digital Solutions Limited platform. Enquiries: 0977 638 790 / 0960 271 128.</p>
     <table>
       <tr><td>Date logged</td><td>${payment.date}</td></tr>
       <tr><td>Buyer</td><td>${esc(buyer.name)}${buyer.nrc ? ' — NRC ' + esc(buyer.nrc) : ''}, ${esc(buyer.phone)}</td></tr>
@@ -1703,6 +2323,7 @@ document.getElementById('admin-set-pin-btn').addEventListener('click', async ()=
 
 function renderAdmin(){
   if(!isAdmin) return;
+  clearBoundaryEditMaps('admin');
   const dash = document.getElementById('admin-dashboard');
   const sites = Object.values(state.sites);
   const buyers = Object.values(state.buyers);
@@ -1725,11 +2346,24 @@ function renderAdmin(){
   const pendingSites = sites.filter(s=>s.status==='pending');
   const activeSitesList = sites.filter(s=>s.status==='active');
 
+  // Buyers/owners who tapped "Forgot PIN" — resolving these means picking a
+  // new PIN for them and calling/WhatsApping it over, since there's no
+  // email/SMS OTP infrastructure to reset it automatically.
+  const resetRequests = Object.values(state.pinResetRequests||{}).filter(r=>!r.resolved);
+  const resetRequestsHtml = resetRequests.length ? resetRequests.map(r=>`
+    <div class="schedule-line">
+      <span>${r.requestedAt} — ${esc(r.name)} (${esc(r.type)}) — ${esc(r.phone)}</span>
+      <span>
+        <button class="btn btn-secondary btn-sm" data-reset-pin="${esc(r.id)}">Reset PIN</button>
+        <button class="btn btn-ghost btn-sm" data-dismiss-reset="${esc(r.id)}">Dismiss</button>
+      </span>
+    </div>`).join('') : '';
+
   const pendingSitesHtml = pendingSites.length ? pendingSites.map(s=>`
     <div class="side-card">
       ${s.photoUrl ? `<img src="${s.photoUrl}" alt="${esc(s.name)}" style="width:100%;max-height:160px;object-fit:cover;border-radius:6px;margin-bottom:10px;">` : ''}
       <h3>${esc(s.name)}</h3>
-      <div class="schedule-line"><span>Location</span><span>${esc(s.location)}</span></div>
+      <div class="schedule-line"><span>Location</span><span>${esc(s.location)}${siteMapsUrl(s) ? ` · <a href="${esc(siteMapsUrl(s))}" target="_blank" rel="noopener">📍 Map</a>` : ' · <span style="color:#a08a5c;">No GPS provided</span>'}</span></div>
       <div class="schedule-line"><span>Owner</span><span>${esc(s.ownerName)} · ${esc(s.ownerPhone)}</span></div>
       <div class="schedule-line"><span>Owner ID</span><span>${s.ownerNrc ? esc(s.ownerNrc) : 'Not provided'}</span></div>
       <div class="schedule-line"><span>Price / plot</span><span>${money(s.pricePerPlot)} (${esc(s.plotLabel)})</span></div>
@@ -1749,6 +2383,27 @@ function renderAdmin(){
     const settlementHistory = (s.commissionSettlements||[]).length
       ? (s.commissionSettlements||[]).slice().reverse().map(st=>`<div class="schedule-line"><span>${st.date} — ${esc(st.method)}</span><span>${money(st.amount)}</span></div>`).join('')
       : '<p class="note">No commission received from this owner yet.</p>';
+
+    // Same editor as the owner dashboard, under an admin-* data attribute so
+    // it doesn't collide if this same site is ever rendered in both places
+    // in one page. Needed here regardless, since Nexlite-owned sites have no
+    // owner login (empty ownerPinHash) and can only be managed from admin.
+    const availablePlotsAdmin = s.plots.filter(p=>p.status==='available');
+    const plotDetailsHtmlAdmin = availablePlotsAdmin.length ? `
+      <details style="margin-top:10px;">
+        <summary style="cursor:pointer;font-weight:600;color:var(--soil-dark);">Plot pricing &amp; sizes (${availablePlotsAdmin.length} available)</summary>
+        <p class="note" style="margin-top:6px;">Leave a field blank to use the site default — ${money(s.pricePerPlot)}, ${esc(s.plotLabel)}.</p>
+        <div style="max-height:280px;overflow:auto;margin-top:6px;">
+          <table class="ledger"><thead><tr><th>Plot</th><th>Price (K)</th><th>Size</th></tr></thead>
+          <tbody>${availablePlotsAdmin.map(p=>`
+            <tr>
+              <td>${String(p.id).padStart(2,'0')}</td>
+              <td><input type="number" min="1" style="width:100px;" data-admin-plot-price="${s.id}:${p.id}" value="${p.price!=null?p.price:''}" placeholder="${s.pricePerPlot}"></td>
+              <td><input type="text" style="width:100px;" data-admin-plot-size="${s.id}:${p.id}" value="${esc(p.sizeLabel||'')}" placeholder="${esc(s.plotLabel)}"></td>
+            </tr>`).join('')}</tbody></table>
+        </div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-admin-save-plot-details="${s.id}">Save plot changes</button>
+      </details>` : '';
 
     // Same stuck-reservation override as the owner dashboard — admin needs
     // this too for sites where the owner isn't logging in themselves.
@@ -1784,6 +2439,8 @@ function renderAdmin(){
         <button class="btn btn-secondary btn-sm" data-save-site="${s.id}">Save changes</button>
         <button class="btn btn-primary btn-sm" data-record-commission="${s.id}">Record commission received</button>
       </div>
+      ${plotDetailsHtmlAdmin}
+      ${boundaryDetailsHtml(s, 'admin')}
       <p class="note" style="margin:10px 0 4px;"><strong>Open reservations</strong></p>
       ${reservationsHtml}
     </div>`;
@@ -1835,6 +2492,13 @@ function renderAdmin(){
       <div class="side-card"><h3>Payments awaiting confirmation</h3><div class="price" style="font-size:1.3rem;">${pendingCount}</div></div>
     </div>
 
+    ${resetRequests.length ? `
+    <div class="side-card" style="margin-bottom:16px;border:1px solid var(--gold-dark);">
+      <h3>PIN reset requests</h3>
+      <p class="note" style="margin-top:-4px;">Call or WhatsApp them a new PIN, then reset it here so it's live for their next login.</p>
+      ${resetRequestsHtml}
+    </div>` : ''}
+
     ${isSuperAdmin ? `
     <div class="side-card" style="margin-bottom:16px;">
       <h3>Platform settings</h3>
@@ -1868,6 +2532,16 @@ function renderAdmin(){
         <div><label class="field">Temporary PIN (4–12 digits)</label><input type="password" inputmode="numeric" id="staff-new-pin" maxlength="12" autocomplete="new-password"></div>
       </div>
       <button class="btn btn-primary" style="margin-top:10px;" id="staff-add-btn">Add staff account</button>
+    </div>
+
+    <div class="side-card" style="margin-bottom:16px;">
+      <h3>Backup &amp; export</h3>
+      <p class="note" style="margin-top:-4px;">Tukule's only copy of your data lives in this Firebase project — download a backup now and then so you're covered if anything ever goes wrong there.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;">
+        <button class="btn btn-primary btn-sm" id="export-backup-btn">Download full backup (.json)</button>
+        <button class="btn btn-secondary btn-sm" id="export-payments-btn">Export payments (.csv)</button>
+        <button class="btn btn-secondary btn-sm" id="export-sites-btn">Export sites &amp; commission (.csv)</button>
+      </div>
     </div>` : ''}
 
     <div class="side-card" style="margin-bottom:16px;">
@@ -1954,14 +2628,41 @@ function renderAdmin(){
       saveState(); renderAdmin();
     });
   });
+  dash.querySelectorAll('[data-admin-save-plot-details]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const siteId = btn.dataset.adminSavePlotDetails;
+      const site = state.sites[siteId];
+      if(!site) return;
+      let changed = 0;
+      dash.querySelectorAll(`[data-admin-plot-price^="${siteId}:"]`).forEach(input=>{
+        const plotId = Number(input.dataset.adminPlotPrice.split(':')[1]);
+        const p = site.plots.find(pp=>pp.id===plotId);
+        if(!p) return;
+        const val = input.value.trim();
+        const newPrice = val==='' ? null : Number(val);
+        if(newPrice!==null && (Number.isNaN(newPrice) || newPrice<=0)) return;
+        if(p.price !== newPrice){ p.price = newPrice; changed++; }
+      });
+      dash.querySelectorAll(`[data-admin-plot-size^="${siteId}:"]`).forEach(input=>{
+        const plotId = Number(input.dataset.adminPlotSize.split(':')[1]);
+        const p = site.plots.find(pp=>pp.id===plotId);
+        if(!p) return;
+        const val = input.value.trim() || null;
+        if(p.sizeLabel !== val){ p.sizeLabel = val; changed++; }
+      });
+      if(changed){ logAudit(`Updated per-plot pricing/size for "${site.name}" (${changed} field${changed===1?'':'s'})`); saveState(); }
+      renderAdmin();
+    });
+  });
   dash.querySelectorAll('[data-confirm]').forEach(btn=>{
     btn.addEventListener('click', ()=>{
       const [phone, idxStr] = btn.dataset.confirm.split(':');
       const buyer = state.buyers[phone];
       const payment = buyer && buyer.payments[Number(idxStr)];
-      confirmPayment(phone, Number(idxStr));
-      if(payment) logAudit(`Confirmed payment of ${money(payment.amount)} from ${buyer.name} (${buyer.phone})`);
+      const wasConfirmed = confirmPayment(phone, Number(idxStr));
+      if(wasConfirmed && payment) logAudit(`Confirmed payment of ${money(payment.amount)} from ${buyer.name} (${buyer.phone})`);
       saveState(); renderAdmin();
+      if(wasConfirmed && buyer && payment) notifyBuyerPaymentConfirmed(buyer, payment);
     });
   });
   dash.querySelectorAll('[data-release-plan]').forEach(btn=>{
@@ -1993,6 +2694,7 @@ function renderAdmin(){
       saveState(); renderAdmin();
     });
   });
+  wireBoundaryEditors(dash, 'admin');
 
   const savePlatformBtn = document.getElementById('save-platform-btn');
   if(savePlatformBtn) savePlatformBtn.addEventListener('click', ()=>{
@@ -2008,6 +2710,13 @@ function renderAdmin(){
     saveState();
     platformMsg.innerHTML = ' <span style="color:#1f4b2c;font-size:0.85rem;">Saved.</span>';
   });
+
+  const exportBackupBtn = document.getElementById('export-backup-btn');
+  if(exportBackupBtn) exportBackupBtn.addEventListener('click', exportFullBackupJson);
+  const exportPaymentsBtn = document.getElementById('export-payments-btn');
+  if(exportPaymentsBtn) exportPaymentsBtn.addEventListener('click', exportPaymentsCsv);
+  const exportSitesBtn = document.getElementById('export-sites-btn');
+  if(exportSitesBtn) exportSitesBtn.addEventListener('click', exportSitesCsv);
 
   const savePinBtn = document.getElementById('save-pin-btn');
   if(savePinBtn) savePinBtn.addEventListener('click', async ()=>{
@@ -2068,7 +2777,83 @@ function renderAdmin(){
     logAudit(`Reset PIN for staff account ${rec.name} (${rec.phone})`);
     saveState(); renderAdmin();
   }));
+
+  dash.querySelectorAll('[data-reset-pin]').forEach(btn=>btn.addEventListener('click', async ()=>{
+    const req = state.pinResetRequests && state.pinResetRequests[btn.dataset.resetPin];
+    if(!req) return;
+    const newPin = prompt(`New temporary PIN for ${req.name} (4–6 digits):`);
+    if(newPin===null) return;
+    const pin = newPin.trim();
+    if(!validPin(pin)){ alert('PIN must be 4–6 digits.'); return; }
+    const pinHash = await hashPin(pin);
+    if(req.type==='buyer'){
+      const buyer = state.buyers[req.phone];
+      if(!buyer){ alert('That buyer account no longer exists.'); return; }
+      buyer.pinHash = pinHash;
+    } else {
+      const ownerSites = Object.values(state.sites).filter(s=>normPhone(s.ownerPhone)===req.phone);
+      if(!ownerSites.length){ alert('That owner has no listings on file anymore.'); return; }
+      ownerSites.forEach(s=>{ s.ownerPinHash = pinHash; });
+    }
+    req.resolved = true;
+    logAudit(`Reset PIN for ${req.type} ${req.name} (${req.phone})`);
+    saveState(); renderAdmin();
+    const waPhone = normPhone(req.phone).replace(/^0/, '260');
+    const waMsg = encodeURIComponent(`Hi ${req.name}, your Tukule PIN has been reset to ${pin}. Please log in and keep it somewhere safe. - Nexlite Digital Solutions`);
+    window.open(`https://wa.me/${waPhone}?text=${waMsg}`, '_blank');
+  }));
+
+  dash.querySelectorAll('[data-dismiss-reset]').forEach(btn=>btn.addEventListener('click', ()=>{
+    const req = state.pinResetRequests && state.pinResetRequests[btn.dataset.dismissReset];
+    if(!req) return;
+    req.resolved = true;
+    saveState(); renderAdmin();
+  }));
 }
+
+/* ---------- PWA: service worker + install prompt ---------- */
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=>{
+    navigator.serviceWorker.register('sw.js').catch(()=>{
+      // Registration can fail (e.g. opened as a plain file:// page, or the
+      // host doesn't serve it) — the app still works fully online either way,
+      // it just won't be installable/offline-capable.
+    });
+  });
+}
+(function setupInstallPrompt(){
+  const btn = document.getElementById('pwa-install-btn');
+  if(!btn) return;
+  const alreadyInstalled = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  if(alreadyInstalled) return;
+
+  let deferredPrompt = null;
+  window.addEventListener('beforeinstallprompt', (e)=>{
+    e.preventDefault(); // Chrome/Android/desktop: hold the native prompt and offer our own button instead
+    deferredPrompt = e;
+    btn.classList.remove('hidden');
+  });
+  btn.addEventListener('click', async ()=>{
+    if(deferredPrompt){
+      deferredPrompt.prompt();
+      await deferredPrompt.userChoice;
+      deferredPrompt = null;
+      btn.classList.add('hidden');
+      return;
+    }
+    // iOS Safari has no install prompt API — walk the user through the
+    // manual Share-sheet steps instead of just doing nothing.
+    const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    if(isIOS){
+      alert("To install Tukule: tap the Share icon in Safari's toolbar, then choose \"Add to Home Screen\".");
+    }
+  });
+  // iOS never fires beforeinstallprompt, so show the button anyway there
+  // (its click handler falls through to the manual instructions above).
+  if(/iphone|ipad|ipod/i.test(navigator.userAgent) && /safari/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent)){
+    btn.classList.remove('hidden');
+  }
+})();
 
 /* ---------- init ---------- */
 initApp();
