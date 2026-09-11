@@ -550,12 +550,18 @@ function restoreSessionOnce(){
   }
 }
 
-function saveState(){
+// onError (optional) fires if the cloud write itself is rejected (e.g. a
+// database-rules validation failure, or no connection) — screens that need
+// to know their change didn't actually persist (account creation, listing
+// submission, payment logging) should pass one instead of assuming success
+// just because the local `state` update went through.
+function saveState(onError){
   if(!state) return;
   syncSuppressUntil = Date.now() + 2000;
   db.ref(DATA_PATH).set(state).catch(err=>{
     console.error('Tukule: cloud save failed', err);
     setSyncPill('offline', 'Save failed — retrying');
+    if(onError) onError(err);
   });
 }
 
@@ -2462,6 +2468,7 @@ document.getElementById('create-account-btn').addEventListener('click', async ()
   const phone = normPhone(document.getElementById('create-phone').value);
   const nrc = document.getElementById('create-nrc').value.trim();
   const pin = document.getElementById('create-pin').value.trim();
+  if(!state){ msg.innerHTML = '<div class="msg err">Still connecting — please wait a moment and try again.</div>'; return; }
   if(!name || !phone){ msg.innerHTML = '<div class="msg err">Enter your name and phone number.</div>'; return; }
   if(!validPhone(phone)){ msg.innerHTML = '<div class="msg err">Enter a valid 10-digit phone number starting with 0.</div>'; return; }
   if(!validPin(pin)){ msg.innerHTML = '<div class="msg err">PIN must be 4–6 digits.</div>'; return; }
@@ -2470,7 +2477,12 @@ document.getElementById('create-account-btn').addEventListener('click', async ()
   try{
     const pinHash = await hashPin(pin);
     state.buyers[phone] = { phone, name, nrc, pinHash, plans:[], payments:[] };
-    saveState();
+    saveState(err=>{
+      // The account is showing locally, but it never actually reached the
+      // cloud — reload/another device won't see it. Tell the person plainly
+      // instead of letting them believe it's done.
+      alert("Your account was created on this device, but we couldn't save it to the cloud (connection or server issue). Please check your connection and try creating it again, or call 0977 638 790 / 0960 271 128.");
+    });
     document.getElementById('create-pin').value='';
     currentAccountPhone = phone;
     updateSession({ accountPhone: phone });
@@ -2487,6 +2499,7 @@ document.getElementById('login-btn').addEventListener('click', async ()=>{
   const pin = document.getElementById('login-pin').value.trim();
   const msg = document.getElementById('login-msg');
   const btn = document.getElementById('login-btn');
+  if(!state){ msg.innerHTML = '<div class="msg err">Still connecting — please wait a moment and try again.</div>'; return; }
   const buyer = state.buyers[phone];
   if(!phone || !pin || !buyer){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
   btn.disabled = true;
