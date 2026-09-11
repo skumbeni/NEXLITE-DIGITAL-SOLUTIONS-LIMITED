@@ -442,9 +442,23 @@ const DATA_PATH = 'tukule_state_v2';
 // are eligible — the moment a buyer has any money down, expireStaleReservations()
 // leaves the plan alone and it becomes an owner/admin manual-release matter.
 const RESERVATION_TTL_HOURS = 72;
-firebase.initializeApp(firebaseConfig);
-const auth = firebase.auth();
-const db = firebase.database();
+// If the firebase-*-compat.js <script> tags above failed to load (no
+// internet at page-load time, a CDN block, a WebView that doesn't allow
+// the gstatic.com scripts through) then the global `firebase` object
+// simply doesn't exist. Referencing it directly used to throw right here,
+// which — since this is all one script block — silently killed every
+// event listener defined below it. The app looked "dead": no button did
+// anything, with no error shown. Guard it instead, so initApp() can show
+// a real message.
+const FIREBASE_SDK_OK = (typeof firebase !== 'undefined' && typeof firebase.initializeApp === 'function');
+let auth, db;
+if(FIREBASE_SDK_OK){
+  firebase.initializeApp(firebaseConfig);
+  auth = firebase.auth();
+  db = firebase.database();
+} else {
+  console.error('Tukule: Firebase SDK failed to load — check internet connection or blocked CDN (gstatic.com).');
+}
 /* ====== end Firebase setup ====== */
 
 function buildPlots(rows, cols, seedPattern){
@@ -616,6 +630,19 @@ function attachCloudListener(){
 }
 
 function initApp(){
+  if(!FIREBASE_SDK_OK){
+    // Same situation as above but caught cleanly: tell the person what's
+    // wrong instead of leaving a blank/unresponsive screen.
+    const el = document.getElementById('app-loading');
+    if(el){
+      el.innerHTML = '<div style="padding:24px;text-align:center;font-family:sans-serif;">'
+        + '<p>Couldn\'t load required app files. This usually means no internet '
+        + 'connection at the moment the app opened.</p>'
+        + '<button onclick="location.reload()" style="margin-top:12px;padding:10px 20px;">Reload</button>'
+        + '</div>';
+    }
+    return;
+  }
   setSyncPill('connecting', 'Connecting…');
   // If sign-in stalls (e.g. first-ever offline launch), don't leave the
   // person staring at a spinner forever — start locally and merge once
