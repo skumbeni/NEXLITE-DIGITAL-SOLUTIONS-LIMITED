@@ -143,6 +143,11 @@
   .msg.ok{background:#dcead9;color:#204a25;border:1px solid #a9cba3;}
   .msg.err{background:#f2d9d3;color:#6b2323;border:1px solid #dba898;}
   .hidden{display:none !important;}
+  /* Maximise/restore control for any Leaflet map box — added so plot/boundary
+     drawing isn't cramped into a small fixed-height box on a phone screen. */
+  .map-maximise-btn{position:absolute;top:10px;right:10px;z-index:1001;width:34px;height:34px;border-radius:4px;border:2px solid rgba(0,0,0,0.25);background:#fff;cursor:pointer;font-size:1rem;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,0.3);padding:0;}
+  .map-maximised{position:fixed !important;top:0 !important;left:0 !important;right:0 !important;bottom:0 !important;width:100vw !important;height:100vh !important;z-index:9999;border-radius:0 !important;margin:0 !important;}
+  body.map-maximised-active{overflow:hidden;}
   .toggle-link{background:none;border:none;color:var(--river-dark);text-decoration:underline;font-size:0.85rem;padding:0;}
   .back-link{background:none;border:none;color:var(--soil-dark);font-size:0.85rem;padding:0;margin-bottom:14px;text-decoration:underline;}
   #app-loading{position:fixed;inset:0;background:var(--paper);display:flex;align-items:center;justify-content:center;z-index:100;flex-direction:column;gap:10px;}
@@ -878,6 +883,7 @@ function initSellMap(){
   });
   sellMap.on(L.Draw.Event.EDITED, (e)=>{ e.layers.eachLayer(layer=>updateSellBoundaryFromLayer(layer)); });
   sellMap.on(L.Draw.Event.DELETED, ()=>{ sellBoundaryLatLngs = null; document.getElementById('sell-map-status').textContent = ''; });
+  addMapMaximiseControl('sell-map', sellMap);
   setTimeout(()=>sellMap.invalidateSize(), 150);
 }
 function updateSellBoundaryFromLayer(layer){
@@ -1030,6 +1036,7 @@ function renderBuySiteMap(){
     const baseLayers = makeBaseLayers();
     baseLayers['Satellite'].addTo(buySiteMap); // satellite default helps buyers judge the actual land
     L.control.layers(baseLayers).addTo(buySiteMap);
+    addMapMaximiseControl('buy-site-map', buySiteMap);
   }
   if(buySiteMapBoundaryLayer) buySiteMap.removeLayer(buySiteMapBoundaryLayer);
   if(buySiteMapPlotGroup) buySiteMap.removeLayer(buySiteMapPlotGroup);
@@ -1056,6 +1063,49 @@ function renderBuySiteMap(){
   buySiteMapPlotGroup.addTo(buySiteMap);
   setTimeout(()=>{ buySiteMap.invalidateSize(); buySiteMap.fitBounds(buySiteMapBoundaryLayer.getBounds(), {padding:[16,16]}); }, 100);
 }
+
+/* ---------- maximise/restore control, shared by every Leaflet map box ---------- */
+function allLiveLeafletMaps(){
+  const maps = [];
+  if(typeof sellMap !== 'undefined' && sellMap) maps.push(sellMap);
+  if(typeof buySiteMap !== 'undefined' && buySiteMap) maps.push(buySiteMap);
+  Object.values(boundaryEditMaps).forEach(e=>{ if(e && e.map) maps.push(e.map); });
+  return maps;
+}
+function addMapMaximiseControl(mapDivId, leafletMap){
+  const container = document.getElementById(mapDivId);
+  if(!container || container.querySelector('.map-maximise-btn')) return; // already added
+  if(!container.style.position) container.style.position = 'relative';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'map-maximise-btn';
+  btn.title = 'Maximise map';
+  btn.textContent = '⛶';
+  btn.addEventListener('click', (e)=>{
+    e.preventDefault(); e.stopPropagation();
+    const isMax = container.classList.toggle('map-maximised');
+    document.body.classList.toggle('map-maximised-active', isMax);
+    btn.textContent = isMax ? '✕' : '⛶';
+    btn.title = isMax ? 'Restore map size' : 'Maximise map';
+    setTimeout(()=>leafletMap.invalidateSize(), 200);
+  });
+  container.appendChild(btn);
+}
+// Escape exits fullscreen from anywhere — one listener for every map box,
+// rather than one per map (maps get recreated on re-render, and this way
+// there's nothing to accumulate or clean up).
+document.addEventListener('keydown', (e)=>{
+  if(e.key !== 'Escape') return;
+  const maximised = document.querySelectorAll('.map-maximised');
+  if(!maximised.length) return;
+  maximised.forEach(el=>{
+    el.classList.remove('map-maximised');
+    const btn = el.querySelector('.map-maximise-btn');
+    if(btn){ btn.textContent = '⛶'; btn.title = 'Maximise map'; }
+  });
+  document.body.classList.remove('map-maximised-active');
+  allLiveLeafletMaps().forEach(m=>setTimeout(()=>m.invalidateSize(), 200));
+});
 
 /* ---------- shared owner/admin site-boundary editor ---------- */
 const boundaryEditMaps = {}; // key `${prefix}:${siteId}` -> {map, drawnItems}
@@ -1099,6 +1149,7 @@ function initBoundaryEditMap(prefix, siteId){
   map.addControl(drawControl);
   map.on(L.Draw.Event.CREATED, (e)=>{ drawnItems.clearLayers(); drawnItems.addLayer(e.layer); });
   boundaryEditMaps[key] = { map, drawnItems };
+  addMapMaximiseControl(mapDivId, map);
   setTimeout(()=>map.invalidateSize(), 150);
 }
 function clearBoundaryEditMaps(prefix){
