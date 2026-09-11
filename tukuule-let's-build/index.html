@@ -829,29 +829,20 @@ const NUMERIC_BOUNDS = {
 function inRange(n, [min,max]){ return Number.isFinite(n) && n>=min && n<=max; }
 async function hashPin(pin){
   const raw = 'tukule:' + String(pin);
-  // Prefer real Web Crypto when it's actually available and working — but
-  // crypto.subtle only exists in a secure context (https, or localhost).
-  // Opened over plain http, some Android WebViews, or file://, it's simply
-  // undefined, and the old version of this function threw there — which
-  // left "Create account" / login buttons permanently disabled with no
-  // error shown, since nothing ever caught the rejection. Fall back to a
-  // deterministic non-crypto hash in that case: PINs here are only 4-6
-  // digits anyway, so SHA-256 wasn't providing meaningfully more real-world
-  // security against guessing than this does — it only needs to be
-  // deterministic so the same PIN compares equal next time.
-  if(window.crypto && window.crypto.subtle && typeof window.crypto.subtle.digest === 'function'){
-    try{
-      const enc = new TextEncoder().encode(raw);
-      const buf = await crypto.subtle.digest('SHA-256', enc);
-      return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
-    }catch(e){ /* fall through to the fallback below */ }
-  }
-  // Firebase rules validate pinHash as a 64-char hex string (the shape of a
-  // real SHA-256 digest) — so this fallback has to produce exactly that
-  // shape too, or every write through this path gets rejected by the
-  // database rules with no clue why (looks identical to a random cloud
-  // failure from the UI). Run 8 independently-salted 32-bit rolling hashes
-  // and concatenate them: 8 x 8 hex chars = 64, still fully deterministic.
+  // Deliberately NOT using Web Crypto / SHA-256 here. crypto.subtle only
+  // exists in a secure context (https or localhost) — over plain http, some
+  // Android WebViews, or file://, it's undefined, and having two possible
+  // code paths (real SHA-256 vs. a fallback) meant the two could silently
+  // produce different-shaped output depending on the device, which is
+  // exactly what broke account creation earlier. One plain JS hash, always,
+  // means every environment produces the identical shape every time — no
+  // branching, no environment-dependent behavior to debug later. PINs here
+  // are only 4-6 digits anyway, so SHA-256 wasn't buying meaningfully more
+  // real-world security against guessing than this does; it only needs to
+  // be deterministic so the same PIN compares equal next time.
+  // Firebase rules validate pinHash as a 64-char hex string, so this always
+  // runs 8 independently-salted 32-bit rolling hashes and concatenates them:
+  // 8 x 8 hex chars = 64.
   const seeds = [0x12345678, 0x87654321, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35, 0x27d4eb2f, 0x165667b1, 0xd3a2646c];
   const words = seeds.map((seed, si)=>{
     let h = seed;
