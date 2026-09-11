@@ -146,9 +146,12 @@
   /* Maximise/restore control for any Leaflet map box — added so plot/boundary
      drawing isn't cramped into a small fixed-height box on a phone screen. */
   .map-maximise-btn{position:absolute;bottom:calc(10px + env(safe-area-inset-bottom, 0px));left:10px;z-index:1001;width:34px;height:34px;border-radius:4px;border:2px solid rgba(0,0,0,0.25);background:#fff;cursor:pointer;font-size:1rem;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,0.3);padding:0;}
+  .map-locate-btn{position:absolute;bottom:calc(10px + env(safe-area-inset-bottom, 0px));right:10px;z-index:1001;width:34px;height:34px;border-radius:4px;border:2px solid rgba(0,0,0,0.25);background:#fff;cursor:pointer;font-size:1.1rem;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,0.3);padding:0;}
+  .map-locate-btn:disabled{opacity:0.6;}
   .map-maximised{position:fixed !important;top:0 !important;left:0 !important;right:0 !important;bottom:0 !important;width:100vw !important;height:100vh !important;height:100dvh !important;z-index:9999;border-radius:0 !important;margin:0 !important;}
   .sat-fallback-banner{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:1002;background:#fff;border:1px solid var(--line);border-radius:6px;padding:8px 12px;font-size:0.8rem;box-shadow:0 1px 4px rgba(0,0,0,0.25);display:flex;align-items:center;gap:10px;max-width:88%;text-align:left;color:var(--ink);}
   .sat-fallback-banner button{background:var(--soil);color:#fff;border:none;border-radius:4px;padding:5px 10px;font-size:0.76rem;white-space:nowrap;flex:none;}
+  .imagery-date-caption{position:absolute;top:56px;right:10px;z-index:1000;background:rgba(255,255,255,0.85);border-radius:4px;padding:3px 7px;font-size:0.68rem;color:#6b6153;box-shadow:0 1px 3px rgba(0,0,0,0.15);pointer-events:none;max-width:60%;text-align:right;}
   body.map-maximised-active{overflow:hidden;}
   .toggle-link{background:none;border:none;color:var(--river-dark);text-decoration:underline;font-size:0.85rem;padding:0;}
   .back-link{background:none;border:none;color:var(--soil-dark);font-size:0.85rem;padding:0;margin-bottom:14px;text-decoration:underline;}
@@ -239,6 +242,12 @@
       <p class="section-sub" id="buy-site-loc"></p>
       <img id="buy-site-photo" class="site-photo-large hidden" alt="Site photo">
       <div id="buy-site-map" class="hidden" style="height:220px;border:1px solid var(--line);border-radius:6px;margin-bottom:16px;"></div>
+      <div id="buy-site-mymap-wrap" class="hidden" style="border:1px solid var(--line);border-radius:6px;margin-bottom:16px;overflow:hidden;">
+        <p class="note" style="margin:8px 10px 6px;">Owner-supplied map</p>
+        <div style="position:relative;width:100%;aspect-ratio:4/3;background:#f2ede4;">
+          <iframe id="buy-site-mymap" style="position:absolute;inset:0;width:100%;height:100%;border:0;" loading="lazy" referrerpolicy="no-referrer-when-downgrade" allowfullscreen></iframe>
+        </div>
+      </div>
       <div class="plot-panel">
         <div>
           <div class="grid-scroll"><div class="plot-grid" id="plot-grid"></div></div>
@@ -303,7 +312,7 @@
       </div>
       <label class="field">Or paste a Google Maps link (optional)</label>
       <input type="text" id="sell-maps-link" placeholder="e.g. https://maps.app.goo.gl/...">
-      <p class="note" style="margin-top:-4px;">Any of the three works — a drawn boundary, coordinates, or a Maps link. This gives buyers a one-tap "Get directions" to the site, and a boundary also shows on the site plan.</p>
+      <p class="note" id="sell-maps-link-status" style="margin-top:-4px;">Any of the three works — a drawn boundary, coordinates, or a Maps link. This gives buyers a one-tap "Get directions" to the site. Only a Google <strong>My Maps</strong> link (one with "mid=" in it, from Map &gt; Share) can also be shown embedded on the site page — a plain Google Maps place link or maps.app.goo.gl link only gives the "Get directions" button.</p>
       <label class="field">Description (optional)</label>
       <textarea id="sell-description" placeholder="What makes this site worth buying into?"></textarea>
       <div class="grid-two">
@@ -812,6 +821,41 @@ function siteMapsUrl(site){
   if(site.lat!=null && site.lng!=null && !Number.isNaN(site.lat) && !Number.isNaN(site.lng)) return `https://www.google.com/maps?q=${site.lat},${site.lng}`;
   return null;
 }
+// Google My Maps links (the ones with a "mid=" parameter — from Map >
+// Share, or copied out of My Maps' own "Embed on my site" iframe code) can
+// be embedded for free with no API key via maps/d/embed?mid=... — see
+// https://support.google.com/mymaps. Ordinary Google Maps share links
+// (maps.app.goo.gl, a plain /maps/place/ link, etc.) have no mid and can't
+// be resolved into an embeddable URL client-side — those short links only
+// redirect server-side, which a static app with no backend can't follow, so
+// they're left as the existing "📍 Get directions" external link instead of
+// pretending to embed something that would just come back blank.
+function googleMyMapsEmbedSrc(link){
+  if(!link) return null;
+  let url;
+  try{ url = new URL(link); }catch(e){ return null; }
+  if(!/(^|\.)google\.[a-z.]+$/i.test(url.hostname)) return null;
+  const mid = url.searchParams.get('mid');
+  if(!mid) return null;
+  let src = `https://www.google.com/maps/d/embed?mid=${encodeURIComponent(mid)}`;
+  const z = url.searchParams.get('z');
+  const ll = url.searchParams.get('ll');
+  if(z) src += `&z=${encodeURIComponent(z)}`;
+  if(ll) src += `&ll=${encodeURIComponent(ll)}`;
+  return src;
+}
+function renderBuySiteMyMapsEmbed(site){
+  const wrap = document.getElementById('buy-site-mymap-wrap');
+  const frame = document.getElementById('buy-site-mymap');
+  const src = googleMyMapsEmbedSrc(site.mapsLink);
+  if(src){
+    frame.src = src;
+    wrap.classList.remove('hidden');
+  } else {
+    frame.src = '';
+    wrap.classList.add('hidden');
+  }
+}
 
 // There's no fixed instalment-schedule record — a plan just carries a
 // running balance. So "is this buyer behind?" is worked out on the fly:
@@ -876,6 +920,7 @@ function initSellMap(){
   sellMap = L.map('sell-map').setView([-13.133897, 27.849332], 6); // Zambia-wide default view
   const baseLayers = makeBaseLayers();
   baseLayers['Street'].addTo(sellMap);
+  applyRememberedLayer('sell', sellMap, baseLayers);
   L.control.layers(baseLayers).addTo(sellMap);
   sellDrawnItems = new L.FeatureGroup();
   sellMap.addLayer(sellDrawnItems);
@@ -892,7 +937,11 @@ function initSellMap(){
   sellMap.on(L.Draw.Event.EDITED, (e)=>{ e.layers.eachLayer(layer=>updateSellBoundaryFromLayer(layer)); });
   sellMap.on(L.Draw.Event.DELETED, ()=>{ sellBoundaryLatLngs = null; document.getElementById('sell-map-status').textContent = ''; });
   addMapMaximiseControl('sell-map', sellMap);
+  addMapLocateControl('sell-map', sellMap);
   attachSatelliteFallback('sell-map', sellMap, baseLayers);
+  attachStreetDetailNotice('sell-map', sellMap, baseLayers);
+  attachImageryDateCaption('sell-map', sellMap, baseLayers);
+  watchLayerChoice(()=>'sell', sellMap);
   setTimeout(()=>sellMap.invalidateSize(), 150);
 }
 function updateSellBoundaryFromLayer(layer){
@@ -901,7 +950,12 @@ function updateSellBoundaryFromLayer(layer){
   const centroid = latlngs.reduce((acc,p)=>[acc[0]+p[0], acc[1]+p[1]], [0,0]).map(v=>v/latlngs.length);
   document.getElementById('sell-lat').value = centroid[0].toFixed(6);
   document.getElementById('sell-lng').value = centroid[1].toFixed(6);
-  document.getElementById('sell-map-status').textContent = `Boundary set (${latlngs.length} points) — coordinates filled in below.`;
+  const warnings = boundarySanityWarnings(latlngs, null);
+  const areaLabel = boundaryAreaLabel(latlngs);
+  const base = `Boundary set (${latlngs.length} points${areaLabel ? `, ~${areaLabel}` : ''}) — coordinates filled in below.`;
+  document.getElementById('sell-map-status').innerHTML = warnings.length
+    ? `${esc(base)}<br><span style="color:#6b2323;">⚠ ${warnings.map(esc).join(' ')}</span>`
+    : esc(base);
 }
 function resetSellMap(){
   if(sellDrawnItems) sellDrawnItems.clearLayers();
@@ -910,6 +964,19 @@ function resetSellMap(){
   if(statusEl) statusEl.textContent = '';
 }
 document.getElementById('sell-map-clear').addEventListener('click', resetSellMap);
+const SELL_MAPS_LINK_DEFAULT_NOTE = document.getElementById('sell-maps-link-status').innerHTML;
+document.getElementById('sell-maps-link').addEventListener('input', (e)=>{
+  const statusEl = document.getElementById('sell-maps-link-status');
+  const link = e.target.value.trim();
+  if(!link){ statusEl.innerHTML = SELL_MAPS_LINK_DEFAULT_NOTE; statusEl.style.color = ''; return; }
+  if(googleMyMapsEmbedSrc(link)){
+    statusEl.textContent = '✓ This is a Google My Maps link — it will show embedded on the site page.';
+    statusEl.style.color = '#204a25';
+  } else {
+    statusEl.textContent = 'Only a Google My Maps link (with "mid=") can be embedded — this one will just give buyers a "Get directions" button instead.';
+    statusEl.style.color = '#6b2323';
+  }
+});
 document.getElementById('sell-use-my-location').addEventListener('click', ()=>{
   const btn = document.getElementById('sell-use-my-location');
   const statusEl = document.getElementById('sell-map-status');
@@ -966,6 +1033,55 @@ function rectToTurfPolygon(corners){
   const ring = corners.map(([lat,lng])=>[lng,lat]);
   ring.push(ring[0]);
   return turf.polygon([ring]);
+}
+// Formats a saved boundary's area for display (not just while actively
+// drawing, where Leaflet Draw's own showArea tooltip already covers it).
+function boundaryAreaLabel(boundary){
+  if(typeof turf === 'undefined' || !boundary || boundary.length < 3) return null;
+  const poly = boundaryToTurfPolygon(boundary);
+  if(!poly) return null;
+  let areaM2;
+  try{ areaM2 = turf.area(poly); }catch(e){ return null; }
+  if(!areaM2 || areaM2 <= 0) return null;
+  return areaM2 < 10000 ? `${Math.round(areaM2).toLocaleString()} m²` : `${(areaM2/10000).toFixed(2)} ha`;
+}
+// sizes, and overlap with another site's already-saved boundary are all easy
+// mistakes to make when drawing on a blank/blurry satellite tile. These are
+// warnings only (shown alongside the boundary status), never block saving —
+// an owner's real plot might legitimately be unusual, so the call stays
+// theirs, not the app's.
+function boundarySanityWarnings(latlngs, excludeSiteId){
+  const warnings = [];
+  if(typeof turf === 'undefined' || !latlngs || latlngs.length < 3) return warnings;
+  const poly = boundaryToTurfPolygon(latlngs);
+  if(!poly) return warnings;
+  try{
+    if(turf.kinks(poly).features.length){
+      warnings.push('This boundary line crosses itself — check for a twisted or pinched shape.');
+    }
+  }catch(e){ /* malformed ring — skip this check rather than block on it */ }
+  let areaM2 = null;
+  try{ areaM2 = turf.area(poly); }catch(e){}
+  if(areaM2 != null){
+    if(areaM2 < 50) warnings.push(`This boundary looks very small (about ${Math.round(areaM2)} m²) — is that right?`);
+    else if(areaM2 > 2000000) warnings.push(`This boundary looks very large (about ${(areaM2/10000).toFixed(1)} ha) — is that right?`);
+  }
+  try{
+    Object.entries(state.sites).forEach(([id, other])=>{
+      if(!other || id===excludeSiteId || !other.boundary || other.boundary.length<3) return;
+      const otherPoly = boundaryToTurfPolygon(other.boundary);
+      if(!otherPoly) return;
+      let overlapArea = 0;
+      try{
+        const clip = turf.intersect(poly, otherPoly);
+        if(clip) overlapArea = turf.area(clip);
+      }catch(e){}
+      if(overlapArea > 25){ // small threshold so shared/adjacent edges don't false-positive
+        warnings.push(`This boundary overlaps "${other.name}" — check they're not the same plot of land.`);
+      }
+    });
+  }catch(e){}
+  return warnings;
 }
 function turfGeomToLatLngParts(geom){
   // Returns an array of "parts" — one per disjoint polygon piece — each part
@@ -1034,7 +1150,7 @@ function refreshBuySiteMapStyles(){
   });
 }
 
-let buySiteMap, buySiteMapBoundaryLayer, buySiteMapPlotGroup, buySiteMapPlotLayers = {};
+let buySiteMap, buySiteMapBaseLayers, buySiteMapBoundaryLayer, buySiteMapPlotGroup, buySiteMapPlotLayers = {};
 function renderBuySiteMap(){
   const mapDiv = document.getElementById('buy-site-map');
   const site = state.sites[currentSiteId];
@@ -1043,11 +1159,16 @@ function renderBuySiteMap(){
   if(!buySiteMap){
     buySiteMap = L.map('buy-site-map', { zoomControl:true, dragging:true, scrollWheelZoom:false });
     const baseLayers = makeBaseLayers();
+    buySiteMapBaseLayers = baseLayers;
     baseLayers['Satellite'].addTo(buySiteMap); // satellite default helps buyers judge the actual land
     L.control.layers(baseLayers).addTo(buySiteMap);
     addMapMaximiseControl('buy-site-map', buySiteMap);
     attachSatelliteFallback('buy-site-map', buySiteMap, baseLayers);
+    attachStreetDetailNotice('buy-site-map', buySiteMap, baseLayers);
+    attachImageryDateCaption('buy-site-map', buySiteMap, baseLayers);
+    watchLayerChoice(()=>'buy:'+currentSiteId, buySiteMap);
   }
+  applyRememberedLayer('buy:'+currentSiteId, buySiteMap, buySiteMapBaseLayers);
   if(buySiteMapBoundaryLayer) buySiteMap.removeLayer(buySiteMapBoundaryLayer);
   if(buySiteMapPlotGroup) buySiteMap.removeLayer(buySiteMapPlotGroup);
   buySiteMapBoundaryLayer = L.polygon(site.boundary, { color:'#2F6E62', weight:2, fill:false, dashArray:'4,4' }).addTo(buySiteMap);
@@ -1101,6 +1222,86 @@ function addMapMaximiseControl(mapDivId, leafletMap){
   });
   container.appendChild(btn);
 }
+// A transient on-map notice for things like geolocation errors — separate
+// from the persistent Satellite/Street banners so it doesn't fight with
+// their show/hide state, and it self-removes after a few seconds.
+function showMapNotice(container, text, duration=4000){
+  const el = document.createElement('div');
+  el.className = 'sat-fallback-banner';
+  el.style.top = 'auto';
+  el.style.bottom = 'calc(54px + env(safe-area-inset-bottom, 0px))';
+  el.textContent = text;
+  container.appendChild(el);
+  setTimeout(()=>{ if(el.parentNode) el.remove(); }, duration);
+}
+// "Go to my location" — lets an owner standing on the actual plot centre the
+// map on themselves instead of hunting for the spot manually, which matters
+// most for drawing boundaries in areas with sparse satellite/street detail.
+function addMapLocateControl(mapDivId, map){
+  const container = document.getElementById(mapDivId);
+  if(!container || container.querySelector('.map-locate-btn')) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'map-locate-btn';
+  btn.title = 'Go to my location';
+  btn.textContent = '⌖';
+  container.appendChild(btn);
+  let marker = null, circle = null;
+  btn.addEventListener('click', (e)=>{
+    e.preventDefault(); e.stopPropagation();
+    if(!navigator.geolocation){
+      showMapNotice(container, "This browser can't get your location.");
+      return;
+    }
+    btn.disabled = true; btn.textContent = '…';
+    navigator.geolocation.getCurrentPosition(
+      (pos)=>{
+        btn.disabled = false; btn.textContent = '⌖';
+        const { latitude, longitude, accuracy } = pos.coords;
+        map.setView([latitude, longitude], 18);
+        if(marker) map.removeLayer(marker);
+        if(circle) map.removeLayer(circle);
+        marker = L.circleMarker([latitude, longitude], { radius:6, color:'#2563a8', fillColor:'#2563a8', fillOpacity:0.9, weight:2 }).addTo(map);
+        if(accuracy) circle = L.circle([latitude, longitude], { radius:accuracy, color:'#2563a8', weight:1, fillOpacity:0.08 }).addTo(map);
+      },
+      (err)=>{
+        btn.disabled = false; btn.textContent = '⌖';
+        const message = err.code === 1
+          ? "Location access was denied — allow it in your browser settings to use this."
+          : "Couldn't get your location — try again with a clear view of the sky.";
+        showMapNotice(container, message);
+      },
+      { enableHighAccuracy:true, timeout:15000, maximumAge:0 }
+    );
+  });
+}
+// given map, so re-opening the same site doesn't default back to a layer
+// they already found blank/unhelpful there. Keyed per map so each site's
+// choice is independent. Falls back to doing nothing if storage is blocked
+// (private browsing etc.) — it's a convenience, not load-bearing.
+function mapLayerKey(key){ return 'tukule-map-layer:' + key; }
+function getRememberedLayer(key){
+  try{ return localStorage.getItem(mapLayerKey(key)); }catch(e){ return null; }
+}
+function rememberLayer(key, name){
+  try{ localStorage.setItem(mapLayerKey(key), name); }catch(e){ /* ignore */ }
+}
+function applyRememberedLayer(key, map, baseLayers){
+  const remembered = getRememberedLayer(key);
+  if(!remembered || !baseLayers[remembered]) return;
+  Object.entries(baseLayers).forEach(([name, layer])=>{
+    const shouldHave = name === remembered;
+    if(shouldHave && !map.hasLayer(layer)) map.addLayer(layer);
+    else if(!shouldHave && map.hasLayer(layer)) map.removeLayer(layer);
+  });
+}
+// keyFn is a function (not a fixed string) so maps that get reused across
+// different sites (buy-site-map) can resolve the right key at the moment the
+// person actually switches layers, rather than whatever site was active
+// when the listener was first attached.
+function watchLayerChoice(keyFn, map){
+  map.on('baselayerchange', (e)=>{ rememberLayer(keyFn(), e.name); });
+}
 // Esri's free World Imagery layer has real coverage gaps in parts of rural
 // Zambia — when that happens the tile request doesn't fail, it succeeds and
 // returns Esri's own "Map data not yet available" placeholder image. That
@@ -1128,6 +1329,47 @@ function attachSatelliteFallback(mapDivId, map, baseLayers){
   }
   map.on('baselayerchange', syncBanner);
   syncBanner(); // set correct initial state for whichever layer was added first
+}
+// OpenStreetMap coverage is community-contributed, and rural parts of Zambia
+// are often only traced as building outlines with no road names or other
+// tags added yet. That's expected, not a bug — this is just a one-time,
+// dismissible heads-up so sellers/buyers aren't confused by the sparse detail.
+function attachStreetDetailNotice(mapDivId, map, baseLayers){
+  const container = document.getElementById(mapDivId);
+  const street = baseLayers['Street'];
+  if(!container || !street || container.querySelector('.street-detail-banner')) return;
+  const banner = document.createElement('div');
+  banner.className = 'sat-fallback-banner street-detail-banner hidden';
+  banner.innerHTML = `<span>Map detail is limited in rural areas — road names and some features may be missing.</span><button type="button">Got it</button>`;
+  container.appendChild(banner);
+  let dismissed = false;
+  banner.querySelector('button').addEventListener('click', (e)=>{
+    e.preventDefault(); e.stopPropagation();
+    dismissed = true;
+    banner.classList.add('hidden');
+  });
+  function syncBanner(){
+    if(dismissed) return;
+    banner.classList.toggle('hidden', !map.hasLayer(street));
+  }
+  map.on('baselayerchange', syncBanner);
+  syncBanner();
+}
+// A quiet, always-on caption (not a dismissible banner) near the layer
+// switcher, visible only on Satellite — Esri's free imagery date varies a
+// lot by location, and rural Zambia tiles can be several years old, so this
+// manages expectations without nagging like the fallback banner does.
+function attachImageryDateCaption(mapDivId, map, baseLayers){
+  const container = document.getElementById(mapDivId);
+  const satellite = baseLayers['Satellite'];
+  if(!container || !satellite || container.querySelector('.imagery-date-caption')) return;
+  const caption = document.createElement('div');
+  caption.className = 'imagery-date-caption hidden';
+  caption.textContent = 'Satellite imagery may be outdated here';
+  container.appendChild(caption);
+  function sync(){ caption.classList.toggle('hidden', !map.hasLayer(satellite)); }
+  map.on('baselayerchange', sync);
+  sync();
 }
 // Escape exits fullscreen from anywhere — one listener for every map box,
 // rather than one per map (maps get recreated on re-render, and this way
@@ -1172,6 +1414,7 @@ function initBoundaryEditMap(prefix, siteId){
   );
   const baseLayers = makeBaseLayers();
   baseLayers['Satellite'].addTo(map);
+  applyRememberedLayer(key, map, baseLayers);
   L.control.layers(baseLayers).addTo(map);
   const drawnItems = new L.FeatureGroup();
   map.addLayer(drawnItems);
@@ -1185,10 +1428,25 @@ function initBoundaryEditMap(prefix, siteId){
     edit: { featureGroup: drawnItems, remove:true }
   });
   map.addControl(drawControl);
-  map.on(L.Draw.Event.CREATED, (e)=>{ drawnItems.clearLayers(); drawnItems.addLayer(e.layer); });
+  function reportBoundaryStatus(layer){
+    const statusEl = document.getElementById(`${prefix}-map-status-${siteId}`);
+    if(!statusEl) return;
+    const latlngs = layer.getLatLngs()[0].map(ll=>[Number(ll.lat.toFixed(6)), Number(ll.lng.toFixed(6))]);
+    const warnings = boundarySanityWarnings(latlngs, siteId);
+    const areaLabel = boundaryAreaLabel(latlngs);
+    const areaPart = areaLabel ? `~${esc(areaLabel)}` : '';
+    const warnPart = warnings.length ? `<span style="color:#6b2323;">⚠ ${warnings.map(esc).join(' ')}</span>` : '';
+    statusEl.innerHTML = [areaPart, warnPart].filter(Boolean).join(' · ');
+  }
+  map.on(L.Draw.Event.CREATED, (e)=>{ drawnItems.clearLayers(); drawnItems.addLayer(e.layer); reportBoundaryStatus(e.layer); });
+  map.on(L.Draw.Event.EDITED, (e)=>{ e.layers.eachLayer(layer=>reportBoundaryStatus(layer)); });
   boundaryEditMaps[key] = { map, drawnItems };
   addMapMaximiseControl(mapDivId, map);
+  addMapLocateControl(mapDivId, map);
   attachSatelliteFallback(mapDivId, map, baseLayers);
+  attachStreetDetailNotice(mapDivId, map, baseLayers);
+  attachImageryDateCaption(mapDivId, map, baseLayers);
+  watchLayerChoice(()=>key, map);
   setTimeout(()=>map.invalidateSize(), 150);
 }
 function clearBoundaryEditMaps(prefix){
@@ -1232,7 +1490,14 @@ function wireBoundaryEditors(container, prefix){
       logAudit(`Updated site boundary for "${site.name}"`);
       saveState();
       const statusEl = document.getElementById(`${prefix}-map-status-${siteId}`);
-      if(statusEl) statusEl.textContent = 'Saved.';
+      if(statusEl){
+        const warnings = site.boundary ? boundarySanityWarnings(site.boundary, siteId) : [];
+        const areaLabel = site.boundary ? boundaryAreaLabel(site.boundary) : null;
+        const parts = ['Saved.'];
+        if(areaLabel) parts.push(`~${esc(areaLabel)}`);
+        if(warnings.length) parts.push(`<span style="color:#6b2323;">⚠ ${warnings.map(esc).join(' ')}</span>`);
+        statusEl.innerHTML = parts.join(' ');
+      }
     });
   });
 }
@@ -1339,7 +1604,8 @@ function openSite(siteId){
   const site = state.sites[siteId];
   document.getElementById('buy-site-title').textContent = site.name;
   const mapsUrl = siteMapsUrl(site);
-  document.getElementById('buy-site-loc').innerHTML = `${esc(site.location)} · ${esc(site.plotLabel)} plots${mapsUrl ? ` · <a href="${esc(mapsUrl)}" target="_blank" rel="noopener">📍 Get directions</a>` : ''}`;
+  const areaLabel = boundaryAreaLabel(site.boundary);
+  document.getElementById('buy-site-loc').innerHTML = `${esc(site.location)} · ${esc(site.plotLabel)} plots${areaLabel ? ` · ${esc(areaLabel)} total land` : ''}${mapsUrl ? ` · <a href="${esc(mapsUrl)}" target="_blank" rel="noopener">📍 Get directions</a>` : ''}`;
   const photo = document.getElementById('buy-site-photo');
   if(site.photoUrl){ photo.src = site.photoUrl; photo.classList.remove('hidden'); }
   else { photo.classList.add('hidden'); photo.removeAttribute('src'); }
@@ -1349,6 +1615,7 @@ function openSite(siteId){
   (document.querySelector('.plan-tab[data-plan="outright"]:not(.hidden)') || document.querySelector('.plan-tab:not(.hidden)')).click();
   renderPlotGrid();
   renderBuySiteMap();
+  renderBuySiteMyMapsEmbed(site);
 }
 
 function renderPlotGrid(){
