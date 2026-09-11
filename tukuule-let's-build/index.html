@@ -313,6 +313,11 @@
       <label class="field">Or paste a Google Maps link (optional)</label>
       <input type="text" id="sell-maps-link" placeholder="e.g. https://maps.app.goo.gl/...">
       <p class="note" id="sell-maps-link-status" style="margin-top:-4px;">Any of the three works — a drawn boundary, coordinates, or a Maps link. This gives buyers a one-tap "Get directions" to the site. Only a Google <strong>My Maps</strong> link (one with "mid=" in it, from Map &gt; Share) can also be shown embedded on the site page — a plain Google Maps place link or maps.app.goo.gl link only gives the "Get directions" button.</p>
+      <div id="sell-maps-link-preview-wrap" class="hidden" style="border:1px solid var(--line);border-radius:6px;margin-bottom:16px;overflow:hidden;">
+        <div style="position:relative;width:100%;aspect-ratio:4/3;background:#f2ede4;">
+          <iframe id="sell-maps-link-preview" style="position:absolute;inset:0;width:100%;height:100%;border:0;" loading="lazy" referrerpolicy="no-referrer-when-downgrade" allowfullscreen></iframe>
+        </div>
+      </div>
       <label class="field">Description (optional)</label>
       <textarea id="sell-description" placeholder="What makes this site worth buying into?"></textarea>
       <div class="grid-two">
@@ -965,16 +970,31 @@ function resetSellMap(){
 }
 document.getElementById('sell-map-clear').addEventListener('click', resetSellMap);
 const SELL_MAPS_LINK_DEFAULT_NOTE = document.getElementById('sell-maps-link-status').innerHTML;
+let sellMapsLinkPreviewTimer = null;
 document.getElementById('sell-maps-link').addEventListener('input', (e)=>{
   const statusEl = document.getElementById('sell-maps-link-status');
+  const previewWrap = document.getElementById('sell-maps-link-preview-wrap');
+  const previewFrame = document.getElementById('sell-maps-link-preview');
   const link = e.target.value.trim();
-  if(!link){ statusEl.innerHTML = SELL_MAPS_LINK_DEFAULT_NOTE; statusEl.style.color = ''; return; }
-  if(googleMyMapsEmbedSrc(link)){
+  clearTimeout(sellMapsLinkPreviewTimer);
+  if(!link){
+    statusEl.innerHTML = SELL_MAPS_LINK_DEFAULT_NOTE; statusEl.style.color = '';
+    previewWrap.classList.add('hidden'); previewFrame.src = '';
+    return;
+  }
+  const src = googleMyMapsEmbedSrc(link);
+  if(src){
     statusEl.textContent = '✓ This is a Google My Maps link — it will show embedded on the site page.';
     statusEl.style.color = '#204a25';
+    // Small debounce so a fast paste/edit doesn't reload the iframe on every keystroke.
+    sellMapsLinkPreviewTimer = setTimeout(()=>{
+      if(previewFrame.src !== src) previewFrame.src = src;
+      previewWrap.classList.remove('hidden');
+    }, 300);
   } else {
     statusEl.textContent = 'Only a Google My Maps link (with "mid=") can be embedded — this one will just give buyers a "Get directions" button instead.';
     statusEl.style.color = '#6b2323';
+    previewWrap.classList.add('hidden'); previewFrame.src = '';
   }
 });
 document.getElementById('sell-use-my-location').addEventListener('click', ()=>{
@@ -1965,6 +1985,10 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
   saveState();
   msg.innerHTML = `<div class="msg ok">Thanks, ${esc(ownerName)}. Your listing is under review — we'll confirm on ${esc(ownerPhone)}, or call us on 0977 638 790 / 0960 271 128.</div>`;
   ['sell-name','sell-location','sell-lat','sell-lng','sell-maps-link','sell-description','sell-price','sell-owner-name','sell-owner-phone','sell-owner-nrc','sell-owner-pin'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('sell-maps-link-status').innerHTML = SELL_MAPS_LINK_DEFAULT_NOTE;
+  document.getElementById('sell-maps-link-status').style.color = '';
+  document.getElementById('sell-maps-link-preview-wrap').classList.add('hidden');
+  document.getElementById('sell-maps-link-preview').src = '';
   document.getElementById('sell-total').value='50';
   document.getElementById('sell-plotsize').value='30 x 30';
   document.getElementById('sell-photo').value='';
