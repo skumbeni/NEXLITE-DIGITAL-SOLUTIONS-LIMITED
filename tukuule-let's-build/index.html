@@ -437,6 +437,11 @@ const firebaseConfig = {
   appId: "1:141747891324:web:c3e89d4cb8e96d7133edf9"
 };
 const DATA_PATH = 'tukule_state_v2';
+// How long an unpaid reservation is held before it's automatically released
+// back to available. Only reservations with zero payment logged against them
+// are eligible — the moment a buyer has any money down, expireStaleReservations()
+// leaves the plan alone and it becomes an owner/admin manual-release matter.
+const RESERVATION_TTL_HOURS = 72;
 firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.database();
@@ -591,7 +596,7 @@ function attachCloudListener(){
       db.ref(DATA_PATH).set(state);
     }
     const firstLoad = document.getElementById('app-loading');
-    if(firstLoad){ hideLoadingOverlay(); renderHome(); }
+    if(firstLoad){ hideLoadingOverlay(); renderHome(); expireStaleReservations(); }
     else if(Date.now() > syncSuppressUntil){ rerenderCurrentView(); }
     restoreSessionOnce();
   }, err=>{
@@ -629,6 +634,12 @@ function initApp(){
     console.error('Tukule: anonymous sign-in failed', err);
     setSyncPill('offline', 'Offline');
   });
+
+  // No Cloud Functions backend to run this on a schedule, so whichever tabs
+  // are open share the job — checking every 5 minutes is frequent enough
+  // that a reservation won't sit expired-but-not-yet-released for long,
+  // without hammering the database.
+  setInterval(()=>{ if(state) expireStaleReservations(); }, 5*60*1000);
 }
 let selectedPlots = [];
 let currentPlan = 'outright';
@@ -1736,14 +1747,16 @@ function renderSchedule(){
       <div class="schedule-line"><span>List price</span><span>${money(plan.listTotal)}</span></div>
       <div class="schedule-line"><span>Outright discount</span><span>-${money(plan.listTotal-plan.total)}</span></div>
       <div class="schedule-line"><strong>Due today</strong><strong>${money(plan.total)}</strong></div>
-      <p class="note">Pay the full amount to the property owner and your plot is marked sold as soon as it's confirmed.</p>`;
+      <p class="note">Pay the full amount to the property owner and your plot is marked sold as soon as it's confirmed.</p>
+      <p class="note">⏱ If no payment is logged within ${RESERVATION_TTL_HOURS} hours, this reservation is automatically released back to available.</p>`;
   } else {
     box.innerHTML = `
       <div class="schedule-line"><span>Total price</span><span>${money(plan.total)}</span></div>
       <div class="schedule-line"><span>Deposit (${site.depositPct}%)</span><span>${money(plan.deposit)}</span></div>
       <div class="schedule-line"><strong>${plan.type==='daily'?'Daily':'Monthly'} instalment</strong><strong>${money(plan.installment)} × ${plan.installments} ${plan.unit}${plan.installments>1?'s':''}</strong></div>
       <div class="schedule-line"><span>Projected paid-off date</span><span>${plan.completionDate}</span></div>
-      <p class="note">Deposit is due first, paid to the property owner and logged the same way as any other payment.</p>`;
+      <p class="note">Deposit is due first, paid to the property owner and logged the same way as any other payment.</p>
+      <p class="note">⏱ If no deposit is logged within ${RESERVATION_TTL_HOURS} hours, this reservation is automatically released back to available.</p>`;
   }
 }
 
@@ -1837,6 +1850,63 @@ async function cancelPlan(buyerPhone, planId){
   return true;
 }
 
+// There's no Cloud Functions backend here (pure client + Firebase RTDB), so
+// there's no single authoritative background job to expire stale reservations.
+// Instead, every open tab (buyer, owner, or admin) opportunistically runs this
+// check on load and on an interval. A reservation is only eligible once it's
+// past RESERVATION_TTL_HOURS old AND still has zero payment logged against
+// it — the instant a buyer puts any money down, this leaves it alone and it
+// becomes a manual owner/admin "release" decision instead (same as before).
+// releasePlot()'s transaction already guards against two tabs double-releasing
+// the same plot, and re-checking plan.status==='active' per plan before
+// writing keeps repeated calls (e.g. from two tabs catching the same expiry
+// moment) harmless rather than double-logging it.
+async function expireStaleReservations(){
+  if(!state || !state.buyers) return;
+  const cutoff = Date.now() - RESERVATION_TTL_HOURS*3600*1000;
+  for(const buyer of Object.values(state.buyers)){
+    for(const plan of buyer.plans){
+      if(plan.status !== 'active') continue;
+      if(!plan.reservedAt || plan.reservedAt > cutoff) continue; // no timestamp (pre-dates this feature) or not old enough yet
+      const paidSoFar = Math.round((plan.total - planBalance(plan))*100)/100;
+      if(paidSoFar > 0) continue; // buyer has money down — owner/admin should handle this one manually
+      const site = state.sites[plan.siteId];
+      if(site){
+        for(const plotId of plan.plots){
+          const released = await releasePlot(site, plotId);
+          if(released){
+            const p = site.plots.find(pp=>pp.id===plotId);
+            if(p){ p.status='available'; p.buyerPhone=null; }
+          }
+        }
+      }
+      plan.status = 'expired';
+      plan.expiredAt = todayISO();
+      // logAudit()'s actor mechanism is for a logged-in admin/staff acting on
+      // purpose — this is an automated background action with nobody logged
+      // in, so it's pushed directly with its own actor label rather than
+      // getting attributed to "Super Admin". Bundled into one update() with
+      // the plan change, and saved directly (not via saveBuyerPlans/saveState)
+      // so it doesn't clobber whatever else is in state locally right now.
+      if(!state.auditLog) state.auditLog = [];
+      state.auditLog.push({
+        ts: new Date().toISOString(),
+        actorName: 'System (auto-expiry)',
+        actorPhone: '',
+        action: `Auto-released expired reservation for ${buyer.name} (${buyer.phone}) at ${plan.siteName} — no payment within ${RESERVATION_TTL_HOURS}h`
+      });
+      if(state.auditLog.length > 300) state.auditLog = state.auditLog.slice(-300);
+      syncSuppressUntil = Date.now() + 2000;
+      const updates = {};
+      updates[`buyers/${buyer.phone}/plans`] = buyer.plans;
+      updates['auditLog'] = state.auditLog;
+      db.ref(DATA_PATH).update(updates).catch(err=>{
+        console.error('Tukule: auto-expiry save failed', err);
+      });
+    }
+  }
+}
+
 document.getElementById('reserve-btn').addEventListener('click', async ()=>{
   if(!currentAccountPhone){ showView('account'); return; }
   const buyer = state.buyers[currentAccountPhone];
@@ -1884,7 +1954,8 @@ document.getElementById('reserve-btn').addEventListener('click', async ()=>{
     installment: plan.installment, installments: plan.installments, unit: plan.unit,
     startDate: plan.startDate, completionDate: plan.completionDate || plan.startDate,
     balance: plan.total, status:'active',
-    buyerAgreedAt: todayISO(), ownerAgreedAt: null
+    buyerAgreedAt: todayISO(), ownerAgreedAt: null,
+    reservedAt: Date.now() // ms timestamp — powers the auto-expiry TTL, since startDate is day-granularity only
   };
   buyer.plans.push(planRecord);
   saveBuyerPlans(currentAccountPhone, buyer.plans);
@@ -1897,6 +1968,7 @@ document.getElementById('reserve-btn').addEventListener('click', async ()=>{
       (lost.length===1 ? 'was' : 'were') + ' taken by another buyer moments ago, so ' +
       (lost.length===1 ? "it wasn't" : "they weren't") + ' included. The rest of your reservation went through.');
   }
+  alert(`Reserved! Please log your ${plan.type==='outright' ? 'payment' : 'deposit'} within ${RESERVATION_TTL_HOURS} hours, or this reservation is automatically released back to available.`);
 
   showView('account'); renderAccount();
 });
@@ -2155,13 +2227,18 @@ function renderOwnerDashboard(){
       const days = daysSince(plan.startDate);
       const stale = days >= 7;
       const paidSoFar = Math.round((plan.total - planBalance(plan))*100)/100;
+      // Unpaid reservations auto-release on their own (see expireStaleReservations),
+      // so surface the countdown here rather than the manual "Release" button
+      // being the only way an owner learns about it.
+      const hoursLeft = plan.reservedAt ? Math.max(0, Math.ceil(RESERVATION_TTL_HOURS - (Date.now()-plan.reservedAt)/3600000)) : null;
+      const expiryNote = (paidSoFar<=0 && hoursLeft!==null) ? (hoursLeft>0 ? ` · auto-releases in ${hoursLeft}h if unpaid` : ` · auto-release pending`) : '';
       const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
       const agreementBtn = plan.ownerAgreedAt
         ? `<span class="note" style="margin:0;">Agreement confirmed ${plan.ownerAgreedAt}</span>`
         : `<button class="btn btn-secondary btn-sm" data-confirm-agreement="${esc(buyer.phone)}:${plan.id}">Confirm agreement</button>`;
       return `
         <div class="schedule-line">
-          <span>${stale?'⚠️ ':''}Plot${plan.plots.length>1?'s':''} ${plotLabels} — ${esc(buyer.name)} — reserved ${days} day${days===1?'':'s'} ago${paidSoFar>0?' · '+money(paidSoFar)+' paid':''}</span>
+          <span>${stale?'⚠️ ':''}Plot${plan.plots.length>1?'s':''} ${plotLabels} — ${esc(buyer.name)} — reserved ${days} day${days===1?'':'s'} ago${paidSoFar>0?' · '+money(paidSoFar)+' paid':expiryNote}</span>
           <span style="display:flex;gap:6px;align-items:center;">${agreementBtn}<button class="btn btn-ghost btn-sm" data-release-plan="${esc(buyer.phone)}:${plan.id}">Release</button></span>
         </div>`;
     }).join('') : '<p class="note">No open reservations.</p>';
@@ -2497,7 +2574,7 @@ function renderAccount(){
   const dash = document.getElementById('account-dashboard');
   dash.classList.remove('hidden');
 
-  const livePlans = buyer.plans.filter(p=>p.status!=='cancelled');
+  const livePlans = buyer.plans.filter(p=>p.status!=='cancelled' && p.status!=='expired');
   const totalBalance = livePlans.reduce((s,p)=>s+planBalance(p),0);
   const totalPaid = livePlans.reduce((s,p)=>s + (p.total - planBalance(p)),0);
   const totalValue = livePlans.reduce((s,p)=>s+p.total,0);
@@ -2514,6 +2591,8 @@ function renderAccount(){
     const cancellable = plan.status==='active' && paidSoFar<=0;
     const statusHtml = plan.status==='cancelled'
       ? '<span class="pill">Cancelled</span>'
+      : plan.status==='expired'
+      ? '<span class="pill">Expired — released</span>'
       : `<span class="pill ${bal<=0?'confirmed':'pending'}">${bal<=0?'Paid off — title processing':'In progress'}</span>`;
     const due = planDueStatus(plan);
     let dueHtml = '';
@@ -2533,6 +2612,7 @@ function renderAccount(){
         <div class="schedule-line"><span>Outstanding balance</span><span>${money(bal)}</span></div>
         <div class="schedule-line"><span>Status</span><span>${statusHtml}</span></div>
         ${plan.buyerAgreedAt ? `<div class="schedule-line"><span>Agreement</span><span>${plan.ownerAgreedAt ? 'Confirmed by both parties' : 'You confirmed · awaiting owner'}</span></div>` : ''}
+        ${plan.status==='expired' ? `<p class="note">Released automatically on ${plan.expiredAt} — no payment was logged within ${RESERVATION_TTL_HOURS} hours. Browse the site again to reserve those plots if they're still available.</p>` : ''}
         ${dueHtml}
         ${plan.status==='active' ? `<button class="btn btn-secondary btn-sm" style="margin-top:10px;" data-print-plan="${plan.id}">Generate &amp; print contract</button>` : ''}
         ${plan.status==='paid' ? `<button class="btn btn-secondary btn-sm" style="margin-top:10px;" data-print-certificate="${plan.id}">Print certificate of purchase</button>` : ''}
@@ -2973,10 +3053,12 @@ function renderAdmin(){
       const days = daysSince(plan.startDate);
       const stale = days >= 7;
       const paidSoFar = Math.round((plan.total - planBalance(plan))*100)/100;
+      const hoursLeft = plan.reservedAt ? Math.max(0, Math.ceil(RESERVATION_TTL_HOURS - (Date.now()-plan.reservedAt)/3600000)) : null;
+      const expiryNote = (paidSoFar<=0 && hoursLeft!==null) ? (hoursLeft>0 ? ` · auto-releases in ${hoursLeft}h if unpaid` : ` · auto-release pending`) : '';
       const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
       return `
         <div class="schedule-line">
-          <span>${stale?'⚠️ ':''}Plot${plan.plots.length>1?'s':''} ${plotLabels} — ${esc(buyer.name)} — reserved ${days} day${days===1?'':'s'} ago${paidSoFar>0?' · '+money(paidSoFar)+' paid':''}</span>
+          <span>${stale?'⚠️ ':''}Plot${plan.plots.length>1?'s':''} ${plotLabels} — ${esc(buyer.name)} — reserved ${days} day${days===1?'':'s'} ago${paidSoFar>0?' · '+money(paidSoFar)+' paid':expiryNote}</span>
           <span><button class="btn btn-ghost btn-sm" data-release-plan="${esc(buyer.phone)}:${plan.id}">Release</button></span>
         </div>`;
     }).join('') : '<p class="note">No open reservations.</p>';
