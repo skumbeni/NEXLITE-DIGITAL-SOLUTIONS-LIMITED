@@ -262,6 +262,10 @@
             <div id="schedule-box" style="margin-top:12px;"></div>
           </div>
           <div id="reserve-account-check"></div>
+          <label style="font-size:0.85rem;display:flex;align-items:flex-start;gap:6px;margin:10px 0;">
+            <input type="checkbox" id="reserve-agree-check" style="margin-top:3px;">
+            <span>I agree to the payment terms shown above, and understand this becomes a purchase agreement between me and the site owner once I reserve.</span>
+          </label>
           <button class="btn btn-primary" style="width:100%;" id="reserve-btn" disabled>Select plots to continue</button>
         </div>
       </div>
@@ -282,6 +286,7 @@
       <div id="sell-map" style="height:260px;border:1px solid var(--line);border-radius:6px;"></div>
       <div style="display:flex;align-items:center;gap:10px;margin:8px 0;">
         <button type="button" class="btn btn-ghost btn-sm" id="sell-map-clear">Clear boundary</button>
+        <button type="button" class="btn btn-ghost btn-sm" id="sell-use-my-location">📍 Use my current location</button>
         <span class="note" id="sell-map-status" style="margin:0;"></span>
       </div>
       <p class="note" style="margin-top:-4px;">Zoom to your site, then tap the polygon tool (top-left of the map) and trace its edges. We'll fill in the coordinates below automatically.</p>
@@ -751,15 +756,49 @@ const NUMERIC_BOUNDS = {
 };
 function inRange(n, [min,max]){ return Number.isFinite(n) && n>=min && n<=max; }
 async function hashPin(pin){
-  const enc = new TextEncoder().encode('tukule:' + String(pin));
-  const buf = await crypto.subtle.digest('SHA-256', enc);
-  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  const raw = 'tukule:' + String(pin);
+  // Prefer real Web Crypto when it's actually available and working — but
+  // crypto.subtle only exists in a secure context (https, or localhost).
+  // Opened over plain http, some Android WebViews, or file://, it's simply
+  // undefined, and the old version of this function threw there — which
+  // left "Create account" / login buttons permanently disabled with no
+  // error shown, since nothing ever caught the rejection. Fall back to a
+  // deterministic non-crypto hash in that case: PINs here are only 4-6
+  // digits anyway, so SHA-256 wasn't providing meaningfully more real-world
+  // security against guessing than this does — it only needs to be
+  // deterministic so the same PIN compares equal next time.
+  if(window.crypto && window.crypto.subtle && typeof window.crypto.subtle.digest === 'function'){
+    try{
+      const enc = new TextEncoder().encode(raw);
+      const buf = await crypto.subtle.digest('SHA-256', enc);
+      return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+    }catch(e){ /* fall through to the fallback below */ }
+  }
+  let h1 = 0x12345678, h2 = 0x87654321;
+  for(let i=0;i<raw.length;i++){
+    const c = raw.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761) >>> 0;
+    h2 = Math.imul(h2 ^ c, 0x85ebca6b) >>> 0;
+    h1 = ((h1 << 13) | (h1 >>> 19)) >>> 0;
+    h2 = ((h2 << 11) | (h2 >>> 21)) >>> 0;
+  }
+  return 'fb' + h1.toString(16).padStart(8,'0') + h2.toString(16).padStart(8,'0');
 }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 function addDays(dateStr, days){ const d=new Date(dateStr); d.setDate(d.getDate()+days); return d.toISOString().slice(0,10); }
 function addMonths(dateStr, months){ const d=new Date(dateStr); d.setMonth(d.getMonth()+months); return d.toISOString().slice(0,10); }
 function daysSince(dateStr){ return Math.max(0, Math.floor((new Date() - new Date(dateStr)) / 86400000)); }
 function activeSites(){ return Object.values(state.sites).filter(s=>s.status==='active'); }
+// Existing sites created before per-plan-type toggles existed have no
+// offerOutright/offerDaily/offerMonthly fields at all — treat "missing" as
+// "offered", so nothing that was working for them silently disappears.
+function siteOffersPlan(site, type){
+  const key = type==='outright' ? 'offerOutright' : type==='daily' ? 'offerDaily' : 'offerMonthly';
+  return site[key] !== false;
+}
+function siteOfferedPlanTypes(site){
+  return ['outright','daily','monthly'].filter(t=>siteOffersPlan(site,t));
+}
 function siteAvailableCount(site){ return site.plots.filter(p=>p.status==='available').length; }
 function siteMapsUrl(site){
   if(site.mapsLink) return site.mapsLink;
@@ -856,6 +895,35 @@ function resetSellMap(){
   if(statusEl) statusEl.textContent = '';
 }
 document.getElementById('sell-map-clear').addEventListener('click', resetSellMap);
+document.getElementById('sell-use-my-location').addEventListener('click', ()=>{
+  const btn = document.getElementById('sell-use-my-location');
+  const statusEl = document.getElementById('sell-map-status');
+  if(!navigator.geolocation){
+    statusEl.textContent = "Your browser doesn't support location — enter coordinates manually or paste a Maps link instead.";
+    return;
+  }
+  const originalLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Locating…';
+  navigator.geolocation.getCurrentPosition(
+    (pos)=>{
+      const lat = pos.coords.latitude, lng = pos.coords.longitude;
+      document.getElementById('sell-lat').value = lat.toFixed(6);
+      document.getElementById('sell-lng').value = lng.toFixed(6);
+      if(sellMap){ sellMap.setView([lat, lng], 17); setTimeout(()=>sellMap.invalidateSize(), 80); }
+      statusEl.textContent = 'Map centred on your current location — trace the boundary, or leave the pinned coordinates as-is.';
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    },
+    (err)=>{
+      const reason = err && err.code===1 ? 'Location permission was denied.' : "Couldn't get your location.";
+      statusEl.textContent = `${reason} You can still enter coordinates manually or paste a Maps link.`;
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    },
+    { enableHighAccuracy:true, timeout:10000 }
+  );
+});
 
 /* ---------- buyer read-only boundary map ---------- */
 /* ---------- geo-referenced plot grid (subdivides the drawn boundary into
@@ -1080,16 +1148,32 @@ function wireBoundaryEditors(container, prefix){
 }
 
 /* ---------- home ---------- */
+function siteTermsSummary(site){
+  const parts = [];
+  if(siteOffersPlan(site,'outright')) parts.push(site.outrightDiscountPct>0 ? `Outright −${site.outrightDiscountPct}%` : 'Outright');
+  if(siteOffersPlan(site,'daily') && site.dailyTerms && site.dailyTerms.length){
+    const t = site.dailyTerms;
+    parts.push(`Daily ${t.length>1 ? Math.min(...t)+'–'+Math.max(...t) : t[0]} days`);
+  }
+  if(siteOffersPlan(site,'monthly') && site.monthlyTerms && site.monthlyTerms.length){
+    const t = site.monthlyTerms;
+    parts.push(`Monthly ${t.length>1 ? Math.min(...t)+'–'+Math.max(...t) : t[0]}mo`);
+  }
+  if(parts.length) parts.push(`${site.depositPct}% deposit`);
+  return parts.join(' · ');
+}
 function siteCardHtml(site, ctaLabel){
   const mapsUrl = siteMapsUrl(site);
   const [minP,maxP] = siteMinMaxPrice(site);
   const priceLabel = minP===maxP ? money(minP) : `${money(minP)} – ${money(maxP)}`;
+  const termsSummary = siteTermsSummary(site);
   return `
     <div class="site-card">
       ${site.photoUrl ? `<img class="thumb" src="${site.photoUrl}" alt="${esc(site.name)}">` : ''}
       <h3>${esc(site.name)}</h3>
       <div class="loc">${esc(site.location)}${mapsUrl ? ` · <a href="${esc(mapsUrl)}" target="_blank" rel="noopener">📍 Get directions</a>` : ''}</div>
       <div class="price">${priceLabel} <span style="font-family:'Karla',sans-serif;font-size:0.72rem;font-weight:600;">/ ${esc(site.plotLabel)}</span></div>
+      ${termsSummary ? `<div class="avail" style="color:var(--river-dark);">${esc(termsSummary)}</div>` : ''}
       <div class="avail">${siteAvailableCount(site)} of ${site.plots.length} plots available</div>
       <button class="btn btn-secondary btn-sm" data-open-site="${site.id}">${ctaLabel}</button>
     </div>
@@ -1159,6 +1243,7 @@ document.getElementById('back-to-sites').addEventListener('click', ()=>{
 
 function openSite(siteId){
   currentSiteId = siteId; selectedPlots = [];
+  document.getElementById('reserve-agree-check').checked = false;
   document.getElementById('buy-site-picker').classList.add('hidden');
   document.getElementById('buy-plot-area').classList.remove('hidden');
   const site = state.sites[siteId];
@@ -1168,7 +1253,10 @@ function openSite(siteId){
   const photo = document.getElementById('buy-site-photo');
   if(site.photoUrl){ photo.src = site.photoUrl; photo.classList.remove('hidden'); }
   else { photo.classList.add('hidden'); photo.removeAttribute('src'); }
-  document.querySelector('.plan-tab[data-plan="outright"]').click();
+  document.querySelectorAll('.plan-tab').forEach(btn=>{
+    btn.classList.toggle('hidden', !siteOffersPlan(site, btn.dataset.plan));
+  });
+  (document.querySelector('.plan-tab[data-plan="outright"]:not(.hidden)') || document.querySelector('.plan-tab:not(.hidden)')).click();
   renderPlotGrid();
   renderBuySiteMap();
 }
@@ -1210,11 +1298,13 @@ function renderSelection(){
   const check = document.getElementById('reserve-account-check');
   check.innerHTML = currentAccountPhone ? '' : '<p class="note">Log in or create an account to reserve a plot.</p>';
 
+  const agreeCheck = document.getElementById('reserve-agree-check');
   const btn = document.getElementById('reserve-btn');
-  btn.disabled = selectedPlots.length===0;
+  btn.disabled = selectedPlots.length===0 || !agreeCheck.checked;
   btn.textContent = selectedPlots.length===0 ? 'Select plots to continue' : (currentAccountPhone ? 'Reserve these plots' : 'Log in to reserve');
   renderSchedule();
 }
+document.getElementById('reserve-agree-check').addEventListener('change', renderSelection);
 
 document.querySelectorAll('.plan-tab').forEach(btn=>{
   btn.addEventListener('click', ()=>{
@@ -1376,6 +1466,7 @@ document.getElementById('reserve-btn').addEventListener('click', async ()=>{
   const site = state.sites[currentSiteId];
   const requested = [...selectedPlots];
   if(!buyer || !site || requested.length===0 || !computePlanFor(requested)) return;
+  if(!document.getElementById('reserve-agree-check').checked) return;
 
   const btn = document.getElementById('reserve-btn');
   const originalLabel = btn.textContent;
@@ -1415,7 +1506,8 @@ document.getElementById('reserve-btn').addEventListener('click', async ()=>{
     plots: claimed, type: plan.type, total: plan.total, deposit: plan.deposit,
     installment: plan.installment, installments: plan.installments, unit: plan.unit,
     startDate: plan.startDate, completionDate: plan.completionDate || plan.startDate,
-    balance: plan.total, status:'active'
+    balance: plan.total, status:'active',
+    buyerAgreedAt: todayISO(), ownerAgreedAt: null
   };
   buyer.plans.push(planRecord);
   saveBuyerPlans(currentAccountPhone, buyer.plans);
@@ -1508,6 +1600,7 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
     mapsLink: mapsLink || null,
     boundary: sellBoundaryLatLngs && sellBoundaryLatLngs.length ? sellBoundaryLatLngs : null,
     outrightDiscountPct:5, depositPct:20, dailyTerms:[90,180,365], monthlyTerms:[6,12,18,24,36],
+    offerOutright:true, offerDaily:true, offerMonthly:true,
     ownerName, ownerPhone, ownerNrc: ownerNrc || null, ownerPinHash, isNexliteOwned:false, commissionPct: state.settings.defaultCommissionPct,
     status:'pending', createdAt: todayISO(), plots: buildPlots(rows, cols, []),
     commissionSettlements: [], photoUrl: pendingListingPhoto || null
@@ -1637,6 +1730,26 @@ function renderOwnerDashboard(){
         <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-save-plot-details="${site.id}">Save plot changes</button>
       </details>` : '';
 
+    const paymentTermsHtml = `
+      <details style="margin-top:10px;">
+        <summary style="cursor:pointer;font-weight:600;color:var(--soil-dark);">Payment terms</summary>
+        <div class="grid-two" style="margin-top:8px;">
+          <div><label class="field">Outright discount %</label><input type="number" min="0" max="100" data-terms-field="outrightDiscountPct:${site.id}" value="${site.outrightDiscountPct}"></div>
+          <div><label class="field">Deposit %</label><input type="number" min="0" max="100" data-terms-field="depositPct:${site.id}" value="${site.depositPct}"></div>
+        </div>
+        <label class="field">Daily plan terms (days, comma-separated)</label>
+        <input type="text" data-terms-field="dailyTerms:${site.id}" value="${(site.dailyTerms||[]).join(', ')}" placeholder="e.g. 90, 180, 365">
+        <label class="field">Monthly plan terms (months, comma-separated)</label>
+        <input type="text" data-terms-field="monthlyTerms:${site.id}" value="${(site.monthlyTerms||[]).join(', ')}" placeholder="e.g. 6, 12, 18, 24, 36">
+        <div style="display:flex;gap:14px;margin:10px 0;flex-wrap:wrap;">
+          <label style="font-size:0.85rem;display:flex;align-items:center;gap:5px;"><input type="checkbox" data-terms-toggle="offerOutright:${site.id}" ${siteOffersPlan(site,'outright')?'checked':''}> Offer outright</label>
+          <label style="font-size:0.85rem;display:flex;align-items:center;gap:5px;"><input type="checkbox" data-terms-toggle="offerDaily:${site.id}" ${siteOffersPlan(site,'daily')?'checked':''}> Offer daily plan</label>
+          <label style="font-size:0.85rem;display:flex;align-items:center;gap:5px;"><input type="checkbox" data-terms-toggle="offerMonthly:${site.id}" ${siteOffersPlan(site,'monthly')?'checked':''}> Offer monthly plan</label>
+        </div>
+        <p class="note" style="margin-top:0;">Changes apply to plots not yet reserved — buyers who've already reserved keep the terms they agreed to when they reserved.</p>
+        <button class="btn btn-secondary btn-sm" data-save-terms="${site.id}">Save payment terms</button>
+      </details>`;
+
     const boundaryHtml = boundaryDetailsHtml(site, 'owner');
 
     const pendingForSite = [];
@@ -1662,10 +1775,13 @@ function renderOwnerDashboard(){
       const stale = days >= 7;
       const paidSoFar = Math.round((plan.total - planBalance(plan))*100)/100;
       const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
+      const agreementBtn = plan.ownerAgreedAt
+        ? `<span class="note" style="margin:0;">Agreement confirmed ${plan.ownerAgreedAt}</span>`
+        : `<button class="btn btn-secondary btn-sm" data-confirm-agreement="${esc(buyer.phone)}:${plan.id}">Confirm agreement</button>`;
       return `
         <div class="schedule-line">
           <span>${stale?'⚠️ ':''}Plot${plan.plots.length>1?'s':''} ${plotLabels} — ${esc(buyer.name)} — reserved ${days} day${days===1?'':'s'} ago${paidSoFar>0?' · '+money(paidSoFar)+' paid':''}</span>
-          <span><button class="btn btn-ghost btn-sm" data-release-plan="${esc(buyer.phone)}:${plan.id}">Release</button></span>
+          <span style="display:flex;gap:6px;align-items:center;">${agreementBtn}<button class="btn btn-ghost btn-sm" data-release-plan="${esc(buyer.phone)}:${plan.id}">Release</button></span>
         </div>`;
     }).join('') : '<p class="note">No open reservations.</p>';
 
@@ -1710,6 +1826,7 @@ function renderOwnerDashboard(){
         <div class="schedule-line"><span>Commission you've forwarded</span><span>${money(comm.settled)}</span></div>
         <div class="schedule-line"><strong>Commission still owed to Nexlite</strong><strong>${money(comm.outstanding)}</strong></div>
         ${plotDetailsHtml}
+        ${paymentTermsHtml}
         ${boundaryHtml}
         <p class="note" style="margin:10px 0 0;"><strong>Sales velocity (plots reserved/month)</strong></p>
         ${velocityChartHtml(siteMonthlyVelocity(site))}
@@ -1774,6 +1891,51 @@ function renderOwnerDashboard(){
         if(p.sizeLabel !== val){ p.sizeLabel = val; changed++; }
       });
       if(changed){ logAudit(`Updated per-plot pricing/size for "${site.name}" (${changed} field${changed===1?'':'s'})`); saveState(); }
+      renderOwnerDashboard();
+    });
+  });
+  dash.querySelectorAll('[data-save-terms]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const siteId = btn.dataset.saveTerms;
+      const site = state.sites[siteId];
+      if(!site) return;
+      const field = (name)=>dash.querySelector(`[data-terms-field="${name}:${siteId}"]`);
+      const toggle = (name)=>dash.querySelector(`[data-terms-toggle="${name}:${siteId}"]`);
+      const outright = Number(field('outrightDiscountPct').value);
+      const deposit = Number(field('depositPct').value);
+      const parseTermList = (raw)=>[...new Set(raw.split(',').map(s=>Number(s.trim())).filter(n=>Number.isInteger(n) && n>0))].sort((a,b)=>a-b);
+      const dailyTerms = parseTermList(field('dailyTerms').value);
+      const monthlyTerms = parseTermList(field('monthlyTerms').value);
+      const offerOutright = toggle('offerOutright').checked;
+      const offerDaily = toggle('offerDaily').checked;
+      const offerMonthly = toggle('offerMonthly').checked;
+      const problems = [];
+      if(!inRange(outright, NUMERIC_BOUNDS.outrightDiscountPct)) problems.push('Outright discount % must be 0-100');
+      if(!inRange(deposit, NUMERIC_BOUNDS.depositPct)) problems.push('Deposit % must be 0-100');
+      if(offerDaily && dailyTerms.length===0) problems.push('Add at least one daily term in days, or turn off the daily plan');
+      if(offerMonthly && monthlyTerms.length===0) problems.push('Add at least one monthly term in months, or turn off the monthly plan');
+      if(!offerOutright && !offerDaily && !offerMonthly) problems.push('At least one payment plan must stay on');
+      if(problems.length){ alert("Couldn't save — " + problems.join('; ') + '.'); return; }
+      site.outrightDiscountPct = outright;
+      site.depositPct = deposit;
+      if(dailyTerms.length) site.dailyTerms = dailyTerms;
+      if(monthlyTerms.length) site.monthlyTerms = monthlyTerms;
+      site.offerOutright = offerOutright;
+      site.offerDaily = offerDaily;
+      site.offerMonthly = offerMonthly;
+      logAudit(`Updated payment terms for "${site.name}"`);
+      saveState();
+      renderOwnerDashboard();
+    });
+  });
+  dash.querySelectorAll('[data-confirm-agreement]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [buyerPhone, planId] = btn.dataset.confirmAgreement.split(':');
+      const buyer = state.buyers[buyerPhone];
+      const plan = buyer && buyer.plans.find(p=>p.id===planId);
+      if(!plan || plan.ownerAgreedAt) return;
+      plan.ownerAgreedAt = todayISO();
+      saveBuyerPlans(buyerPhone, buyer.plans);
       renderOwnerDashboard();
     });
   });
@@ -1847,14 +2009,19 @@ document.getElementById('create-account-btn').addEventListener('click', async ()
   if(!validPin(pin)){ msg.innerHTML = '<div class="msg err">PIN must be 4–6 digits.</div>'; return; }
   if(state.buyers[phone]){ msg.innerHTML = '<div class="msg err">An account already exists for that number. Log in instead.</div>'; return; }
   btn.disabled = true;
-  const pinHash = await hashPin(pin);
-  state.buyers[phone] = { phone, name, nrc, pinHash, plans:[], payments:[] };
-  saveState();
-  document.getElementById('create-pin').value='';
-  currentAccountPhone = phone;
-  updateSession({ accountPhone: phone });
-  btn.disabled = false;
-  renderAccount();
+  try{
+    const pinHash = await hashPin(pin);
+    state.buyers[phone] = { phone, name, nrc, pinHash, plans:[], payments:[] };
+    saveState();
+    document.getElementById('create-pin').value='';
+    currentAccountPhone = phone;
+    updateSession({ accountPhone: phone });
+    renderAccount();
+  }catch(e){
+    msg.innerHTML = '<div class="msg err">Something went wrong creating your account — please try again, or call 0977 638 790 / 0960 271 128.</div>';
+  }finally{
+    btn.disabled = false;
+  }
 });
 
 document.getElementById('login-btn').addEventListener('click', async ()=>{
@@ -1865,13 +2032,18 @@ document.getElementById('login-btn').addEventListener('click', async ()=>{
   const buyer = state.buyers[phone];
   if(!phone || !pin || !buyer){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
   btn.disabled = true;
-  const pinHash = await hashPin(pin);
-  btn.disabled = false;
-  if(pinHash !== buyer.pinHash){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
-  currentAccountPhone = phone;
-  updateSession({ accountPhone: phone });
-  document.getElementById('login-pin').value='';
-  renderAccount();
+  try{
+    const pinHash = await hashPin(pin);
+    if(pinHash !== buyer.pinHash){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
+    currentAccountPhone = phone;
+    updateSession({ accountPhone: phone });
+    document.getElementById('login-pin').value='';
+    renderAccount();
+  }catch(e){
+    msg.innerHTML = '<div class="msg err">Something went wrong logging in — please try again, or call 0977 638 790 / 0960 271 128.</div>';
+  }finally{
+    btn.disabled = false;
+  }
 });
 
 document.getElementById('forgot-pin-btn').addEventListener('click', ()=>{
@@ -1979,6 +2151,7 @@ function renderAccount(){
         <div class="schedule-line"><span>Total price</span><span>${money(plan.total)}</span></div>
         <div class="schedule-line"><span>Outstanding balance</span><span>${money(bal)}</span></div>
         <div class="schedule-line"><span>Status</span><span>${statusHtml}</span></div>
+        ${plan.buyerAgreedAt ? `<div class="schedule-line"><span>Agreement</span><span>${plan.ownerAgreedAt ? 'Confirmed by both parties' : 'You confirmed · awaiting owner'}</span></div>` : ''}
         ${dueHtml}
         ${plan.status==='active' ? `<button class="btn btn-secondary btn-sm" style="margin-top:10px;" data-print-plan="${plan.id}">Generate &amp; print contract</button>` : ''}
         ${plan.status==='paid' ? `<button class="btn btn-secondary btn-sm" style="margin-top:10px;" data-print-certificate="${plan.id}">Print certificate of purchase</button>` : ''}
@@ -2124,6 +2297,9 @@ function printContract(buyer, plan){
   const scheduleRow = plan.type==='outright'
     ? `<tr><td>Payment terms</td><td>Outright — full amount due on signing</td></tr>`
     : `<tr><td>Payment terms</td><td>${plan.type==='daily'?'Daily':'Monthly'} plan: deposit of ${money(plan.deposit)}, then ${money(plan.installment)} per ${plan.unit} for ${plan.installments} ${plan.unit}s</td></tr>`;
+  const agreementRow = plan.buyerAgreedAt ? `<tr><td>Agreement confirmed</td><td>Buyer: ${plan.buyerAgreedAt}${plan.ownerAgreedAt ? ' · Seller: ' + plan.ownerAgreedAt : ' · Seller: pending'}</td></tr>` : '';
+  const buyerSignNote = plan.buyerAgreedAt ? `<div style="font-size:0.75rem;color:#666;margin-top:4px;">Confirmed in-app ${plan.buyerAgreedAt}</div>` : '';
+  const sellerSignNote = plan.ownerAgreedAt ? `<div style="font-size:0.75rem;color:#666;margin-top:4px;">Confirmed in-app ${plan.ownerAgreedAt}</div>` : `<div style="font-size:0.75rem;color:#666;margin-top:4px;">Not yet confirmed in-app</div>`;
   const html = `
     <!DOCTYPE html><html><head><meta charset="UTF-8"><title>Sale Agreement — ${plotLabels}</title>
     <style>
@@ -2147,11 +2323,12 @@ function printContract(buyer, plan){
       <tr><td>Plot(s)</td><td>${plotSizeRow}</td></tr>
       <tr><td>Total price</td><td>${money(plan.total)}</td></tr>
       ${scheduleRow}
+      ${agreementRow}
       <tr><td>Outstanding balance</td><td>${money(bal)}</td></tr>
       <tr><td>Status</td><td>${bal<=0 ? 'Paid in full — title processing' : 'Instalments in progress'}</td></tr>
     </table>
     <p>All payments under this agreement are made directly between the Buyer and the Seller; Tukule / Nexlite Digital Solutions Limited does not collect or hold buyer funds. The Buyer agrees to keep instalments up to date as scheduled above. Ownership and title processing begin once the full price has been paid and confirmed. Where the Seller is a third party, the Seller separately owes Nexlite Digital Solutions Limited a commission on amounts collected under this agreement, payable as agreed between Seller and Nexlite. This document is a summary of the agreed sale and does not replace formal conveyancing — the buyer and seller are encouraged to finalise transfer documents with a lawyer or conveyancer once the plot is paid off.</p>
-    <div class="sign"><div>Buyer's signature</div><div>Seller / Agent signature</div></div>
+    <div class="sign"><div>Buyer's signature${buyerSignNote}</div><div>Seller / Agent signature${sellerSignNote}</div></div>
     <p class="note">Printed from Tukule — Let's Build on ${todayISO()}.</p>
     <button onclick="window.print()" style="margin-top:20px;padding:10px 18px;">Print this agreement</button>
     </body></html>`;
