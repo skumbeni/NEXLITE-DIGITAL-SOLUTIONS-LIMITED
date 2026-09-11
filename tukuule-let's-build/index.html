@@ -607,10 +607,17 @@ function attachCloudListener(){
     const val = snap.val();
     if(val){
       state = val;
-      // Backfill fields added after this database was first created, so
-      // older deployments don't crash on state.staff/state.auditLog being undefined.
+      // Backfill fields that can legitimately be empty. Realtime Database
+      // never stores empty objects — a node with zero children simply
+      // doesn't come back at all — so the very first save/read round-trip
+      // silently drops buyers/sites/pinResetRequests (and staff/auditLog on
+      // older deployments) from what we get back, leaving state.buyers etc.
+      // undefined and crashing anything that indexes into them.
       if(!state.staff) state.staff = {};
       if(!state.auditLog) state.auditLog = [];
+      if(!state.sites) state.sites = {};
+      if(!state.buyers) state.buyers = {};
+      if(!state.pinResetRequests) state.pinResetRequests = {};
     } else if(!state){
       state = defaultState();
       db.ref(DATA_PATH).set(state);
