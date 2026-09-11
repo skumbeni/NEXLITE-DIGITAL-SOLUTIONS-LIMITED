@@ -846,15 +846,23 @@ async function hashPin(pin){
       return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
     }catch(e){ /* fall through to the fallback below */ }
   }
-  let h1 = 0x12345678, h2 = 0x87654321;
-  for(let i=0;i<raw.length;i++){
-    const c = raw.charCodeAt(i);
-    h1 = Math.imul(h1 ^ c, 2654435761) >>> 0;
-    h2 = Math.imul(h2 ^ c, 0x85ebca6b) >>> 0;
-    h1 = ((h1 << 13) | (h1 >>> 19)) >>> 0;
-    h2 = ((h2 << 11) | (h2 >>> 21)) >>> 0;
-  }
-  return 'fb' + h1.toString(16).padStart(8,'0') + h2.toString(16).padStart(8,'0');
+  // Firebase rules validate pinHash as a 64-char hex string (the shape of a
+  // real SHA-256 digest) — so this fallback has to produce exactly that
+  // shape too, or every write through this path gets rejected by the
+  // database rules with no clue why (looks identical to a random cloud
+  // failure from the UI). Run 8 independently-salted 32-bit rolling hashes
+  // and concatenate them: 8 x 8 hex chars = 64, still fully deterministic.
+  const seeds = [0x12345678, 0x87654321, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35, 0x27d4eb2f, 0x165667b1, 0xd3a2646c];
+  const words = seeds.map((seed, si)=>{
+    let h = seed;
+    const salted = raw + ':' + si;
+    for(let i=0;i<salted.length;i++){
+      h = Math.imul(h ^ salted.charCodeAt(i), 2654435761) >>> 0;
+      h = ((h << 13) | (h >>> 19)) >>> 0;
+    }
+    return h.toString(16).padStart(8,'0');
+  });
+  return words.join('');
 }
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 function addDays(dateStr, days){ const d=new Date(dateStr); d.setDate(d.getDate()+days); return d.toISOString().slice(0,10); }
