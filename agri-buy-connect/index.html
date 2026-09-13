@@ -61,10 +61,12 @@ input,select{font-family:inherit;}
 .chip-company{background:var(--navy-tint);color:var(--navy-dark);}
 .chip-agent{background:var(--rust-tint);color:var(--rust-dark);}
 .chip-staff{background:var(--olive-tint);color:var(--olive-dark);}
+.chip-wstaff{background:var(--navy-tint);color:var(--navy-dark);}
 .chip-farmer{background:var(--gold-tint);color:var(--gold-dark);}
 .btn-company{background:var(--navy);}
 .btn-agent{background:var(--rust);}
 .btn-staff{background:var(--olive);}
+.btn-wstaff{background:var(--navy-dark);}
 .btn-farmer{background:var(--gold-dark);}
 .landing-foot{text-align:center;margin-top:28px;font-size:12px;color:var(--soil-40);}
 
@@ -477,6 +479,7 @@ window.__firebaseReadyPromise = new Promise((resolve) => { window.__firebaseRead
           <div class="role-card"><div class="role-chip chip-company">🏢</div><h3>Buying company</h3><p>Manage buying, agents, field staff, farmers, approvals, payments and reports.</p><button class="btn-company" onclick="goLogin('company')">Company sign in</button><button class="link-btn" onclick="goSignup('company')">New company? Create account</button></div>
           <div class="role-card"><div class="role-chip chip-agent">🤝</div><h3>Agent</h3><p>Coordinate farmer supply, field staff, purchases and commission.</p><button class="btn-agent" onclick="goLogin('agent')">Agent sign in</button><button class="link-btn" onclick="goSignup('agent')">New agent? Create account</button></div>
           <div class="role-card"><div class="role-chip chip-staff">🚜</div><h3>Field staff</h3><p>Register farmers and capture crop transactions in the field.</p><button class="btn-staff" onclick="goLogin('staff')">Staff sign in</button></div>
+          <div class="role-card"><div class="role-chip chip-wstaff">📦</div><h3>Warehouse staff</h3><p>Log produce as it physically arrives — nothing else on this account.</p><button class="btn-wstaff" onclick="goLogin('wstaff')">Warehouse sign in</button></div>
           <div class="role-card"><div class="role-chip chip-farmer">🌾</div><h3>Farmer</h3><p>View sales, quantities, buyers and payment status.</p><button class="btn-farmer" onclick="goLogin('farmer')">Farmer sign in</button></div>
         </div>
       </div>
@@ -524,6 +527,7 @@ window.__firebaseReadyPromise = new Promise((resolve) => { window.__firebaseRead
     <button class="nav-item" data-view="c-agents" onclick="setView('company','c-agents')">Agents <span style="opacity:.6;font-size:11px;">optional</span></button>
     <button class="nav-item" data-view="c-staff" onclick="setView('company','c-staff')">Field staff</button>
     <button class="nav-item" data-view="c-purchases" onclick="setView('company','c-purchases')">Purchases</button>
+    <button class="nav-item" data-view="c-intake" onclick="setView('company','c-intake')">Warehouse intake</button>
     <button class="nav-item" data-view="c-contracts" onclick="setView('company','c-contracts')">Contracts</button>
     <button class="nav-item" data-view="c-impact" onclick="setView('company','c-impact')">Impact</button>
     <button class="nav-item" data-view="c-payroll" onclick="setView('company','c-payroll')">Payroll</button>
@@ -576,6 +580,19 @@ window.__firebaseReadyPromise = new Promise((resolve) => { window.__firebaseRead
     <button class="logout-btn" onclick="logout()">Log out</button>
   </div>
   <div class="main" id="staff-main"></div>
+</div>
+
+<!-- ============ APP: WAREHOUSE STAFF (intake-only, company-provisioned) ============ -->
+<div class="app" id="app-wstaff">
+  <div class="sidebar">
+    <div class="brand"><div class="brand-mark">A</div><div class="brand-name">AgriBuy Connect</div></div>
+    <span class="role-tag" style="background:var(--navy-tint);color:var(--navy-dark);">Warehouse staff</span>
+    <button class="nav-item active" data-view="w-intake" onclick="setView('wstaff','w-intake')">Warehouse intake</button>
+    <div class="sidebar-spacer"></div>
+    <div class="who"><div class="nm" id="wstaff-who-name"></div><div class="rl">Warehouse staff</div></div>
+    <button class="logout-btn" onclick="logout()">Log out</button>
+  </div>
+  <div class="main" id="wstaff-main"></div>
 </div>
 
 <!-- ============ APP: FARMER ============ -->
@@ -787,6 +804,16 @@ function purchaseMT(p){
   const factor = UNIT_KG[p.unit];
   return factor ? (p.quantity * factor) / 1000 : 0;
 }
+// Whole calendar months a link has been active, inclusive of the current
+// month — used only by the flat_monthly NEXLITE fee model below. Floors at
+// 1 so a link created this month still owes one month's fee, not zero.
+function monthsElapsedSince(dateStr){
+  if(!dateStr) return 1;
+  const start = new Date(dateStr+'T00:00:00');
+  const now = new Date();
+  const months = (now.getFullYear()-start.getFullYear())*12 + (now.getMonth()-start.getMonth()) + 1;
+  return Math.max(1, months);
+}
 
 /* =========================================================================
    AGRIBUY PARTNERSHIP MODELS
@@ -972,7 +999,7 @@ function refreshCurrentView(){
   const activeApp = document.querySelector('.app.active');
   if(!activeApp) return;
   const activeNav = activeApp.querySelector('.nav-item.active');
-  if(activeNav) setView(session.role==='company'?'company':session.role==='agent'?'agent':session.role==='staff'?'staff':'farmer', activeNav.dataset.view);
+  if(activeNav) setView(session.role==='company'?'company':session.role==='agent'?'agent':session.role==='staff'?'staff':session.role==='wstaff'?'wstaff':'farmer', activeNav.dataset.view);
 }
 
 function seedData(){
@@ -989,6 +1016,12 @@ function seedData(){
     // equivalent for staff hired directly, no agent involved. See
     // DB.isStaffLinkedToCompany / DB.linkStaffToCompany.
     staffLinks: [],
+    // Company-provisioned, PIN-login accounts scoped to warehouse intake
+    // logging only — NOT field staff (they don't register farmers or log
+    // purchases) and NOT full company admins (no access to payroll,
+    // billing, partnership terms, etc.). See DB.addWarehouseStaff /
+    // renderWstaff / the "Warehouse intake" nav item on the company side.
+    warehouseStaff: [],
     farmers: [],
     // Many-to-many: which staff (and by extension, which company/agent)
     // a farmer has an active relationship with. A farmer can sell to
@@ -1013,6 +1046,8 @@ const DB = {
   applyMigrations(){
     if(!this.data.payrollRuns) this.data.payrollRuns = [];
     if(!this.data.contracts) this.data.contracts = [];
+    if(!Array.isArray(this.data.intakeLogs)) this.data.intakeLogs = [];
+    if(!Array.isArray(this.data.warehouseStaff)) this.data.warehouseStaff = [];
     if(!this.data.messages) this.data.messages = [];
     if(!this.data.notifications) this.data.notifications = [];
     if(typeof this.data.partnershipTerms === 'undefined') this.data.partnershipTerms = null;
@@ -1021,6 +1056,25 @@ const DB = {
     this.data.agentLinks.forEach(l=>{
       if(!Array.isArray(l.advances)) l.advances = [];
       if(typeof l.commissionRate === 'undefined' || l.commissionRate===null) l.commissionRate = 0;
+      // NEXLITE's own take from this agent-company link. Three interchangeable
+      // fee models — pick one per link. None of these are billed to the
+      // buying company or shown to them; they're settled between NEXLITE
+      // and the agent, out of his own commission/earnings on this link.
+      //   pct_commission — % of the agent's accrued commission (scales with volume)
+      //   flat_monthly   — flat ZMW/month for keeping this link active
+      //   flat_per_mt    — flat ZMW per MT of commissionable volume moved
+      if(typeof l.nexliteFeeModel === 'undefined' || l.nexliteFeeModel===null) l.nexliteFeeModel = 'pct_commission';
+      if(typeof l.nexliteCutPct === 'undefined' || l.nexliteCutPct===null) l.nexliteCutPct = 15;
+      if(typeof l.nexliteFlatMonthlyZMW === 'undefined' || l.nexliteFlatMonthlyZMW===null) l.nexliteFlatMonthlyZMW = 200;
+      if(typeof l.nexliteFlatPerMT === 'undefined' || l.nexliteFlatPerMT===null) l.nexliteFlatPerMT = 10;
+      if(!l.linkedDate) l.linkedDate = new Date().toISOString().slice(0,10);
+      // Payments the agent has made against this link's platform fee, and
+      // the enforcement clock NEXLITE starts once it decides to collect —
+      // see DB.linkLedger (owed) and DB.linkAccessGate (enforcement).
+      // Nothing here auto-blocks anyone; nexliteGraceEndsAt has to be set
+      // (from agribuy-admin.html) for the gate to ever bite.
+      if(!Array.isArray(l.nexlitePayments)) l.nexlitePayments = [];
+      if(typeof l.nexliteGraceEndsAt === 'undefined') l.nexliteGraceEndsAt = null;
     });
     if(!Array.isArray(this.data.staffLinks)) this.data.staffLinks = [];
     if(!Array.isArray(this.data.farmerLinks)) this.data.farmerLinks = [];
@@ -1168,7 +1222,7 @@ const DB = {
   // nothing of theirs left in `cloud` to merge against.
   _mergeLocalIntoCloud(local, cloud){
     const merged = JSON.parse(JSON.stringify(cloud));
-    ['companies','agents','agentLinks','fieldStaff','farmers','purchases','contracts','payrollRuns'].forEach(key => {
+    ['companies','agents','agentLinks','fieldStaff','warehouseStaff','farmers','purchases','contracts','payrollRuns'].forEach(key => {
       if(!Array.isArray(merged[key])) merged[key] = [];
       if(!Array.isArray(local[key])) return;
       const existingIds = new Set(merged[key].map(r => r && r.id));
@@ -1224,11 +1278,13 @@ const DB = {
   company(id){ return this.data.companies.find(c=>c.id===id); },
   agent(id){ return this.data.agents.find(a=>a.id===id); },
   fieldStaffById(id){ return this.data.fieldStaff.find(s=>s.id===id); },
+  warehouseStaffById(id){ return this.data.warehouseStaff.find(s=>s.id===id); },
   farmer(id){ return this.data.farmers.find(f=>f.id===id); },
   recordFor(role, id){
     if(role==='company') return this.company(id);
     if(role==='agent') return this.agent(id);
     if(role==='staff') return this.fieldStaffById(id);
+    if(role==='wstaff') return this.warehouseStaffById(id);
     if(role==='farmer') return this.farmer(id);
     return null;
   },
@@ -1421,6 +1477,45 @@ const DB = {
     return this.data.purchases.filter(p=>p.contractId===contractId).reduce((s,p)=>s+p.quantity,0);
   },
 
+  // ---- warehouse intake (independent of agent-logged purchases) ----
+  // Recorded by the company itself when produce physically arrives — a
+  // second, independent number to check the agent's logged purchases
+  // against. If an agent under-reports, this won't match, and it's the
+  // company (wanting accurate stock records for its own reasons) that has
+  // the incentive to notice, not just NEXLITE chasing a suspicion.
+  intakeLogsFor(companyId){
+    return this.data.intakeLogs.filter(i=>i.companyId===companyId);
+  },
+  intakeReconciliation(companyId){
+    const purchases = this.purchasesFor({companyId}).filter(p=>this.isCommissionable(p));
+    const intake = this.intakeLogsFor(companyId);
+    const commodities = Array.from(new Set([...purchases.map(p=>p.commodity), ...intake.map(i=>i.commodity)]));
+    return commodities.map(commodity => {
+      const purchasedMT = purchases.filter(p=>p.commodity===commodity).reduce((s,p)=>s+purchaseMT(p),0);
+      const intakeMT = intake.filter(i=>i.commodity===commodity).reduce((s,i)=>s+(expectedWeightKg(i.quantity,i.unit)||0)/1000, 0);
+      const varianceMT = intakeMT - purchasedMT;
+      // % relative to whichever side actually has volume, so a commodity
+      // with intake but zero logged purchases still reads as a full mismatch
+      // instead of dividing by zero.
+      const base = Math.max(purchasedMT, intakeMT);
+      const variancePct = base>0 ? Math.round((varianceMT/base)*100) : 0;
+      return { commodity, purchasedMT, intakeMT, varianceMT, variancePct };
+    });
+  },
+
+  // ---- warehouse staff (company-provisioned, PIN login, intake-only access) ----
+  warehouseStaffForCompany(companyId){
+    return this.data.warehouseStaff.filter(s=>s.companyId===companyId);
+  },
+  // Who actually logged an intake record — used for the "Logged by" column
+  // and to let a warehouse-staff account delete only what it logged itself
+  // (the company account can still delete any of its own intake records).
+  intakeLoggerName(rec){
+    if(!rec.recordedByRole || rec.recordedByRole==='company') return 'Company';
+    const w = this.warehouseStaffById(rec.recordedById);
+    return w ? w.name : 'Warehouse staff';
+  },
+
   // ---- ledger math ----
   // Commission accrues only once a purchase is at least 'approved' (inspected & signed off),
   // regardless of whether the company ultimately pays the agent or the farmer directly.
@@ -1548,16 +1643,52 @@ const DB = {
     const commissionAccrued = totalValue * (link.commissionRate/100);
     const advanceTotal = (Array.isArray(link.advances) ? link.advances : []).reduce((s,a)=>s+Number(a.amount),0);
     const netPayable = commissionAccrued - advanceTotal; // negative = still owes the advance back
-    return { link, purchases, totalQty, totalValue, commissionAccrued, advanceTotal, netPayable };
+    // nexliteCut is carved out of the agent's own commission/earnings on
+    // this link — never billed to the company on top. netPayable above
+    // (what the company owes the agent) is intentionally unaffected by it.
+    // agentTakeHome is what the agent actually keeps after settling with
+    // NEXLITE, whichever fee model this link uses.
+    const totalMT = commissionablePurchases.reduce((s,p)=>s+purchaseMT(p),0);
+    let nexliteCut = 0;
+    if(link.nexliteFeeModel==='flat_monthly'){
+      nexliteCut = (link.nexliteFlatMonthlyZMW||0) * monthsElapsedSince(link.linkedDate);
+    } else if(link.nexliteFeeModel==='flat_per_mt'){
+      nexliteCut = (link.nexliteFlatPerMT||0) * totalMT;
+    } else { // 'pct_commission' (default)
+      nexliteCut = commissionAccrued * ((link.nexliteCutPct||0)/100);
+    }
+    const agentTakeHome = netPayable - nexliteCut;
+    const nexlitePaid = (Array.isArray(link.nexlitePayments) ? link.nexlitePayments : []).reduce((s,p)=>s+Number(p.amount||0),0);
+    const nexliteOwed = Math.max(0, nexliteCut - nexlitePaid);
+    return { link, purchases, totalQty, totalValue, totalMT, commissionAccrued, advanceTotal, netPayable, nexliteCut, nexlitePaid, nexliteOwed, agentTakeHome };
   },
   agentOverallLedger(agentId){
     const links = this.linksForAgent(agentId);
-    let totalQty=0, commissionAccrued=0, advanceTotal=0;
+    let totalQty=0, commissionAccrued=0, advanceTotal=0, nexliteCut=0, nexliteOwed=0;
     links.forEach(l=>{
       const led = this.linkLedger(agentId, l.companyId);
-      totalQty += led.totalQty; commissionAccrued += led.commissionAccrued; advanceTotal += led.advanceTotal;
+      totalQty += led.totalQty; commissionAccrued += led.commissionAccrued; advanceTotal += led.advanceTotal; nexliteCut += led.nexliteCut; nexliteOwed += led.nexliteOwed;
     });
-    return { totalQty, commissionAccrued, advanceTotal, netPayable: commissionAccrued - advanceTotal };
+    const netPayable = commissionAccrued - advanceTotal;
+    return { totalQty, commissionAccrued, advanceTotal, nexliteCut, nexliteOwed, netPayable, agentTakeHome: netPayable - nexliteCut };
+  },
+  // Enforcement for the platform fee owed on a specific agent-company link.
+  // Deliberately narrow: blocks NEW purchases logged against that one
+  // company only (never the agent's other clients, never existing data),
+  // and only once NEXLITE has actually started the clock by setting
+  // nexliteGraceEndsAt (from agribuy-admin.html) — an unpaid balance with
+  // no grace date set is visible on the ledger but never blocks anything
+  // on its own.
+  linkAccessGate(agentId, companyId){
+    if(!agentId) return { ok:true }; // no agent on this purchase (company-direct staff) — nothing to gate
+    const link = this.link(agentId, companyId);
+    if(!link) return { ok:true };
+    const led = this.linkLedger(agentId, companyId);
+    if(led.nexliteOwed<=0) return { ok:true };
+    if(!link.nexliteGraceEndsAt) return { ok:true, owed: led.nexliteOwed };
+    const graceMs = new Date(link.nexliteGraceEndsAt+'T23:59:59').getTime();
+    if(graceMs >= Date.now()) return { ok:true, grace:true, graceEndsAt: link.nexliteGraceEndsAt, owed: led.nexliteOwed };
+    return { ok:false, owed: led.nexliteOwed, reason: `New purchases against this company are on hold — the NEXLITE platform fee on this link (${fmtK(led.nexliteOwed)}) is overdue. Settle it with NEXLITE to resume.` };
   },
 
   // ---- messaging ----
@@ -1764,6 +1895,7 @@ function companyIsAgentAssisted(companyId){
 function resolveOwnerAccount(role, record){
   if(!record) return null;
   if(role==='company' || role==='agent') return record;
+  if(role==='wstaff') return DB.company(record.companyId); // gated on the same subscription as the company that provisioned this login
   if(role==='staff'){
     // A staff member can now work directly for several companies (home
     // companyId + staffLinks) as well as through an agent — same
@@ -2126,6 +2258,7 @@ const roleMeta = {
   company: { title:'Buying company sign in', sub:'Sign in with your company ID and password.', btnClass:'btn-company', idLabel:'Company ID', idPlaceholder:'e.g. AGRIFOODS', hasSecond:true, secondLabel:'Password', secondPlaceholder:'Your password', canSignup:true },
   agent:   { title:'Agent sign in', sub:'Sign in with your agent ID and password.', btnClass:'btn-agent', idLabel:'Agent ID', idPlaceholder:'e.g. AG-BWALYA', hasSecond:true, secondLabel:'Password', secondPlaceholder:'Your password', canSignup:true },
   staff:   { title:'Field staff sign in', sub:'Enter your staff ID and the PIN given to you by whoever added you.', btnClass:'btn-staff', idLabel:'Staff ID', idPlaceholder:'e.g. FS-MUTALE23', hasSecond:true, secondLabel:'PIN', secondPlaceholder:'6-digit PIN', numeric:true },
+  wstaff:  { title:'Warehouse staff sign in', sub:'Enter your warehouse staff ID and the PIN given to you by your company.', btnClass:'btn-wstaff', idLabel:'Warehouse staff ID', idPlaceholder:'e.g. WS-BANDA42', hasSecond:true, secondLabel:'PIN', secondPlaceholder:'6-digit PIN', numeric:true },
   farmer:  { title:'Farmer sign in', sub:'Enter the code given to you when you sold your crop, or the code from your own sign-up.', btnClass:'btn-farmer', idLabel:'Code', idPlaceholder:'Enter your code', hasSecond:false, canSignup:true }
 };
 
@@ -2169,7 +2302,7 @@ function goLogin(role, silent){
 }
 
 function goSignup(role, silent){
-  if(role!=='company' && role!=='agent' && role!=='farmer') return; // field staff are provisioned by whoever adds them, not self-signup — they need a PIN issued by that employer
+  if(role!=='company' && role!=='agent' && role!=='farmer') return; // field staff and warehouse staff are provisioned by whoever adds them, not self-signup — they need a PIN issued by that employer
   pendingRole = role;
   const meta = signupMeta[role];
   document.getElementById('signup-title').textContent = meta.title;
@@ -2339,6 +2472,16 @@ async function attemptLogin(){
     found = ok ? byId : null;
     if(byId && !found){ err.textContent = "ID recognized but that PIN is wrong. Check with whoever issued it."; err.style.display='block'; return; }
   }
+  if(pendingRole==='wstaff'){
+    const pinEl = document.getElementById('login-pin');
+    const pin = pinEl ? pinEl.value.trim() : '';
+    const byId = DB.data.warehouseStaff.find(s=>s.code.toUpperCase()===code);
+    if(byId && !pin){ err.textContent = "Enter your PIN as well as your warehouse staff ID."; err.style.display='block'; return; }
+    const ok = byId ? await verifyPin(byId, pin) : false;
+    found = ok ? byId : null;
+    if(byId && !found){ err.textContent = "ID recognized but that PIN is wrong. Check with whoever issued it."; err.style.display='block'; return; }
+    if(found && found.active===false){ err.textContent = "This warehouse staff login has been deactivated. Contact your company."; err.style.display='block'; return; }
+  }
   if(pendingRole==='company' || pendingRole==='agent'){
     if(!found){ err.textContent = "That ID wasn't recognized. Check it, or create an account below."; err.style.display='block'; return; }
     const pinEl = document.getElementById('login-pin');
@@ -2379,6 +2522,10 @@ async function attemptLogin(){
     const pinEl = document.getElementById('login-pin');
     const pin = pinEl ? pinEl.value.trim() : '';
     firebaseSignInAndBackfillUid(found, 'staff', authEmailFor('fs', found.id), pin);
+  } else if(pendingRole==='wstaff'){
+    const pinEl = document.getElementById('login-pin');
+    const pin = pinEl ? pinEl.value.trim() : '';
+    firebaseSignInAndBackfillUid(found, 'wstaff', authEmailFor('ws', found.id), pin);
   } else if(pendingRole==='farmer'){
     // Farmers have no interactive password — same deterministic secret
     // used when their Firebase Auth account was (or will be) created.
@@ -2429,6 +2576,11 @@ function enterApp(){
     document.getElementById('app-staff').classList.add('active');
     document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
     setView('staff','s-log');
+  } else if(role==='wstaff'){
+    document.getElementById('wstaff-who-name').textContent = DB.warehouseStaffById(id).name;
+    document.getElementById('app-wstaff').classList.add('active');
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+    setView('wstaff','w-intake');
   } else if(role==='farmer'){
     document.getElementById('farmer-who-name').textContent = DB.farmer(id).name;
     document.getElementById('app-farmer').classList.add('active');
@@ -2442,7 +2594,7 @@ function setView(appKey, view, silent){
   document.querySelectorAll('#app-'+appKey+' .nav-item').forEach(n=>n.classList.toggle('active', n.dataset.view===view));
   if(view.endsWith('-messages')){ renderMessagesView(appKey, session.id); return; }
   if(view.endsWith('-notifications')){ renderNotificationsView(appKey, session.id); return; }
-  const renderers = { company: renderCompany, agent: renderAgent, staff: renderStaff, farmer: renderFarmer };
+  const renderers = { company: renderCompany, agent: renderAgent, staff: renderStaff, wstaff: renderWstaff, farmer: renderFarmer };
   try{
     renderers[appKey](view);
   }catch(e){
@@ -2810,6 +2962,28 @@ function renderCompany(view){
     main.innerHTML = syncBannerHTML() + `
       <div class="main-head"><div><h1>Purchases</h1><p class="desc">Inspect, approve, and choose how each purchase gets paid.</p></div></div>
       <div class="panel"><div class="panel-body">${purchasesTable(purchases.slice().reverse(), {showCompany:false, actions:'company'})}</div></div>`;
+  }
+  if(view==='c-intake'){
+    const logs = DB.intakeLogsFor(companyId).slice().reverse();
+    const recon = DB.intakeReconciliation(companyId);
+    main.innerHTML = syncBannerHTML() + `
+      <div class="main-head">
+        <div><h1>Warehouse intake</h1><p class="desc">What actually arrived, logged independently of any agent's purchase records — your own check against under- or over-reporting.</p></div>
+        <button class="action-btn" style="background:var(--olive)" onclick="openLogIntakeModal('${companyId}')">+ Log intake</button>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Reconciliation — purchases logged vs. intake received</h3></div>
+        <div class="panel-body">${intakeReconciliationHTML(recon)}</div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Intake log</h3></div>
+        <div class="panel-body">${intakeLogsTable(logs)}</div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Warehouse staff accounts</h3><button class="mini-btn primary" onclick="openAddWarehouseStaffModal('${companyId}')">+ Add warehouse staff</button></div>
+        <div class="panel-body">${warehouseStaffTable(companyId)}</div>
+        <p class="sub" style="margin:0;padding:0 16px 14px;">A separate PIN login that can only log and view this page — no purchases, payroll, settings, or billing access. Give it to whoever physically receives produce at the warehouse without making them a full company admin.</p>
+      </div>`;
   }
   if(view==='c-contracts'){
     const contracts = DB.contractsFor({companyId}).slice().reverse();
@@ -3324,7 +3498,7 @@ function confirmAddAgent(companyId){
   }
   if(DB.link(agent.id, companyId)){ toast(agent.name + ' is already linked to your company'); return; }
   const wasAgentAssisted = companyIsAgentAssisted(companyId);
-  DB.data.agentLinks.push({ id: DB.uid('l'), agentId: agent.id, companyId, commissionRate: rate, advances: [] });
+  DB.data.agentLinks.push({ id: DB.uid('l'), agentId: agent.id, companyId, commissionRate: rate, advances: [], nexliteFeeModel: 'pct_commission', nexliteCutPct: 15, nexliteFlatMonthlyZMW: 200, nexliteFlatPerMT: 10, linkedDate: new Date().toISOString().slice(0,10) });
   const c = DB.company(companyId);
   if(!wasAgentAssisted) logBillingEvent(c, 'agent_linked', `Linked agent ${agent.name} — account moved to the free (agent-assisted) plan.`);
   DB.save(); closeModal();
@@ -3523,7 +3697,9 @@ function renderAgent(view){
         <div class="stat-card"><div class="lbl">Total quantity purchased</div><div class="val">${fmtQty(overall.totalQty)}</div><div class="sub">bags, all companies</div></div>
         <div class="stat-card"><div class="lbl">Commission accrued</div><div class="val">${fmtK(overall.commissionAccrued)}</div><div class="sub">from approved purchases</div></div>
         <div class="stat-card"><div class="lbl">Advances outstanding</div><div class="val">${fmtK(overall.advanceTotal)}</div><div class="sub">to be rebated</div></div>
-        <div class="stat-card"><div class="lbl">Net payable</div><div class="val" style="color:${overall.netPayable<0?'var(--red)':'var(--green-ok)'}">${fmtK(overall.netPayable)}</div><div class="sub">${overall.netPayable<0?'advance not yet earned back':'due to you'}</div></div>
+        <div class="stat-card"><div class="lbl">Net payable</div><div class="val" style="color:${overall.netPayable<0?'var(--red)':'var(--green-ok)'}">${fmtK(overall.netPayable)}</div><div class="sub">${overall.netPayable<0?'advance not yet earned back':'due to you from companies'}</div></div>
+        <div class="stat-card"><div class="lbl">Platform fee</div><div class="val">${fmtK(overall.nexliteCut)}</div><div class="sub">your share of NEXLITE's fee</div></div>
+        <div class="stat-card"><div class="lbl">You take home</div><div class="val" style="color:${overall.agentTakeHome<0?'var(--red)':'var(--green-ok)'}">${fmtK(overall.agentTakeHome)}</div><div class="sub">after platform fee</div></div>
       </div>
       <div class="panel">
         <div class="panel-head"><h3>By buying company</h3></div>
@@ -3684,6 +3860,11 @@ function confirmPayroll(staffId){
   setView('agent','a-payroll');
 }
 
+function feeModelLabel(link){
+  if(link.nexliteFeeModel==='flat_monthly') return `ZMW ${link.nexliteFlatMonthlyZMW}/mo`;
+  if(link.nexliteFeeModel==='flat_per_mt') return `ZMW ${link.nexliteFlatPerMT}/MT`;
+  return `${link.nexliteCutPct}% of commission`;
+}
 function agentLinksTable(agentId, withRequest){
   const links = DB.linksForAgent(agentId);
   if(!links.length) return `<table><tr class="empty-row"><td>Not linked to any buying company yet.</td></tr></table>`;
@@ -3693,16 +3874,22 @@ function agentLinksTable(agentId, withRequest){
       return `<tr><td colspan="6" style="color:var(--soil-40);">Company removed — link ID ${l.id}</td></tr>`;
     }
     const led = DB.linkLedger(agentId, l.companyId);
+    const gate = DB.linkAccessGate(agentId, l.companyId);
+    const statusBadgeHtml = !gate.ok
+      ? `<span class="badge badge-flag">Blocked — settle ${fmtK(led.nexliteOwed)}</span>`
+      : (gate.grace ? `<span class="badge badge-pending">Owes ${fmtK(led.nexliteOwed)} by ${gate.graceEndsAt}</span>`
+      : (led.nexliteOwed>0 ? `<span class="badge badge-cancelled">Owes ${fmtK(led.nexliteOwed)}</span>` : ''));
     return `<tr>
       <td><strong>${company.name}</strong></td>
       <td>${l.commissionRate}%</td>
       <td>${fmtQty(led.totalQty)} bags</td>
       <td>${fmtK(led.commissionAccrued)}</td>
       <td>${fmtK(led.advanceTotal)}</td>
-      <td style="font-weight:600;color:${led.netPayable<0?'var(--red)':'var(--green-ok)'}">${fmtK(led.netPayable)}</td>
+      <td>${fmtK(led.nexliteCut)}<div style="font-size:10.5px;color:var(--soil-40);">${feeModelLabel(l)}</div>${statusBadgeHtml ? '<div style="margin-top:4px;">'+statusBadgeHtml+'</div>' : ''}</td>
+      <td style="font-weight:600;color:${led.agentTakeHome<0?'var(--red)':'var(--green-ok)'}">${fmtK(led.agentTakeHome)}</td>
     </tr>`;
   }).join('');
-  return `<table><tr><th>Company</th><th>Rate</th><th>Qty bought</th><th>Commission</th><th>Advance</th><th>Net</th></tr>${rows}</table>`;
+  return `<table><tr><th>Company</th><th>Rate</th><th>Qty bought</th><th>Commission</th><th>Advance</th><th>Platform fee</th><th>You take home</th></tr>${rows}</table>`;
 }
 
 function generateStaffLogin(staffId){
@@ -4001,6 +4188,145 @@ function contractStatusInfo(contract){
   else { label='Active'; cls='badge-pending'; }
   return { delivered, pct, overdue, label, cls };
 }
+function intakeReconciliationHTML(recon){
+  if(!recon.length) return `<p class="sub" style="margin:0;">No purchases or intake logged yet — nothing to compare.</p>`;
+  const rows = recon.map(r=>{
+    // Small variances are normal (weighing rounding, in-transit moisture
+    // loss) — only flag once it's big enough to actually be worth a
+    // conversation with the agent.
+    const mismatch = Math.abs(r.variancePct) >= 10;
+    return `<tr>
+      <td><strong>${escapeHTML(r.commodity)}</strong></td>
+      <td>${r.purchasedMT.toFixed(2)} MT</td>
+      <td>${r.intakeMT.toFixed(2)} MT</td>
+      <td style="font-weight:600;color:${mismatch?'#B42318':'var(--green-ok)'}">${r.varianceMT>=0?'+':''}${r.varianceMT.toFixed(2)} MT (${r.variancePct>=0?'+':''}${r.variancePct}%)</td>
+      <td>${mismatch ? '<span class="badge badge-flag">Check with agent</span>' : '<span class="badge badge-approved">Matches</span>'}</td>
+    </tr>`;
+  }).join('');
+  return `<table><tr><th>Commodity</th><th>Purchases logged (agent-side)</th><th>Intake received (your side)</th><th>Variance</th><th></th></tr>${rows}</table>`;
+}
+function intakeLogsTable(logs){
+  if(!logs.length) return `<table><tr class="empty-row"><td>No intake logged yet. Use "+ Log intake" whenever produce physically arrives at your warehouse.</td></tr></table>`;
+  const rows = logs.map(i=>`<tr>
+    <td>${i.date}</td>
+    <td>${escapeHTML(i.commodity)}</td>
+    <td>${fmtQty(i.quantity)} ${escapeHTML(i.unit)}</td>
+    <td>${escapeHTML(i.note||'—')}</td>
+    <td>${escapeHTML(DB.intakeLoggerName(i))}</td>
+    <td><button class="mini-btn" onclick="deleteIntakeLog('${i.id}')">Delete</button></td>
+  </tr>`).join('');
+  return `<table><tr><th>Date</th><th>Commodity</th><th>Quantity</th><th>Note</th><th>Logged by</th><th></th></tr>${rows}</table>`;
+}
+function openLogIntakeModal(companyId){
+  openModal(`
+    <button class="modal-close" onclick="closeModal()">&times;</button>
+    <h3>Log warehouse intake</h3>
+    <p class="sub">Record what physically arrived — independent of any purchase an agent or staff member logged. This is your own check, not theirs.</p>
+    <div class="two-col">
+      <div class="field"><label>Commodity</label><input id="ik-commodity" list="ik-commodity-list" placeholder="e.g. Cassava" value="Maize"><datalist id="ik-commodity-list"></datalist></div>
+      <div class="field"><label>Unit</label><select id="ik-unit"><option value="kg">Kilograms (kg)</option><option value="bags (50kg)" selected>Bags (50kg)</option><option value="tonne">Tonnes</option></select></div>
+    </div>
+    <div class="two-col">
+      <div class="field"><label>Quantity</label><input id="ik-qty" type="number" placeholder="e.g. 40"></div>
+      <div class="field"><label>Date</label><input id="ik-date" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+    </div>
+    <div class="field"><label>Note (optional)</label><input id="ik-note" placeholder="e.g. Truck reg, agent's name, waybill #"></div>
+    <button class="submit-btn" style="background:var(--olive)" onclick="confirmLogIntake('${companyId}')">Save intake record</button>
+  `);
+  const list = document.getElementById('ik-commodity-list');
+  if(list){
+    const c = DB.company(companyId);
+    list.innerHTML = (c && Array.isArray(c.commodities) ? c.commodities : []).map(x=>`<option value="${escapeHTML(x)}">`).join('');
+  }
+}
+function confirmLogIntake(companyId){
+  const commodity = document.getElementById('ik-commodity').value.trim();
+  const unit = document.getElementById('ik-unit').value;
+  const quantity = Number(document.getElementById('ik-qty').value);
+  const date = document.getElementById('ik-date').value || new Date().toISOString().slice(0,10);
+  const note = document.getElementById('ik-note').value.trim();
+  if(!commodity || !quantity || quantity<=0){ toast('Enter a commodity and a valid quantity'); return; }
+  DB.data.intakeLogs.push({ id: DB.uid('ik'), companyId, commodity, unit, quantity, date, note, recordedAt: new Date().toISOString(), recordedByRole: session.role, recordedById: session.id });
+  DB.save();
+  closeModal();
+  toast('Intake recorded');
+  setView(session.role==='wstaff'?'wstaff':'company', session.role==='wstaff'?'w-intake':'c-intake');
+}
+function deleteIntakeLog(id){
+  const rec = DB.data.intakeLogs.find(i=>i.id===id);
+  if(!rec) return;
+  if(session.role==='wstaff' && rec.recordedById!==session.id){ toast('You can only delete intake you logged yourself'); return; }
+  if(!confirm('Delete this intake record?')) return;
+  DB.data.intakeLogs = DB.data.intakeLogs.filter(i=>i.id!==id);
+  DB.save();
+  setView(session.role==='wstaff'?'wstaff':'company', session.role==='wstaff'?'w-intake':'c-intake');
+}
+
+// ---- warehouse staff management (company side only) ----
+function openAddWarehouseStaffModal(companyId){
+  openModal(`
+    <button class="modal-close" onclick="closeModal()">&times;</button>
+    <h3>Add warehouse staff</h3>
+    <p class="sub">This login can only log and view warehouse intake — nothing else in your account. You'll get an ID and a PIN to hand over.</p>
+    <div class="field"><label>Full name</label><input id="ws-name" placeholder="e.g. Mutinta Banda"></div>
+    <button class="submit-btn" style="background:var(--navy-dark)" onclick="confirmAddWarehouseStaff('${companyId}')">Add warehouse staff</button>
+  `);
+}
+function confirmAddWarehouseStaff(companyId){
+  const name = document.getElementById('ws-name').value.trim();
+  if(!name){ toast('Enter a name'); return; }
+  addWarehouseStaffAsync(companyId, name);
+}
+async function addWarehouseStaffAsync(companyId, name){
+  const code = 'WS-'+name.split(' ')[0].toUpperCase()+Math.floor(Math.random()*900+100);
+  const pin = genStaffPin();
+  const { pinSalt, pinHash } = await makePinRecord(pin);
+  const id = DB.uid('ws');
+  const uid = await createAuxAuthAccount(authEmailFor('ws', id), pin);
+  DB.data.warehouseStaff.push({ id, companyId, name, code, pinSalt, pinHash, active:true, uid: uid||null, createdAt:new Date().toISOString() });
+  DB.save();
+  closeModal();
+  toast('Warehouse staff added — ID: '+code+'  PIN: '+pin+' (write it down, it won\'t be shown again)');
+  setView('company','c-intake');
+}
+function resetWarehouseStaffPin(staffId){
+  const s = DB.warehouseStaffById(staffId);
+  if(!s || s.companyId!==session.id){ toast('Only this staff member\'s company can reset their PIN'); return; }
+  regenerateStaffPinAsync(s, 'company', 'c-intake');
+}
+function toggleWarehouseStaffActive(staffId){
+  const s = DB.warehouseStaffById(staffId);
+  if(!s || s.companyId!==session.id) return;
+  s.active = s.active===false ? true : false;
+  DB.save();
+  toast(s.name + (s.active ? ' reactivated' : ' deactivated — they can no longer sign in'));
+  setView('company','c-intake');
+}
+// Hard delete — unlike deactivate, this removes the account entirely and
+// can't be undone. Past intake records they logged stay in the log
+// (DB.intakeLoggerName falls back to 'Warehouse staff' once the record
+// is gone), so history isn't rewritten, just the login itself.
+function deleteWarehouseStaff(staffId){
+  const s = DB.warehouseStaffById(staffId);
+  if(!s || s.companyId!==session.id) return;
+  if(!confirm('Permanently delete ' + s.name + ' as a warehouse staff login? This cannot be undone. Intake they already logged stays on record.')) return;
+  DB.data.warehouseStaff = DB.data.warehouseStaff.filter(w=>w.id!==staffId);
+  DB.save();
+  toast(s.name+' deleted');
+  setView('company','c-intake');
+}
+function warehouseStaffTable(companyId){
+  const staff = DB.warehouseStaffForCompany(companyId);
+  if(!staff.length) return `<table><tr class="empty-row"><td>No warehouse staff accounts yet. Add one to let someone log intake without giving them full company access.</td></tr></table>`;
+  const rows = staff.map(s=>`<tr>
+    <td>${escapeHTML(s.name)}</td>
+    <td class="mono">${s.code}</td>
+    <td>${s.active===false ? '<span class="badge badge-cancelled">Deactivated</span>' : '<span class="badge badge-approved">Active</span>'}</td>
+    <td><button class="mini-btn" onclick="resetWarehouseStaffPin('${s.id}')">Reset PIN</button> <button class="mini-btn" onclick="toggleWarehouseStaffActive('${s.id}')">${s.active===false?'Reactivate':'Deactivate'}</button> <button class="mini-btn" onclick="deleteWarehouseStaff('${s.id}')">Delete</button></td>
+  </tr>`).join('');
+  return `<table><tr><th>Name</th><th>Warehouse staff ID</th><th>Status</th><th></th></tr>${rows}</table>`;
+}
+
 function contractsTable(contracts){
   if(!contracts.length) return `<table><tr class="empty-row"><td>No forward contracts yet. Use "+ New contract" to commit a farmer to a delivery volume ahead of the season.</td></tr></table>`;
   let rows = contracts.map(c=>{
@@ -4163,6 +4489,36 @@ function updateCommodityOptions(){
   if(list) list.innerHTML = commodities.map(c=>`<option value="${c}">`).join('');
   const cropLists = [document.getElementById('rf-crop-list'), document.getElementById('lp-farmer-crop-list')].filter(Boolean);
   cropLists.forEach(el => el.innerHTML = commodities.map(c=>`<option value="${c}">`).join(''));
+}
+
+// ---- WAREHOUSE STAFF (company-provisioned, PIN login, intake-only) ----
+// Deliberately a single-view app: this account can log and see intake
+// records for its own company and nothing else — no purchases, payroll,
+// settings, billing, or partnership data. Reuses the exact same
+// reconciliation/log rendering the company account uses on c-intake, just
+// scoped through this session's own companyId instead of session.id.
+function renderWstaff(view){
+  const w = DB.warehouseStaffById(session.id);
+  const companyId = w ? w.companyId : null;
+  const main = document.getElementById('wstaff-main');
+  if(!main) return;
+  if(view==='w-intake'){
+    const logs = DB.intakeLogsFor(companyId).slice().reverse();
+    const recon = DB.intakeReconciliation(companyId);
+    main.innerHTML = syncBannerHTML() + `
+      <div class="main-head">
+        <div><h1>Warehouse intake</h1><p class="desc">Record what physically arrives at the warehouse — independent of any purchase an agent or field staffer logged.</p></div>
+        <button class="action-btn" style="background:var(--olive)" onclick="openLogIntakeModal('${companyId}')">+ Log intake</button>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Reconciliation — purchases logged vs. intake received</h3></div>
+        <div class="panel-body">${intakeReconciliationHTML(recon)}</div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3>Intake log</h3></div>
+        <div class="panel-body">${intakeLogsTable(logs)}</div>
+      </div>`;
+  }
 }
 
 function renderFarmerPicker(){
@@ -4401,6 +4757,8 @@ async function confirmBulkImport(){
 async function submitPurchase(){
   const staff = DB.fieldStaffById(session.id);
   const companyId = document.getElementById('lp-company').value;
+  const gate = DB.linkAccessGate(staff.agentId, companyId);
+  if(!gate.ok){ toast(gate.reason); return; }
   const commodity = document.getElementById('lp-commodity').value.trim() || 'Maize';
   const unit = document.getElementById('lp-unit').value.trim() || 'bags (50kg)';
   const qty = Number(document.getElementById('lp-qty').value);
