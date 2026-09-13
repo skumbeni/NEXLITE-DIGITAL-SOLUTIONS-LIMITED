@@ -10,7 +10,7 @@
  * Bump CACHE_NAME on every deploy so returning users pick up the new
  * shell instead of a stale cached copy.
  */
-const CACHE_NAME = 'agribuy-shell-v3';
+const CACHE_NAME = 'agribuy-shell-v4';
 const APP_SHELL = [
   './',
   './index.html',
@@ -59,7 +59,9 @@ self.addEventListener('fetch', (event) => {
 
   const scopePath = self.registration.scope.replace(url.origin, '');
   const isAppShellDoc = url.origin === self.location.origin &&
-    (url.pathname === scopePath || url.pathname.endsWith('/index.html'));
+    (url.pathname === scopePath ||
+     url.pathname.endsWith('/index.html') ||
+     url.pathname.endsWith('/agribuy-admin.html'));
 
   if(isAppShellDoc){
     // Network-first for the app itself: always try to get the latest
