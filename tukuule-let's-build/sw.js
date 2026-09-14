@@ -8,10 +8,11 @@
 
    Bump CACHE_VERSION whenever the shell's own files change so old caches
    get cleared out on the next visit. */
-const CACHE_VERSION = 'tukule-shell-v1';
+const CACHE_VERSION = 'tukule-shell-v2';
 
 const SHELL_URLS = [
-  './tukule-lets-build-with-map-drawing.html',
+  './index.html',
+  './tukule-admin.html',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
@@ -96,7 +97,7 @@ self.addEventListener('fetch', (event) => {
       // shell itself rather than a browser error page, so the user still
       // lands somewhere usable.
       if (req.mode === 'navigate') {
-        const shell = await cache.match('./tukule-lets-build-with-map-drawing.html');
+        const shell = await cache.match('./index.html');
         if (shell) return shell;
       }
       return Response.error();
