@@ -955,7 +955,25 @@ function planDueStatus(plan){
 /* ---------- nav ---------- */
 document.querySelectorAll('nav.tabs button').forEach(btn=>btn.addEventListener('click', ()=>showView(btn.dataset.view)));
 document.querySelectorAll('[data-goto]').forEach(btn=>btn.addEventListener('click', ()=>showView(btn.dataset.goto)));
-function showView(name){
+
+// Tag the very first view (home) as history entry 0, so pressing back
+// from home has nothing app-level left to go to and falls through to the
+// browser/OS default (closing the tab or the installed app) — which is
+// correct there. Every OTHER view switch pushes a new entry, so back
+// from anywhere else lands on the view the user was on before, instead
+// of exiting the app entirely.
+let currentView = 'home';
+history.replaceState({ tukuleView: 'home' }, '', location.pathname + location.search);
+window.addEventListener('popstate', (e)=>{
+  showView((e.state && e.state.tukuleView) || 'home', { pushState:false });
+});
+
+function showView(name, opts){
+  const pushState = !opts || opts.pushState !== false;
+  if(pushState && name!==currentView){
+    history.pushState({ tukuleView: name }, '', location.pathname + location.search);
+  }
+  currentView = name;
   document.querySelectorAll('section.view').forEach(s=>s.classList.remove('active'));
   document.getElementById('view-'+name).classList.add('active');
   document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.toggle('active', b.dataset.view===name));
@@ -2393,6 +2411,7 @@ function renderOwnerDashboard(){
   `;
 
   document.getElementById('owner-logout-btn').addEventListener('click', ()=>{
+    if(!confirm('Log out of your owner account?')) return;
     currentOwnerPhone = null;
     updateSession({ ownerPhone: null });
     dash.classList.add('hidden');
@@ -2788,6 +2807,7 @@ function renderAccount(){
 
   dash.querySelectorAll('[data-goto2]').forEach(b=>b.addEventListener('click', ()=>showView(b.dataset.goto2)));
   document.getElementById('logout-btn').addEventListener('click', ()=>{
+    if(!confirm('Log out of your account?')) return;
     currentAccountPhone = null;
     updateSession({ accountPhone: null });
     dash.classList.add('hidden');

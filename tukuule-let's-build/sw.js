@@ -8,7 +8,7 @@
 
    Bump CACHE_VERSION whenever the shell's own files change so old caches
    get cleared out on the next visit. */
-const CACHE_VERSION = 'tukule-shell-v3';
+const CACHE_VERSION = 'tukule-shell-v4';
 
 const SHELL_URLS = [
   './index.html',
