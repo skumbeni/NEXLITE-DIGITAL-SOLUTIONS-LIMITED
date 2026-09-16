@@ -201,7 +201,7 @@
       </div>
       <div class="deed-card">
         <span class="stamp">Selling with Tukule</span>
-        <p style="margin:6px 0 0;font-size:0.92rem;">Any landowner can list a site with us. Buyers pay you directly — we handle plot sales, instalment tracking, and buyer contracts, and you forward our 10% commission once payments come in.</p>
+        <p style="margin:6px 0 0;font-size:0.92rem;">Any landowner can list a site with us. Buyers pay you directly — we handle plot sales, instalment tracking, and buyer contracts. A small listing fee applies when your site goes live; nothing is deducted from what buyers pay you.</p>
         <button class="btn btn-secondary" style="margin-top:14px;width:100%;" data-goto="sell">List a property</button>
       </div>
     </div>
@@ -290,7 +290,7 @@
   <!-- SELL -->
   <section class="view" id="view-sell">
     <h2 class="section-title">List your property with Tukule</h2>
-    <p class="section-sub">We'll handle plot sales, instalment tracking, and buyer contracts for you. Buyers pay you directly — you forward our 10% commission once payments are confirmed. Nothing upfront.</p>
+    <p class="section-sub">We'll handle plot sales, instalment tracking, and buyer contracts for you. Buyers pay you directly — a one-time listing fee applies before your site goes live, calculated below as you fill in the form.</p>
     <div class="side-card" style="max-width:560px;">
       <div id="sell-msg"></div>
       <label class="field">Property name</label>
@@ -325,6 +325,7 @@
       </div>
       <label class="field">Total number of plots on site</label>
       <input type="number" id="sell-total" min="1" max="2000" value="50">
+      <p class="note" id="sell-fee-preview" style="margin-top:-2px;"></p>
       <label class="field">Cover photo (optional)</label>
       <input type="file" accept="image/*" id="sell-photo">
       <p class="note" style="margin-top:-4px;">A clear photo of the site helps buyers trust the listing. We'll shrink it automatically to keep the app fast on mobile data.</p>
@@ -345,7 +346,7 @@
     </div>
 
     <h2 class="section-title" style="margin-top:40px;">Already listed with us?</h2>
-    <p class="section-sub">Log in with your phone number to see your listing status, buyer activity, and commission balance.</p>
+    <p class="section-sub">Log in with your phone number to see your listing status and buyer activity.</p>
     <div class="side-card login-box" id="owner-login-panel">
       <div id="owner-login-msg"></div>
       <label class="field">Phone number</label>
@@ -431,10 +432,58 @@ if(FIREBASE_SDK_OK){
 }
 /* ====== end Firebase setup ====== */
 
-function buildPlots(rows, cols, seedPattern){
+// --- Listing fee (data-model prep only — no payment gate wired up yet) ---
+// A plot's position within its site locks in which rate tier it pays at
+// listing time: the first LISTING_FEE_TIER_THRESHOLD plots pay the full
+// rate, everything beyond that pays the discounted rate. Locking this by
+// plot INDEX (not by price) at creation means an owner can't dodge the
+// higher rate later by repricing plots to reshuffle which ones look
+// "small". Amounts are computed off each plot's own price so mixed
+// pricing within one site is handled automatically — no separate
+// mixed-pricing logic needed, see plotFeeDue().
+// Threshold/rates are admin-configurable (state.settings), same pattern as
+// defaultCommissionPct — see defaultState() for the first-install defaults.
+function listingFeeTierForIndex(idx){
+  const threshold = state.settings.listingFeeTierThreshold ?? 100;
+  const fullRate = state.settings.listingFeeFullRatePct ?? 2;
+  const discountRate = state.settings.listingFeeDiscountRatePct ?? 1;
+  return idx < threshold ? fullRate : discountRate;
+}
+function plotFeeDue(price, feeTierPct){ return Math.round(price * (feeTierPct/100) * 100)/100; }
+function siteListingFeeTotal(plots){ return Math.round(plots.reduce((sum,p)=>sum + (p.feeDue||0), 0) * 100)/100; }
+const LISTING_FEE_FULL_RATE_PCT_FALLBACK = 2; // used only for plots created before feeTier existed
+// A price INCREASE on an already-listed plot owes a top-up (closing the
+// "list cheap, reprice later" loophole); a decrease owes nothing and gets
+// no refund — feeDue only ever moves up. Returns null if no top-up is
+// owed (price same/lower, or increase doesn't exceed what's already
+// covered), otherwise { requiredFee, topUp } for the caller to act on.
+function plotFeeTopUp(plot, newEffectivePrice){
+  const requiredFee = plotFeeDue(newEffectivePrice, plot.feeTier ?? LISTING_FEE_FULL_RATE_PCT_FALLBACK);
+  const alreadyCovered = plot.feeDue || 0;
+  if(requiredFee <= alreadyCovered) return null;
+  return { requiredFee, topUp: Math.round((requiredFee - alreadyCovered)*100)/100 };
+}
+// Same tiering as buildPlots, but works off just price+count — used for the
+// live fee preview on the listing form, before any plot objects exist.
+function estimateListingFeeTotal(pricePerPlot, totalPlots){
+  if(!(pricePerPlot>0) || !(totalPlots>0)) return 0;
+  const threshold = state.settings.listingFeeTierThreshold ?? 100;
+  const fullRate = state.settings.listingFeeFullRatePct ?? 2;
+  const discountRate = state.settings.listingFeeDiscountRatePct ?? 1;
+  const fullCount = Math.min(totalPlots, threshold);
+  const discountCount = Math.max(0, totalPlots - threshold);
+  const total = fullCount * plotFeeDue(pricePerPlot, fullRate) + discountCount * plotFeeDue(pricePerPlot, discountRate);
+  return Math.round(total*100)/100;
+}
+
+function buildPlots(rows, cols, seedPattern, pricePerPlot){
   const total = rows*cols;
   const plots = [];
-  for(let i=0;i<total;i++) plots.push({ id:i+1, status:'available', buyerPhone:null, price:null, sizeLabel:null });
+  for(let i=0;i<total;i++){
+    const feeTier = listingFeeTierForIndex(i);
+    const feeDue = plotFeeDue(pricePerPlot, feeTier);
+    plots.push({ id:i+1, status:'available', buyerPhone:null, price:null, sizeLabel:null, feeTier, feeDue, feePaid:false });
+  }
   (seedPattern||[]).forEach((n,idx)=>{ if(plots[n-1]) plots[n-1].status = idx % 3 === 0 ? 'sold' : 'reserved'; });
   return plots;
 }
@@ -466,7 +515,8 @@ function plotSizeSummary(site, plotIds){
 
 function defaultState(){
   return {
-    settings:{ nexliteContact:'0977638790 / 0960271128', defaultCommissionPct:10, adminPinHash:'0889c39fbe2987060378014caac47694cde6e56370261a504b33109674f15e7b', adminPinIsDefault:true },
+    settings:{ nexliteContact:'0977638790 / 0960271128', defaultCommissionPct:0, adminPinHash:'0889c39fbe2987060378014caac47694cde6e56370261a504b33109674f15e7b', adminPinIsDefault:true,
+      listingFeeTierThreshold:100, listingFeeFullRatePct:2, listingFeeDiscountRatePct:1 },
     staff:{},
     auditLog:[],
     sites:{},
@@ -577,6 +627,15 @@ function attachCloudListener(){
         if(!b.plans) b.plans = [];
         if(!b.payments) b.payments = [];
       });
+      // The 10% sale-time commission is retired — the listing fee is now
+      // the only revenue model. Forcing commissionPct to 0 on every site
+      // (old and new) means any plan created FROM NOW ON locks in 0%,
+      // since plan.commissionPct is copied from site.commissionPct at
+      // reservation time. This does NOT touch history: plans/payments
+      // created before this change already locked in their own
+      // commissionPct/commissionAmount, so past accrued/outstanding
+      // commission stays exactly as it was and remains collectible.
+      Object.values(state.sites).forEach(s=>{ s.commissionPct = 0; });
     } else if(!state){
       state = defaultState();
       db.ref(DATA_PATH).set(state);
@@ -780,8 +839,6 @@ const NUMERIC_BOUNDS = {
   pricePerPlot: [1, 10000000],
   outrightDiscountPct: [0, 100],
   depositPct: [0, 100],
-  commissionPct: [0, 100],
-  defaultCommissionPct: [0, 100],
   totalPlots: [1, 2000]
 };
 function inRange(n, [min,max]){ return Number.isFinite(n) && n>=min && n<=max; }
@@ -2038,6 +2095,7 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
   const cols = Math.ceil(Math.sqrt(total));
   const rows = Math.ceil(total/cols);
   const id = 'site' + Date.now();
+  const plots = buildPlots(rows, cols, [], price);
   state.sites[id] = {
     id, name, location, description, pricePerPlot: price, plotLabel, rows, cols,
     lat: (latRaw!=='' && !Number.isNaN(lat)) ? lat : null,
@@ -2047,7 +2105,8 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
     outrightDiscountPct:5, depositPct:20, dailyTerms:[90,180,365], monthlyTerms:[6,12,18,24,36],
     offerOutright:true, offerDaily:true, offerMonthly:true,
     ownerName, ownerPhone, ownerNrc: ownerNrc || null, ownerPinHash, isNexliteOwned:false, commissionPct: state.settings.defaultCommissionPct,
-    status:'pending', createdAt: todayISO(), plots: buildPlots(rows, cols, []),
+    status:'pending', createdAt: todayISO(), plots,
+    feeDue: siteListingFeeTotal(plots), feePaid: false,
     commissionSettlements: [], photoUrl: pendingListingPhoto || null
   };
   saveState();
@@ -2058,6 +2117,7 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
   document.getElementById('sell-maps-link-preview-wrap').classList.add('hidden');
   document.getElementById('sell-maps-link-preview').src = '';
   document.getElementById('sell-total').value='50';
+  updateSellFeePreview();
   document.getElementById('sell-plotsize').value='30 x 30';
   document.getElementById('sell-photo').value='';
   document.getElementById('sell-photo-preview').innerHTML='';
@@ -2065,6 +2125,23 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
   resetSellMap();
   btn.disabled = false;
 });
+
+function updateSellFeePreview(){
+  const preview = document.getElementById('sell-fee-preview');
+  const price = Number(document.getElementById('sell-price').value);
+  const total = Number(document.getElementById('sell-total').value);
+  const fee = estimateListingFeeTotal(price, total);
+  if(!fee){ preview.textContent = ''; return; }
+  const threshold = state.settings.listingFeeTierThreshold ?? 100;
+  const fullRate = state.settings.listingFeeFullRatePct ?? 2;
+  const discountRate = state.settings.listingFeeDiscountRatePct ?? 1;
+  const tierNote = total > threshold
+    ? ` (first ${threshold} plots at ${fullRate}%, the rest at ${discountRate}%)`
+    : ` (${fullRate}% per plot)`;
+  preview.textContent = `Estimated listing fee: ${money(fee)}${tierNote} — payable before your listing goes live.`;
+}
+['sell-price','sell-total'].forEach(id=>document.getElementById(id).addEventListener('input', updateSellFeePreview));
+updateSellFeePreview();
 
 /* ---------- owner dashboard ---------- */
 let currentOwnerPhone = null;
@@ -2156,6 +2233,7 @@ function renderOwnerDashboard(){
     const counts = {available:0,reserved:0,sold:0};
     site.plots.forEach(p=>counts[p.status]++);
     const comm = computeSiteCommission(site);
+    const hasLegacyCommission = comm.accrued > 0 || comm.settled > 0 || comm.outstanding > 0;
 
     // Bulk-created plots default to the site's price/size, but any plot can
     // be given its own — a corner or river-view plot priced differently
@@ -2174,7 +2252,8 @@ function renderOwnerDashboard(){
               <td>${String(p.id).padStart(2,'0')}</td>
               <td><input type="number" min="1" style="width:100px;" data-plot-price="${site.id}:${p.id}" value="${p.price!=null?p.price:''}" placeholder="${site.pricePerPlot}"></td>
               <td><input type="text" style="width:100px;" data-plot-size="${site.id}:${p.id}" value="${esc(p.sizeLabel||'')}" placeholder="${esc(site.plotLabel)}"></td>
-            </tr>`).join('')}</tbody></table>
+            </tr>${p.pendingPrice!=null ? `
+            <tr><td></td><td colspan="2" style="color:#6b2323;font-size:0.8rem;padding-top:0;">↳ ${money(p.pendingPrice)} pending — ${money(p.pendingFeeTopUp)} top-up fee due before this applies</td></tr>` : ''}`).join('')}</tbody></table>
         </div>
         <button class="btn btn-secondary btn-sm" style="margin-top:8px;" data-save-plot-details="${site.id}">Save plot changes</button>
       </details>` : '';
@@ -2270,15 +2349,24 @@ function renderOwnerDashboard(){
         </div>
         <button class="btn btn-primary btn-sm" data-resubmit-site="${site.id}">Resubmit for review</button>` : '';
 
+    const feeRequired = (site.feeDue||0) > 0;
+    const listingFeeHtml = (feeRequired && site.status==='pending') ? `
+        <div class="msg ${site.feePaid ? 'ok' : 'err'}" style="margin:10px 0;">
+          ${site.feePaid
+            ? `<strong>Listing fee received.</strong> Your listing will go live once Nexlite finishes reviewing it.`
+            : `<strong>Listing fee due: ${money(site.feeDue)}.</strong> Call or WhatsApp us on 0977 638 790 / 0960 271 128 to pay — your listing won't go live until this clears.`}
+        </div>` : '';
+
     return `
       <div class="side-card">
         <h3>${esc(site.name)} <span class="pill ${site.status}">${site.status}</span></h3>
+        ${listingFeeHtml}
         ${rejectionHtml}
         <div class="schedule-line"><span>Plots</span><span>${counts.available} available · ${counts.reserved} reserved · ${counts.sold} sold</span></div>
-        <div class="schedule-line"><span>Commission rate</span><span>${site.commissionPct}%</span></div>
+        ${hasLegacyCommission ? `
         <div class="schedule-line"><span>Commission accrued</span><span>${money(comm.accrued)}</span></div>
         <div class="schedule-line"><span>Commission you've forwarded</span><span>${money(comm.settled)}</span></div>
-        <div class="schedule-line"><strong>Commission still owed to Nexlite</strong><strong>${money(comm.outstanding)}</strong></div>
+        <div class="schedule-line"><strong>Commission still owed to Nexlite</strong><strong>${money(comm.outstanding)}</strong></div>` : ''}
         ${plotDetailsHtml}
         ${paymentTermsHtml}
         ${boundaryHtml}
@@ -2293,13 +2381,14 @@ function renderOwnerDashboard(){
       </div>`;
   }).join('');
 
+  const anyLegacyCommission = mySites.some(s=>{ const c=computeSiteCommission(s); return c.accrued>0 || c.settled>0 || c.outstanding>0; });
   dash.innerHTML = `
     <div class="balance-hero">
       <h2 class="section-title" style="margin-bottom:0;">Your listings</h2>
       <button class="btn btn-ghost" id="owner-logout-btn">Log out</button>
     </div>
     ${statusBanner}
-    <p class="note">When a buyer pays you directly, confirm it here so their balance and your commission update. Forward your commission to Nexlite on 0977 638 790 / 0960 271 128 — we'll mark it received on our side.</p>
+    <p class="note">Confirm buyer payments here so their balance updates.${anyLegacyCommission ? ' Forward any outstanding commission to Nexlite on 0977 638 790 / 0960 271 128 — we\'ll mark it received on our side.' : ''}</p>
     <div class="grid-two" style="margin-top:16px;">${siteBlocks}</div>
   `;
 
@@ -2328,6 +2417,7 @@ function renderOwnerDashboard(){
       const site = state.sites[siteId];
       if(!site) return;
       let changed = 0;
+      const topUpsNeeded = [];
       dash.querySelectorAll(`[data-plot-price^="${siteId}:"]`).forEach(input=>{
         const plotId = Number(input.dataset.plotPrice.split(':')[1]);
         const p = site.plots.find(pp=>pp.id===plotId);
@@ -2335,7 +2425,26 @@ function renderOwnerDashboard(){
         const val = input.value.trim();
         const newPrice = val==='' ? null : Number(val);
         if(newPrice!==null && (Number.isNaN(newPrice) || newPrice<=0)) return; // ignore junk input, keep prior value
-        if(p.price !== newPrice){ p.price = newPrice; changed++; }
+        if(p.price === newPrice) return; // no change requested for this plot
+        // A fresh edit supersedes any earlier unresolved pending request —
+        // otherwise a second edit (e.g. lowering the price again before
+        // admin acts on the first increase) would leave a stale pending
+        // top-up sitting there for a price that's no longer being asked for.
+        if(p.pendingPrice!=null){ delete p.pendingPrice; delete p.pendingFeeTopUp; }
+        // Compare against the EFFECTIVE price (falls back to site default),
+        // since clearing a custom price back to blank can itself be an
+        // increase if the site default is higher than what was set.
+        const newEffectivePrice = newPrice===null ? site.pricePerPlot : newPrice;
+        const topUp = plotFeeTopUp(p, newEffectivePrice);
+        if(topUp){
+          // Don't apply the new price yet — it needs a top-up fee
+          // recorded by an admin first, same as the initial listing fee.
+          p.pendingPrice = newPrice;
+          p.pendingFeeTopUp = topUp.topUp;
+          topUpsNeeded.push({ plotId, topUp: topUp.topUp });
+        } else {
+          p.price = newPrice; changed++;
+        }
       });
       dash.querySelectorAll(`[data-plot-size^="${siteId}:"]`).forEach(input=>{
         const plotId = Number(input.dataset.plotSize.split(':')[1]);
@@ -2344,7 +2453,13 @@ function renderOwnerDashboard(){
         const val = input.value.trim() || null;
         if(p.sizeLabel !== val){ p.sizeLabel = val; changed++; }
       });
-      if(changed){ logAudit(`Updated per-plot pricing/size for "${site.name}" (${changed} field${changed===1?'':'s'})`); saveState(); }
+      if(changed){ logAudit(`Updated per-plot pricing/size for "${site.name}" (${changed} field${changed===1?'':'s'})`); }
+      if(topUpsNeeded.length){
+        const total = Math.round(topUpsNeeded.reduce((s,t)=>s+t.topUp,0)*100)/100;
+        logAudit(`Requested price increase on ${topUpsNeeded.length} plot(s) for "${site.name}" — ${money(total)} top-up fee pending`);
+        alert(`${topUpsNeeded.length} plot price increase${topUpsNeeded.length===1?'':'s'} need a ${money(total)} top-up fee before they take effect. Call/WhatsApp Nexlite to pay — the new price${topUpsNeeded.length===1?'':'s'} will apply once recorded. Your other changes were saved.`);
+      }
+      if(changed || topUpsNeeded.length) saveState();
       renderOwnerDashboard();
     });
   });
@@ -2791,7 +2906,7 @@ function printContract(buyer, plan){
       <tr><td>Outstanding balance</td><td>${money(bal)}</td></tr>
       <tr><td>Status</td><td>${bal<=0 ? 'Paid in full — title processing' : 'Instalments in progress'}</td></tr>
     </table>
-    <p>All payments under this agreement are made directly between the Buyer and the Seller; Tukule / Nexlite Digital Solutions Limited does not collect or hold buyer funds. The Buyer agrees to keep instalments up to date as scheduled above. Ownership and title processing begin once the full price has been paid and confirmed. Where the Seller is a third party, the Seller separately owes Nexlite Digital Solutions Limited a commission on amounts collected under this agreement, payable as agreed between Seller and Nexlite. This document is a summary of the agreed sale and does not replace formal conveyancing — the buyer and seller are encouraged to finalise transfer documents with a lawyer or conveyancer once the plot is paid off.</p>
+    <p>All payments under this agreement are made directly between the Buyer and the Seller; Tukule / Nexlite Digital Solutions Limited does not collect or hold buyer funds. The Buyer agrees to keep instalments up to date as scheduled above. Ownership and title processing begin once the full price has been paid and confirmed.${(plan.commissionPct>0) ? ` Where the Seller is a third party, the Seller separately owes Nexlite Digital Solutions Limited a commission on amounts collected under this agreement, payable as agreed between Seller and Nexlite.` : ''} This document is a summary of the agreed sale and does not replace formal conveyancing — the buyer and seller are encouraged to finalise transfer documents with a lawyer or conveyancer once the plot is paid off.</p>
     <div class="sign"><div>Buyer's signature${buyerSignNote}</div><div>Seller / Agent signature${sellerSignNote}</div></div>
     <p class="note">Printed from Tukule — Let's Build on ${todayISO()}.</p>
     <button onclick="window.print()" style="margin-top:20px;padding:10px 18px;">Print this agreement</button>
