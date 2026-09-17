@@ -1298,7 +1298,10 @@ window._AC_DEBUG = /[?&]acdebug=1/.test(location.search);
 // ══════════════════════════════════════════════════════════
 // ██  PDF PRINT ENGINE  ████████████████████████████████████
 // Universal PDF download: opens a styled print window.
-// No CDN, no external libs — works fully offline.
+// Printing itself needs no CDN/libs and works fully offline.
+// The window also carries a "Share to WhatsApp/Social" button — that one
+// path lazy-loads html2canvas + jsPDF from cdnjs on demand (first use only,
+// needs internet) to build a real .pdf File and hand it to navigator.share().
 // ══════════════════════════════════════════════════════════
 function _pdfPrint(htmlBody, title, filename) {
   // Inject brand colour as a CSS variable so every accent in the document
@@ -1372,11 +1375,109 @@ function _pdfPrint(htmlBody, title, filename) {
   .net-row td { font-size: 13pt; font-weight: 900; background: var(--accent-bg); color: var(--accent); border-top: 3px solid var(--accent); }
   .sig-row { margin-top: 36px; display: flex; justify-content: space-between; }
   .sig-box { width: 42%; border-top: 1px solid #aaa; padding-top: 5px; font-size: 9.5pt; color: #555; }
-  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } }
+  @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } .pdf-toolbar,.pdf-toolbar-spacer{ display:none !important; } }
+  .pdf-toolbar{
+    position: sticky; top: 0; z-index: 999;
+    display: flex; gap: 8px; align-items: center; justify-content: flex-end;
+    padding: 9px 16px; background: #f5f6f8; border-bottom: 1px solid #ddd;
+  }
+  .pdf-toolbar .hint{ margin-right:auto; font-size:8.5pt; color:#777; }
+  .pdf-toolbar button{
+    font: inherit; font-size: 9.5pt; font-weight: 600; padding: 7px 14px;
+    border-radius: 7px; cursor: pointer; border: 1.5px solid var(--accent);
+    background: #fff; color: var(--accent);
+  }
+  .pdf-toolbar button.primary{ background: var(--accent); color: #fff; }
+  .pdf-toolbar button:disabled{ opacity: .6; cursor: default; }
+  .pdf-toolbar-spacer{ height: 4px; }
 </style>
 </head>
 <body>
+<div class="pdf-toolbar">
+  <span class="hint">Cancel the print dialog to share instead ↓</span>
+  <button class="primary" onclick="window.print()">🖨 Print / Save PDF</button>
+  <button id="__share_btn" onclick="_shareGeneratedPdf()">📤 Share to WhatsApp / Social</button>
+</div>
+<div class="pdf-toolbar-spacer"></div>
 ${htmlBody}
+<script>
+window.__pdfShareTitle = ${JSON.stringify(title || 'MDM Document')};
+window.__pdfShareFilename = ${JSON.stringify((filename || title || 'MDM_Document').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') + '.pdf')};
+
+function _loadScriptOnce(src){
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-src="'+src+'"]');
+    if (existing) { existing.addEventListener('load', resolve); if (existing._loaded) resolve(); return; }
+    const s = document.createElement('script');
+    s.src = src; s.dataset.src = src;
+    s.onload = () => { s._loaded = true; resolve(); };
+    s.onerror = () => reject(new Error('load-failed'));
+    document.head.appendChild(s);
+  });
+}
+
+async function _ensurePdfShareLibs(){
+  if (window.jspdf && window.html2canvas) return;
+  await Promise.all([
+    window.html2canvas ? Promise.resolve() : _loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'),
+    window.jspdf ? Promise.resolve() : _loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js')
+  ]);
+}
+
+// Renders the document body into a real PDF file (client-side, via html2canvas
+// + jsPDF, loaded on demand) and hands it to the OS share sheet so it can be
+// sent directly into WhatsApp, Facebook, Telegram, email, etc. Falls back to
+// a plain file download when the Web Share API (or file sharing) isn't
+// available on this device/browser, or when the libraries can't be fetched
+// (e.g. no internet on first use — sharing needs a one-time online fetch).
+async function _shareGeneratedPdf(){
+  const btn = document.getElementById('__share_btn');
+  const toolbar = document.querySelector('.pdf-toolbar');
+  const original = btn.textContent;
+  btn.disabled = true; btn.textContent = '⏳ Preparing PDF…';
+  try{
+    await _ensurePdfShareLibs();
+    if (toolbar) toolbar.style.visibility = 'hidden';
+    const canvas = await window.html2canvas(document.body, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+    if (toolbar) toolbar.style.visibility = '';
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const imgW = pageW;
+    const imgH = canvas.height * imgW / canvas.width;
+    const imgData = canvas.toDataURL('image/jpeg', 0.92);
+    let heightLeft = imgH, position = 0;
+    pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH);
+    heightLeft -= pageH;
+    while (heightLeft > 0){
+      position = heightLeft - imgH;
+      pdf.addPage();
+      pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH);
+      heightLeft -= pageH;
+    }
+    const blob = pdf.output('blob');
+    const file = new File([blob], window.__pdfShareFilename, { type: 'application/pdf' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })){
+      await navigator.share({ files: [file], title: window.__pdfShareTitle });
+      btn.textContent = '✅ Shared';
+    } else {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = window.__pdfShareFilename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 8000);
+      btn.textContent = navigator.share ? '⬇️ Saved (share manually)' : '⬇️ Downloaded';
+    }
+  } catch(err){
+    if (toolbar) toolbar.style.visibility = '';
+    if (err && err.name === 'AbortError'){ btn.textContent = 'Share cancelled'; }
+    else { btn.textContent = '⚠️ Needs internet the first time'; }
+  } finally {
+    setTimeout(() => { btn.disabled = false; btn.textContent = original; }, 2600);
+  }
+}
+<\/script>
 </body>
 </html>`;
 
