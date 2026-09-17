@@ -11118,18 +11118,20 @@ function renderStaffLogs(){
   // Open shifts across ALL time (not period-filtered)
   const allOpenShifts=(DATA.staffLogs||[]).filter(l=>l.status==='open'&&!isRejected(l)&&(!l.entryType||l.entryType==='work')&&_sIds.has(String(l.staffId)));
 
-  // Build cumulative totals per staff across ALL logs (career running total up to each entry) — approved only
+  // Build cumulative totals per staff PER TASK across ALL logs (career
+  // running total up to each entry, split by task rather than blended
+  // across every task a staff member performs) — approved only.
   const allSorted=approvedArr(DATA.staffLogs).slice().sort((a,b)=>a.date.localeCompare(b.date)||String(a.id).localeCompare(String(b.id)));
   const cumMap={};
   const runQty={}, runNet={};
   allSorted.forEach(log=>{
-    const sid=log.staffId;
+    const key=String(log.staffId)+'|'+(log.entryType&&log.entryType!=='work'?'__abs__':(log.task||'—'));
     const logQty=log.qty!=null?Number(log.qty):Number(log.bags||0);
-    runQty[sid]=(runQty[sid]||0)+logQty;
-    runNet[sid]=(runNet[sid]||0)+(Number(log.earnings||0)-Number(log.deduction||0));
+    runQty[key]=(runQty[key]||0)+logQty;
+    runNet[key]=(runNet[key]||0)+(Number(log.earnings||0)-Number(log.deduction||0));
     // Resolve unit label for this log
     const logUnit=(()=>{const u=log.rateUnit||'bag';if(u==='custom'){const ro=(DATA.staffRoles||[]).find(r=>r.name===log.role);const to=(ro?.tasks||[]).find(t=>t.name===log.task);return to?.customUnit||'unit';}return u;})();
-    cumMap[log.id]={cumQty:runQty[sid], cumNet:runNet[sid], cumUnit:logUnit};
+    cumMap[log.id]={cumQty:runQty[key], cumNet:runNet[key], cumUnit:logUnit};
   });
 
   const rows=taskFilteredLogs.slice().sort((a,b)=>b.date.localeCompare(a.date)||String(b.id).localeCompare(String(a.id))).map(log=>{
@@ -11198,7 +11200,7 @@ function renderStaffLogs(){
       <div class="sbox bl"><div class="sv">${cur()} ${totNet.toFixed(0)}</div><div class="sl">Net (Period)${STAFF_LOG_TASK_FILTER!=='all'?' · '+esc(STAFF_LOG_TASK_FILTER):''}</div></div>
     </div>
     <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:12px;font-size:17px;color:var(--muted)">
-      🔵 <span style="color:var(--blue);font-weight:700">Cum. Qty</span> &amp; 🟣 <span style="color:var(--purple);font-weight:700">Cum. Net</span> = running career total per staff up to that day (qty in task's own unit)
+      🔵 <span style="color:var(--blue);font-weight:700">Cum. Qty</span> &amp; 🟣 <span style="color:var(--purple);font-weight:700">Cum. Net</span> = running career total per staff, per task, up to that day (qty in task's own unit)
     </div>
     ${_taskList.length>1?`<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">
       <button class="tag" style="cursor:pointer;padding:6px 12px;font-size:16px;${STAFF_LOG_TASK_FILTER==='all'?'background:var(--blue);color:#fff;border-color:var(--blue);font-weight:700':''}" onclick="setStaffLogTaskFilter('all')">All Tasks (${_workCount})</button>
@@ -11295,6 +11297,16 @@ function renderRoster(){
 function renderEarnings(){
   const staffList=scopedStaff();
   const {start:_eStart,end:_eEnd}=_periodBounds(PERIOD.staff,'staff');
+  // Career (all-time, approved, work-only) totals per staff PER TASK — used
+  // for the "Career" figure inside each staff row's expandable task
+  // breakdown, independent of whatever period is currently selected above.
+  const careerByStaffTask={};
+  approvedArr(DATA.staffLogs).filter(l=>!l.entryType||l.entryType==='work').forEach(l=>{
+    const key=String(l.staffId)+'|'+(l.task||'—');
+    if(!careerByStaffTask[key])careerByStaffTask[key]={qty:0,net:0};
+    careerByStaffTask[key].qty+=Number(l.qty!=null?l.qty:l.bags||0);
+    careerByStaffTask[key].net+=(Number(l.earnings||0)-Number(l.deduction||0));
+  });
   const rows=staffList.map(s=>{
     const isSalaried=s.payType==='salary';
     const allLogs=DATA.staffLogs.filter(l=>String(l.staffId)===String(s.id)&&(!l.entryType||l.entryType==='work'));
@@ -11310,8 +11322,39 @@ function renderEarnings(){
       const t={absent:'Absent',leave:'Leave',sick:'Sick'}[l.entryType]||l.entryType;
       return t+(l.absenceNote?' ('+l.absenceNote+')':'');
     }).join(', ');
+    // Per-task breakdown for the currently selected period — kept collapsed
+    // by default so the main table stays uncluttered; each task line also
+    // shows its own career (all-time) qty/net, separate from every other
+    // task this staff member performs (they can be on different rates).
+    const byTask={};
+    sLogs.forEach(l=>{
+      const t=l.task||'—';
+      if(!byTask[t])byTask[t]={qty:0,gross:0,ded:0,role:l.role||s.role||''};
+      byTask[t].qty+=Number(l.qty!=null?l.qty:l.bags||0);
+      byTask[t].gross+=Number(l.earnings||0);
+      byTask[t].ded+=Number(l.deduction||0);
+    });
+    const taskNames=Object.keys(byTask).sort((a,b)=>a.localeCompare(b));
+    const taskKey='earn-'+s.id;
+    const taskRows=taskNames.map(t=>{
+      const v=byTask[t];
+      const tNet=Math.max(0,v.gross-v.ded);
+      const ul=taskRateUnitLabel(v.role,t)||'unit';
+      const career=careerByStaffTask[String(s.id)+'|'+t]||{qty:0,net:0};
+      return`<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border);gap:8px;flex-wrap:wrap">
+        <span style="font-size:15px;font-weight:700">${esc(t)}</span>
+        <span style="font-size:14px;color:var(--muted)">${v.qty.toLocaleString()} ${esc(ul)} · <span style="color:var(--green)">${zm(v.gross)}</span>${v.ded>0?` <span style="color:var(--red)">-${zm(v.ded)}</span>`:''} = <span style="color:var(--green);font-weight:700">${zm(tNet)}</span></span>
+        <span style="font-size:13px;color:var(--purple)">Career: ${career.qty.toLocaleString()} ${esc(ul)} · ${zm(career.net)}</span>
+      </div>`;
+    }).join('');
+    const taskToggle=taskNames.length===0?'':`<div style="margin-top:6px">
+      <span style="font-size:14px;color:var(--blue);cursor:pointer;font-weight:700" onclick="toggleRoleHistorySection('${taskKey}')">
+        <span id="rwh-arrow-${taskKey}">▼</span> By Task (${taskNames.length})
+      </span>
+      <div id="rwh-body-${taskKey}" style="display:none;margin-top:6px">${taskRows}</div>
+    </div>`;
     return `<tr>
-      <td style="font-weight:700">${esc(s.name)}${isSalaried?' <span class="tag" style="font-size:13px">SALARY</span>':''}</td>
+      <td style="font-weight:700">${esc(s.name)}${isSalaried?' <span class="tag" style="font-size:13px">SALARY</span>':''}${taskToggle}</td>
       <td><span class="tag">${esc(staffRoleLabel(s))}</span></td>
       <td>${isSalaried?'<span style="color:var(--muted)">—</span>':totBags.toLocaleString()}</td>
       <td style="color:var(--green)">${zm(gross)}${isSalaried?' <span style="font-size:14px;color:var(--muted)">/mo</span>':''}</td>
