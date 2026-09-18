@@ -27,10 +27,17 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
 <!-- Turf.js (free, no API key) — used to clip plot rectangles to the actual drawn
-     boundary instead of just its bounding box. Loaded from CDN; if it fails to
-     load (e.g. offline), the plot map gracefully falls back to bounding-box
-     rectangles — see computePlotGeoCells(). -->
-<script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+     boundary instead of just its bounding box — see computePlotGeoCells().
+     Vendored locally (turf.min.js next to this file) instead of loaded from
+     unpkg: sw.js was already precaching the CDN copy for offline use, but that
+     precache is only as good as the one network fetch that populated it — a
+     first visit with flaky signal, a stale cache, or unpkg being briefly
+     unreachable all leave turf undefined offline. A local file ships with the
+     app every time, no network fetch required at all. If turf.min.js hasn't
+     been added yet, this 404s harmlessly and the app falls back to
+     bounding-box rectangles, same as before — see the
+     `typeof turf==='undefined'` guards below. -->
+<script src="./turf.min.js"></script>
 <style>
   :root{
     --soil:#6B4226; --soil-dark:#4B2E19;
@@ -530,6 +537,105 @@ function defaultState(){
   };
 }
 
+/* ---------- offline write queue ----------
+   The Firebase Web SDK already holds writes made while offline in an
+   in-memory queue and flushes them on reconnect — but that queue lives only
+   in JS memory. If the tab/app is closed (or the OS kills it) before the
+   connection comes back, whatever was pending is gone with no trace and no
+   warning: a buyer who logs a payment out in the field with no signal, then
+   closes the browser, simply loses that payment record. This module gives
+   the two write paths that matter most for that scenario — a buyer's own
+   payments/plans (saveBuyerPayments/saveBuyerPlans) — a durable,
+   IndexedDB-backed queue that survives a closed tab and replays in order
+   once we're actually connected again. It deliberately does NOT queue
+   saveState()'s whole-blob overwrites (used mostly for admin/owner editing
+   at a desk): replaying a stale full snapshot after reconnecting risks
+   clobbering other people's changes made in the meantime, which is exactly
+   the hazard update()-style writes were already chosen to avoid elsewhere
+   in this file. */
+const OFFLINE_DB_NAME = 'tukule_offline_queue_v1';
+const OFFLINE_STORE = 'writes';
+function openOfflineDB(){
+  return new Promise((resolve, reject)=>{
+    if(!('indexedDB' in window)){ reject(new Error('IndexedDB unavailable')); return; }
+    const req = indexedDB.open(OFFLINE_DB_NAME, 1);
+    req.onupgradeneeded = ()=>{
+      if(!req.result.objectStoreNames.contains(OFFLINE_STORE)){
+        req.result.createObjectStore(OFFLINE_STORE, { keyPath:'id', autoIncrement:true });
+      }
+    };
+    req.onsuccess = ()=>resolve(req.result);
+    req.onerror = ()=>reject(req.error);
+  });
+}
+// Queues one `db.ref(DATA_PATH).update(updates)` call for later replay.
+// Fire-and-forget from the caller's point of view — if IndexedDB itself is
+// unavailable (very old browser, storage disabled) this just logs and the
+// write is no worse off than it was before this feature existed.
+async function queueOfflineWrite(updates, label){
+  try{
+    const idb = await openOfflineDB();
+    await new Promise((resolve, reject)=>{
+      const tx = idb.transaction(OFFLINE_STORE, 'readwrite');
+      tx.objectStore(OFFLINE_STORE).add({ updates, label, ts: Date.now() });
+      tx.oncomplete = resolve;
+      tx.onerror = ()=>reject(tx.error);
+    });
+    updatePendingPill();
+  } catch(err){ console.error('Tukule: could not queue offline write', err); }
+}
+async function getQueuedWrites(){
+  try{
+    const idb = await openOfflineDB();
+    return await new Promise((resolve, reject)=>{
+      const tx = idb.transaction(OFFLINE_STORE, 'readonly');
+      const req = tx.objectStore(OFFLINE_STORE).getAll();
+      req.onsuccess = ()=>resolve(req.result || []);
+      req.onerror = ()=>reject(req.error);
+    });
+  } catch(err){ return []; }
+}
+async function removeQueuedWrite(id){
+  try{
+    const idb = await openOfflineDB();
+    await new Promise((resolve, reject)=>{
+      const tx = idb.transaction(OFFLINE_STORE, 'readwrite');
+      tx.objectStore(OFFLINE_STORE).delete(id);
+      tx.oncomplete = resolve;
+      tx.onerror = ()=>reject(tx.error);
+    });
+  } catch(err){ console.error('Tukule: could not clear queued write', err); }
+}
+let offlineFlushInFlight = false;
+// Replays queued writes in the order they were made. Stops at the first
+// failure and leaves the rest queued for the next trigger, so a payment
+// logged Monday can never jump ahead of / clobber one logged Tuesday.
+async function flushOfflineQueue(){
+  if(offlineFlushInFlight || !db) return;
+  offlineFlushInFlight = true;
+  try{
+    const items = await getQueuedWrites();
+    for(const item of items){
+      try{
+        await db.ref(DATA_PATH).update(item.updates);
+        await removeQueuedWrite(item.id);
+      } catch(err){
+        console.error('Tukule: retry of queued offline write failed, will try again later', err);
+        break;
+      }
+    }
+  } finally {
+    offlineFlushInFlight = false;
+    updatePendingPill();
+  }
+}
+async function updatePendingPill(){
+  const items = await getQueuedWrites();
+  if(items.length>0) setSyncPill('offline', `${items.length} change${items.length>1?'s':''} pending — will sync`);
+  else if(db && db.ref) setSyncPill('online', 'Synced');
+}
+window.addEventListener('online', flushOfflineQueue);
+
 /* ---------- cloud sync ----------
    Whole-blob pattern: the entire `state` object lives at one Realtime
    Database path. saveState() pushes the full object up; a live `on('value')`
@@ -654,9 +760,16 @@ function attachCloudListener(){
     setSyncPill('offline', 'Offline');
   });
   db.ref('.info/connected').on('value', snap=>{
-    if(snap.val()===true) setSyncPill('online', 'Synced');
+    if(snap.val()===true){ flushOfflineQueue(); }
     else setSyncPill('connecting', 'Reconnecting…');
   });
+  // Covers the case this fix actually targets: the app was closed while a
+  // payment/plan write was still queued from a previous offline session.
+  // The moment we're connected we try to replay it, rather than only ever
+  // checking on the 'online' browser event (which won't fire again if the
+  // device never went offline in *this* page load — e.g. it was already
+  // offline when the page opened and came online before Firebase connected).
+  flushOfflineQueue();
 }
 
 function initApp(){
@@ -875,6 +988,70 @@ async function hashPin(pin){
   });
   return words.join('');
 }
+/* ---------- auth secrets (kept OUT of the bulk-synced state tree) ----------
+   PIN hashes used to live inside buyers/$phone and sites/$siteId — both part
+   of the single `tukule_state_v2` tree that attachCloudListener() subscribes
+   to as a whole. That meant every visitor's browser downloaded every PIN
+   hash on page load, whether they ever attempted a login or not, and since
+   hashPin() is a fast unsalted-per-user hash over a 4-6 digit space, anyone
+   with those hashes could recover every real PIN in under a second offline.
+   Hashes now live in a separate `tukule_auth_v1` tree that this app never
+   bulk-reads — login fetches only the one record it needs, and the rules
+   only allow reading/writing that exact path, never listing the collection.
+
+   Old accounts created before this change still carry their hash on the
+   buyer/site record itself. Login below checks the new location first,
+   falls back to the legacy field if the new one isn't there yet, and on a
+   successful legacy login migrates the hash across and deletes the legacy
+   copy — so every account is moved the next time its owner logs in, with
+   no bulk migration script needed. */
+const AUTH_PATH = 'tukule_auth_v1';
+async function fetchAuthSecret(kind, id){
+  try{ const snap = await db.ref(`${AUTH_PATH}/${kind}/${id}`).once('value'); return snap.val(); }
+  catch(e){ return null; }
+}
+async function writeAuthSecret(kind, id, data){
+  try{ await db.ref(`${AUTH_PATH}/${kind}/${id}`).set(data); return true; }
+  catch(e){ return false; }
+}
+async function updateAuthSecret(kind, id, patch){
+  try{ await db.ref(`${AUTH_PATH}/${kind}/${id}`).update(patch); return true; }
+  catch(e){ return false; }
+}
+
+/* ---------- login lockout ----------
+   A wrong PIN increments failedAttempts on the auth secret; hitting the cap
+   sets lockedUntil LOGIN_LOCK_MINUTES into the future. This only throttles
+   attempts made through this app's own login form — it's a second layer on
+   top of (not a replacement for) keeping the hash out of the bulk sync. */
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCK_MINUTES = 15;
+function isLockedSecret(secret){
+  return !!(secret && secret.lockedUntil && new Date(secret.lockedUntil).getTime() > Date.now());
+}
+function lockoutRemainingMinutes(secret){
+  if(!secret || !secret.lockedUntil) return 0;
+  return Math.max(1, Math.ceil((new Date(secret.lockedUntil).getTime() - Date.now()) / 60000));
+}
+function lockoutMessageHtml(secret){
+  const mins = lockoutRemainingMinutes(secret);
+  return `<div class="msg err">Too many incorrect attempts. Try again in ${mins} minute${mins===1?'':'s'}, or use "Forgot PIN".</div>`;
+}
+async function registerFailedAttempt(kind, id, secret){
+  const attempts = (secret.failedAttempts||0) + 1;
+  const patch = { failedAttempts: attempts };
+  if(attempts >= LOGIN_MAX_ATTEMPTS){
+    patch.lockedUntil = new Date(Date.now() + LOGIN_LOCK_MINUTES*60000).toISOString();
+  }
+  Object.assign(secret, patch);
+  await updateAuthSecret(kind, id, patch);
+}
+async function clearFailedAttempts(kind, id, secret){
+  if(!secret.failedAttempts && !secret.lockedUntil) return;
+  secret.failedAttempts = 0; secret.lockedUntil = null;
+  await updateAuthSecret(kind, id, { failedAttempts: 0, lockedUntil: null });
+}
+
 function todayISO(){ return new Date().toISOString().slice(0,10); }
 function addDays(dateStr, days){ const d=new Date(dateStr); d.setDate(d.getDate()+days); return d.toISOString().slice(0,10); }
 function addMonths(dateStr, months){ const d=new Date(dateStr); d.setMonth(d.getMonth()+months); return d.toISOString().slice(0,10); }
@@ -1893,14 +2070,34 @@ async function claimPlot(site, plotId, buyerPhone){
 // would blow away the very reservations we just won. Updating only this
 // buyer's `plans` path leaves every other path — including the plots we
 // just claimed and anything anyone else changed in between — untouched.
-function saveBuyerPlans(phone, plans){
+async function saveBuyerPlans(phone, plans){
   syncSuppressUntil = Date.now() + 2000;
   const updates = {};
   updates[`buyers/${phone}/plans`] = plans;
-  db.ref(DATA_PATH).update(updates).catch(err=>{
-    console.error('Tukule: cloud save failed', err);
-    setSyncPill('offline', 'Save failed — retrying');
-  });
+  await persistAndSend(updates, `plans for ${phone}`);
+}
+
+// Same reasoning as saveBuyerPlans() above, for a buyer's own payment log:
+// update only the `payments` path so it can never clobber plots/plans
+// changed elsewhere, and route it through the offline queue below so a
+// payment logged with no signal survives the app being closed before it
+// syncs, instead of only living in JS memory.
+async function saveBuyerPayments(phone, payments){
+  syncSuppressUntil = Date.now() + 2000;
+  const updates = {};
+  updates[`buyers/${phone}/payments`] = payments;
+  await persistAndSend(updates, `payments for ${phone}`);
+}
+
+// Writes are always queued to IndexedDB first, then an immediate flush is
+// attempted. When online this round-trips in milliseconds — the write
+// leaves the queue as soon as it's acknowledged. When offline (or the tab
+// is closed before the flush finishes) it simply stays queued, durable on
+// disk, and gets replayed by flushOfflineQueue() next time we connect —
+// see the .info/connected listener and the 'online' handler above.
+async function persistAndSend(updates, label){
+  await queueOfflineWrite(updates, label);
+  flushOfflineQueue();
 }
 
 // A reserved plot with no timeout or cancel path can get stuck unsellable
@@ -1998,9 +2195,7 @@ async function expireStaleReservations(){
       const updates = {};
       updates[`buyers/${buyer.phone}/plans`] = buyer.plans;
       updates['auditLog'] = state.auditLog;
-      db.ref(DATA_PATH).update(updates).catch(err=>{
-        console.error('Tukule: auto-expiry save failed', err);
-      });
+      await persistAndSend(updates, 'auto-expiry');
     }
   }
 }
@@ -2130,11 +2325,36 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
 
   btn.disabled = true;
   const ownerPinHash = await hashPin(ownerPin);
-  const existingOwnerSite = findSiteForOwnerPhone(ownerPhone);
-  if(existingOwnerSite && existingOwnerSite.ownerPinHash !== ownerPinHash){
-    btn.disabled = false;
-    msg.innerHTML = '<div class="msg err">That PIN doesn\'t match the one on file for this phone number. Use the PIN from your first listing, or call us if you\'ve forgotten it.</div>';
-    return;
+  // One PIN per owner phone, shared across all their sites — check it
+  // against the isolated auth secret first; only fall back to the legacy
+  // per-site field for an owner who hasn't logged in (and been migrated)
+  // since the PIN-isolation change.
+  let ownerSecret = await fetchAuthSecret('owners', ownerPhone);
+  if(ownerSecret){
+    if(ownerSecret.pinHash !== ownerPinHash){
+      btn.disabled = false;
+      msg.innerHTML = '<div class="msg err">That PIN doesn\'t match the one on file for this phone number. Use the PIN from your first listing, or call us if you\'ve forgotten it.</div>';
+      return;
+    }
+  } else {
+    const existingOwnerSite = findSiteForOwnerPhone(ownerPhone);
+    if(existingOwnerSite && existingOwnerSite.ownerPinHash){
+      if(existingOwnerSite.ownerPinHash !== ownerPinHash){
+        btn.disabled = false;
+        msg.innerHTML = '<div class="msg err">That PIN doesn\'t match the one on file for this phone number. Use the PIN from your first listing, or call us if you\'ve forgotten it.</div>';
+        return;
+      }
+      // Verified against the legacy field — migrate it now rather than
+      // waiting for a login.
+      await writeAuthSecret('owners', ownerPhone, { pinHash: ownerPinHash, failedAttempts:0, lockedUntil:null });
+    } else {
+      const ok = await writeAuthSecret('owners', ownerPhone, { pinHash: ownerPinHash, failedAttempts:0, lockedUntil:null });
+      if(!ok){
+        btn.disabled = false;
+        msg.innerHTML = '<div class="msg err">Something went wrong saving your PIN — check your connection and try again.</div>';
+        return;
+      }
+    }
   }
 
   const cols = Math.ceil(Math.sqrt(total));
@@ -2149,7 +2369,7 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
     boundary: sellBoundaryLatLngs && sellBoundaryLatLngs.length ? sellBoundaryLatLngs : null,
     outrightDiscountPct:5, depositPct:20, dailyTerms:[90,180,365], monthlyTerms:[6,12,18,24,36],
     offerOutright:true, offerDaily:true, offerMonthly:true,
-    ownerName, ownerPhone, ownerNrc: ownerNrc || null, ownerPinHash, isNexliteOwned:false, commissionPct: state.settings.defaultCommissionPct,
+    ownerName, ownerPhone, ownerNrc: ownerNrc || null, isNexliteOwned:false, commissionPct: state.settings.defaultCommissionPct,
     status:'pending', createdAt: todayISO(), plots,
     feeDue: siteListingFeeTotal(plots), feePaid: false,
     commissionSettlements: [], photoUrl: pendingListingPhoto || null
@@ -2197,16 +2417,43 @@ document.getElementById('owner-login-btn').addEventListener('click', async ()=>{
   const btn = document.getElementById('owner-login-btn');
   const pin = document.getElementById('owner-login-pin').value.trim();
   const mySites = Object.values(state.sites).filter(s=>normPhone(s.ownerPhone)===phone);
-  const pinnedSite = mySites.find(s=>s.ownerPinHash);
-  if(!phone || !pin || mySites.length===0 || !pinnedSite){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
+  if(!phone || !pin || mySites.length===0){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
   btn.disabled = true;
-  const pinHash = await hashPin(pin);
-  btn.disabled = false;
-  if(pinHash !== pinnedSite.ownerPinHash){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
-  currentOwnerPhone = phone;
-  updateSession({ ownerPhone: phone });
-  document.getElementById('owner-login-pin').value='';
-  renderOwnerDashboard();
+  try{
+    let secret = await fetchAuthSecret('owners', phone);
+    let usingLegacy = false;
+    if(!secret){
+      const pinnedSite = mySites.find(s=>s.ownerPinHash);
+      if(!pinnedSite){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
+      secret = { pinHash: pinnedSite.ownerPinHash, failedAttempts:0, lockedUntil:null };
+      usingLegacy = true;
+    }
+    if(isLockedSecret(secret)){ msg.innerHTML = lockoutMessageHtml(secret); return; }
+    const pinHash = await hashPin(pin);
+    if(pinHash !== secret.pinHash){
+      await registerFailedAttempt('owners', phone, secret);
+      msg.innerHTML = isLockedSecret(secret) ? lockoutMessageHtml(secret) : '<div class="msg err">Incorrect phone number or PIN.</div>';
+      return;
+    }
+    if(usingLegacy){
+      await writeAuthSecret('owners', phone, { pinHash: secret.pinHash, failedAttempts:0, lockedUntil:null });
+      // Strip the now-migrated hash off every one of this owner's sites —
+      // it no longer needs to live in the bulk-synced tree.
+      mySites.forEach(s=>{
+        if(s.ownerPinHash){ db.ref(`${DATA_PATH}/sites/${s.id}/ownerPinHash`).remove().catch(()=>{}); delete s.ownerPinHash; }
+      });
+    } else {
+      await clearFailedAttempts('owners', phone, secret);
+    }
+    currentOwnerPhone = phone;
+    updateSession({ ownerPhone: phone });
+    document.getElementById('owner-login-pin').value='';
+    renderOwnerDashboard();
+  }catch(e){
+    msg.innerHTML = '<div class="msg err">Something went wrong logging in — please try again, or call 0977 638 790 / 0960 271 128.</div>';
+  }finally{
+    btn.disabled = false;
+  }
 });
 
 document.getElementById('owner-forgot-pin-btn').addEventListener('click', ()=>{
@@ -2627,7 +2874,13 @@ document.getElementById('create-account-btn').addEventListener('click', async ()
   btn.disabled = true;
   try{
     const pinHash = await hashPin(pin);
-    state.buyers[phone] = { phone, name, nrc, pinHash, plans:[], payments:[] };
+    const secretOk = await writeAuthSecret('buyers', phone, { pinHash, failedAttempts:0, lockedUntil:null });
+    if(!secretOk){
+      msg.innerHTML = '<div class="msg err">Something went wrong creating your account — check your connection and try again.</div>';
+      btn.disabled = false;
+      return;
+    }
+    state.buyers[phone] = { phone, name, nrc, plans:[], payments:[] };
     saveState(err=>{
       // The account is showing locally, but it never actually reached the
       // cloud — reload/another device won't see it. Tell the person plainly
@@ -2655,8 +2908,26 @@ document.getElementById('login-btn').addEventListener('click', async ()=>{
   if(!phone || !pin || !buyer){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
   btn.disabled = true;
   try{
+    let secret = await fetchAuthSecret('buyers', phone);
+    const usingLegacy = !secret;
+    if(usingLegacy){
+      if(!buyer.pinHash){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
+      secret = { pinHash: buyer.pinHash, failedAttempts:0, lockedUntil:null };
+    }
+    if(isLockedSecret(secret)){ msg.innerHTML = lockoutMessageHtml(secret); return; }
     const pinHash = await hashPin(pin);
-    if(pinHash !== buyer.pinHash){ msg.innerHTML = '<div class="msg err">Incorrect phone number or PIN.</div>'; return; }
+    if(pinHash !== secret.pinHash){
+      await registerFailedAttempt('buyers', phone, secret);
+      msg.innerHTML = isLockedSecret(secret) ? lockoutMessageHtml(secret) : '<div class="msg err">Incorrect phone number or PIN.</div>';
+      return;
+    }
+    if(usingLegacy){
+      await writeAuthSecret('buyers', phone, { pinHash: secret.pinHash, failedAttempts:0, lockedUntil:null });
+      db.ref(`${DATA_PATH}/buyers/${phone}/pinHash`).remove().catch(()=>{});
+      delete buyer.pinHash;
+    } else {
+      await clearFailedAttempts('buyers', phone, secret);
+    }
     currentAccountPhone = phone;
     updateSession({ accountPhone: phone });
     document.getElementById('login-pin').value='';
@@ -2872,8 +3143,10 @@ function renderAccount(){
     const plan = buyer.plans.find(p=>p.id===planId);
     if(!plan){ msg.innerHTML = '<div class="msg err">Select which plot this payment is for.</div>'; return; }
     buyer.payments.push({ date: todayISO(), amount: amt, method, reference: reference || null, status:'pending', planId: plan.id, siteId: plan.siteId });
-    saveState();
-    msg.innerHTML = '<div class="msg ok">Payment logged. It will reflect once confirmed.</div>';
+    saveBuyerPayments(currentAccountPhone, buyer.payments);
+    msg.innerHTML = navigator.onLine
+      ? '<div class="msg ok">Payment logged. It will reflect once confirmed.</div>'
+      : '<div class="msg ok">Payment logged. No signal right now — it\'s saved on this device and will sync automatically once you\'re back online.</div>';
     document.getElementById('pay-amount').value='';
     document.getElementById('pay-reference').value='';
     renderAccount();
