@@ -1470,6 +1470,9 @@ function _buildPdfFromJpeg(jpegBytes, imgWpx, imgHpx){
 
 // Rasterises an element to a canvas using the native SVG <foreignObject>
 // technique — no html2canvas, no external library, works fully offline.
+// IMPORTANT: the SVG must be loaded as a data: URI, not a blob: URL — Chrome
+// marks the resulting canvas "tainted" (blocking toDataURL/toBlob) when an
+// SVG containing <foreignObject> HTML is loaded via blob:, even same-origin.
 async function _captureContentToCanvas(el){
   var width = Math.max(1, Math.ceil(el.scrollWidth));
   var height = Math.max(1, Math.ceil(el.scrollHeight));
@@ -1484,27 +1487,23 @@ async function _captureContentToCanvas(el){
   var svgMarkup = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '">' +
     '<foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">' +
     '<style>' + styleText + '</style>' + htmlStr + '</div></foreignObject></svg>';
-  var svgBlob = new Blob([svgMarkup], { type: 'image/svg+xml;charset=utf-8' });
-  var url = URL.createObjectURL(svgBlob);
-  try{
-    var img = new Image();
-    await new Promise(function(resolve, reject){
-      img.onload = resolve;
-      img.onerror = function(){ reject(new Error('render-failed')); };
-      img.src = url;
-    });
-    var scale = Math.max(1, Math.min(1.5, 1400 / width));
-    var canvas = document.createElement('canvas');
-    canvas.width = Math.round(width * scale);
-    canvas.height = Math.round(height * scale);
-    var ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    return canvas;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+  var svgBase64 = btoa(unescape(encodeURIComponent(svgMarkup)));
+  var dataUri = 'data:image/svg+xml;base64,' + svgBase64;
+  var img = new Image();
+  await new Promise(function(resolve, reject){
+    img.onload = resolve;
+    img.onerror = function(){ reject(new Error('svg-render-failed')); };
+    img.src = dataUri;
+  });
+  var scale = Math.max(1, Math.min(1.5, 1400 / width));
+  var canvas = document.createElement('canvas');
+  canvas.width = Math.round(width * scale);
+  canvas.height = Math.round(height * scale);
+  var ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas;
 }
 
 // Generates a real PDF fully offline (no CDN, no network) and hands it to
@@ -1543,10 +1542,10 @@ async function _shareGeneratedPdf(){
   } catch(err){
     if (err && err.name === 'AbortError'){ btn.textContent = 'Share cancelled'; }
     else if (err && err.message === 'timeout'){ btn.textContent = '⚠️ Too slow — use Print instead'; }
-    else { btn.textContent = '⚠️ Couldn\'t generate — use Print instead'; }
+    else { btn.textContent = '⚠️ ' + ((err && err.message) ? err.message.slice(0, 40) : 'Failed') + ' — try Print'; }
   } finally {
     clearInterval(ticker);
-    setTimeout(function(){ btn.disabled = false; btn.textContent = original; }, 3200);
+    setTimeout(function(){ btn.disabled = false; btn.textContent = original; }, 6000);
   }
 }
 <\/script>
