@@ -225,7 +225,12 @@
       <p class="section-sub">Pick which property you'd like to buy a plot on.</p>
       <div class="side-card" style="margin-bottom:16px;">
         <div class="grid-two">
-          <div><label class="field">Search by name or location</label><input type="text" id="buy-filter-search" placeholder="e.g. Mansa, Kabunda"></div>
+          <div><label class="field">Search by name or location</label>
+            <div style="display:flex;gap:6px;">
+              <input type="text" id="buy-filter-search" placeholder="e.g. Mansa, Kabunda" style="flex:1;">
+              <button class="btn btn-secondary btn-sm" id="buy-filter-search-btn" type="button" style="flex-shrink:0;">Search</button>
+            </div>
+          </div>
           <div><label class="field">Minimum plots available</label><input type="number" id="buy-filter-minavail" min="0" placeholder="Any"></div>
           <div><label class="field">Min price per plot (K)</label><input type="number" id="buy-filter-minprice" min="0" placeholder="No minimum"></div>
           <div><label class="field">Max price per plot (K)</label><input type="number" id="buy-filter-maxprice" min="0" placeholder="No maximum"></div>
@@ -1674,7 +1679,25 @@ function filteredActiveSites(){
 function renderBuySitePicker(){
   const wrap = document.getElementById('buy-site-cards');
   const sites = filteredActiveSites();
-  wrap.innerHTML = sites.length ? sites.map(s=>siteCardHtml(s,'Select this site')).join('') : '<div class="empty">No sites match your filters.</div>';
+  if(sites.length){
+    wrap.innerHTML = sites.map(s=>siteCardHtml(s,'Select this site')).join('');
+  } else {
+    // Don't leave the buyer stuck on a dead end when their search term
+    // (usually a location) matches nothing — show them what IS available
+    // instead of just a flat "no results".
+    const search = (document.getElementById('buy-filter-search')?.value || '').trim();
+    const others = activeSites().filter(s=>!sites.includes(s));
+    const suggestionsHtml = (search && others.length) ? `
+      <p class="note" style="margin-top:10px;">No sites match "${esc(search)}". Other available locations:</p>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">
+        ${others.map(s=>`<button class="btn btn-ghost btn-sm" data-suggest-location="${esc(s.location)}">${esc(s.location)}${s.location!==s.name ? ` (${esc(s.name)})` : ''}</button>`).join('')}
+      </div>` : '';
+    wrap.innerHTML = `<div class="empty">No sites match your filters.</div>${suggestionsHtml}`;
+    wrap.querySelectorAll('[data-suggest-location]').forEach(btn=>btn.addEventListener('click', ()=>{
+      document.getElementById('buy-filter-search').value = btn.dataset.suggestLocation;
+      renderBuySitePicker();
+    }));
+  }
   wrap.querySelectorAll('[data-open-site]').forEach(btn=>btn.addEventListener('click', ()=>openSite(btn.dataset.openSite)));
   if(!currentSiteId){
     document.getElementById('buy-site-picker').classList.remove('hidden');
@@ -1683,6 +1706,10 @@ function renderBuySitePicker(){
 }
 ['buy-filter-search','buy-filter-minavail','buy-filter-minprice','buy-filter-maxprice'].forEach(id=>{
   document.getElementById(id).addEventListener('input', renderBuySitePicker);
+});
+document.getElementById('buy-filter-search-btn').addEventListener('click', renderBuySitePicker);
+document.getElementById('buy-filter-search').addEventListener('keydown', e=>{
+  if(e.key==='Enter'){ e.preventDefault(); renderBuySitePicker(); }
 });
 document.getElementById('buy-filter-clear').addEventListener('click', ()=>{
   document.getElementById('buy-filter-search').value='';
