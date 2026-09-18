@@ -1387,16 +1387,169 @@ function _pdfPrint(htmlBody, title, filename) {
     border-radius: 7px; cursor: pointer; border: 1.5px solid var(--accent);
     background: var(--accent); color: #fff;
   }
+  .pdf-toolbar button#__share_btn{ background: #fff; color: var(--accent); }
+  .pdf-toolbar button:disabled{ opacity: .6; cursor: default; }
   .pdf-toolbar-spacer{ height: 4px; }
 </style>
 </head>
 <body>
 <div class="pdf-toolbar">
-  <button onclick="window.print()">🖨 Print / Save / Share PDF</button>
-  <span class="hint">Tip: on the next screen, tap the Share icon (top right) to send this straight to WhatsApp or any app</span>
+  <button class="primary" onclick="window.print()">🖨 Print / Save PDF</button>
+  <button id="__share_btn" onclick="_shareGeneratedPdf()">📤 Share to WhatsApp / Social</button>
 </div>
 <div class="pdf-toolbar-spacer"></div>
+<div id="pdf-content">
 ${htmlBody}
+</div>
+<script>
+window.__pdfShareTitle = ${JSON.stringify(title || 'MDM Document')};
+window.__pdfShareFilename = ${JSON.stringify((filename || title || 'MDM_Document').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') + '.pdf')};
+
+// Turns a canvas.toDataURL('image/jpeg', q) string into raw JPEG bytes.
+function _dataUrlToUint8Array(dataUrl){
+  var base64 = dataUrl.split(',')[1];
+  var binary = atob(base64);
+  var bytes = new Uint8Array(binary.length);
+  for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+// Hand-written, dependency-free PDF writer: wraps one JPEG image across as
+// many A4 pages as needed (same image, repositioned per page — the standard
+// "tall screenshot across pages" trick). No library, no network, no CDN.
+function _buildPdfFromJpeg(jpegBytes, imgWpx, imgHpx){
+  var pageW = 595.28, pageH = 841.89;
+  var imgW = pageW;
+  var imgH = imgHpx * (imgW / imgWpx);
+  var pages = Math.max(1, Math.ceil(imgH / pageH));
+  var enc = new TextEncoder();
+  var chunks = [];
+  var length = 0;
+  function push(part){
+    var bytes = (typeof part === 'string') ? enc.encode(part) : part;
+    chunks.push(bytes);
+    length += bytes.length;
+  }
+  var offsets = [];
+  push('%PDF-1.4\n');
+  offsets.push(length);
+  push('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+  var kids = [];
+  for (var k = 0; k < pages; k++) kids.push((4 + 2*k) + ' 0 R');
+  offsets.push(length);
+  push('2 0 obj\n<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages + ' >>\nendobj\n');
+  offsets.push(length);
+  push('3 0 obj\n<< /Type /XObject /Subtype /Image /Width ' + imgWpx + ' /Height ' + imgHpx + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + jpegBytes.length + ' >>\nstream\n');
+  push(jpegBytes);
+  push('\nendstream\nendobj\n');
+  for (var k2 = 0; k2 < pages; k2++){
+    var yOffset = (k2 + 1) * pageH - imgH;
+    var content = 'q\n' + imgW.toFixed(2) + ' 0 0 ' + imgH.toFixed(2) + ' 0 ' + yOffset.toFixed(2) + ' cm\n/Im0 Do\nQ\n';
+    var contentBytes = enc.encode(content);
+    var pageObjNum = 4 + 2*k2, contentObjNum = 5 + 2*k2;
+    offsets.push(length);
+    push(pageObjNum + ' 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pageW.toFixed(2) + ' ' + pageH.toFixed(2) + '] /Resources << /XObject << /Im0 3 0 R >> >> /Contents ' + contentObjNum + ' 0 R >>\nendobj\n');
+    offsets.push(length);
+    push(contentObjNum + ' 0 obj\n<< /Length ' + contentBytes.length + ' >>\nstream\n');
+    push(contentBytes);
+    push('\nendstream\nendobj\n');
+  }
+  var xrefOffset = length;
+  var totalObjs = offsets.length;
+  var xref = 'xref\n0 ' + (totalObjs + 1) + '\n0000000000 65535 f \n';
+  for (var i2 = 0; i2 < offsets.length; i2++){
+    xref += String(offsets[i2]).padStart(10, '0') + ' 00000 n \n';
+  }
+  xref += 'trailer\n<< /Size ' + (totalObjs + 1) + ' /Root 1 0 R >>\nstartxref\n' + xrefOffset + '\n%%EOF';
+  push(xref);
+  var out = new Uint8Array(length);
+  var pos = 0;
+  for (var c = 0; c < chunks.length; c++){ out.set(chunks[c], pos); pos += chunks[c].length; }
+  return out;
+}
+
+// Rasterises an element to a canvas using the native SVG <foreignObject>
+// technique — no html2canvas, no external library, works fully offline.
+async function _captureContentToCanvas(el){
+  var width = Math.max(1, Math.ceil(el.scrollWidth));
+  var height = Math.max(1, Math.ceil(el.scrollHeight));
+  var styleText = '';
+  try{
+    styleText = Array.prototype.map.call(document.styleSheets, function(ss){
+      try{ return Array.prototype.map.call(ss.cssRules, function(r){ return r.cssText; }).join('\n'); }
+      catch(e){ return ''; }
+    }).join('\n');
+  } catch(e){}
+  var htmlStr = new XMLSerializer().serializeToString(el);
+  var svgMarkup = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '">' +
+    '<foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">' +
+    '<style>' + styleText + '</style>' + htmlStr + '</div></foreignObject></svg>';
+  var svgBlob = new Blob([svgMarkup], { type: 'image/svg+xml;charset=utf-8' });
+  var url = URL.createObjectURL(svgBlob);
+  try{
+    var img = new Image();
+    await new Promise(function(resolve, reject){
+      img.onload = resolve;
+      img.onerror = function(){ reject(new Error('render-failed')); };
+      img.src = url;
+    });
+    var scale = Math.max(1, Math.min(1.5, 1400 / width));
+    var canvas = document.createElement('canvas');
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+// Generates a real PDF fully offline (no CDN, no network) and hands it to
+// the OS share sheet so it can go straight into WhatsApp, email, etc. Falls
+// back to a plain download when file-sharing isn't available on this device.
+async function _shareGeneratedPdf(){
+  var btn = document.getElementById('__share_btn');
+  var original = btn.textContent;
+  btn.disabled = true;
+  var secs = 0;
+  btn.textContent = '⏳ Preparing PDF…';
+  var ticker = setInterval(function(){ secs += 1; btn.textContent = '⏳ Preparing PDF… (' + secs + 's)'; }, 1000);
+  function withTimeout(p, ms){
+    return Promise.race([p, new Promise(function(_, rej){ setTimeout(function(){ rej(new Error('timeout')); }, ms); })]);
+  }
+  try{
+    var content = document.getElementById('pdf-content');
+    var canvas = await withTimeout(_captureContentToCanvas(content), 20000);
+    if (!canvas.width || !canvas.height) throw new Error('empty-canvas');
+    var jpegDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    var jpegBytes = _dataUrlToUint8Array(jpegDataUrl);
+    var pdfBytes = _buildPdfFromJpeg(jpegBytes, canvas.width, canvas.height);
+    var blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    var file = new File([blob], window.__pdfShareFilename, { type: 'application/pdf' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })){
+      await navigator.share({ files: [file], title: window.__pdfShareTitle });
+      btn.textContent = '✅ Shared';
+    } else {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = window.__pdfShareFilename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 8000);
+      btn.textContent = navigator.share ? '⬇️ Saved (share manually)' : '⬇️ Downloaded';
+    }
+  } catch(err){
+    if (err && err.name === 'AbortError'){ btn.textContent = 'Share cancelled'; }
+    else if (err && err.message === 'timeout'){ btn.textContent = '⚠️ Too slow — use Print instead'; }
+    else { btn.textContent = '⚠️ Couldn\'t generate — use Print instead'; }
+  } finally {
+    clearInterval(ticker);
+    setTimeout(function(){ btn.disabled = false; btn.textContent = original; }, 3200);
+  }
+}
+<\/script>
 </body>
 </html>`;
 
