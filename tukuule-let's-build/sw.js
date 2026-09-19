@@ -8,7 +8,7 @@
 
    Bump CACHE_VERSION whenever the shell's own files change so old caches
    get cleared out on the next visit. */
-const CACHE_VERSION = 'tukule-shell-v4';
+const CACHE_VERSION = 'tukule-shell-v5';
 
 const SHELL_URLS = [
   './index.html',
@@ -16,6 +16,13 @@ const SHELL_URLS = [
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  // Turf is now vendored locally (see index.html) instead of loaded from
+  // unpkg, so it belongs with the shell files, not LIBRARY_URLS below: it's
+  // part of what ships with the app, not a third-party fetch that's allowed
+  // to fail silently. cache.addAll() is strict, so if this file is missing
+  // from the deploy, install() fails loudly here instead of the app quietly
+  // losing precise plot clipping with no one noticing.
+  './turf.min.js',
 ];
 
 // Third-party libraries the app can't function without — worth precaching
@@ -26,7 +33,6 @@ const LIBRARY_URLS = [
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
   'https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css',
   'https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js',
-  'https://unpkg.com/@turf/turf@6.5.0/turf.min.js',
 ];
 
 self.addEventListener('install', (event) => {

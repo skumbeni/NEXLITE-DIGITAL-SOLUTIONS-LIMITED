@@ -106,9 +106,19 @@
   @media(max-width:840px){.plot-panel{grid-template-columns:1fr;}}
   .grid-scroll{overflow-x:auto;border:1px solid var(--line);border-radius:6px;background:var(--card);padding:16px;}
   .plot-grid{display:grid;gap:4px;width:max-content;}
-  .plot{width:34px;height:34px;border-radius:2px;border:1px solid rgba(0,0,0,0.15);display:flex;align-items:center;justify-content:center;font-size:0.6rem;color:#fff;font-weight:600;background:var(--available);}
-  .plot.reserved{background:var(--reserved);cursor:not-allowed;} .plot.sold{background:var(--sold);cursor:not-allowed;}
+  .plot{width:34px;height:34px;border-radius:2px;border:1px solid rgba(0,0,0,0.15);display:flex;align-items:center;justify-content:center;font-size:0.6rem;color:#fff;font-weight:600;background:var(--available);position:relative;}
+  .plot.reserved{background:var(--reserved);cursor:not-allowed;border-style:dashed;} .plot.sold{background:var(--sold);cursor:not-allowed;border-width:2px;}
   .plot.available{cursor:pointer;} .plot.selected{outline:2px solid var(--ink);outline-offset:1px;}
+  .plot.available:focus-visible{outline:2px solid #1a73e8;outline-offset:2px;}
+  /* Corner glyphs so status isn't color-only: an hourglass for reserved, a
+     check for sold. Available plots get no glyph (their dotted/solid border
+     plus cursor already say "you can act on this"). */
+  .plot.reserved::after, .plot.sold::after{
+    content:''; position:absolute; bottom:1px; right:1px; font-size:0.5rem; line-height:1; color:#fff;
+  }
+  .plot.reserved::after{ content:'⏳'; }
+  .plot.sold::after{ content:'✓'; }
+  .plot-grid-sentinel{padding:8px 4px;font-size:0.72rem;color:#6b6153;text-align:center;}
   .legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:12px;font-size:0.82rem;}
   .legend span{display:inline-flex;align-items:center;gap:6px;} .legend i{width:12px;height:12px;border-radius:2px;display:inline-block;}
   .side-card{border:1px solid var(--line);border-radius:6px;background:var(--card);padding:18px;margin-bottom:16px;}
@@ -189,6 +199,7 @@
       <button data-view="buy">Buy a plot</button>
       <button data-view="sell">List a property</button>
       <button data-view="account">My account</button>
+      <button data-view="verify">Verify a document</button>
     </nav>
   </div>
 </header>
@@ -241,6 +252,13 @@
           <div><label class="field">Minimum plots available</label><input type="number" id="buy-filter-minavail" min="0" placeholder="Any"></div>
           <div><label class="field">Min price per plot (K)</label><input type="number" id="buy-filter-minprice" min="0" placeholder="No minimum"></div>
           <div><label class="field">Max price per plot (K)</label><input type="number" id="buy-filter-maxprice" min="0" placeholder="No maximum"></div>
+          <div><label class="field">Payment plan</label>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;padding-top:6px;">
+              <label style="font-size:0.85rem;display:flex;align-items:center;gap:5px;"><input type="checkbox" id="buy-filter-plan-outright"> Outright</label>
+              <label style="font-size:0.85rem;display:flex;align-items:center;gap:5px;"><input type="checkbox" id="buy-filter-plan-daily"> Daily</label>
+              <label style="font-size:0.85rem;display:flex;align-items:center;gap:5px;"><input type="checkbox" id="buy-filter-plan-monthly"> Monthly</label>
+            </div>
+          </div>
         </div>
         <button class="btn btn-ghost btn-sm" style="margin-top:10px;" id="buy-filter-clear">Clear filters</button>
       </div>
@@ -261,7 +279,7 @@
       </div>
       <div class="plot-panel">
         <div>
-          <div class="grid-scroll"><div class="plot-grid" id="plot-grid"></div></div>
+          <div class="grid-scroll"><div class="plot-grid" id="plot-grid" role="group" aria-label="Plot grid"></div></div>
           <div class="legend">
             <span><i style="background:var(--available)"></i> Available</span>
             <span><i style="background:var(--reserved)"></i> Reserved</span>
@@ -402,6 +420,19 @@
       </div>
     </div>
     <div id="account-dashboard" class="hidden"></div>
+  </section>
+
+  <!-- VERIFY -->
+  <section class="view" id="view-verify">
+    <h2 class="section-title">Verify a certificate or receipt</h2>
+    <p class="section-sub">Anyone holding a printed certificate of purchase or payment receipt — a lands officer, a bank, a family member — can check it's genuine here. No login needed.</p>
+    <div class="side-card" style="max-width:460px;">
+      <label class="field">Verification code</label>
+      <p class="note" style="margin-top:-4px;">Printed at the bottom of the certificate/receipt, e.g. <code>7K4M-QT2R-9F</code></p>
+      <input type="text" id="verify-code-input" placeholder="XXXX-XXXX-XX" style="text-transform:uppercase;letter-spacing:0.05em;">
+      <button class="btn btn-primary" style="width:100%;margin-top:14px;" id="verify-code-btn">Check this code</button>
+      <div id="verify-result" style="margin-top:16px;"></div>
+    </div>
   </section>
 
 </main>
@@ -987,6 +1018,68 @@ async function hashPin(pin){
     return h.toString(16).padStart(8,'0');
   });
   return words.join('');
+}
+// Same "no Web Crypto, one plain-JS hash everywhere" reasoning as hashPin()
+// above — used to print a short, unguessable verification code on
+// certificates/receipts (see printCertificate/printReceipt) so a printout
+// can be checked against the live record on the Verify page instead of
+// just being trusted at face value. Deliberately built only from fields
+// that never change after the document is issued (buyer phone, amounts,
+// dates, plan/site ids) — never from a payment's status, which an owner
+// can still confirm/reject after the receipt was printed; that way an old,
+// genuine printout keeps verifying correctly even after its status changes,
+// since the Verify page always shows the *current* status separately.
+async function shortVerificationCode(parts){
+  const raw = 'tukule-verify:' + parts.join('|');
+  const seeds = [0x12345678, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35];
+  let hex = '';
+  seeds.forEach((seed, si)=>{
+    let h = seed;
+    const salted = raw + ':' + si;
+    for(let i=0;i<salted.length;i++){
+      h = Math.imul(h ^ salted.charCodeAt(i), 2654435761) >>> 0;
+      h = ((h << 13) | (h >>> 19)) >>> 0;
+    }
+    hex += h.toString(16).padStart(8,'0');
+  });
+  // Restricted 32-char alphabet with no 0/O/1/I/L — easy to read off a
+  // printed page and type back in without ambiguity. 10 chars from this
+  // alphabet is ~50 bits, plenty to make guessing impractical while still
+  // being short enough to type.
+  const alphabet = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+  let code = '';
+  for(let i=0;i<10;i++){
+    code += alphabet[parseInt(hex.substr(i*3,3), 16) % alphabet.length];
+  }
+  return code.match(/.{1,4}/g).join('-');
+}
+function certVerificationCode(buyer, plan, payoffDate){
+  return shortVerificationCode(['cert', plan.id, buyer.phone, plan.total, payoffDate, plan.siteId]);
+}
+function receiptVerificationCode(buyer, payment){
+  return shortVerificationCode(['receipt', buyer.phone, payment.date, payment.amount, payment.method, payment.reference||'', payment.planId, payment.siteId]);
+}
+// Scans every buyer's paid-off plans and logged payments for one whose
+// code matches what was typed in on the Verify page. Runs entirely against
+// the already-synced local `state` — no network round-trip needed, since
+// the whole-blob sync means every device already has the current data.
+async function findByVerificationCode(inputCode){
+  const normalized = inputCode.trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if(!normalized) return null;
+  for(const phone of Object.keys(state.buyers||{})){
+    const buyer = state.buyers[phone];
+    for(const plan of (buyer.plans||[])){
+      if(plan.status!=='paid') continue;
+      const payoffDate = plan.paidOffDate || plan.startDate || '';
+      const code = await certVerificationCode(buyer, plan, payoffDate);
+      if(code.replace(/-/g,'')===normalized) return { type:'certificate', buyer, plan };
+    }
+    for(const payment of (buyer.payments||[])){
+      const code = await receiptVerificationCode(buyer, payment);
+      if(code.replace(/-/g,'')===normalized) return { type:'receipt', buyer, payment };
+    }
+  }
+  return null;
 }
 /* ---------- auth secrets (kept OUT of the bulk-synced state tree) ----------
    PIN hashes used to live inside buyers/$phone and sites/$siteId — both part
@@ -1834,9 +1927,14 @@ function filteredActiveSites(){
   const minAvail = Number(document.getElementById('buy-filter-minavail')?.value) || 0;
   const minPrice = document.getElementById('buy-filter-minprice')?.value === '' ? null : Number(document.getElementById('buy-filter-minprice')?.value);
   const maxPrice = document.getElementById('buy-filter-maxprice')?.value === '' ? null : Number(document.getElementById('buy-filter-maxprice')?.value);
+  // Each checked plan is OR'd together (e.g. "Daily" + "Monthly" checked
+  // shows sites offering either), same logic as the plan tabs on a site's
+  // own page (siteOffersPlan). No boxes checked = no plan filter at all.
+  const planFilters = ['outright','daily','monthly'].filter(t=>document.getElementById(`buy-filter-plan-${t}`)?.checked);
   return activeSites().filter(s=>{
     if(search && !(s.name.toLowerCase().includes(search) || s.location.toLowerCase().includes(search))) return false;
     if(minAvail>0 && siteAvailableCount(s) < minAvail) return false;
+    if(planFilters.length && !planFilters.some(t=>siteOffersPlan(s,t))) return false;
     if(minPrice!==null && !Number.isNaN(minPrice) || maxPrice!==null && !Number.isNaN(maxPrice)){
       // Match if at least one available plot falls in range — a site with
       // mixed pricing shouldn't be hidden just because its cheapest or
@@ -1881,7 +1979,7 @@ function renderBuySitePicker(){
     document.getElementById('buy-plot-area').classList.add('hidden');
   }
 }
-['buy-filter-search','buy-filter-minavail','buy-filter-minprice','buy-filter-maxprice'].forEach(id=>{
+['buy-filter-search','buy-filter-minavail','buy-filter-minprice','buy-filter-maxprice','buy-filter-plan-outright','buy-filter-plan-daily','buy-filter-plan-monthly'].forEach(id=>{
   document.getElementById(id).addEventListener('input', renderBuySitePicker);
 });
 document.getElementById('buy-filter-search-btn').addEventListener('click', renderBuySitePicker);
@@ -1893,6 +1991,7 @@ document.getElementById('buy-filter-clear').addEventListener('click', ()=>{
   document.getElementById('buy-filter-minavail').value='';
   document.getElementById('buy-filter-minprice').value='';
   document.getElementById('buy-filter-maxprice').value='';
+  ['outright','daily','monthly'].forEach(t=>{ document.getElementById(`buy-filter-plan-${t}`).checked = false; });
   renderBuySitePicker();
 });
 document.getElementById('back-to-sites').addEventListener('click', ()=>{
@@ -1924,26 +2023,110 @@ function openSite(siteId){
   renderBuySiteMyMapsEmbed(site);
 }
 
+// Rendering every plot div up front is fine for a small site, but a
+// listing can legally have up to NUMERIC_BOUNDS.totalPlots (2000) plots —
+// and on a low-end Android WebView, building/attaching 2000 nodes at once
+// (and, worse, doing it again on every single tap — see the old
+// toggleSelectPlot, which used to call this whole function) is visibly
+// laggy. Two changes fix that:
+//   1. renderPlotGrid() below paints only the first few rows synchronously,
+//      then lazily appends more rows as the user scrolls near the bottom
+//      (a "load more" sentinel + IntersectionObserver) instead of building
+//      the whole grid at once.
+//   2. toggleSelectPlot() (below) no longer rebuilds the grid at all — it
+//      just flips the .selected class on the one already-rendered element
+//      for that plot, via plotElsById.
+const PLOT_GRID_ROWS_PER_BATCH = 8;
+let plotElsById = new Map();
+let plotGridObserver = null;
+let plotGridRenderedCount = 0;
 function renderPlotGrid(){
   const site = state.sites[currentSiteId];
   if(!site) return;
+  if(plotGridObserver){ plotGridObserver.disconnect(); plotGridObserver = null; }
   const grid = document.getElementById('plot-grid');
   grid.style.gridTemplateColumns = `repeat(${site.cols}, 34px)`;
+  grid.setAttribute('aria-label', `Plot grid for ${site.name} — ${siteAvailableCount(site)} of ${site.plots.length} plots available`);
   grid.innerHTML = '';
-  site.plots.forEach(p=>{
-    const el = document.createElement('div');
-    el.className = 'plot ' + p.status + (selectedPlots.includes(p.id) ? ' selected' : '');
-    el.textContent = String(p.id).padStart(2,'0');
-    el.title = `Plot ${p.id} — ${p.status} — ${money(plotPrice(site,p))} (${plotSizeLabel(site,p)})`;
-    if(p.status === 'available') el.addEventListener('click', ()=>toggleSelectPlot(p.id));
-    grid.appendChild(el);
-  });
+  plotElsById = new Map();
+  plotGridRenderedCount = 0;
+  renderNextPlotGridBatch(site, grid);
   renderSelection();
 }
+function makePlotEl(site, p){
+  const el = document.createElement('div');
+  el.dataset.plotId = p.id;
+  el.textContent = String(p.id).padStart(2,'0');
+  if(p.status === 'available'){
+    el.addEventListener('click', ()=>toggleSelectPlot(p.id));
+    // Native <button> would be simplest, but CSS grid auto-placement and
+    // existing .plot styling assume a div — so make it keyboard-operable
+    // by hand: focusable, and Enter/Space activate it like a click would.
+    el.tabIndex = 0;
+    el.addEventListener('keydown', e=>{
+      if(e.key==='Enter' || e.key===' '){ e.preventDefault(); toggleSelectPlot(p.id); }
+    });
+  }
+  updatePlotEl(site, el, p);
+  return el;
+}
+// Status was previously color-only (green/orange/red backgrounds), which is
+// unreadable to colorblind buyers and invisible to screen readers — title
+// tooltips don't even show up on touch devices. Each status now also gets:
+// its own border style + a small corner glyph (shape, not just color), and
+// an aria-label carrying the same text as the tooltip so a screen reader
+// announces it. Available plots are additionally real tab-stops with
+// role="button"/aria-pressed; reserved/sold plots are non-interactive
+// (role="img") since they can't be clicked.
+function updatePlotEl(site, el, p){
+  const selected = selectedPlots.includes(p.id);
+  el.className = 'plot ' + p.status + (selected ? ' selected' : '');
+  const label = `Plot ${p.id} — ${p.status} — ${money(plotPrice(site,p))} (${plotSizeLabel(site,p)})`;
+  el.title = label;
+  el.setAttribute('aria-label', label);
+  if(p.status === 'available'){
+    el.setAttribute('role','button');
+    el.setAttribute('aria-pressed', String(selected));
+  } else {
+    el.setAttribute('role','img');
+    el.removeAttribute('aria-pressed');
+  }
+}
+function renderNextPlotGridBatch(site, grid){
+  const batchSize = site.cols * PLOT_GRID_ROWS_PER_BATCH;
+  const from = plotGridRenderedCount;
+  const to = Math.min(site.plots.length, from + batchSize);
+  const fragment = document.createDocumentFragment();
+  for(let i=from;i<to;i++){
+    const p = site.plots[i];
+    const el = makePlotEl(site, p);
+    plotElsById.set(p.id, el);
+    fragment.appendChild(el);
+  }
+  const oldSentinel = grid.querySelector('.plot-grid-sentinel');
+  if(oldSentinel) oldSentinel.remove();
+  grid.appendChild(fragment);
+  plotGridRenderedCount = to;
+  if(to < site.plots.length){
+    const sentinel = document.createElement('div');
+    sentinel.className = 'plot-grid-sentinel';
+    sentinel.style.gridColumn = `1 / -1`;
+    sentinel.textContent = `Loading more plots… (${to} of ${site.plots.length})`;
+    grid.appendChild(sentinel);
+    plotGridObserver = new IntersectionObserver(entries=>{
+      if(entries.some(e=>e.isIntersecting)) renderNextPlotGridBatch(site, grid);
+    });
+    plotGridObserver.observe(sentinel);
+  }
+}
 function toggleSelectPlot(id){
+  const site = state.sites[currentSiteId];
   const i = selectedPlots.indexOf(id);
   if(i>-1) selectedPlots.splice(i,1); else selectedPlots.push(id);
-  renderPlotGrid();
+  const el = plotElsById.get(id);
+  const p = site && site.plots.find(pp=>pp.id===id);
+  if(el && p) updatePlotEl(site, el, p);
+  renderSelection();
   refreshBuySiteMapStyles();
 }
 function renderSelection(){
@@ -3244,6 +3427,9 @@ function printContract(buyer, plan){
    those actually state that the plot is now fully owned). ---------- */
 function printCertificate(buyer, plan){
   if(plan.status!=='paid') return;
+  printCertificateAsync(buyer, plan);
+}
+async function printCertificateAsync(buyer, plan){
   const site = state.sites[plan.siteId];
   const seller = site && site.isNexliteOwned ? 'Nexlite Digital Solutions Limited' : (site ? esc(site.ownerName) + (site.ownerNrc ? ' — NRC ' + esc(site.ownerNrc) : '') + ' (via Nexlite Digital Solutions Limited, agent)' : 'Nexlite Digital Solutions Limited');
   const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
@@ -3254,6 +3440,13 @@ function printCertificate(buyer, plan){
     : plan.plots.map((id,i)=>`Plot ${String(id).padStart(2,'0')} (${esc(sizeLabels[i])})`).join(', ');
   const certNo = 'TKL-CERT-' + plan.id.replace(/[^0-9]/g,'').slice(-8);
   const payoffDate = plan.paidOffDate || todayISO();
+  // Hashed separately from the display-only payoffDate above: that one
+  // falls back to "today" for legacy plans with no stored paidOffDate,
+  // which would make the code different every time it's reprinted. This
+  // fallback uses plan.startDate instead — stored once, never "today" —
+  // so the same plan always produces the same code, matching exactly what
+  // findByVerificationCode() computes on the Verify page.
+  const certCode = await certVerificationCode(buyer, plan, plan.paidOffDate || plan.startDate || '');
   const html = `
     <!DOCTYPE html><html><head><meta charset="UTF-8"><title>Certificate of Purchase — ${plotLabels}</title>
     <style>
@@ -3272,6 +3465,7 @@ function printCertificate(buyer, plan){
     <div class="seal">Paid in&nbsp;full</div>
     <h1>Certificate of Purchase</h1>
     <p class="cert-no">Certificate No. ${certNo}</p>
+    <p class="cert-no">Verification code: <strong style="letter-spacing:0.1em;">${certCode}</strong> — check at Tukule &gt; Verify a document</p>
     <p>Generated by Tukule — Let's Build, a Nexlite Digital Solutions Limited platform. Enquiries: 0977 638 790 / 0960 271 128.</p>
     <table>
       <tr><td>Date issued</td><td>${todayISO()}</td></tr>
@@ -3294,12 +3488,16 @@ function printCertificate(buyer, plan){
 
 /* ---------- receipt generator ---------- */
 function printReceipt(buyer, payment){
+  printReceiptAsync(buyer, payment);
+}
+async function printReceiptAsync(buyer, payment){
   const plan = buyer.plans.find(p=>p.id===payment.planId);
   const site = state.sites[payment.siteId];
   const plotLabels = plan ? plan.plots.map(id=>String(id).padStart(2,'0')).join(', ') : '—';
   const statusLabel = payment.status==='confirmed' ? 'Confirmed by owner'
     : payment.status==='rejected' ? 'Rejected — contact the owner for details'
     : 'Pending owner confirmation';
+  const receiptCode = await receiptVerificationCode(buyer, payment);
   const html = `
     <!DOCTYPE html><html><head><meta charset="UTF-8"><title>Payment Receipt — ${esc(buyer.name)}</title>
     <style>
@@ -3313,6 +3511,7 @@ function printReceipt(buyer, payment){
     </style></head><body>
     <h1>Payment Receipt</h1>
     <p>Generated by Tukule — Let's Build, a Nexlite Digital Solutions Limited platform. Enquiries: 0977 638 790 / 0960 271 128.</p>
+    <p class="note" style="margin-top:-10px;">Verification code: <strong style="letter-spacing:0.1em;">${receiptCode}</strong> — check at Tukule &gt; Verify a document</p>
     <table>
       <tr><td>Date logged</td><td>${payment.date}</td></tr>
       <tr><td>Buyer</td><td>${esc(buyer.name)}${buyer.nrc ? ' — NRC ' + esc(buyer.nrc) : ''}, ${esc(buyer.phone)}</td></tr>
@@ -3375,6 +3574,63 @@ if('serviceWorker' in navigator){
     btn.classList.remove('hidden');
   }
 })();
+
+/* ---------- verify a certificate/receipt (see printCertificate/printReceipt
+   for how the code gets generated and printed) ---------- */
+function renderVerifyResult(html){
+  document.getElementById('verify-result').innerHTML = html;
+}
+async function runVerifyCode(){
+  const input = document.getElementById('verify-code-input').value;
+  if(!input.trim()){ renderVerifyResult(''); return; }
+  renderVerifyResult('<p class="note">Checking…</p>');
+  const match = await findByVerificationCode(input);
+  if(!match){
+    renderVerifyResult('<div class="msg err">No matching certificate or receipt found for that code. Double-check it against the printout — a single mistyped character will not match.</div>');
+    return;
+  }
+  // Buyer's phone is shown partially masked — this page has no login, so
+  // anyone with a genuine code (a lands officer, a bank, a family member)
+  // can confirm a document is real without us exposing a buyer's full
+  // contact details to whoever happens to type in a code.
+  const maskedPhone = match.buyer.phone.length>=4
+    ? match.buyer.phone.slice(0,4) + '•••' + match.buyer.phone.slice(-3)
+    : match.buyer.phone;
+  if(match.type==='certificate'){
+    const plan = match.plan;
+    const site = state.sites[plan.siteId];
+    const plotLabels = plan.plots.map(id=>String(id).padStart(2,'0')).join(', ');
+    renderVerifyResult(`
+      <div class="msg ok">✓ Genuine certificate of purchase</div>
+      <table style="width:100%;border-collapse:collapse;margin-top:10px;">
+        <tr><td style="color:#6b6153;padding:4px 0;">Buyer</td><td>${esc(match.buyer.name)}, ${esc(maskedPhone)}</td></tr>
+        <tr><td style="color:#6b6153;padding:4px 0;">Site</td><td>${site ? esc(site.name) + ' — ' + esc(site.location) : esc(plan.siteName)}</td></tr>
+        <tr><td style="color:#6b6153;padding:4px 0;">Plot(s)</td><td>${plotLabels}</td></tr>
+        <tr><td style="color:#6b6153;padding:4px 0;">Paid in full</td><td>${money(plan.total)}</td></tr>
+        <tr><td style="color:#6b6153;padding:4px 0;">Status</td><td>Paid in full ✓</td></tr>
+      </table>`);
+  } else {
+    const payment = match.payment;
+    const statusLabel = payment.status==='confirmed' ? 'Confirmed by owner ✓'
+      : payment.status==='rejected' ? 'Rejected by owner'
+      : 'Pending owner confirmation';
+    const site = state.sites[payment.siteId];
+    renderVerifyResult(`
+      <div class="msg ok">✓ Genuine payment receipt</div>
+      <table style="width:100%;border-collapse:collapse;margin-top:10px;">
+        <tr><td style="color:#6b6153;padding:4px 0;">Buyer</td><td>${esc(match.buyer.name)}, ${esc(maskedPhone)}</td></tr>
+        <tr><td style="color:#6b6153;padding:4px 0;">Site</td><td>${site ? esc(site.name) : '—'}</td></tr>
+        <tr><td style="color:#6b6153;padding:4px 0;">Date</td><td>${esc(payment.date)}</td></tr>
+        <tr><td style="color:#6b6153;padding:4px 0;">Amount</td><td>${money(payment.amount)}</td></tr>
+        <tr><td style="color:#6b6153;padding:4px 0;">Current status</td><td>${statusLabel}</td></tr>
+      </table>
+      <p class="note">Status shown here is live — it reflects the owner's confirmation as of right now, even if the printout is older.</p>`);
+  }
+}
+document.getElementById('verify-code-btn').addEventListener('click', runVerifyCode);
+document.getElementById('verify-code-input').addEventListener('keydown', e=>{
+  if(e.key==='Enter'){ e.preventDefault(); runVerifyCode(); }
+});
 
 /* ---------- init ---------- */
 initApp();
