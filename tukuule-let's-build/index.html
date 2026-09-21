@@ -3696,6 +3696,56 @@ if('serviceWorker' in navigator){
 function renderVerifyResult(html){
   document.getElementById('verify-result').innerHTML = html;
 }
+// The Verify page has no login, so this write intentionally bypasses
+// state/saveState() entirely — it goes straight to its own narrowly-scoped
+// Firebase path (tukule_verifier_uploads_v1) whose rules cannot touch
+// buyers, sites, or payments no matter what's sent, unlike the whole-tree
+// overwrite saveState() performs everywhere else in the app.
+const VERIFY_PHOTO_ATTACH_HTML = `
+  <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:12px;">
+    <p class="note" style="margin:0 0 6px;"><strong>Optionally attach a photo of the physical document</strong> — kept for Nexlite's records if this needs checking again later.</p>
+    <input type="file" accept="image/*" id="verify-photo-input">
+    <div id="verify-photo-preview" style="margin:6px 0;"></div>
+    <button class="btn btn-secondary btn-sm" id="verify-photo-submit-btn" disabled>Attach photo</button>
+    <div id="verify-photo-msg" style="margin-top:6px;"></div>
+  </div>`;
+function wireVerifyPhotoUpload(code, matchLabel){
+  let pendingVerifyPhoto = null;
+  const input = document.getElementById('verify-photo-input');
+  const preview = document.getElementById('verify-photo-preview');
+  const submitBtn = document.getElementById('verify-photo-submit-btn');
+  const msg = document.getElementById('verify-photo-msg');
+  if(!input) return;
+  input.addEventListener('change', async (e)=>{
+    const file = e.target.files[0];
+    if(!file){ pendingVerifyPhoto = null; preview.innerHTML=''; submitBtn.disabled=true; return; }
+    preview.innerHTML = '<p class="note">Compressing photo…</p>';
+    submitBtn.disabled = true;
+    try{
+      pendingVerifyPhoto = await compressNrcPhoto(file);
+      preview.innerHTML = `<img src="${pendingVerifyPhoto}" alt="Document preview" style="max-width:220px;border-radius:6px;border:1px solid var(--line);display:block;">`;
+      submitBtn.disabled = false;
+    }catch(err){
+      pendingVerifyPhoto = null;
+      preview.innerHTML = `<div class="msg err">${esc(err.message)}</div>`;
+      e.target.value = '';
+    }
+  });
+  submitBtn.addEventListener('click', ()=>{
+    if(!pendingVerifyPhoto) return;
+    submitBtn.disabled = true;
+    msg.innerHTML = '<p class="note">Saving…</p>';
+    db.ref('tukule_verifier_uploads_v1').push({
+      code, matchLabel, photo: pendingVerifyPhoto, submittedAt: Date.now()
+    }).then(()=>{
+      msg.innerHTML = '<div class="msg ok">Photo saved.</div>';
+      input.value = ''; preview.innerHTML = ''; pendingVerifyPhoto = null;
+    }).catch(()=>{
+      msg.innerHTML = '<div class="msg err">Could not save — check your connection and try again.</div>';
+      submitBtn.disabled = false;
+    });
+  });
+}
 async function runVerifyCode(){
   const input = document.getElementById('verify-code-input').value;
   if(!input.trim()){ renderVerifyResult(''); return; }
@@ -3705,6 +3755,7 @@ async function runVerifyCode(){
     renderVerifyResult('<div class="msg err">No matching certificate or receipt found for that code. Double-check it against the printout — a single mistyped character will not match.</div>');
     return;
   }
+  const normalizedCode = input.trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
   // Buyer's phone is shown partially masked — this page has no login, so
   // anyone with a genuine code (a lands officer, a bank, a family member)
   // can confirm a document is real without us exposing a buyer's full
@@ -3724,7 +3775,8 @@ async function runVerifyCode(){
         <tr><td style="color:#6b6153;padding:4px 0;">Plot(s)</td><td>${plotLabels}</td></tr>
         <tr><td style="color:#6b6153;padding:4px 0;">Paid in full</td><td>${money(plan.total)}</td></tr>
         <tr><td style="color:#6b6153;padding:4px 0;">Status</td><td>Paid in full ✓</td></tr>
-      </table>`);
+      </table>${VERIFY_PHOTO_ATTACH_HTML}`);
+    wireVerifyPhotoUpload(normalizedCode, `${match.buyer.name} — certificate, ${site ? site.name : plan.siteName}`);
   } else {
     const payment = match.payment;
     const statusLabel = payment.status==='confirmed' ? 'Confirmed by owner ✓'
@@ -3740,7 +3792,8 @@ async function runVerifyCode(){
         <tr><td style="color:#6b6153;padding:4px 0;">Amount</td><td>${money(payment.amount)}</td></tr>
         <tr><td style="color:#6b6153;padding:4px 0;">Current status</td><td>${statusLabel}</td></tr>
       </table>
-      <p class="note">Status shown here is live — it reflects the owner's confirmation as of right now, even if the printout is older.</p>`);
+      <p class="note">Status shown here is live — it reflects the owner's confirmation as of right now, even if the printout is older.</p>${VERIFY_PHOTO_ATTACH_HTML}`);
+    wireVerifyPhotoUpload(normalizedCode, `${match.buyer.name} — receipt, ${site ? site.name : '—'}`);
   }
 }
 document.getElementById('verify-code-btn').addEventListener('click', runVerifyCode);
