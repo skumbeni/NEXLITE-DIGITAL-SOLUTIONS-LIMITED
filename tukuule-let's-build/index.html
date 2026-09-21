@@ -367,6 +367,10 @@
       <label class="field">NRC / National ID (optional)</label>
       <input type="text" id="sell-owner-nrc" placeholder="e.g. 123456/78/1">
       <p class="note" style="margin-top:-4px;">Helps us verify you're the rightful owner and strengthens the paper trail on buyer contracts. Not shown to buyers.</p>
+      <label class="field">Photo of your NRC (optional)</label>
+      <input type="file" accept="image/*" id="sell-owner-nrc-photo">
+      <p class="note" style="margin-top:-4px;">A clear photo of the card speeds up verification. Not shown to buyers.</p>
+      <div id="sell-owner-nrc-photo-preview" style="margin:6px 0 10px;"></div>
       <label class="field">Owner PIN (4–6 digits)</label>
       <input type="password" inputmode="numeric" id="sell-owner-pin" maxlength="6" autocomplete="new-password">
       <p class="note" style="margin-top:-4px;">First listing under this number sets your PIN; later listings need the same one. You'll use it to log in and manage your listings.</p>
@@ -412,6 +416,10 @@
         <input type="tel" id="create-phone">
         <label class="field">NRC (optional)</label>
         <input type="text" id="create-nrc">
+        <label class="field">Photo of your NRC (optional)</label>
+        <input type="file" accept="image/*" id="create-nrc-photo">
+        <p class="note" style="margin-top:-4px;">A clear photo of the card speeds up verification.</p>
+        <div id="create-nrc-photo-preview" style="margin:6px 0 10px;"></div>
         <label class="field">Create a PIN (4–6 digits)</label>
         <input type="password" inputmode="numeric" id="create-pin" maxlength="6" autocomplete="new-password">
         <p class="note" style="margin-top:-4px;">You'll need this PIN to log in — don't share it.</p>
@@ -959,6 +967,22 @@ function compressImageFile(file, maxDim = 900, quality = 0.72){
     reader.onerror = () => reject(new Error('Could not read that file.'));
     reader.readAsDataURL(file);
   });
+}
+// The cover photo is one field on one site, so its size barely matters —
+// but an NRC photo exists once per owner AND once per buyer, and every one
+// of them rides inside the same whole-blob state that syncs on every page
+// load. Left uncapped, a few hundred registrations would noticeably slow
+// the app down for everyone. 200KB of base64 (~150KB of actual image data)
+// is generous for a legible ID photo, so we enforce it here: try normal
+// quality first, and only fall back to a blurrier re-encode — never a
+// silent size reduction the person doesn't know about — before rejecting.
+const MAX_NRC_PHOTO_OUTPUT_CHARS = 200 * 1024;
+async function compressNrcPhoto(file){
+  let photo = await compressImageFile(file, 1000, 0.75);
+  if(photo.length <= MAX_NRC_PHOTO_OUTPUT_CHARS) return photo;
+  photo = await compressImageFile(file, 800, 0.5);
+  if(photo.length <= MAX_NRC_PHOTO_OUTPUT_CHARS) return photo;
+  throw new Error('That photo is too detailed to store even after compressing — please retake it with a plainer background or better lighting, or use a smaller photo.');
 }
 // normPhone() is a lookup-key normalizer, not a validator — it strips the
 // formatting differences people commonly type (spaces, dashes, brackets,
@@ -2470,6 +2494,24 @@ document.getElementById('sell-photo').addEventListener('change', async (e)=>{
   }
 });
 
+// NRC photos only need to be legible, not sharp — a smaller max dimension
+// than the cover photo keeps each one cheap inside the whole-blob state.
+let pendingOwnerNrcPhoto = null;
+document.getElementById('sell-owner-nrc-photo').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  const preview = document.getElementById('sell-owner-nrc-photo-preview');
+  if(!file){ pendingOwnerNrcPhoto = null; preview.innerHTML = ''; return; }
+  preview.innerHTML = '<p class="note">Compressing photo…</p>';
+  try{
+    pendingOwnerNrcPhoto = await compressNrcPhoto(file);
+    preview.innerHTML = `<img src="${pendingOwnerNrcPhoto}" alt="NRC preview" style="max-width:220px;border-radius:6px;border:1px solid var(--line);display:block;">`;
+  }catch(err){
+    pendingOwnerNrcPhoto = null;
+    preview.innerHTML = `<div class="msg err">${esc(err.message)}</div>`;
+    e.target.value = '';
+  }
+});
+
 document.getElementById('submit-listing-btn').addEventListener('click', async ()=>{
   const msg = document.getElementById('sell-msg');
   const btn = document.getElementById('submit-listing-btn');
@@ -2552,7 +2594,7 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
     boundary: sellBoundaryLatLngs && sellBoundaryLatLngs.length ? sellBoundaryLatLngs : null,
     outrightDiscountPct:5, depositPct:20, dailyTerms:[90,180,365], monthlyTerms:[6,12,18,24,36],
     offerOutright:true, offerDaily:true, offerMonthly:true,
-    ownerName, ownerPhone, ownerNrc: ownerNrc || null, isNexliteOwned:false, commissionPct: state.settings.defaultCommissionPct,
+    ownerName, ownerPhone, ownerNrc: ownerNrc || null, ownerNrcPhoto: pendingOwnerNrcPhoto || null, isNexliteOwned:false, commissionPct: state.settings.defaultCommissionPct,
     status:'pending', createdAt: todayISO(), plots,
     feeDue: siteListingFeeTotal(plots), feePaid: false,
     commissionSettlements: [], photoUrl: pendingListingPhoto || null
@@ -2570,6 +2612,9 @@ document.getElementById('submit-listing-btn').addEventListener('click', async ()
   document.getElementById('sell-photo').value='';
   document.getElementById('sell-photo-preview').innerHTML='';
   pendingListingPhoto = null;
+  document.getElementById('sell-owner-nrc-photo').value='';
+  document.getElementById('sell-owner-nrc-photo-preview').innerHTML='';
+  pendingOwnerNrcPhoto = null;
   resetSellMap();
   btn.disabled = false;
 });
@@ -2789,7 +2834,7 @@ function renderOwnerDashboard(){
       return `
         <div class="schedule-line">
           <span>${stale?'⚠️ ':''}Plot${plan.plots.length>1?'s':''} ${plotLabels} — ${esc(buyer.name)} — reserved ${days} day${days===1?'':'s'} ago${paidSoFar>0?' · '+money(paidSoFar)+' paid':expiryNote}</span>
-          <span style="display:flex;gap:6px;align-items:center;">${agreementBtn}<button class="btn btn-ghost btn-sm" data-release-plan="${esc(buyer.phone)}:${plan.id}">Release</button></span>
+          <span style="display:flex;gap:6px;align-items:center;">${agreementBtn}<button class="btn btn-secondary btn-sm" data-owner-pay="${esc(buyer.phone)}:${plan.id}">Pay</button><button class="btn btn-ghost btn-sm" data-release-plan="${esc(buyer.phone)}:${plan.id}">Release</button></span>
         </div>`;
     }).join('') : '<p class="note">No open reservations.</p>';
 
@@ -2835,6 +2880,15 @@ function renderOwnerDashboard(){
     return `
       <div class="side-card">
         <h3>${esc(site.name)} <span class="pill ${site.status}">${site.status}</span></h3>
+        <details style="margin:4px 0 10px;">
+          <summary style="cursor:pointer;font-weight:600;color:var(--soil-dark);">Your details on file</summary>
+          <div style="margin-top:6px;">
+            <div class="schedule-line"><span>Name</span><span>${esc(site.ownerName)}</span></div>
+            <div class="schedule-line"><span>Phone</span><span>${esc(site.ownerPhone)}</span></div>
+            <div class="schedule-line"><span>NRC</span><span>${site.ownerNrc ? esc(site.ownerNrc) : 'Not provided'}</span></div>
+            ${site.ownerNrcPhoto ? `<a href="${site.ownerNrcPhoto}" target="_blank" rel="noopener"><img src="${site.ownerNrcPhoto}" alt="Your NRC photo" style="max-width:140px;max-height:100px;border-radius:6px;border:1px solid var(--line);object-fit:cover;margin-top:6px;"></a>` : ''}
+          </div>
+        </details>
         ${listingFeeHtml}
         ${rejectionHtml}
         <div class="schedule-line"><span>Plots</span><span>${counts.available} available · ${counts.reserved} reserved · ${counts.sold} sold</span></div>
@@ -2885,6 +2939,24 @@ function renderOwnerDashboard(){
       saveState();
       renderOwnerDashboard();
       if(wasConfirmed && buyer && payment) notifyBuyerPaymentConfirmed(buyer, payment);
+    });
+  });
+  dash.querySelectorAll('[data-owner-pay]').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      const [buyerPhone, planId] = btn.dataset.ownerPay.split(':');
+      const buyer = state.buyers[buyerPhone];
+      const plan = buyer && buyer.plans.find(p=>p.id===planId);
+      if(!buyer || !plan) return;
+      const amountStr = prompt(`Amount received from ${buyer.name} (K) — balance is ${money(planBalance(plan))}:`);
+      const amount = Number(amountStr);
+      if(!amountStr || !amount || amount<=0) return;
+      const method = prompt('Method (e.g. Cash, Mobile money, Bank deposit):', 'Cash') || 'Cash';
+      const reference = prompt('Reference (optional):') || null;
+      const payment = logDirectPayment(buyerPhone, planId, amount, method, reference);
+      if(!payment) return;
+      saveState();
+      renderOwnerDashboard();
+      notifyBuyerPaymentConfirmed(buyer, payment);
     });
   });
   dash.querySelectorAll('[data-save-plot-details]').forEach(btn=>{
@@ -3042,6 +3114,22 @@ document.getElementById('show-login').addEventListener('click', ()=>{
   document.getElementById('login-panel').classList.remove('hidden');
 });
 
+let pendingBuyerNrcPhoto = null;
+document.getElementById('create-nrc-photo').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  const preview = document.getElementById('create-nrc-photo-preview');
+  if(!file){ pendingBuyerNrcPhoto = null; preview.innerHTML = ''; return; }
+  preview.innerHTML = '<p class="note">Compressing photo…</p>';
+  try{
+    pendingBuyerNrcPhoto = await compressNrcPhoto(file);
+    preview.innerHTML = `<img src="${pendingBuyerNrcPhoto}" alt="NRC preview" style="max-width:220px;border-radius:6px;border:1px solid var(--line);display:block;">`;
+  }catch(err){
+    pendingBuyerNrcPhoto = null;
+    preview.innerHTML = `<div class="msg err">${esc(err.message)}</div>`;
+    e.target.value = '';
+  }
+});
+
 document.getElementById('create-account-btn').addEventListener('click', async ()=>{
   const msg = document.getElementById('create-msg');
   const btn = document.getElementById('create-account-btn');
@@ -3063,7 +3151,7 @@ document.getElementById('create-account-btn').addEventListener('click', async ()
       btn.disabled = false;
       return;
     }
-    state.buyers[phone] = { phone, name, nrc, plans:[], payments:[] };
+    state.buyers[phone] = { phone, name, nrc, nrcPhoto: pendingBuyerNrcPhoto || null, plans:[], payments:[] };
     saveState(err=>{
       // The account is showing locally, but it never actually reached the
       // cloud — reload/another device won't see it. Tell the person plainly
@@ -3071,6 +3159,9 @@ document.getElementById('create-account-btn').addEventListener('click', async ()
       alert("Your account was created on this device, but we couldn't save it to the cloud (connection or server issue). Please check your connection and try creating it again, or call 0977 638 790 / 0960 271 128.");
     });
     document.getElementById('create-pin').value='';
+    document.getElementById('create-nrc-photo').value='';
+    document.getElementById('create-nrc-photo-preview').innerHTML='';
+    pendingBuyerNrcPhoto = null;
     currentAccountPhone = phone;
     updateSession({ accountPhone: phone });
     renderAccount();
@@ -3176,6 +3267,20 @@ function notifyBuyerPaymentConfirmed(buyer, payment){
   window.open(`https://wa.me/${waPhone}?text=${encodeURIComponent(waMsg)}`, '_blank');
 }
 
+// For cash/mobile-money paid in person that the buyer never logged
+// themselves. Pushed as 'pending' and immediately run through
+// confirmPayment() rather than duplicating its balance-reduction and
+// pay-off logic here — one place decides what a confirmed payment does.
+function logDirectPayment(buyerPhone, planId, amount, method, reference){
+  const buyer = state.buyers[buyerPhone];
+  const plan = buyer && buyer.plans.find(p=>p.id===planId);
+  if(!buyer || !plan) return null;
+  buyer.payments.push({ date: todayISO(), amount, method, reference: reference || null, status: 'pending', planId: plan.id, siteId: plan.siteId });
+  const idx = buyer.payments.length - 1;
+  confirmPayment(buyerPhone, idx);
+  return buyer.payments[idx];
+}
+
 function computeSiteCommission(site){
   let accrued = 0;
   Object.values(state.buyers).forEach(b=>b.payments.forEach(p=>{
@@ -3260,6 +3365,17 @@ function renderAccount(){
       <button class="btn btn-ghost" id="logout-btn">Log out</button>
     </div>
     ${reminderBanner}
+    <div class="side-card">
+      <details>
+        <summary style="cursor:pointer;font-weight:600;color:var(--soil-dark);">Your details on file</summary>
+        <div style="margin-top:6px;">
+          <div class="schedule-line"><span>Name</span><span>${esc(buyer.name)}</span></div>
+          <div class="schedule-line"><span>Phone</span><span>${esc(buyer.phone)}</span></div>
+          <div class="schedule-line"><span>NRC</span><span>${buyer.nrc ? esc(buyer.nrc) : 'Not provided'}</span></div>
+          ${buyer.nrcPhoto ? `<a href="${buyer.nrcPhoto}" target="_blank" rel="noopener"><img src="${buyer.nrcPhoto}" alt="Your NRC photo" style="max-width:140px;max-height:100px;border-radius:6px;border:1px solid var(--line);object-fit:cover;margin-top:6px;"></a>` : ''}
+        </div>
+      </details>
+    </div>
     <div class="side-card">
       <h3>Overall progress</h3>
       <div class="progress-track"><div class="progress-fill" style="width:${pct}%;"></div></div>
