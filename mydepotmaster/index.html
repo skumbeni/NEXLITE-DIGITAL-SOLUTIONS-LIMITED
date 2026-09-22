@@ -3915,7 +3915,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.0.2';
+const SW_VERSION  = 'v0.0.3';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -12197,7 +12197,11 @@ function saveBulkLog(){
 // (or all active staff in a role) in one go, instead of clocking
 // each person in one at a time. Staff who already have an open
 // shift are shown but auto-unchecked and disabled, same
-// safeguard as the single Clock In form (_openShiftFor).
+// safeguard as the single Clock In form (_openShiftFor). Each
+// row gets its own Task selector — a role with more than one
+// task doesn't force everyone onto the same one — with a shared
+// "same for everyone" Task field at the top as a quick-fill that
+// can still be hand-overridden per row afterward.
 // ══════════════════════════════════════════════════════════
 function openBulkClockInForm(){
   if(isStaffRole()){alert('⛔ Staff logins can only clock themselves in. Ask your Admin to bulk clock in.');return;}
@@ -12209,9 +12213,9 @@ function openBulkClockInForm(){
   const roleOpts=roles.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
   openModal(`
     <div class="mtitle">👥 Bulk Clock In ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>
-    <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Clock in every selected staff member in a role at once — tick "All" or pick individuals. Anyone already on an open shift is skipped automatically.</div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Clock in every selected staff member in a role at once. Tasks can differ per person for roles with more than one task — pick each person's task below, or set "same for everyone" to fill them all in one go.</div>
     <div class="fw"><div class="fl">Role</div><select class="fi" id="bci-role" onchange="_bciRoleChange()">${roleOpts}</select></div>
-    <div class="fw"><div class="fl">Task</div><select class="fi" id="bci-task"><option>—</option></select></div>
+    <div class="fw"><div class="fl">Task (same for everyone)</div><select class="fi" id="bci-task" onchange="_bciApplyTaskAll()"><option>—</option></select></div>
     <div class="twobox">
       <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="bci-date" value="${today()}"/></div>
       <div class="fw"><div class="fl">Time In</div><input class="fi" type="time" id="bci-time-in" value="${nowTime()}"/></div>
@@ -12229,31 +12233,45 @@ function openBulkClockInForm(){
   _bciRoleChange();
 }
 
+// Shared <option> markup for a role's tasks — used by both the top
+// "same for everyone" select and every individual row select.
+function _bciTaskOptionsHtml(role){
+  const tasks=tasksForRole(role);
+  return tasks.length>0?tasks.map(t=>{
+    const u=t.rateUnit||'bag';const ul=u==='custom'?(t.customUnit||'unit'):u;
+    return`<option value="${esc(t.name)}">${esc(t.name)} — K${Number(t.rate||0).toFixed(2)}/${ul}</option>`;
+  }).join(''):'<option>No tasks defined</option>';
+}
+
 function _bciRoleChange(){
   const role=document.getElementById('bci-role')?.value;
   const taskEl=document.getElementById('bci-task');
-  if(taskEl){
-    const tasks=tasksForRole(role);
-    taskEl.innerHTML=tasks.length>0?tasks.map(t=>{
-      const u=t.rateUnit||'bag';const ul=u==='custom'?(t.customUnit||'unit'):u;
-      return`<option value="${esc(t.name)}">${esc(t.name)} — K${Number(t.rate||0).toFixed(2)}/${ul}</option>`;
-    }).join(''):'<option>No tasks defined</option>';
-  }
+  if(taskEl)taskEl.innerHTML=_bciTaskOptionsHtml(role);
   const staffInRole=DATA.staff.filter(s=>(!s.status||s.status==='active')&&staffHasRole(s,role));
   const rowsEl=document.getElementById('bci-staff-rows');
   if(rowsEl){
     rowsEl.innerHTML = staffInRole.length>0 ? staffInRole.map(s=>{
       const open=_openShiftFor(s.id);
       return `
-      <div class="ded-line" style="display:grid;grid-template-columns:28px 1fr;gap:8px;align-items:center;margin-bottom:8px">
+      <div class="ded-line" style="display:grid;grid-template-columns:28px 1fr;gap:8px;align-items:center;margin-bottom:8px" data-staffid="${esc(s.id)}">
         <input type="checkbox" class="bci-row-check" data-staffid="${esc(s.id)}" ${open?'disabled':'checked'} style="width:18px;height:18px"/>
         <div>
           <div style="font-weight:600${open?';color:var(--muted)':''}">${esc(s.name)}</div>
-          ${open?`<div style="font-size:13px;color:var(--amber)">⚠️ Already clocked in (${open.date} ${open.timeIn||'—'}) — skipped</div>`:''}
+          ${open?`<div style="font-size:13px;color:var(--amber)">⚠️ Already clocked in (${open.date} ${open.timeIn||'—'}) — skipped</div>`
+            :`<select class="fi bci-row-task" style="margin-top:4px;margin-bottom:0;padding:6px 8px;font-size:14px">${_bciTaskOptionsHtml(role)}</select>`}
         </div>
       </div>`;
     }).join('') : '<div class="empty">No active staff in this role.</div>';
   }
+  _bciApplyTaskAll();
+}
+// Copies the shared "same for everyone" task into every visible row's own
+// task selector — people can still hand-pick a different task per row after.
+function _bciApplyTaskAll(){
+  const v=document.getElementById('bci-task')?.value||'';
+  document.querySelectorAll('#bci-staff-rows .bci-row-task').forEach(el=>{
+    if([...el.options].some(o=>o.value===v))el.value=v;
+  });
 }
 function _bciSelectAll(on){
   document.querySelectorAll('#bci-staff-rows .bci-row-check').forEach(el=>{if(!el.disabled)el.checked=on;});
@@ -12263,27 +12281,33 @@ function saveBulkClockIn(){
   if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
   if(!requireAddPermission('clock in staff'))return;
   const role=document.getElementById('bci-role')?.value;
-  const task=document.getElementById('bci-task')?.value;
   const date=document.getElementById('bci-date')?.value||today();
   const timeIn=document.getElementById('bci-time-in')?.value||nowTime();
   const notes=(document.getElementById('bci-notes')?.value||'').trim();
-  if(!role||!task||task==='No tasks defined'){alert('Select a role and task first.');return;}
-  const staffIds=[...document.querySelectorAll('#bci-staff-rows .bci-row-check')]
-    .filter(el=>el.checked&&!el.disabled)
-    .map(el=>el.dataset.staffid);
-  if(staffIds.length===0){alert('Select at least one eligible staff member (not already clocked in).');return;}
+  if(!role){alert('Select a role first.');return;}
+  const rows=[...document.querySelectorAll('#bci-staff-rows > div[data-staffid]')];
+  const entries=[];
+  rows.forEach(row=>{
+    const check=row.querySelector('.bci-row-check');
+    if(!check?.checked||check.disabled)return;
+    const task=row.querySelector('.bci-row-task')?.value||'';
+    if(!task||task==='No tasks defined')return;
+    entries.push({staffId:row.dataset.staffid,task});
+  });
+  if(entries.length===0){alert('Select at least one eligible staff member with a task assigned.');return;}
   // Defense-in-depth: re-check for open shifts at save time in case data changed
   // (e.g. sync from another device) since the modal was opened.
-  const eligible=staffIds.filter(id=>!_openShiftFor(id));
+  const eligible=entries.filter(en=>!_openShiftFor(en.staffId));
   if(eligible.length===0){alert('All selected staff already have an open shift now — nothing to clock in.');return;}
-  const names=eligible.map(id=>DATA.staff.find(s=>String(s.id)===String(id))?.name||id).join(', ');
-  if(!confirm(`Confirm Bulk Clock In:\n${role} · ${task}\n${eligible.length} staff: ${names}\nDate: ${fmtDate(date)} · Time In: ${timeIn}\n\nProceed?`))return;
+  const names=eligible.map(en=>DATA.staff.find(s=>String(s.id)===String(en.staffId))?.name||en.staffId).join(', ');
+  const taskSummary=[...new Set(eligible.map(en=>en.task))].join(', ');
+  if(!confirm(`Confirm Bulk Clock In:\n${role} · ${taskSummary}\n${eligible.length} staff: ${names}\nDate: ${fmtDate(date)} · Time In: ${timeIn}\n\nProceed?`))return;
   const timeInTs=Date.now();
-  const payloads=eligible.map(staffId=>stampEntry({id:uid(),staffId,date,role,task,timeIn,timeInTs,status:'open',
+  const payloads=eligible.map(en=>stampEntry({id:uid(),staffId:en.staffId,date,role,task:en.task,timeIn,timeInTs,status:'open',
     bags:0,qty:0,earnings:0,deduction:0,deductionReason:'',timeOut:'',
     time:nowTime(),entryType:'work',notes}));
   updateData(d=>({...d,staffLogs:[...d.staffLogs,...payloads]}));
-  logAuditEvent('CREATE','Work Log (Bulk Clock In)',`Role:${role} · Task:${task} · Staff:${eligible.length} · Date:${date} · TimeIn:${timeIn}`);
+  logAuditEvent('CREATE','Work Log (Bulk Clock In)',`Role:${role} · Tasks:${taskSummary} · Staff:${eligible.length} · Date:${date} · TimeIn:${timeIn}`);
   closeModal();
   showToast(`⏵ Clocked in ${eligible.length} staff`);
 }
@@ -12292,9 +12316,12 @@ function saveBulkClockIn(){
 // ══════════════════════════════════════════════════════════
 // BULK CLOCK OUT — close out every selected open shift at once
 // with a shared time out, instead of clocking each person out
-// one at a time. Each row still gets its own quantity, deduction
-// and notes fields since those vary per person; salaried staff
-// skip the quantity field, same as the single Clock Out form.
+// one at a time. Mirrors Bulk Log Work's UX: a "same for
+// everyone" Quantity and Deduction quick-fill up top that copies
+// into every row (still hand-editable per row after), a per-row
+// note indented under each name, and a batch note that fills in
+// for any row left blank. Salaried staff skip the quantity field,
+// same as the single Clock Out form.
 // ══════════════════════════════════════════════════════════
 function openBulkClockOutForm(){
   if(!requireAdmin('bulk clock out staff'))return;
@@ -12305,13 +12332,21 @@ function openBulkClockOutForm(){
     const c=openShifts.filter(l=>l.role===r).length;
     return `<option value="${esc(r)}">${esc(r)} (${c})</option>`;
   }).join('');
+  const dedReasonOpts=`<option value="">No deduction</option>${DATA.deductionReasons.map(r=>`<option>${esc(r)}</option>`).join('')}`;
   openModal(`
     <div class="mtitle">👥⏹ Bulk Clock Out ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>
-    <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Close out multiple open shifts with a shared time out. Each person keeps their own quantity, deduction and notes — leave blank if not needed.</div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Close out every selected open shift with the same time out — enter each person's own quantity, deduction and note, then save all at once.</div>
     <div class="fw"><div class="fl">Filter by Role</div><select class="fi" id="bco-role-filter" onchange="_bcoRenderRows()">${roleOpts}</select></div>
     <div class="twobox">
       <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="bco-date" value="${today()}"/></div>
       <div class="fw"><div class="fl">Time Out</div><input class="fi" type="time" id="bco-time-out" value="${nowTime()}"/></div>
+    </div>
+    <div class="fw"><div class="fl">Quantity (same for everyone)</div><input class="fi" id="bco-qty-all" type="number" placeholder="Same for everyone…" inputmode="decimal" step="0.01" oninput="_bcoApplyQtyAll()"/></div>
+    <div class="fw"><div class="fl">Deduction (same for everyone)</div>
+      <div style="display:grid;grid-template-columns:1fr 90px;gap:6px">
+        <select class="fi" id="bco-ded-reason-all" onchange="_bcoApplyDedAll()">${dedReasonOpts}</select>
+        <input class="fi" id="bco-ded-amount-all" type="number" placeholder="0.00" inputmode="decimal" step="0.01" oninput="_bcoApplyDedAll()"/>
+      </div>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div class="fl" style="margin-bottom:0">Open Shifts</div>
@@ -12321,6 +12356,7 @@ function openBulkClockOutForm(){
       </div>
     </div>
     <div id="bco-rows" style="margin-bottom:12px"></div>
+    <div class="fw"><div class="fl">Notes (optional, applies to any staff without their own note above)</div><input class="fi" id="bco-notes" placeholder="Any notes for this batch of clock-outs…"/></div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkClockOut()">⏹ Clock Out Selected</button></div>`);
   _bcoRenderRows();
 }
@@ -12341,30 +12377,42 @@ function _bcoRenderRows(){
     const qtyLbl=isSalaried?'':qtyLabelForTask(l.role,l.task||'');
     const ru=isSalaried?'':taskRateUnitLabel(l.role,l.task||'');
     return `
-    <div class="ded-line" style="display:block;border:1px solid var(--border,rgba(128,128,128,.25));border-radius:10px;padding:10px;margin-bottom:10px" data-logid="${esc(l.id)}">
-      <div style="display:grid;grid-template-columns:28px 1fr;gap:8px;align-items:center;margin-bottom:8px">
+    <div class="ded-line" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border,rgba(255,255,255,.08))" data-logid="${esc(l.id)}">
+      <div style="display:grid;grid-template-columns:28px 1fr ${isSalaried?'':'100px'};gap:8px;align-items:center">
         <input type="checkbox" class="bco-row-check" checked style="width:18px;height:18px"/>
         <div>
           <div style="font-weight:600">${esc(s?.name||'—')}</div>
           <div style="font-size:13px;color:var(--muted)">${esc(l.role||'—')} · ${esc(l.task||'—')} · in ${l.timeIn||'—'}</div>
         </div>
+        ${isSalaried?'':`<input class="fi bco-row-qty" type="number" placeholder="0" inputmode="decimal" step="0.01" title="${esc(qtyLbl)} (${esc(ru)})" style="margin-bottom:0;padding:8px 10px;font-size:17px"/>`}
       </div>
-      ${isSalaried?'':`<div style="margin-bottom:6px"><div class="fl" style="font-size:13px;margin-bottom:3px">${esc(qtyLbl)} (${esc(ru)})</div><input class="fi bco-row-qty" type="number" value="0" placeholder="0" inputmode="decimal" step="0.01" style="padding:6px 8px;font-size:15px"/></div>`}
-      <div style="margin-bottom:6px">
-        <div class="fl" style="font-size:13px;margin-bottom:3px">Deduction</div>
-        <div style="display:grid;grid-template-columns:1fr 90px;gap:6px">
-          <select class="fi bco-row-ded-reason" style="padding:6px 8px;font-size:14px">${dedReasonOpts}</select>
-          <input class="fi bco-row-ded-amount" type="number" value="0" placeholder="0.00" inputmode="decimal" step="0.01" style="padding:6px 8px;font-size:14px"/>
-        </div>
+      <div style="display:grid;grid-template-columns:1fr 90px;gap:6px;margin-left:36px">
+        <select class="fi bco-row-ded-reason" style="margin-bottom:0;padding:6px 8px;font-size:14px">${dedReasonOpts}</select>
+        <input class="fi bco-row-ded-amount" type="number" placeholder="0.00" inputmode="decimal" step="0.01" style="margin-bottom:0;padding:6px 8px;font-size:14px"/>
       </div>
-      <div>
-        <div class="fl" style="font-size:13px;margin-bottom:3px">Notes</div>
-        <input class="fi bco-row-notes" placeholder="Any shift notes…" value="${esc(l.notes||'')}" style="padding:6px 8px;font-size:14px"/>
-      </div>
+      <input class="fi bco-row-notes" type="text" placeholder="Note for ${esc(s?.name||'this person')} (optional)" value="${esc(l.notes||'')}" style="margin-bottom:0;margin-left:36px;padding:6px 10px;font-size:14px"/>
     </div>`;
   }).join('') : '<div class="empty">No open shifts for this role.</div>';
 }
 
+// Copies the shared "apply to all" quantity into every visible row's own
+// field — people can still hand-edit any individual row afterward.
+function _bcoApplyQtyAll(){
+  const v=document.getElementById('bco-qty-all')?.value||'';
+  document.querySelectorAll('#bco-rows .bco-row-qty').forEach(el=>{el.value=v;});
+}
+// Copies the shared "apply to all" deduction reason + amount into every
+// visible row — people can still hand-edit any individual row afterward.
+function _bcoApplyDedAll(){
+  const reason=document.getElementById('bco-ded-reason-all')?.value||'';
+  const amount=document.getElementById('bco-ded-amount-all')?.value||'';
+  document.querySelectorAll('#bco-rows .ded-line').forEach(row=>{
+    const r=row.querySelector('.bco-row-ded-reason');
+    const a=row.querySelector('.bco-row-ded-amount');
+    if(r)r.value=reason;
+    if(a)a.value=amount;
+  });
+}
 function _bcoSelectAll(on){
   document.querySelectorAll('#bco-rows .bco-row-check').forEach(el=>{el.checked=on;});
 }
@@ -12374,6 +12422,7 @@ function saveBulkClockOut(){
   const date=document.getElementById('bco-date')?.value||today();
   const timeOut=document.getElementById('bco-time-out')?.value;
   if(!timeOut){alert('Enter a Time Out to complete shifts.');return;}
+  const batchNotes=(document.getElementById('bco-notes')?.value||'').trim();
   const rows=[...document.querySelectorAll('#bco-rows > div[data-logid]')].filter(row=>row.querySelector('.bco-row-check')?.checked);
   if(rows.length===0){alert('Select at least one open shift to clock out.');return;}
   const timeOutTs=Date.now();
@@ -12395,7 +12444,8 @@ function saveBulkClockOut(){
     const dedAmount=Number(row.querySelector('.bco-row-ded-amount')?.value||0);
     const deductions=(dedAmount>0||dedReason)?[{reason:dedReason,amount:dedAmount}]:[];
     const ded=deductions.reduce((a,b)=>a+b.amount,0);
-    const notes=row.querySelector('.bco-row-notes')?.value||'';
+    const rowNote=(row.querySelector('.bco-row-notes')?.value||'').trim();
+    const notes=rowNote||batchNotes;
     const net=Math.max(0,earnings-ded);
     const ru=taskRateUnit(role,task);
     const bagsVal=ru==='bag'?qty:0;

@@ -25,6 +25,20 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.0.3 (2026-09-22)
+//
+// v0.0.3 changes (2026-09-22) — Bulk Clock In/Out UX matched to Bulk Log:
+//   - Bulk Clock Out now mirrors Bulk Log Work's layout: "same for
+//     everyone" Quantity and Deduction quick-fill fields at the top
+//     (still hand-editable per row), a per-row note indented under each
+//     name, and a batch note that fills in for any row left blank.
+//   - Bulk Clock In now supports multiple tasks in one batch: each staff
+//     row gets its own Task selector, so a role with more than one task
+//     no longer forces everyone onto the same one. A "Task (same for
+//     everyone)" quick-fill at the top still fills every row in one go.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v0.0.2 (2026-09-22)
 //
 // v0.0.2 changes (2026-09-22) — Bulk Clock Out:
@@ -1077,7 +1091,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.0.2';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.0.3';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
