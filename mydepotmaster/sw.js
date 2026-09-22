@@ -25,6 +25,17 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.0.2 (2026-09-22)
+//
+// v0.0.2 changes (2026-09-22) — Bulk Clock Out:
+//   - Staff tab now has a "👥⏹ Bulk Clock Out" button (Admin only) next to
+//     Bulk Clock In. Lists every open shift (optional role filter), and
+//     closes out any selected combination with one shared Date/Time Out.
+//   - Each row keeps its own Quantity (skipped for salaried staff),
+//     Deduction (reason + amount), and Notes, since those vary per person.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v0.0.1 (2026-09-07)
 //
 // v0.0.1 changes (2026-09-07) — Depot Assistant topic-detection fix:
@@ -1066,7 +1077,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.0.1';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.0.2';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

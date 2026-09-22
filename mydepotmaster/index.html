@@ -3915,7 +3915,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.0.0';
+const SW_VERSION  = 'v0.0.2';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -11250,6 +11250,7 @@ function renderStaff(){
         ${USER.role==='admin'?`<button class="btn bo bsm" id="btn-add-staff" style="flex-shrink:0">+ Add Staff</button>`:''}
         <button class="btn bg bsm" id="btn-clock-in" style="flex-shrink:0">⏵ Clock In</button>
         ${!staffOnly?`<button class="btn bo bsm" id="btn-bulk-clockin" style="flex-shrink:0" onclick="openBulkClockInForm()">👥 Bulk Clock In</button>
+        ${USER.role==='admin'?`<button class="btn bo bsm" id="btn-bulk-clockout" style="flex-shrink:0" onclick="openBulkClockOutForm()">👥⏹ Bulk Clock Out</button>`:''}
         <button class="btn bo bsm" id="btn-log-work" style="flex-shrink:0">✏️ Manual</button>
         <button class="btn bo bsm" id="btn-bulk-log" style="flex-shrink:0">👥 Bulk Log</button>
         <button class="btn ba bsm" id="btn-pay-staff" style="flex-shrink:0">💳 Pay</button>`:''}
@@ -12287,6 +12288,129 @@ function saveBulkClockIn(){
   showToast(`⏵ Clocked in ${eligible.length} staff`);
 }
 // ══ END BULK CLOCK IN ═══════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════
+// BULK CLOCK OUT — close out every selected open shift at once
+// with a shared time out, instead of clocking each person out
+// one at a time. Each row still gets its own quantity, deduction
+// and notes fields since those vary per person; salaried staff
+// skip the quantity field, same as the single Clock Out form.
+// ══════════════════════════════════════════════════════════
+function openBulkClockOutForm(){
+  if(!requireAdmin('bulk clock out staff'))return;
+  const openShifts=(DATA.staffLogs||[]).filter(l=>l.status==='open'&&!isRejected(l)&&(!l.entryType||l.entryType==='work'));
+  if(openShifts.length===0){alert('No open shifts to clock out.');return;}
+  const roles=[...new Set(openShifts.map(l=>l.role).filter(Boolean))];
+  const roleOpts=`<option value="">All Roles (${openShifts.length})</option>`+roles.map(r=>{
+    const c=openShifts.filter(l=>l.role===r).length;
+    return `<option value="${esc(r)}">${esc(r)} (${c})</option>`;
+  }).join('');
+  openModal(`
+    <div class="mtitle">👥⏹ Bulk Clock Out ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Close out multiple open shifts with a shared time out. Each person keeps their own quantity, deduction and notes — leave blank if not needed.</div>
+    <div class="fw"><div class="fl">Filter by Role</div><select class="fi" id="bco-role-filter" onchange="_bcoRenderRows()">${roleOpts}</select></div>
+    <div class="twobox">
+      <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="bco-date" value="${today()}"/></div>
+      <div class="fw"><div class="fl">Time Out</div><input class="fi" type="time" id="bco-time-out" value="${nowTime()}"/></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div class="fl" style="margin-bottom:0">Open Shifts</div>
+      <div style="display:flex;gap:10px">
+        <button type="button" onclick="_bcoSelectAll(true)" style="background:none;border:none;color:var(--green);font-size:14px;font-weight:700;cursor:pointer;padding:0">Select All</button>
+        <button type="button" onclick="_bcoSelectAll(false)" style="background:none;border:none;color:var(--muted);font-size:14px;font-weight:700;cursor:pointer;padding:0">Clear All</button>
+      </div>
+    </div>
+    <div id="bco-rows" style="margin-bottom:12px"></div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkClockOut()">⏹ Clock Out Selected</button></div>`);
+  _bcoRenderRows();
+}
+
+function _bcoOpenShifts(){
+  const roleFilter=document.getElementById('bco-role-filter')?.value||'';
+  return (DATA.staffLogs||[]).filter(l=>l.status==='open'&&!isRejected(l)&&(!l.entryType||l.entryType==='work')&&(!roleFilter||l.role===roleFilter));
+}
+
+function _bcoRenderRows(){
+  const rowsEl=document.getElementById('bco-rows');
+  if(!rowsEl)return;
+  const shifts=_bcoOpenShifts();
+  const dedReasonOpts=`<option value="">No deduction</option>${DATA.deductionReasons.map(r=>`<option>${esc(r)}</option>`).join('')}`;
+  rowsEl.innerHTML = shifts.length>0 ? shifts.map(l=>{
+    const s=DATA.staff.find(x=>String(x.id)===String(l.staffId));
+    const isSalaried=s?.payType==='salary';
+    const qtyLbl=isSalaried?'':qtyLabelForTask(l.role,l.task||'');
+    const ru=isSalaried?'':taskRateUnitLabel(l.role,l.task||'');
+    return `
+    <div class="ded-line" style="display:block;border:1px solid var(--border,rgba(128,128,128,.25));border-radius:10px;padding:10px;margin-bottom:10px" data-logid="${esc(l.id)}">
+      <div style="display:grid;grid-template-columns:28px 1fr;gap:8px;align-items:center;margin-bottom:8px">
+        <input type="checkbox" class="bco-row-check" checked style="width:18px;height:18px"/>
+        <div>
+          <div style="font-weight:600">${esc(s?.name||'—')}</div>
+          <div style="font-size:13px;color:var(--muted)">${esc(l.role||'—')} · ${esc(l.task||'—')} · in ${l.timeIn||'—'}</div>
+        </div>
+      </div>
+      ${isSalaried?'':`<div style="margin-bottom:6px"><div class="fl" style="font-size:13px;margin-bottom:3px">${esc(qtyLbl)} (${esc(ru)})</div><input class="fi bco-row-qty" type="number" value="0" placeholder="0" inputmode="decimal" step="0.01" style="padding:6px 8px;font-size:15px"/></div>`}
+      <div style="margin-bottom:6px">
+        <div class="fl" style="font-size:13px;margin-bottom:3px">Deduction</div>
+        <div style="display:grid;grid-template-columns:1fr 90px;gap:6px">
+          <select class="fi bco-row-ded-reason" style="padding:6px 8px;font-size:14px">${dedReasonOpts}</select>
+          <input class="fi bco-row-ded-amount" type="number" value="0" placeholder="0.00" inputmode="decimal" step="0.01" style="padding:6px 8px;font-size:14px"/>
+        </div>
+      </div>
+      <div>
+        <div class="fl" style="font-size:13px;margin-bottom:3px">Notes</div>
+        <input class="fi bco-row-notes" placeholder="Any shift notes…" value="${esc(l.notes||'')}" style="padding:6px 8px;font-size:14px"/>
+      </div>
+    </div>`;
+  }).join('') : '<div class="empty">No open shifts for this role.</div>';
+}
+
+function _bcoSelectAll(on){
+  document.querySelectorAll('#bco-rows .bco-row-check').forEach(el=>{el.checked=on;});
+}
+
+function saveBulkClockOut(){
+  if(isReadOnly()){alert('🔒 This account is in read-only mode. Contact your administrator.');return;}
+  const date=document.getElementById('bco-date')?.value||today();
+  const timeOut=document.getElementById('bco-time-out')?.value;
+  if(!timeOut){alert('Enter a Time Out to complete shifts.');return;}
+  const rows=[...document.querySelectorAll('#bco-rows > div[data-logid]')].filter(row=>row.querySelector('.bco-row-check')?.checked);
+  if(rows.length===0){alert('Select at least one open shift to clock out.');return;}
+  const timeOutTs=Date.now();
+  const updates={};
+  const names=[];
+  let totalNet=0;
+  rows.forEach(row=>{
+    const logId=row.dataset.logid;
+    const log=DATA.staffLogs.find(x=>String(x.id)===String(logId));
+    if(!log)return;
+    const s=DATA.staff.find(x=>String(x.id)===String(log.staffId));
+    const isSalariedStaff=s?.payType==='salary';
+    const qtyInput=row.querySelector('.bco-row-qty');
+    const qty=isSalariedStaff?0:Number(qtyInput?.value||0);
+    const role=log.role||'';
+    const task=log.task||'';
+    const earnings=isSalariedStaff?0:getEarnings(qty,role,task);
+    const dedReason=row.querySelector('.bco-row-ded-reason')?.value||'';
+    const dedAmount=Number(row.querySelector('.bco-row-ded-amount')?.value||0);
+    const deductions=(dedAmount>0||dedReason)?[{reason:dedReason,amount:dedAmount}]:[];
+    const ded=deductions.reduce((a,b)=>a+b.amount,0);
+    const notes=row.querySelector('.bco-row-notes')?.value||'';
+    const net=Math.max(0,earnings-ded);
+    const ru=taskRateUnit(role,task);
+    const bagsVal=ru==='bag'?qty:0;
+    updates[logId]={role,task,bags:bagsVal,qty,rateUnit:ru,earnings,deduction:ded,deductions,deductionReason:deductions.map(d=>d.reason).filter(Boolean).join('; '),notes,timeIn:log.timeIn,timeOut,timeOutTs,date,status:'completed'};
+    totalNet+=net;
+    names.push(s?.name||'—');
+  });
+  if(Object.keys(updates).length===0){alert('None of the selected shifts could be found — try reopening the form.');return;}
+  if(!confirm(`Confirm Bulk Clock Out:\n${names.length} staff: ${names.join(', ')}\nTime Out: ${timeOut}\nTotal Net: K${totalNet.toFixed(2)}\n\nProceed?`))return;
+  updateData(d=>({...d,staffLogs:d.staffLogs.map(l=>updates[l.id]?{...l,...updates[l.id]}:l)}));
+  logAuditEvent('EDIT','Work Log (Bulk Clock Out)',`Staff:${names.length} · TimeOut:${timeOut} · TotalNet:${totalNet.toFixed(2)}`);
+  closeModal();
+  showToast(`⏹ Clocked out ${names.length} staff`);
+}
+// ══ END BULK CLOCK OUT ═══════════════════════════════════════
 
 
 
