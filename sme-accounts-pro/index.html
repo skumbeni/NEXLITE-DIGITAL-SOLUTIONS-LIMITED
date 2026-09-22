@@ -763,6 +763,33 @@ function save(key, val) {
   dataCache[key] = val;
   dataVersion++;
 }
+// dataCache/dataVersion above are `let` bindings scoped to this <script>
+// block only — other <script> blocks (the Firebase integration code,
+// auth handlers) can't see or reset them directly by name, only via
+// window.*, which is a *different* variable. Expose a proper reset so
+// cross-script code (auth state changes, restoreFromFirebase) can
+// actually invalidate the real cache instead of silently no-op'ing on
+// an unrelated window.dataCache property.
+window.invalidateDataCache = function() {
+  dataCache = {};
+  dataVersion++;
+};
+
+// This device may be shared between businesses (kiosk, shared laptop, one
+// phone handed between staff). Every app-data key below is a flat global
+// key with no per-account namespace, so if we ever leave one account's
+// values sitting in localStorage, the next account to sign in on this
+// device inherits them — sees their customers/invoices, or worse, saves
+// on top of them and pushes the mix back up to Firebase under the wrong
+// uid. This wipes every key this app owns (business data + subscription/
+// tier cache), so we always start the next account from a clean slate
+// rather than trusting that Firebase will happen to overwrite everything.
+window.clearAllLocalAppData = function() {
+  Object.values(K).forEach(k => localStorage.removeItem(k));
+  ['smeap_subscription', 'smeap_tierCatalog', '_fb_synced', '_pending_usage',
+   '_pending_sync_queue'].forEach(k => localStorage.removeItem(k));
+  window.invalidateDataCache();
+};
 // Merges the stored object over the defaults (rather than replacing them outright) so
 // that a partially-saved object — e.g. the signup flow only ever writes { businessName },
 // never tpin/email/phone/etc. — doesn't leave those fields `undefined` (which is what
@@ -3240,7 +3267,7 @@ navigate(ROUTES[initialRoute] ? initialRoute : 'dashboard');
     signOut, sendPasswordResetEmail
   } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
   import {
-    getDatabase, ref, set, get
+    getDatabase, ref, set, get, update, increment
   } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-database.js";
 
   const firebaseConfig = {
@@ -3277,6 +3304,17 @@ navigate(ROUTES[initialRoute] ? initialRoute : 'dashboard');
     async getPath(path) {
       const snap = await get(ref(db, path));
       return snap.exists() ? snap.val() : null;
+    },
+    // Multi-location update from the database root, used for atomic usage
+    // counters (usage/apiCalls/{date} and usage/dataSyncedKB both bump in
+    // one request instead of two).
+    async updatePaths(updates) {
+      await update(ref(db), updates);
+    },
+    // Exposes the RTDB increment() server-side transform so classic-script
+    // code (window.fb below) can build counter updates without its own import.
+    increment(amount) {
+      return increment(amount);
     }
   };
   
@@ -3413,8 +3451,19 @@ navigate(ROUTES[initialRoute] ? initialRoute : 'dashboard');
 
   window.handleLogout = async function() {
     try {
+      // Best-effort: send this account's buffered usage before switching
+      // users. If it fails (offline, etc.) that's fine — what matters is
+      // the buffer never survives into the next signed-in account below.
+      if (window.fb && typeof window.fb.flushUsage === 'function') {
+        try { await window.fb.flushUsage(); } catch (e) { /* best-effort */ }
+      }
       await signOut(window.auth);
-      localStorage.removeItem('_fb_synced');
+      // Wipe every locally-cached key this app owns — not just the usage
+      // counters — so nothing from this account (customers, invoices,
+      // settings, subscription tier, etc.) is still sitting in
+      // localStorage for the next person who signs in on this device.
+      window.clearAllLocalAppData();
+      if (window.fb) window.fb._usage = { calls: 0, bytes: 0 };
     } catch (err) {
       console.error('Sign out failed:', err);
     }
@@ -3439,9 +3488,30 @@ navigate(ROUTES[initialRoute] ? initialRoute : 'dashboard');
         }
       }
       
+      // Belt-and-braces against leftover data from a previous account on
+      // this device: if the uid signed in now doesn't match the uid this
+      // localStorage cache was last populated for, wipe the cache
+      // synchronously *before* doing anything else — including before the
+      // async restoreFromFirebase() call below, which has a network round
+      // trip during which load()/dataCache would otherwise keep serving
+      // the old account's values (and any save() during that window would
+      // sync the mix up under the new account). This catches cases
+      // handleLogout() can't, e.g. the browser/tab was killed instead of
+      // a clean sign-out, or two accounts share a device without ever
+      // signing out between them.
+      const lastUid = localStorage.getItem('_last_uid');
+      if (lastUid && lastUid !== user.uid) {
+        window.clearAllLocalAppData();
+      }
+      localStorage.setItem('_last_uid', user.uid);
+
       // Try to restore from Firebase if this is first sync
       if (typeof window.fb !== 'undefined' && !localStorage.getItem('_fb_synced')) {
-        await window.fb.restoreFromFirebase();
+        const restored = await window.fb.restoreFromFirebase();
+        // If restore failed (offline right after login, etc.) don't let
+        // stale data from a prior account keep serving silently — an
+        // empty/default state is safer than someone else's business data.
+        if (!restored) window.clearAllLocalAppData();
         localStorage.setItem('_fb_synced', 'true');
       }
 
@@ -3461,9 +3531,26 @@ navigate(ROUTES[initialRoute] ? initialRoute : 'dashboard');
       if (typeof window.fb !== 'undefined') {
         window.fb.syncAll();
       }
+
+      // Heartbeat for admin's "Active Sessions": one small write now, then
+      // every 5 minutes while this tab stays open and visible. Cleared on
+      // sign-out below so a closed/logged-out session stops counting.
+      if (typeof window.fb !== 'undefined') {
+        window.fb.heartbeat();
+        if (window._heartbeatInterval) clearInterval(window._heartbeatInterval);
+        window._heartbeatInterval = setInterval(() => {
+          if (document.visibilityState === 'visible' && window.currentUser) {
+            window.fb.heartbeat();
+          }
+        }, 5 * 60 * 1000);
+      }
     } else {
       document.body.removeAttribute('data-auth');
       showLandingView();
+      if (window._heartbeatInterval) {
+        clearInterval(window._heartbeatInterval);
+        window._heartbeatInterval = null;
+      }
     }
   });
 </script>
@@ -3475,9 +3562,16 @@ navigate(ROUTES[initialRoute] ? initialRoute : 'dashboard');
 // Pattern: localStorage first, sync to Firebase when online
 
 window.fb = {
+  // Accumulates write() calls/bytes between usage flushes (see flushUsage
+  // below) instead of hitting Firebase on every single save().
+  _usage: { calls: 0, bytes: 0 },
+
   // Write data to Realtime DB (user-scoped) via the SDK — no URL guessing,
   // no manual ID-token query param; the SDK attaches the signed-in user's
   // auth context automatically so your database security rules see it.
+  // This is the single choke point for every write, whether it comes from
+  // syncAll()'s loop or directly from window.save() on a live edit — so
+  // usage is counted here, not in the callers.
   async write(path, data) {
     if (!window.currentUser) {
       console.warn('No user auth');
@@ -3486,6 +3580,9 @@ window.fb = {
     }
     try {
       await window.__rtdb.setPath(`users/${window.currentUser.uid}/${path}`, data);
+      this._usage.calls++;
+      this._usage.bytes += JSON.stringify(data).length;
+      if (typeof window.saveUsageBuffer === 'function') window.saveUsageBuffer();
       return true;
     } catch (err) {
       // Keep the real Firebase error (e.g. PERMISSION_DENIED) so the UI
@@ -3524,7 +3621,7 @@ window.fb = {
     if (!window.currentUser || window.syncInProgress || !navigator.onLine) return;
     window.syncInProgress = true;
     updateSyncStatus('syncing');
-    
+
     let allOk = true;
     try {
       const dbKeys = Object.values(window.K || {});
@@ -3557,6 +3654,55 @@ window.fb = {
       updateSyncStatus('error');
     } finally {
       window.syncInProgress = false;
+      // Flush whatever write() calls accumulated this cycle — both the
+      // per-key writes just above and any live-edit writes from
+      // window.save() that landed since the last flush.
+      await this.flushUsage();
+    }
+  },
+
+  // Bumps this business's usage counters for the admin Usage page:
+  // usage/apiCalls/{yyyy-mm-dd} (today's write count) and usage/dataSyncedKB
+  // (running total). Uses RTDB's server-side increment() so concurrent
+  // syncs from multiple tabs/devices never overwrite each other's counts.
+  // Best-effort — a failure here should never block or fail the real sync.
+  async trackUsage(callCount, byteCount) {
+    if (!window.currentUser) return;
+    try {
+      const today = new Date().toISOString().slice(0, 10); // yyyy-mm-dd
+      const uid = window.currentUser.uid;
+      await window.__rtdb.updatePaths({
+        [`users/${uid}/usage/apiCalls/${today}`]: window.__rtdb.increment(callCount),
+        [`users/${uid}/usage/dataSyncedKB`]: window.__rtdb.increment(byteCount / 1024),
+        [`users/${uid}/usage/lastActiveAt`]: Date.now()
+      });
+    } catch (err) {
+      // Non-fatal: usage stats are a nice-to-have for admin, not core sync.
+      console.warn('Usage tracking failed (non-fatal):', err);
+    }
+  },
+
+  // Sends whatever write() has accumulated in _usage since the last flush,
+  // then resets the counters. Called at the end of every syncAll() cycle
+  // (i.e. every ~45s, or right after an online reconnect) rather than
+  // after each individual write — so a busy day of data entry still costs
+  // one usage update per cycle, not one per save().
+  async flushUsage() {
+    const { calls, bytes } = this._usage;
+    if (calls === 0) return;
+    this._usage = { calls: 0, bytes: 0 };
+    if (typeof window.saveUsageBuffer === 'function') window.saveUsageBuffer();
+    await this.trackUsage(calls, bytes);
+  },
+
+  // Lightweight heartbeat so admin's "Active Sessions" reflects businesses
+  // with the app open right now, not just ones that synced recently.
+  async heartbeat() {
+    if (!window.currentUser) return;
+    try {
+      await window.__rtdb.setPath(`users/${window.currentUser.uid}/usage/lastActiveAt`, Date.now());
+    } catch (err) {
+      console.warn('Heartbeat failed (non-fatal):', err);
     }
   },
 
@@ -3569,8 +3715,14 @@ window.fb = {
         Object.entries(data).forEach(([k, v]) => {
           localStorage.setItem(k, JSON.stringify(v));
         });
-        window.dataCache = {};
-        window.dataVersion = (window.dataVersion || 0) + 1;
+        // window.dataCache/window.dataVersion here were a different
+        // variable from the dataCache/dataVersion that load()/save()
+        // actually read (different <script> scope) — restore was
+        // overwriting localStorage correctly but the in-memory cache
+        // kept serving whatever was cached before, including another
+        // account's values. window.invalidateDataCache() resets the
+        // real one.
+        window.invalidateDataCache();
         console.log('✓ Data restored from Firebase');
         return true;
       }
@@ -3593,6 +3745,37 @@ window.loadPendingQueue = () => {
     window.pendingSyncQueue = [];
   }
 };
+
+// window.fb._usage only lives in memory, so a killed/backgrounded tab
+// between flush cycles would silently drop counted writes. Persist it
+// the same way the pending sync queue is persisted, and restore it here
+// (this script block runs before window.loadPendingQueue's caller above
+// ever gets a chance to see it defined, so we load our own state inline).
+window.saveUsageBuffer = () => {
+  localStorage.setItem('_pending_usage', JSON.stringify(window.fb._usage));
+};
+try {
+  const savedUsage = JSON.parse(localStorage.getItem('_pending_usage') || 'null');
+  if (savedUsage && typeof savedUsage.calls === 'number') {
+    window.fb._usage = savedUsage;
+  }
+} catch (e) {
+  // Corrupt or missing — keep the fresh { calls: 0, bytes: 0 } from window.fb's init.
+}
+
+// Flush on the ways a phone-first PWA actually goes away: backgrounding
+// (visibilitychange fires reliably on mobile; beforeunload/pagehide often
+// don't) and the tab actually closing. sendBeacon-style guarantees aren't
+// available for an authenticated RTDB write, so this is best-effort: it
+// catches the common "user switches app" case, not a hard kill.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && window.currentUser && window.fb) {
+    window.fb.flushUsage();
+  }
+});
+window.addEventListener('pagehide', () => {
+  if (window.currentUser && window.fb) window.fb.flushUsage();
+});
 
 window.processPendingSyncQueue = async () => {
   if (!window.pendingSyncQueue || window.pendingSyncQueue.length === 0) return;
