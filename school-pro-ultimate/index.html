@@ -1127,7 +1127,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
   import { getDatabase, ref, set, update, onValue, get } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
-  import { getAuth, setPersistence, browserLocalPersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, GoogleAuthProvider, signInWithPopup } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
+  import { getAuth, setPersistence, browserLocalPersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, linkWithCredential } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyDjCuVE0G5zkQQd0itOmXujj8Jy7m6gPAU",
@@ -1180,10 +1180,37 @@ tr:hover td { background:rgba(108,52,131,0.04); }
   window._fbSignIn       = (email, pass) => signInWithEmailAndPassword(auth, email, pass);
   window._fbSignOut      = ()            => signOut(auth);
   window._fbOnAuthStateChanged = (cb)    => onAuthStateChanged(auth, cb);
-  window._fbGoogleSignIn = () => {
+  window._fbGoogleSignIn = async () => {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
-    return signInWithPopup(auth, provider);
+    try {
+      return await signInWithPopup(auth, provider);
+    } catch (err) {
+      if (err.code !== 'auth/account-exists-with-different-credential') throw err;
+
+      // This email already has an email/password account — either the school
+      // owner (self-signup) or a staff member given a "Staff Cloud Login"
+      // (Bursar, Teacher, Head Teacher, etc). Firebase's account-linking
+      // setting refuses to silently create a second, disconnected account for
+      // the same address here. Instead: sign into the EXISTING account with
+      // its password, then permanently attach this Google credential to it.
+      // The uid never changes, so every existing staffDirectory/
+      // schoolsDirectory link keeps working exactly as before — Google just
+      // becomes an additional way to sign into the same account.
+      const pendingCred = GoogleAuthProvider.credentialFromError(err);
+      const email = err.customData && err.customData.email;
+      if (!email || !pendingCred) throw err;
+
+      const password = window.prompt(
+        'An account already exists for ' + email + ' with a password.\n\n' +
+        'Enter that password once to link Google sign-in to it:'
+      );
+      if (!password) throw err; // cancelled — surface the original error upstream
+
+      const userCred = await signInWithEmailAndPassword(auth, email, password);
+      await linkWithCredential(userCred.user, pendingCred);
+      return userCred; // same shape as signInWithPopup's result
+    }
   };
   window._fbReady = true;
 
@@ -5305,6 +5332,8 @@ async function googleSignIn() {
         err.code === 'auth/popup-closed-by-user'    ? 'Sign-in cancelled.' :
         err.code === 'auth/popup-blocked'            ? 'Popup blocked — allow popups for this page.' :
         err.code === 'auth/configuration-not-found'  ? 'Google sign-in not configured yet in Firebase console.' :
+        err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' ? 'Incorrect password — Google sign-in was not linked. Try again.' :
+        err.code === 'auth/account-exists-with-different-credential' ? 'That email already has a password login. Enter the password when prompted to link Google to it.' :
         err.message;
       showToast(msg, 'error');
       return;
@@ -5314,13 +5343,39 @@ async function googleSignIn() {
     const email  = fbUser.email;
     const displayName = fbUser.displayName || email.split('@')[0];
 
-    // Check if user already exists locally
+    // Check Firebase FIRST — not just this device's local cache. A returning
+    // Google user on a new phone (or after clearing browser storage) has no
+    // entry in localStorage, but their school is real and already registered
+    // either in staffDirectory (Bursar/Teacher/Head Teacher/etc. cloud logins)
+    // or schoolsDirectory (the school owner). Trusting only the local cache
+    // here used to treat them as brand-new and spin up a second, blank school
+    // under the same uid with default 0000 PINs, orphaning their real one.
+    // staffDirectory is checked FIRST and unconditionally — a staff account
+    // has no schoolsDirectory entry (that's owner-only), so checking
+    // schoolsDirectory alone would still misroute a Bursar/Teacher with no
+    // local cache into the "new school" branch below.
+    let directoryEntry = null;
+    try { directoryEntry = await _resolveStaffSchool(fbUser.uid); } catch (e) { /* offline/permission issue — fall back below */ }
+
+    let existingSchoolId = null;
+    if (!directoryEntry) {
+      try {
+        const dirSnap = await window._fbGet(window._fbRef(window._fbDb, 'schoolsDirectory/' + fbUser.uid));
+        if (dirSnap.exists()) existingSchoolId = Object.keys(dirSnap.val())[0];
+      } catch (e) { /* permission/network issue — fall back to local cache check below */ }
+    }
+
     const users = JSON.parse(localStorage.getItem('eduGenius_users_v1') || '[]');
     let candidate = users.find(x => (x.email || '').toLowerCase() === email.toLowerCase());
 
-    if (candidate) {
-      // Existing user — log straight in
-      const match = { username: candidate.username, role: candidate.role };
+    if (directoryEntry || candidate || existingSchoolId) {
+      // Existing user (found via staffDirectory, schoolsDirectory, or this
+      // device's local cache) — resolve through the same pipeline every other
+      // login uses, so the right school and role load regardless of device.
+      if (existingSchoolId) config.currentSchool = existingSchoolId;
+      const role = directoryEntry?.role || candidate?.role || 'Super Admin';
+      const username = directoryEntry?.name || candidate?.username || displayName;
+      const match = { username, role };
       sessionStorage.setItem('eduUser', JSON.stringify(match));
       currentUser = { username: match.username, role: match.role };
       closeLandingAuth('login');
@@ -5528,7 +5583,7 @@ function canAccess(section){
    'Accountant':['dashboard','finance','reports'],
    'Counsellor':['dashboard','database','conduct','attendance','reports'],
    'Parent':['dashboard','reports','finance'],
-   'Head Teacher':['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports'],
+   'Head Teacher':['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','admin'],
    'Super Admin':['*']
  };
  if(role==='Super Admin') return true;
