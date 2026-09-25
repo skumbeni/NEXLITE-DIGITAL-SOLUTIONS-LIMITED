@@ -1018,7 +1018,11 @@ tr:hover td { background:rgba(108,52,131,0.04); }
 
         <!-- Teachers -->
         <div class="card">
-          <div class="card-header"><span class="card-title">👩‍🏫 Teacher Accounts</span><button class="btn btn-primary btn-sm" onclick="addTeacher()">+ Add Teacher</button></div>
+          <div class="card-header"><span class="card-title">👩‍🏫 Teacher &amp; Staff Accounts</span><button class="btn btn-primary btn-sm" onclick="addTeacher()">+ Add Teacher / Staff</button></div>
+          <p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Add teaching and non-teaching staff here (use the "Other" designation for support staff not listed). Use the 💰 button on each row to record and review their payments.</p>
+          <div style="display:flex;justify-content:space-between;padding:6px 0 10px;font-weight:700;border-bottom:1px solid var(--border);margin-bottom:6px">
+            <span>Total Paid to Staff</span><span id="teachersTotalPaid">K0</span>
+          </div>
           <div id="teachersList"></div>
         </div>
 
@@ -1818,6 +1822,18 @@ function loadData() {
       Promise.all(pinsToMigrate.map(k => storePin(config[k]).then(h => { config[k] = h; }))).then(() => {
         try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch(e) {}
       });
+    }
+    // ---- V1 fix: migrate plaintext Teacher/Staff PINs to SHA-256 hashes too ----
+    if (Array.isArray(config.teachers)) {
+      const teacherPinsToMigrate = [];
+      config.teachers.forEach((t, ti) => {
+        if (t && t.pin && !String(t.pin).startsWith('sha256$')) teacherPinsToMigrate.push(ti);
+      });
+      if (teacherPinsToMigrate.length > 0) {
+        Promise.all(teacherPinsToMigrate.map(ti => storePin(config.teachers[ti].pin).then(h => { config.teachers[ti].pin = h; }))).then(() => {
+          try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch(e) {}
+        });
+      }
     }
   } catch(e) { config = getDefaultConfig(); }
 
@@ -4226,9 +4242,16 @@ const TEACHER_DESIGNATIONS = [
   'Other'
 ];
 
+function teacherTotalPaid(t) {
+  return (t.paymentHistory || []).reduce((sum, p) => sum + (p.amount || 0), 0);
+}
+
 function renderTeachers() {
   let html = '';
+  let grandTotal = 0;
   (config.teachers || []).forEach((t, ti) => {
+    if (!t.paymentHistory) t.paymentHistory = [];
+    grandTotal += teacherTotalPaid(t);
     const desigOptions = TEACHER_DESIGNATIONS.map(d =>
       `<option value="${esc(d)}" ${(t.designation||'Class Teacher')===d?'selected':''}>${escHtml(d)}</option>`
     ).join('');
@@ -4241,11 +4264,15 @@ function renderTeachers() {
         <option value="">No class</option>
         ${getAllClasses().map(c => `<option value="${esc(c)}" ${t.class===c?'selected':''}>${escHtml(c)}</option>`).join('')}
       </select>
-      <input type="password" value="${esc(t.pin)}" onchange="config.teachers[${ti}].pin=this.value;saveConfig()" placeholder="PIN" style="width:75px" maxlength="6" title="Staff PIN">
+      <input type="password" value="" onchange="updateTeacherPin(${ti},this.value)" placeholder="${t.pin ? 'PIN set — re-enter to change' : 'Set PIN'}" style="width:150px" maxlength="6" title="Staff PIN (hashed; used to sign for payments)">
+      <span style="font-size:11px;color:var(--text-light);white-space:nowrap">Paid: K${teacherTotalPaid(t).toLocaleString()}</span>
+      <button class="btn btn-success btn-sm" onclick="openTeacherPaymentModal(${ti})" title="Record / view payments">💰 Payments</button>
       <button class="btn btn-danger btn-sm" onclick="config.teachers.splice(${ti},1);saveConfig();renderTeachers()" title="Remove">✕</button>
     </div>`;
   });
-  document.getElementById('teachersList').innerHTML = html || '<div style="color:var(--text-light)">No teachers added yet.</div>';
+  document.getElementById('teachersList').innerHTML = html || '<div style="color:var(--text-light)">No teachers or staff added yet.</div>';
+  const totalEl = document.getElementById('teachersTotalPaid');
+  if (totalEl) totalEl.textContent = 'K' + grandTotal.toLocaleString();
 }
 
 function addTeacher() {
@@ -4254,9 +4281,323 @@ function addTeacher() {
     return showToast('⛔ Access denied: only admins can manage teacher accounts.', 'error');
   }
   if (!config.teachers) config.teachers = [];
-  config.teachers.push({ name: '', designation: 'Class Teacher', class: '', pin: '' });
+  config.teachers.push({ name: '', designation: 'Class Teacher', class: '', pin: '', paymentHistory: [] });
   saveConfig();
   renderTeachers();
+}
+
+// Staff PINs are hashed the same way as the admin/head-teacher/master PINs
+// (SHA-256, via storePin/pinMatches) rather than kept in plain text, since
+// this PIN now doubles as the staff member's signature on payment receipts.
+async function updateTeacherPin(ti, rawPin) {
+  const t = config.teachers[ti];
+  if (!t) return;
+  const val = (rawPin || '').trim();
+  if (!val) return; // left blank = no change, keep existing hash
+  if (val.length < 4) { showToast('PIN must be 4+ digits', 'error'); renderTeachers(); return; }
+  t.pin = await storePin(val);
+  saveConfig();
+  renderTeachers();
+  showToast('Staff PIN updated');
+}
+
+// ==================== TEACHER / STAFF PAYMENTS ====================
+// Payment records live inside each teacher/staff entry in config.teachers,
+// so they sync and back up exactly like the rest of the staff roster.
+// Recording a payment requires the same admin roles that manage staff
+// accounts, since it persists through saveConfig().
+function openTeacherPaymentModal(ti) {
+  const t = config.teachers[ti];
+  if (!t) return;
+  if (!t.paymentHistory) t.paymentHistory = [];
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.id = 'teacherPayModal';
+  modal.innerHTML = `
+    <div class="modal" style="max-width:460px">
+      <h3>💰 Payments — ${escHtml(t.name || 'Staff Member')}</h3>
+      <p style="font-size:12px;color:var(--text-light);margin:0 0 12px">${escHtml(t.designation || '')}</p>
+      <div style="display:flex;justify-content:space-between;padding:6px 0;font-weight:700;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-bottom:12px">
+        <span>Total Paid</span><span id="tpTotal">K${teacherTotalPaid(t).toLocaleString()}</span>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Amount</label><input type="number" id="tpAmount" placeholder="Amount"></div>
+        <div class="form-group"><label>Date</label><input type="date" id="tpDate"></div>
+      </div>
+      <div class="form-group"><label>Note <span style="font-size:11px;color:var(--text-light)">(e.g. March salary, transport allowance)</span></label>
+        <input type="text" id="tpNote" placeholder="e.g. March salary">
+      </div>
+      <button class="btn btn-success btn-sm" onclick="recordTeacherPayment(${ti})">Record Payment</button>
+      <div style="margin-top:16px">
+        <strong>Payment History</strong>
+        <div class="table-wrap" style="margin-top:8px" id="tpHistoryWrap"></div>
+      </div>
+      <div class="modal-actions" style="margin-top:14px">
+        <button class="btn btn-outline" onclick="document.getElementById('teacherPayModal').remove()">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  const dateEl = document.getElementById('tpDate');
+  if (dateEl) dateEl.value = new Date().toISOString().split('T')[0];
+  renderTeacherPaymentHistory(ti);
+}
+
+function renderTeacherPaymentHistory(ti) {
+  const t = config.teachers[ti];
+  const wrap = document.getElementById('tpHistoryWrap');
+  if (!t || !wrap) return;
+  const hist = t.paymentHistory || [];
+  const rows = hist.map((p, ri) => ({ p, ri })).reverse().map(({ p, ri }) => `<tr>
+      <td>K${(p.amount||0).toLocaleString()}</td>
+      <td>${escHtml(p.date||'')}</td>
+      <td>${escHtml(p.note||'')}</td>
+      <td>${p.acknowledged
+          ? '<span style="color:var(--success);font-size:12px;white-space:nowrap">✅ Signed</span>'
+          : '<button class="btn btn-warning btn-sm" onclick="openReceiptAcknowledgeModal('+ti+','+ri+')" title="Have the staff member confirm receipt">⏳ Awaiting signature</button>'}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-outline btn-sm" onclick="downloadTeacherPaySlip(${ti},${ri})" title="Pay slip">🧾</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteTeacherPayment(${ti},${ri})" title="Remove">✕</button>
+      </td>
+    </tr>`).join('');
+  wrap.innerHTML = `<table>
+    <tr><th>Amount</th><th>Date</th><th>Note</th><th>Receipt</th><th></th></tr>
+    ${rows || '<tr><td colspan="5" style="text-align:center;color:var(--text-light)">No payments recorded</td></tr>'}
+  </table>`;
+}
+
+function recordTeacherPayment(ti) {
+  const t = config.teachers[ti];
+  if (!t) return;
+  const adminRoles = ['Super Admin', 'Administrator', 'Head Teacher'];
+  if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
+    return showToast('⛔ Access denied: only admins can record staff payments.', 'error');
+  }
+  const amount = parseFloat(document.getElementById('tpAmount').value) || 0;
+  const date = document.getElementById('tpDate').value || new Date().toISOString().split('T')[0];
+  const note = document.getElementById('tpNote').value.trim();
+  if (amount <= 0) return showToast('Enter a valid amount', 'error');
+
+  requestApproval('Record payment K' + amount.toLocaleString() + ' for ' + (t.name || 'staff member'), () => {
+    if (!t.paymentHistory) t.paymentHistory = [];
+    t.paymentHistory.push({ amount, date, note, recordedAt: new Date().toISOString(), acknowledged: false, acknowledgedAt: null, acknowledgedVia: null });
+    const newIdx = t.paymentHistory.length - 1;
+    saveConfig();
+    document.getElementById('tpAmount').value = '';
+    document.getElementById('tpNote').value = '';
+    const totalEl = document.getElementById('tpTotal');
+    if (totalEl) totalEl.textContent = 'K' + teacherTotalPaid(t).toLocaleString();
+    renderTeacherPaymentHistory(ti);
+    renderTeachers();
+    showToast('Payment recorded — now have the staff member confirm receipt');
+    openReceiptAcknowledgeModal(ti, newIdx);
+  });
+}
+
+// ==================== RECEIVER ACKNOWLEDGEMENT ====================
+// The payment only counts as "signed" once the receiving staff member
+// confirms it themselves — with their own Staff PIN (set on their row in
+// Teacher & Staff Accounts), acting as their signature. If they have no PIN
+// set yet, the admin can fall back to a manual, PIN-approved confirmation.
+function openReceiptAcknowledgeModal(ti, ri) {
+  const t = config.teachers[ti];
+  if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
+  const p = t.paymentHistory[ri];
+  const hasPin = !!(t.pin && String(t.pin).trim());
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.id = 'ackModal';
+  modal.innerHTML = `
+    <div class="modal" style="max-width:400px">
+      <h3>✍️ Confirm Receipt</h3>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:14px">
+        Hand the device to <strong>${escHtml(t.name || 'the staff member')}</strong> to confirm they received
+        <strong>K${(p.amount || 0).toLocaleString()}</strong> on ${escHtml(p.date || '')}.
+      </p>
+      ${hasPin ? `
+        <div class="form-group"><label>${escHtml(t.name || 'Staff')}'s PIN</label>
+          <input type="password" id="ackPin" maxlength="6" class="pin-field" placeholder="Enter your PIN to sign">
+        </div>
+        <div id="ackError" style="color:var(--danger);font-size:12px;margin-bottom:8px"></div>
+        <div class="modal-actions">
+          <button class="btn btn-outline" onclick="document.getElementById('ackModal').remove()">Not now</button>
+          <button class="btn btn-success" onclick="confirmPaymentReceipt(${ti},${ri})">Sign & Confirm</button>
+        </div>
+      ` : `
+        <p style="font-size:12px;color:var(--accent);margin-bottom:12px">⚠ No Staff PIN is set for ${escHtml(t.name || 'this staff member')} yet, so they can't sign digitally. Set one in Teacher &amp; Staff Accounts for next time, or the admin can confirm manually below (requires admin approval).</p>
+        <div class="modal-actions">
+          <button class="btn btn-outline" onclick="document.getElementById('ackModal').remove()">Not now</button>
+          <button class="btn btn-warning" onclick="confirmPaymentReceiptManual(${ti},${ri})">Confirm Manually</button>
+        </div>
+      `}
+    </div>`;
+  document.body.appendChild(modal);
+  const pinEl = document.getElementById('ackPin');
+  if (pinEl) setTimeout(() => pinEl.focus(), 100);
+}
+
+async function confirmPaymentReceipt(ti, ri) {
+  const t = config.teachers[ti];
+  if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
+  const entered = (document.getElementById('ackPin').value || '').trim();
+  const ok = entered && await pinMatches(entered, t.pin);
+  if (!ok) {
+    document.getElementById('ackError').textContent = 'Incorrect PIN. Try again.';
+    return;
+  }
+  t.paymentHistory[ri].acknowledged = true;
+  t.paymentHistory[ri].acknowledgedAt = new Date().toISOString();
+  t.paymentHistory[ri].acknowledgedVia = 'pin';
+  saveConfig();
+  const modal = document.getElementById('ackModal');
+  if (modal) modal.remove();
+  renderTeacherPaymentHistory(ti);
+  showToast('Payment signed by ' + (t.name || 'staff member'));
+  downloadTeacherPaySlip(ti, ri);
+}
+
+function confirmPaymentReceiptManual(ti, ri) {
+  const t = config.teachers[ti];
+  if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
+  const adminRoles = ['Super Admin', 'Administrator', 'Head Teacher'];
+  if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
+    return showToast('⛔ Access denied: only admins can confirm receipt manually.', 'error');
+  }
+  requestApproval('Confirm ' + (t.name || 'staff member') + ' received this payment (no Staff PIN on file)', () => {
+    t.paymentHistory[ri].acknowledged = true;
+    t.paymentHistory[ri].acknowledgedAt = new Date().toISOString();
+    t.paymentHistory[ri].acknowledgedVia = 'manual';
+    saveConfig();
+    const modal = document.getElementById('ackModal');
+    if (modal) modal.remove();
+    renderTeacherPaymentHistory(ti);
+    showToast('Receipt confirmed manually');
+    downloadTeacherPaySlip(ti, ri);
+  }, true);
+}
+
+// ==================== PAY SLIP (PDF) ====================
+function buildTeacherPaySlipPdf(ti, ri) {
+  const t = config.teachers[ti];
+  if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return null;
+  if (!window.jspdf) { showToast('PDF library failed to load — check your internet connection and try again.', 'error'); return null; }
+  const { jsPDF } = window.jspdf;
+  const p = t.paymentHistory[ri];
+  const doc = new jsPDF({ unit: 'mm', format: 'a5' });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const marginX = 12;
+  let y = 16;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text(config.schoolName || 'School', pageWidth / 2, y, { align: 'center' });
+  y += 6;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
+  doc.text('STAFF PAY SLIP', pageWidth / 2, y, { align: 'center' });
+  y += 8;
+  doc.setLineWidth(0.3);
+  doc.line(marginX, y, pageWidth - marginX, y);
+  y += 8;
+
+  doc.setFontSize(10);
+  const labelX = marginX, valueX = marginX + 38, rowGap = 7;
+  function row(label, value) {
+    doc.setFont('helvetica', 'bold');
+    doc.text(label, labelX, y);
+    doc.setFont('helvetica', 'normal');
+    doc.text(String(value || '-'), valueX, y);
+    y += rowGap;
+  }
+  row('Staff Name:', t.name);
+  row('Designation:', t.designation);
+  if (t.class) row('Class:', t.class);
+  row('Payment Date:', p.date);
+  row('Term/Year:', ((config.currentTerm || '') + ' ' + (config.academicYear || '')).trim());
+  y += 1;
+  doc.line(marginX, y, pageWidth - marginX, y);
+  y += 8;
+
+  doc.setFont('helvetica', 'bold');
+  doc.text('Description', labelX, y);
+  doc.text('Amount', pageWidth - marginX, y, { align: 'right' });
+  y += 6;
+  doc.setFont('helvetica', 'normal');
+  doc.text(p.note || 'Salary Payment', labelX, y);
+  doc.text('K' + (p.amount || 0).toLocaleString(), pageWidth - marginX, y, { align: 'right' });
+  y += 8;
+  doc.line(marginX, y, pageWidth - marginX, y);
+  y += 8;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.text('Total Paid:', labelX, y);
+  doc.text('K' + (p.amount || 0).toLocaleString(), pageWidth - marginX, y, { align: 'right' });
+  y += 14;
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.text('Generated: ' + new Date(p.recordedAt || Date.now()).toLocaleString(), labelX, y);
+  y += 12;
+
+  doc.setFontSize(9);
+  doc.line(labelX, y, labelX + 50, y);
+  doc.text('Prepared By (Admin)', labelX, y + 5);
+  y += 14;
+
+  if (p.acknowledged) {
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 130, 0);
+    doc.text('✔ RECEIVED & SIGNED BY ' + String(t.name || 'STAFF').toUpperCase(), labelX, y);
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    y += 5;
+    doc.text('Confirmed ' + (p.acknowledgedVia === 'manual' ? 'manually by admin' : 'via Staff PIN') + ' on ' + new Date(p.acknowledgedAt || Date.now()).toLocaleString(), labelX, y);
+  } else {
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(180, 0, 0);
+    doc.text('⚠ PENDING RECEIVER CONFIRMATION', labelX, y);
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    y += 8;
+    doc.line(labelX, y, labelX + 50, y);
+    doc.text('Receiver Signature', labelX, y + 5);
+  }
+
+  return doc;
+}
+
+function _payslipFilename(t, p) {
+  return `${String(t.name || 'Staff').replace(/[^a-z0-9]+/gi, '_')}_payslip_${String(p.date || '').replace(/[^0-9]/g, '')}.pdf`;
+}
+
+function downloadTeacherPaySlip(ti, ri) {
+  const t = config.teachers[ti];
+  if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
+  const doc = buildTeacherPaySlipPdf(ti, ri);
+  if (!doc) return;
+  const blob = doc.output('blob');
+  _shareOrDownloadPdf(blob, _payslipFilename(t, t.paymentHistory[ri]), (config.schoolName || 'Staff') + ' Pay Slip');
+}
+
+function deleteTeacherPayment(ti, ri) {
+  const t = config.teachers[ti];
+  if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
+  const adminRoles = ['Super Admin', 'Administrator', 'Head Teacher'];
+  if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
+    return showToast('⛔ Access denied: only admins can remove staff payment records.', 'error');
+  }
+  if (!confirm('Remove this payment record?')) return;
+  requestApproval('Remove payment record for ' + (t.name || 'staff member'), () => {
+    t.paymentHistory.splice(ri, 1);
+    saveConfig();
+    const totalEl = document.getElementById('tpTotal');
+    if (totalEl) totalEl.textContent = 'K' + teacherTotalPaid(t).toLocaleString();
+    renderTeacherPaymentHistory(ti);
+    renderTeachers();
+    showToast('Payment record removed');
+  });
 }
 
 function renderStaffLogins() {
