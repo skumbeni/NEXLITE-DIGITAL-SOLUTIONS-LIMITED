@@ -3,7 +3,7 @@
 // Bump CACHE_VERSION on every deploy so users get the new app shell instead
 // of a stale cached copy forever.
 // ─────────────────────────────────────────────────────────────────────────
-const CACHE_VERSION   = 'v3';
+const CACHE_VERSION   = 'v4';
 const APP_SHELL_CACHE = `school-pro-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE   = `school-pro-runtime-${CACHE_VERSION}`;
 
