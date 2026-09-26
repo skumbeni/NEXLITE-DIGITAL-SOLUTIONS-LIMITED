@@ -5357,12 +5357,19 @@ async function googleSignIn() {
   });
   try {
     await _waitForFirebase();
+    // Marks this browser tab as "expecting to come back from Google". Needed
+    // because getRedirectResult() is known to sometimes resolve to null even
+    // after a genuinely successful sign-in (a documented Firebase SDK
+    // flakiness) — without this marker there'd be no way to tell "actually
+    // failed" apart from "succeeded, but the SDK didn't report it cleanly".
+    sessionStorage.setItem('_googleAuthPending', '1');
     await window._fbGoogleSignIn();
     // Page is navigating away now; nothing after this runs.
   } catch (err) {
     // Only errors Firebase can detect before ever leaving the page land here
     // (e.g. an unauthorized domain, or the provider not being enabled).
     console.error('[googleSignIn] failed to start redirect:', err.code, err.message);
+    sessionStorage.removeItem('_googleAuthPending'); // redirect never actually happened
     const msg = _googleAuthErrorMessage(err);
     showToast(msg + (err.code ? ' [' + err.code + ']' : ''), 'error');
     ['lpGoogleLoginBtn','lpGoogleSignupBtn'].forEach(id => {
@@ -5390,6 +5397,9 @@ function _googleAuthErrorMessage(err) {
 // inline. On an ordinary load (not returning from Google) this resolves to
 // null immediately and does nothing.
 async function _handleGoogleRedirectResult() {
+  const wasPending = sessionStorage.getItem('_googleAuthPending') === '1';
+  sessionStorage.removeItem('_googleAuthPending'); // consume it either way — only relevant for this one load
+
   let result;
   try {
     await _waitForFirebase();
@@ -5400,14 +5410,29 @@ async function _handleGoogleRedirectResult() {
     showToast(msg + (err.code ? ' [' + err.code + ']' : ''), 'error');
     return;
   }
-  if (!result || !result.user) return; // ordinary load, not returning from Google
+
+  let fbUser = result && result.user;
+  if (!fbUser && wasPending) {
+    // getRedirectResult() came back empty even though this load followed a
+    // redirect we started. Fall back to checking whether Firebase actually
+    // did complete the sign-in — auth.currentUser is set independently of
+    // getRedirectResult() and doesn't share its flakiness.
+    fbUser = window._fbAuth && window._fbAuth.currentUser;
+  }
+  if (!fbUser) {
+    if (wasPending) {
+      // Genuinely nothing to recover — the redirect didn't complete at all
+      // (e.g. the user backed out of the Google account chooser).
+      console.warn('[_handleGoogleRedirectResult] returned from redirect with no signed-in user');
+    }
+    return; // ordinary load, or a redirect that truly didn't complete
+  }
 
   ['lpGoogleLoginBtn','lpGoogleSignupBtn'].forEach(id => {
     const b = document.getElementById(id);
     if (b) { b.disabled = true; b.style.opacity = '0.6'; }
   });
   try {
-    const fbUser = result.user;
     const email  = fbUser.email;
     const displayName = fbUser.displayName || email.split('@')[0];
 
