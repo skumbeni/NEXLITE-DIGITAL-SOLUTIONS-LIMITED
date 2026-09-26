@@ -15,12 +15,13 @@
     • Blocks framing (clickjacking)
     • Restricts form submissions to 'none'
 
-  frame-src is scoped to exactly the two origins Google/Firebase's popup-based
-  sign-in needs — not 'none'. signInWithPopup() loads a hidden iframe at
-  https://<authDomain>/__/auth/iframe to relay the result back from the popup
-  to this page; blocking all frames breaks that handshake and surfaces as a
-  generic auth/internal-error with no indication it was CSP. If the Firebase
-  project's authDomain ever changes, update this origin to match.
+  Google sign-in now uses signInWithRedirect (a full top-level page
+  navigation to accounts.google.com and back), not signInWithPopup, so it no
+  longer depends on the hidden-iframe popup relay at
+  https://<authDomain>/__/auth/iframe. frame-src is kept scoped to
+  school-pro-ultimate.firebaseapp.com and accounts.google.com anyway, in case
+  any Firebase Auth flow still opens a frame; it's otherwise harmless. If the
+  Firebase project's authDomain ever changes, update this origin to match.
 
   To harden further in a future refactor:
     • Move all inline handlers to addEventListener() calls
@@ -1134,7 +1135,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
   import { getDatabase, ref, set, update, onValue, get } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
-  import { getAuth, setPersistence, browserLocalPersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, linkWithCredential } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
+  import { getAuth, setPersistence, browserLocalPersistence, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, GoogleAuthProvider, signInWithRedirect, getRedirectResult, linkWithCredential } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyDjCuVE0G5zkQQd0itOmXujj8Jy7m6gPAU",
@@ -1187,13 +1188,29 @@ tr:hover td { background:rgba(108,52,131,0.04); }
   window._fbSignIn       = (email, pass) => signInWithEmailAndPassword(auth, email, pass);
   window._fbSignOut      = ()            => signOut(auth);
   window._fbOnAuthStateChanged = (cb)    => onAuthStateChanged(auth, cb);
-  window._fbGoogleSignIn = async () => {
+  // WEBVIEW/MOBILE FIX: signInWithPopup requires a real popup window that can
+  // message back to the opener tab. That breaks constantly on mobile Chrome
+  // (and inside any WebView) and surfaces as a generic, unhelpful
+  // auth/internal-error with no indication popups were the problem.
+  // signInWithRedirect instead navigates the whole page to Google and back —
+  // no popup, no cross-window messaging, works reliably on mobile.
+  //
+  // Because the page fully reloads on the way back, _fbGoogleSignIn no longer
+  // returns a sign-in result directly (there's nothing to return — this tab
+  // is about to navigate away). Call window._fbGetGoogleRedirectResult() once
+  // on every page load instead; it resolves with the signed-in user if this
+  // load is the "back from Google" load, or null on an ordinary load.
+  window._fbGoogleSignIn = () => {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
+    return signInWithRedirect(auth, provider);
+  };
+
+  window._fbGetGoogleRedirectResult = async () => {
     try {
-      return await signInWithPopup(auth, provider);
+      return await getRedirectResult(auth); // null if not returning from a redirect
     } catch (err) {
-      console.error('[_fbGoogleSignIn] popup error:', err.code, err.message);
+      console.error('[_fbGetGoogleRedirectResult] error:', err.code, err.message);
       if (err.code !== 'auth/account-exists-with-different-credential') throw err;
 
       // This email already has an email/password account — either the school
@@ -1217,7 +1234,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
 
       const userCred = await signInWithEmailAndPassword(auth, email, password);
       await linkWithCredential(userCred.user, pendingCred);
-      return userCred; // same shape as signInWithPopup's result
+      return userCred; // same shape as a normal redirect-result
     }
   };
   window._fbReady = true;
@@ -5327,6 +5344,11 @@ function _clearSignupHints() {
 }
 
 // ==================== GOOGLE SIGN-IN ====================
+// Kicks off sign-in: navigates the whole page to Google's account chooser.
+// There is no result to handle here — the browser leaves this page entirely.
+// _handleGoogleRedirectResult() (below) picks the result back up on the load
+// that follows, whenever it runs (this session or, if the app was closed
+// mid-flow, the next time it's opened).
 async function googleSignIn() {
   // Disable both Google buttons while working
   ['lpGoogleLoginBtn','lpGoogleSignupBtn'].forEach(id => {
@@ -5335,24 +5357,56 @@ async function googleSignIn() {
   });
   try {
     await _waitForFirebase();
-    let result;
-    try {
-      result = await window._fbGoogleSignIn();
-    } catch(err) {
-      console.error('[googleSignIn] failed:', err.code, err.message, err.customData || '');
-      const msg =
-        err.code === 'auth/popup-closed-by-user'    ? 'Sign-in cancelled.' :
-        err.code === 'auth/popup-blocked'            ? 'Popup blocked — allow popups for this page.' :
-        err.code === 'auth/configuration-not-found'  ? 'Google sign-in not configured yet in Firebase console.' :
-        err.code === 'auth/unauthorized-domain'      ? 'This domain isn\'t authorized for Google sign-in yet.' :
-        err.code === 'auth/operation-not-allowed'    ? 'Google sign-in isn\'t enabled for this project yet.' :
-        err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' ? 'Incorrect password — Google sign-in was not linked. Try again.' :
-        err.code === 'auth/account-exists-with-different-credential' ? 'That email already has a password login. Enter the password when prompted to link Google to it.' :
-        (err.message || 'Google sign-in failed.');
-      showToast(msg + (err.code ? ' [' + err.code + ']' : ''), 'error');
-      return;
-    }
+    await window._fbGoogleSignIn();
+    // Page is navigating away now; nothing after this runs.
+  } catch (err) {
+    // Only errors Firebase can detect before ever leaving the page land here
+    // (e.g. an unauthorized domain, or the provider not being enabled).
+    console.error('[googleSignIn] failed to start redirect:', err.code, err.message);
+    const msg = _googleAuthErrorMessage(err);
+    showToast(msg + (err.code ? ' [' + err.code + ']' : ''), 'error');
+    ['lpGoogleLoginBtn','lpGoogleSignupBtn'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) { b.disabled = false; b.style.opacity = '1'; }
+    });
+  }
+}
 
+function _googleAuthErrorMessage(err) {
+  return (
+    err.code === 'auth/internal-error'           ? 'Google sign-in failed to complete. Please try again.' :
+    err.code === 'auth/configuration-not-found'  ? 'Google sign-in not configured yet in Firebase console.' :
+    err.code === 'auth/unauthorized-domain'      ? 'This domain isn\'t authorized for Google sign-in yet.' :
+    err.code === 'auth/operation-not-allowed'    ? 'Google sign-in isn\'t enabled for this project yet.' :
+    err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' ? 'Incorrect password — Google sign-in was not linked. Try again.' :
+    err.code === 'auth/account-exists-with-different-credential' ? 'That email already has a password login. Enter the password when prompted to link Google to it.' :
+    (err.message || 'Google sign-in failed.')
+  );
+}
+
+// Runs once on every page load (see the DOMContentLoaded wiring near the end
+// of this file). Checks whether this load is "back from Google" and, if so,
+// finishes the same account-resolution steps signInWithPopup used to do
+// inline. On an ordinary load (not returning from Google) this resolves to
+// null immediately and does nothing.
+async function _handleGoogleRedirectResult() {
+  let result;
+  try {
+    await _waitForFirebase();
+    result = await window._fbGetGoogleRedirectResult();
+  } catch (err) {
+    console.error('[_handleGoogleRedirectResult] failed:', err.code, err.message, err.customData || '');
+    const msg = _googleAuthErrorMessage(err);
+    showToast(msg + (err.code ? ' [' + err.code + ']' : ''), 'error');
+    return;
+  }
+  if (!result || !result.user) return; // ordinary load, not returning from Google
+
+  ['lpGoogleLoginBtn','lpGoogleSignupBtn'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) { b.disabled = true; b.style.opacity = '0.6'; }
+  });
+  try {
     const fbUser = result.user;
     const email  = fbUser.email;
     const displayName = fbUser.displayName || email.split('@')[0];
@@ -6231,6 +6285,14 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   // No stored session (or setup incomplete) — leave the landing page / setup
   // wizard exactly as init() already displayed it.
+
+  // Google sign-in now uses signInWithRedirect (see the GOOGLE SIGN-IN
+  // section above) instead of a popup, since popups are unreliable on mobile
+  // Chrome and inside WebViews. That means the actual sign-in result only
+  // becomes available on the page load that follows the redirect back from
+  // Google — check for it on every load; it resolves to nothing and does
+  // nothing when this load isn't that one.
+  if (typeof _handleGoogleRedirectResult === 'function') _handleGoogleRedirectResult();
 });
 </script>
 
