@@ -5442,6 +5442,7 @@ function _googleAuthErrorMessage(err) {
 // new, and either logs them straight in or runs first-time school setup.
 async function _completeGoogleSignIn(fbUser) {
   if (!fbUser) return;
+  console.log('[_completeGoogleSignIn] starting for', fbUser.email);
   _setGoogleButtonsBusy(true);
   try {
     const email  = fbUser.email;
@@ -5459,20 +5460,36 @@ async function _completeGoogleSignIn(fbUser) {
     // schoolsDirectory alone would still misroute a Bursar/Teacher with no
     // local cache into the "new school" branch below.
     let directoryEntry = null;
-    try { directoryEntry = await _resolveStaffSchool(fbUser.uid); } catch (e) { /* offline/permission issue — fall back below */ }
+    try {
+      directoryEntry = await _resolveStaffSchool(fbUser.uid);
+      console.log('[_completeGoogleSignIn] staffDirectory check done:', directoryEntry ? 'found' : 'not staff');
+    } catch (e) {
+      console.warn('[_completeGoogleSignIn] staffDirectory check failed:', e && e.message);
+    }
 
     let existingSchoolId = null;
     if (!directoryEntry) {
       try {
-        const dirSnap = await window._fbGet(window._fbRef(window._fbDb, 'schoolsDirectory/' + fbUser.uid));
+        // LOGIN HANG FIX (same pattern as _resolveStaffSchoolNetwork above):
+        // a bare Firebase read has no built-in timeout, so a slow/flaky
+        // connection can leave this await pending forever with no error —
+        // exactly the "signed in but stuck" symptom this guards against.
+        const dirSnap = await Promise.race([
+          window._fbGet(window._fbRef(window._fbDb, 'schoolsDirectory/' + fbUser.uid)),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('schools-directory-timeout')), 8000))
+        ]);
         if (dirSnap.exists()) existingSchoolId = Object.keys(dirSnap.val())[0];
-      } catch (e) { /* permission/network issue — fall back to local cache check below */ }
+        console.log('[_completeGoogleSignIn] schoolsDirectory check done:', existingSchoolId || 'not found');
+      } catch (e) {
+        console.warn('[_completeGoogleSignIn] schoolsDirectory check failed/timed out:', e && e.message);
+      }
     }
 
     const users = JSON.parse(localStorage.getItem('eduGenius_users_v1') || '[]');
     let candidate = users.find(x => (x.email || '').toLowerCase() === email.toLowerCase());
 
     if (directoryEntry || candidate || existingSchoolId) {
+      console.log('[_completeGoogleSignIn] resolved as existing user, role source:', directoryEntry ? 'staffDirectory' : (candidate ? 'local cache' : 'schoolsDirectory'));
       // Existing user (found via staffDirectory, schoolsDirectory, or this
       // device's local cache) — resolve through the same pipeline every other
       // login uses, so the right school and role load regardless of device.
@@ -5490,8 +5507,10 @@ async function _completeGoogleSignIn(fbUser) {
       if (typeof applyRoleAccess === 'function') applyRoleAccess(match.role);
       showToast('Welcome back, ' + match.username + '!');
     } else {
+      console.log('[_completeGoogleSignIn] no existing account found — treating as new signup, prompting for school name');
       // New Google user — need school name to complete setup
       const schoolName = prompt('Welcome, ' + displayName + '!\n\nEnter your school name to complete setup:');
+      console.log('[_completeGoogleSignIn] prompt() returned:', JSON.stringify(schoolName));
       if (!schoolName || !schoolName.trim()) {
         await window._fbSignOut();
         showToast('School name required to complete setup.', 'error');
