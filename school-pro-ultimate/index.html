@@ -1186,6 +1186,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
     try {
       return await signInWithPopup(auth, provider);
     } catch (err) {
+      console.error('[_fbGoogleSignIn] popup error:', err.code, err.message);
       if (err.code !== 'auth/account-exists-with-different-credential') throw err;
 
       // This email already has an email/password account — either the school
@@ -4713,12 +4714,13 @@ async function createStaffLogin(name, email, password, role, studentId) {
     renderStaffLogins();
     return true;
   } catch(err) {
+    console.error('[createStaffLogin] failed:', err.code, err.message);
     const code = err.code || '';
     const msg = code === 'auth/email-already-in-use' ? 'That email is already registered to an account'
       : code === 'auth/weak-password' ? 'Password too weak (min 6 characters)'
       : code === 'auth/invalid-email' ? 'Enter a valid email address'
       : (err.message || 'Could not create staff account');
-    showToast(msg, 'error');
+    showToast(msg + (code ? ' [' + code + ']' : ''), 'error');
     return false;
   }
 }
@@ -5070,12 +5072,13 @@ async function loginFromLanding(){
     try {
       await window._fbSignIn(email, p);
     } catch(err) {
+      console.error('[loginFromLanding] failed:', err.code, err.message);
       const msg = (err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found')
         ? 'Invalid email or password'
         : err.code === 'auth/too-many-requests' ? 'Too many attempts. Try again later.'
         : err.code === 'auth/network-request-failed' ? 'No internet connection. Please check your network.'
         : (err.message || 'Login failed. Please try again.');
-      _showLoginError(msg);
+      _showLoginError(msg + (err.code ? ' [' + err.code + ']' : ''));
       return;
     }
 
@@ -5183,6 +5186,7 @@ async function signupFromLanding(){
     try {
       fbUser = (await window._fbCreateUser(adminEmail, adminPass)).user;
     } catch(err) {
+      console.error('[signupFromLanding] create account failed:', err.code, err.message);
       const code = err.code || '';
       const msg =
         code === 'auth/email-already-in-use'  ? 'That email already has an account \u2014 tap "Log in instead".' :
@@ -5191,7 +5195,7 @@ async function signupFromLanding(){
         code === 'auth/too-many-requests'      ? 'Too many attempts. Wait a moment then tap Retry.' :
         code === 'auth/invalid-email'          ? 'That email address is not valid.' :
         (err.message || 'Account creation failed \u2014 tap Retry.');
-      _showSignupError(msg, true);
+      _showSignupError(msg + (code ? ' [' + code + ']' : ''), true);
       return;
     }
 
@@ -5328,14 +5332,17 @@ async function googleSignIn() {
     try {
       result = await window._fbGoogleSignIn();
     } catch(err) {
+      console.error('[googleSignIn] failed:', err.code, err.message, err.customData || '');
       const msg =
         err.code === 'auth/popup-closed-by-user'    ? 'Sign-in cancelled.' :
         err.code === 'auth/popup-blocked'            ? 'Popup blocked — allow popups for this page.' :
         err.code === 'auth/configuration-not-found'  ? 'Google sign-in not configured yet in Firebase console.' :
+        err.code === 'auth/unauthorized-domain'      ? 'This domain isn\'t authorized for Google sign-in yet.' :
+        err.code === 'auth/operation-not-allowed'    ? 'Google sign-in isn\'t enabled for this project yet.' :
         err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential' ? 'Incorrect password — Google sign-in was not linked. Try again.' :
         err.code === 'auth/account-exists-with-different-credential' ? 'That email already has a password login. Enter the password when prompted to link Google to it.' :
-        err.message;
-      showToast(msg, 'error');
+        (err.message || 'Google sign-in failed.');
+      showToast(msg + (err.code ? ' [' + err.code + ']' : ''), 'error');
       return;
     }
 
