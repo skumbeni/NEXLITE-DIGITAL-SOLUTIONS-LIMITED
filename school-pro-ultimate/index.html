@@ -439,6 +439,23 @@ tr:hover td { background:rgba(108,52,131,0.04); }
 </style>
 <!-- jsPDF: used to turn report text into real, downloadable/shareable PDF files -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<!--
+  On-device debug console (opt-in): visit this page with ?debug=1 appended
+  to the URL to get a small floating console icon (bottom-right) that shows
+  every console.log/warn/error — the same info Chrome DevTools would show on
+  a computer, but usable directly on the phone. Safe to leave in permanently:
+  it does nothing unless ?debug=1 is present. Loaded from cdnjs, already
+  allowed by this page's CSP script-src.
+-->
+<script>
+(function() {
+  if (location.search.indexOf('debug=1') === -1) return;
+  var s = document.createElement('script');
+  s.src = 'https://cdnjs.cloudflare.com/ajax/libs/eruda/3.0.1/eruda.min.js';
+  s.onload = function() { if (window.eruda) eruda.init(); };
+  document.head.appendChild(s);
+})();
+</script>
 </head>
 <body>
 
@@ -5369,15 +5386,18 @@ function _setGoogleButtonsBusy(busy) {
 }
 
 async function googleSignIn() {
+  console.log('[googleSignIn] button clicked, requesting token…');
   _setGoogleButtonsBusy(true);
   const client = _getGoogleTokenClient();
   if (!client) {
+    console.error('[googleSignIn] GIS script not ready yet (window.google.accounts.oauth2 missing)');
     showToast('Google sign-in is still loading — please try again in a moment.', 'error');
     _setGoogleButtonsBusy(false);
     return;
   }
 
   client.callback = async (tokenResponse) => {
+    console.log('[googleSignIn] token callback fired:', tokenResponse && (tokenResponse.error || 'got access_token'));
     if (!tokenResponse || tokenResponse.error) {
       console.error('[googleSignIn] token error:', tokenResponse && tokenResponse.error);
       // Not an error worth a toast if the user simply closed the chooser.
@@ -5390,7 +5410,9 @@ async function googleSignIn() {
     try {
       await _waitForFirebase();
       const result = await window._fbGoogleSignIn(tokenResponse.access_token);
+      console.log('[googleSignIn] Firebase signInWithCredential succeeded, uid:', result.user && result.user.uid);
       await _completeGoogleSignIn(result.user);
+      console.log('[googleSignIn] _completeGoogleSignIn finished');
     } catch (err) {
       console.error('[googleSignIn] sign-in failed:', err.code, err.message, err.customData || '');
       const msg = _googleAuthErrorMessage(err);
@@ -5399,6 +5421,7 @@ async function googleSignIn() {
     }
   };
 
+  console.log('[googleSignIn] opening Google account picker…');
   client.requestAccessToken({ prompt: 'select_account' });
 }
 
