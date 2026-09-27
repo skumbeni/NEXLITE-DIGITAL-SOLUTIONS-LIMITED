@@ -4797,22 +4797,50 @@ async function createStaffLogin(name, email, password, role, studentId) {
   const schoolId = config.currentSchool || 'default';
 
   // Firebase only allows creating a user while signed in as that same context
-  // in the client SDK — createUserWithEmailAndPassword will sign the new user
-  // in immediately, swapping out the admin's session. We capture the admin's
-  // credentials first so we can restore the admin session right after.
+  // in the client SDK — createUserWithEmailAndPassword would sign the new
+  // user in immediately on the PRIMARY auth instance, kicking the admin out.
+  // _fbCreateUserSecondary runs on a separate, isolated Firebase App instance
+  // instead, so the admin's own session is never touched.
   if (!window._fbCreateUserSecondary) {
     showToast('Staff account creation is not available — secondary auth instance missing. Contact support.', 'error');
     return false;
   }
 
   try {
-    const newUid = await window._fbCreateUserSecondary(email, password);
+    // CREATE-HANG FIX: both Firebase calls below previously had no timeout —
+    // on a slow/flaky connection either could hang forever with the "Create
+    // Login" button just sitting there doing nothing (same class of bug as
+    // the earlier schoolsDirectory-read hang during Google sign-in).
+    const newUid = await Promise.race([
+      window._fbCreateUserSecondary(email, password),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Request timed out — check your connection and try again.')), 10000))
+    ]);
     if (!newUid) { showToast('Could not create the staff account', 'error'); return false; }
 
     // Write the global directory entry so the teacher's own device can resolve their school
     const dirEntry = { adminUid, schoolId, role, name, email, _createdAt: Date.now() };
     if (role === 'Parent' && studentId) dirEntry.studentId = studentId;
-    await window._fbSet(window._fbRef(window._fbDb, _staffDirectoryPath(newUid)), dirEntry);
+    const dirPath = _staffDirectoryPath(newUid);
+    let dirWriteTimedOut = false;
+    try {
+      await Promise.race([
+        window._fbSet(window._fbRef(window._fbDb, dirPath), dirEntry),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('directory-write-timeout')), 10000))
+      ]);
+    } catch (dirErr) {
+      // The Firebase Auth account now genuinely exists (that can't be undone
+      // from here) but the directory link telling THEIR device which school
+      // to load didn't confirm in time. Queue it through the same
+      // retry-with-backoff-then-offline-queue system every other write in
+      // this app uses (_fbWrite) — it keeps retrying and completes
+      // automatically once the connection is stable, instead of leaving a
+      // half-created account the admin would have to manually fix (retrying
+      // this form with the same email would just fail with
+      // auth/email-already-in-use, since the account really was created).
+      console.warn('[createStaffLogin] directory write timed out, queued for retry:', dirErr.message);
+      _fbWrite(dirPath, dirEntry);
+      dirWriteTimedOut = true;
+    }
 
     // Add to the school's local + cloud users list for role-gated UI
     const existing = JSON.parse(localStorage.getItem(USER_KEY) || '[]');
@@ -4822,7 +4850,11 @@ async function createStaffLogin(name, email, password, role, studentId) {
     if (typeof _saveUsers === 'function') _saveUsers(newUsers);
     else { localStorage.setItem(USER_KEY, JSON.stringify(newUsers)); window.eduUsers = newUsers; }
 
-    showToast(name + ' can now log in on their own device with that email and password.');
+    if (dirWriteTimedOut) {
+      showToast(name + '\u2019s login was created but is still syncing \u2014 it will finish automatically once your connection is stable. Don\u2019t create it again in the meantime.', 'error');
+    } else {
+      showToast(name + ' can now log in on their own device with that email and password.');
+    }
     renderStaffLogins();
     return true;
   } catch(err) {
@@ -4872,7 +4904,12 @@ function promptAddStaffLogin() {
           const r=document.getElementById('slRole').value;
           const p=document.getElementById('slPass').value;
           const sid=document.getElementById('slStudentId').value;
-          createStaffLogin(n,e,p,r,sid).then(ok=>{ if(ok) document.getElementById('staffLoginModal').remove(); });
+          const btn=this, origLabel=btn.textContent;
+          btn.disabled=true; btn.textContent='Creating\u2026';
+          createStaffLogin(n,e,p,r,sid).then(ok=>{
+            if(ok){ document.getElementById('staffLoginModal').remove(); }
+            else { btn.disabled=false; btn.textContent=origLabel; }
+          }).catch(()=>{ btn.disabled=false; btn.textContent=origLabel; });
         ">Create Login</button>
       </div>
     </div>`;
