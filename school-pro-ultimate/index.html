@@ -5805,24 +5805,35 @@ function loadUsers(){
  }
 }
 
+// SINGLE SOURCE OF TRUTH for role-based section access. Previously canAccess()
+// (the real gate — showSection() calls this and blocks with a toast) and
+// applyRoleAccess() (further below — only hides/shows nav buttons) each kept
+// their OWN separate copy of this table, and the two had drifted apart:
+// 'Administrator' was missing entirely from this one, meaning that role saw
+// full navigation but got "Access denied" on every single section; and
+// 'Head Teacher' was allowed into register/finance/analytics/announcements
+// here but had no nav button for any of them. Both functions now read from
+// this one table, so nav visibility and actual access can never disagree
+// again — fix a permission here once, and it's correct everywhere.
+window.ROLE_SECTIONS = {
+  'Super Admin':         ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','admin'],
+  'Administrator':       ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','admin'],
+  'Head Teacher':        ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','admin'],
+  'Deputy Head Teacher': ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports'],
+  'Senior Teacher':      ['dashboard','database','assessments','classmarks','attendance','conduct','announcements','reports'],
+  'Head of Department':  ['dashboard','database','assessments','classmarks','attendance','reports'],
+  'Teacher':             ['dashboard','database','assessments','classmarks','attendance','reports'],
+  'Grade Teacher':       ['dashboard','database','assessments','classmarks','attendance','conduct','reports'],
+  'Subject Teacher':     ['dashboard','assessments','classmarks','reports'],
+  'Bursar':              ['dashboard','database','finance','reports'],
+  'Accountant':          ['dashboard','finance','reports'],
+  'Counsellor':          ['dashboard','database','conduct','attendance','reports'],
+  'Parent':              ['dashboard','reports','finance']
+};
+
 function canAccess(section){
- const role=currentUser.role;
- const rules={
-   'Teacher':['dashboard','database','assessments','classmarks','attendance','reports'],
-   'Grade Teacher':['dashboard','database','assessments','classmarks','attendance','conduct','reports'],
-   'Subject Teacher':['dashboard','assessments','classmarks','reports'],
-   'Senior Teacher':['dashboard','database','assessments','classmarks','attendance','conduct','announcements','reports'],
-   'Head of Department':['dashboard','database','assessments','classmarks','attendance','reports'],
-   'Deputy Head Teacher':['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports'],
-   'Bursar':['dashboard','database','finance','reports'],
-   'Accountant':['dashboard','finance','reports'],
-   'Counsellor':['dashboard','database','conduct','attendance','reports'],
-   'Parent':['dashboard','reports','finance'],
-   'Head Teacher':['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','admin'],
-   'Super Admin':['*']
- };
- if(role==='Super Admin') return true;
- return (rules[role]||[]).includes(section);
+ const role = currentUser && currentUser.role;
+ return (window.ROLE_SECTIONS[role] || []).includes(section);
 }
 
 document.addEventListener('DOMContentLoaded',()=>{
@@ -5982,22 +5993,9 @@ if(!localStorage.getItem('edu_roles_v1')){
 }
 
 function applyRoleAccess(role){
- const rules={
-   'Administrator':['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','admin'],
-   'Super Admin':['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','admin'],
-   'Head Teacher':['dashboard','database','assessments','classmarks','attendance','conduct','reports','admin'],
-   'Deputy Head Teacher':['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports'],
-   'Senior Teacher':['dashboard','database','assessments','classmarks','attendance','conduct','announcements','reports'],
-   'Head of Department':['dashboard','database','assessments','classmarks','attendance','reports'],
-   'Teacher':['dashboard','database','assessments','classmarks','attendance','reports'],
-   'Grade Teacher':['dashboard','database','assessments','classmarks','attendance','conduct','reports'],
-   'Subject Teacher':['dashboard','assessments','classmarks','reports'],
-   'Bursar':['dashboard','database','finance','reports'],
-   'Accountant':['dashboard','finance','reports'],
-   'Counsellor':['dashboard','database','conduct','attendance','reports'],
-   'Parent':['dashboard','reports','finance']
- };
- let allowed=rules[role]||['dashboard'];
+ // Reads the SAME table canAccess() uses (defined above) — see the comment
+ // there for why these two used to disagree.
+ let allowed = window.ROLE_SECTIONS[role] || ['dashboard'];
  document.querySelectorAll('[data-section]').forEach(el=>{
    let sec=el.getAttribute('data-section');
    el.style.display=allowed.includes(sec)?'flex':'none';
