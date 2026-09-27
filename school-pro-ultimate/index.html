@@ -661,7 +661,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
     <div class="lp-auth-box">
       <button class="lp-auth-close" onclick="closeLandingAuth('signup')">&times;</button>
       <h2 class="lp-font">Set up your school</h2>
-      <p class="lp-auth-sub">Creates your school's workspace and your Super Admin login.</p>
+      <p class="lp-auth-sub">Creates your school's workspace and your Administrator login.</p>
       <label>School Name</label>
       <input id="lpSchoolName" placeholder="e.g. Lusaka Academy" oninput="checkSignupField('school')">
       <div id="lpSchoolHint" class="lp-field-hint"></div>
@@ -741,6 +741,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
       <div class="nav-item" onclick="showSection('analytics')" data-section="analytics"><span class="icon">📈</span> Analytics</div>
       <div class="nav-item" onclick="showSection('announcements')" data-section="announcements"><span class="icon">📢</span> Announcements</div>
       <div class="nav-item" onclick="showSection('reports')" data-section="reports"><span class="icon">📄</span> Reports</div>
+      <div class="nav-item" onclick="showSection('staff')" data-section="staff"><span class="icon">👥</span> Staff</div>
       <div class="nav-item" onclick="showSection('admin')" data-section="admin"><span class="icon">⚙️</span> Admin Settings</div>
       <div style="margin-top:auto;padding:16px 20px;border-top:1px solid rgba(255,255,255,0.1)">
         <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="toggleDarkMode()">
@@ -1056,11 +1057,13 @@ tr:hover td { background:rgba(108,52,131,0.04); }
           <div id="teachersList"></div>
         </div>
 
-        <!-- Staff Cloud Logins -->
-        <div class="card">
-          <div class="card-header"><span class="card-title">🔐 Staff Logins (own device access)</span><button class="btn btn-primary btn-sm" onclick="promptAddStaffLogin()">+ Give Staff Login</button></div>
-          <p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Create a separate email/password login so a teacher, head teacher, or bursar can sign in on their own phone and see only this school's data, role-restricted to their section.</p>
-          <div id="staffLoginsList"></div>
+        <!-- Pointer to dedicated Staff page (cloud logins + roles moved out of Settings).
+             Hidden for non-Administrator viewers of this section by renderAdmin() below,
+             since Head Teacher can see Admin Settings but not the Staff page itself. -->
+        <div class="card" id="staffPointerCard">
+          <div class="card-header"><span class="card-title">👥 Staff Logins &amp; Roles</span></div>
+          <p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Managing staff cloud logins and roles has moved to its own page.</p>
+          <button class="btn btn-outline btn-sm" onclick="showSection('staff')">Go to Staff →</button>
         </div>
 
         <!-- Data Management -->
@@ -1086,6 +1089,16 @@ tr:hover td { background:rgba(108,52,131,0.04); }
           <div class="card-header"><span class="card-title">👤 Account</span></div>
           <p style="color:var(--text-light);font-size:13px;margin-bottom:12px">Sign out of School Pro on this device.</p>
           <button class="btn btn-danger btn-sm" onclick="logoutEdu()">🚪 Log Out</button>
+        </div>
+      </div>
+
+      <!-- Staff Section (separate from Admin Settings — Administrator only) -->
+      <div class="section" id="sec-staff">
+        <div class="section-title">👥 Staff</div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">🔐 Staff Logins &amp; Roles</span><button class="btn btn-primary btn-sm" onclick="promptAddStaffLogin()">+ Give Staff Login</button></div>
+          <p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Every staff member with a cloud login, and the role that controls what they can see and do. Change a role from the dropdown, or remove their access entirely.</p>
+          <div id="staffLoginsList"></div>
         </div>
       </div>
 
@@ -1598,8 +1611,8 @@ function _fbUpdateSyncBadge(state) {
 
 // --- Public save functions (localStorage + Firebase mirror) ---
 function saveConfig() {
-  // Only Super Admin, Administrator, and Head Teacher may persist config changes
-  const adminRoles = ['Super Admin', 'Administrator', 'Head Teacher'];
+  // Only Administrator and Head Teacher may persist config changes
+  const adminRoles = ['Administrator', 'Head Teacher'];
   if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
     console.warn('saveConfig blocked: insufficient role (' + currentUser.role + ')');
     return;
@@ -2146,6 +2159,7 @@ function refreshCurrentSection() {
     case 'announcements': renderAnnouncements(); break;
     case 'reports': initReports(); break;
     case 'admin': renderAdmin(); break;
+    case 'staff': renderStaffLogins(); break;
   }
 }
 
@@ -4046,8 +4060,12 @@ function renderAdmin() {
   renderGradesManager();
   renderFeeStructure();
   renderTeachers();
-  renderStaffLogins();
   renderSchools();
+  const staffPointer = document.getElementById('staffPointerCard');
+  if (staffPointer) {
+    const canSeeStaffPage = typeof currentUser !== 'undefined' && currentUser.role === 'Administrator';
+    staffPointer.style.display = canSeeStaffPage ? '' : 'none';
+  }
 }
 
 function unlockPinForm() {
@@ -4416,9 +4434,9 @@ function renderTeachers() {
 }
 
 function addTeacher() {
-  const adminRoles = ['Super Admin', 'Administrator', 'Head Teacher'];
-  if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
-    return showToast('⛔ Access denied: only admins can manage teacher accounts.', 'error');
+  const staffManagementRoles = ['Administrator'];
+  if (typeof currentUser !== 'undefined' && !staffManagementRoles.includes(currentUser.role)) {
+    return showToast('⛔ Access denied: only an Administrator can manage teacher accounts.', 'error');
   }
   if (!config.teachers) config.teachers = [];
   config.teachers.push({ name: '', designation: 'Class Teacher', class: '', pin: '', paymentHistory: [] });
@@ -4508,7 +4526,7 @@ function renderTeacherPaymentHistory(ti) {
 function recordTeacherPayment(ti) {
   const t = config.teachers[ti];
   if (!t) return;
-  const adminRoles = ['Super Admin', 'Administrator', 'Head Teacher'];
+  const adminRoles = ['Administrator', 'Head Teacher'];
   if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
     return showToast('⛔ Access denied: only admins can record staff payments.', 'error');
   }
@@ -4598,7 +4616,7 @@ async function confirmPaymentReceipt(ti, ri) {
 function confirmPaymentReceiptManual(ti, ri) {
   const t = config.teachers[ti];
   if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
-  const adminRoles = ['Super Admin', 'Administrator', 'Head Teacher'];
+  const adminRoles = ['Administrator', 'Head Teacher'];
   if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
     return showToast('⛔ Access denied: only admins can confirm receipt manually.', 'error');
   }
@@ -4724,7 +4742,7 @@ function downloadTeacherPaySlip(ti, ri) {
 function deleteTeacherPayment(ti, ri) {
   const t = config.teachers[ti];
   if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
-  const adminRoles = ['Super Admin', 'Administrator', 'Head Teacher'];
+  const adminRoles = ['Administrator', 'Head Teacher'];
   if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
     return showToast('⛔ Access denied: only admins can remove staff payment records.', 'error');
   }
@@ -4748,13 +4766,56 @@ function renderStaffLogins() {
     el.innerHTML = '<div style="color:var(--text-light)">No staff have cloud logins yet</div>';
     return;
   }
+  const staffManagementRoles = ['Administrator'];
+  const canManage = typeof currentUser !== 'undefined' && staffManagementRoles.includes(currentUser.role);
   el.innerHTML = users.map(u => `
     <div style="display:flex;gap:8px;align-items:center;margin:4px 0;flex-wrap:wrap">
       <span style="min-width:120px">${esc(u.username)}</span>
       <span style="font-size:12px;color:var(--text-light);min-width:160px">${esc(u.email||'')}</span>
-      <span class="badge">${esc(u.role)}</span>
-      <button class="btn btn-danger btn-sm" onclick="revokeStaffLogin('${esc(u.firebaseUid)}')">Revoke access</button>
+      ${canManage
+        ? `<select style="min-width:150px" onchange="assignStaffRole('${esc(u.firebaseUid)}', this.value)">
+             ${CLOUD_ROLES.map(r => `<option value="${r}" ${r===u.role?'selected':''}>${r}</option>`).join('')}
+           </select>`
+        : `<span class="badge">${esc(u.role)}</span>`
+      }
+      ${canManage ? `<button class="btn btn-danger btn-sm" onclick="revokeStaffLogin('${esc(u.firebaseUid)}')">Remove</button>` : ''}
     </div>`).join('');
+}
+
+// Changes an existing staff member's role — updates the local roster copy
+// immediately (optimistic, matches the rest of the app's offline-first
+// pattern) and mirrors the change to their staffDirectory entry in Firebase
+// via _fbWriteMerge, which already handles retry/offline queuing.
+// Gated to Administrator only — Head Teacher can view the Staff page's
+// section but not reassign roles, matching the addTeacher/createStaffLogin
+// gates elsewhere.
+function assignStaffRole(firebaseUid, newRole) {
+  const staffManagementRoles = ['Administrator'];
+  if (typeof currentUser !== 'undefined' && !staffManagementRoles.includes(currentUser.role)) {
+    showToast('⛔ Access denied: only an Administrator can change staff roles.', 'error');
+    renderStaffLogins();
+    return;
+  }
+  const users = JSON.parse(localStorage.getItem(USER_KEY) || '[]');
+  const idx = users.findIndex(u => u.firebaseUid === firebaseUid);
+  if (idx === -1) return;
+  const oldRole = users[idx].role;
+  if (oldRole === newRole) return;
+  if (!confirm('Change ' + (users[idx].username || 'this staff member') + '\u2019s role from ' + oldRole + ' to ' + newRole + '?')) {
+    renderStaffLogins();
+    return;
+  }
+  if (newRole === 'Parent' && !users[idx].studentId) {
+    showToast('Cannot switch to Parent here — Parent roles need a linked student. Remove this login and re-add as Parent instead.', 'error');
+    renderStaffLogins();
+    return;
+  }
+  users[idx].role = newRole;
+  if (typeof _saveUsers === 'function') _saveUsers(users);
+  else { localStorage.setItem(USER_KEY, JSON.stringify(users)); window.eduUsers = users; }
+  _fbWriteMerge(_staffDirectoryPath(firebaseUid), { role: newRole });
+  showToast(users[idx].username + '\u2019s role changed to ' + newRole);
+  renderStaffLogins();
 }
 
 // Revokes a staff member's access by deleting their staffDirectory entry —
@@ -4785,13 +4846,23 @@ async function revokeStaffLogin(firebaseUid) {
 //      knows which admin/school to load data from (see _resolveStaffSchool)
 //   2. schools/{adminUid}/{schoolId}/users/{n} — the per-school staff list
 //      (role + display name), used for in-app role-based UI gating
+// Single source of truth for assignable staff roles — used when creating a
+// staff login, when changing an existing staff member's role from the Staff
+// page, and for validating role values coming from either flow.
+const CLOUD_ROLES = ['Administrator','Teacher','Senior Teacher','Grade Teacher','Subject Teacher','Head of Department','Deputy Head Teacher','Head Teacher','Bursar','Accountant','Counsellor','Parent'];
+
 async function createStaffLogin(name, email, password, role, studentId) {
   if (!name || !email || !email.includes('@')) { showToast('Enter a name and valid email', 'error'); return false; }
   if (!password || password.length < 6) { showToast('Password must be at least 6 characters', 'error'); return false; }
-  const VALID_ROLES = ['Teacher','Senior Teacher','Grade Teacher','Subject Teacher','Head of Department','Deputy Head Teacher','Head Teacher','Bursar','Accountant','Counsellor','Parent'];
+  const VALID_ROLES = CLOUD_ROLES;
   if (!VALID_ROLES.includes(role)) { showToast('Invalid role. Choose from: ' + VALID_ROLES.join(', '), 'error'); return false; }
   if (role === 'Parent' && !studentId) { showToast('Select which student this parent is linked to', 'error'); return false; }
   if (!window._fbAuth || !window._fbAuth.currentUser) { showToast('You must be signed in as the school admin to add staff', 'error'); return false; }
+  const staffManagementRoles = ['Administrator'];
+  if (typeof currentUser !== 'undefined' && !staffManagementRoles.includes(currentUser.role)) {
+    showToast('⛔ Access denied: only an Administrator can create staff logins.', 'error');
+    return false;
+  }
 
   const adminUid = window._fbAuth.currentUser.uid;
   const schoolId = config.currentSchool || 'default';
@@ -4870,11 +4941,6 @@ async function createStaffLogin(name, email, password, role, studentId) {
 }
 
 function promptAddStaffLogin() {
-  const CLOUD_ROLES = [
-    'Teacher','Senior Teacher','Grade Teacher','Subject Teacher',
-    'Head of Department','Deputy Head Teacher','Head Teacher',
-    'Bursar','Accountant','Counsellor','Parent'
-  ];
   const roleOptions = CLOUD_ROLES.map(r => `<option value="${r}">${r}</option>`).join('');
   const studentOptions = students.map((s, i) => `<option value="${escHtml(s.id)}">${escHtml(s.name)} (${escHtml(s.id)})</option>`).join('');
   const modal = document.createElement('div');
@@ -5246,15 +5312,15 @@ async function loginFromLanding(){
     const directoryEntry = await _resolveStaffSchool(fbUser.uid);
 
     const username = directoryEntry?.name || fbUser.displayName || email.split('@')[0];
-    const role = directoryEntry?.role || 'Super Admin'; // no directory entry = this account is the school admin
+    const role = directoryEntry?.role || 'Administrator'; // no directory entry = this account is the school admin
     currentUser = { username, role };
     sessionStorage.setItem('eduUser', JSON.stringify(currentUser));
 
     closeLandingAuth('login');
     hideLandingPage();
     if(!config.isSetup){
-      if (role !== 'Super Admin') {
-        _showLoginError('This school has not finished setup yet. Ask your Super Admin to complete it first.');
+      if (role !== 'Administrator') {
+        _showLoginError('This school has not finished setup yet. Ask your Administrator to complete it first.');
         return;
       }
       showSetupWizard();
@@ -5380,7 +5446,7 @@ async function signupFromLanding(){
     makePasswordRecord(adminPass).then(({ passwordHash, salt, kdf }) => {
       const newUsers = existingUsers.concat([{
         username: adminUser, passwordHash, salt, kdf,
-        role: 'Super Admin', email: adminEmail
+        role: 'Administrator', email: adminEmail
       }]);
       if(typeof _saveUsers === 'function') _saveUsers(newUsers);
       else { localStorage.setItem('eduGenius_users_v1', JSON.stringify(newUsers)); window.eduUsers = newUsers; }
@@ -5388,8 +5454,8 @@ async function signupFromLanding(){
     });
 
     // 5. Enter app
-    sessionStorage.setItem('eduUser', JSON.stringify({ username: adminUser, role: 'Super Admin' }));
-    currentUser = { username: adminUser, role: 'Super Admin' };
+    sessionStorage.setItem('eduUser', JSON.stringify({ username: adminUser, role: 'Administrator' }));
+    currentUser = { username: adminUser, role: 'Administrator' };
     closeLandingAuth('signup');
     hideLandingPage();
     showSetupWizard();
@@ -5608,7 +5674,7 @@ async function _completeGoogleSignIn(fbUser) {
       // device's local cache) — resolve through the same pipeline every other
       // login uses, so the right school and role load regardless of device.
       if (existingSchoolId) config.currentSchool = existingSchoolId;
-      const role = directoryEntry?.role || candidate?.role || 'Super Admin';
+      const role = directoryEntry?.role || candidate?.role || 'Administrator';
       const username = directoryEntry?.name || candidate?.username || displayName;
       const match = { username, role };
       sessionStorage.setItem('eduUser', JSON.stringify(match));
@@ -5652,7 +5718,7 @@ async function _completeGoogleSignIn(fbUser) {
       });
 
       // Add user record (no password hash needed — Google handles auth)
-      const newUser = { username: displayName, email: email, role: 'Super Admin', googleAuth: true };
+      const newUser = { username: displayName, email: email, role: 'Administrator', googleAuth: true };
       users.push(newUser);
       if (typeof _saveUsers === 'function') {
         _saveUsers(users);
@@ -5662,8 +5728,8 @@ async function _completeGoogleSignIn(fbUser) {
       }
       if (typeof addAudit === 'function') addAudit('School created via Google: ' + displayName);
 
-      sessionStorage.setItem('eduUser', JSON.stringify({ username: displayName, role: 'Super Admin' }));
-      currentUser = { username: displayName, role: 'Super Admin' };
+      sessionStorage.setItem('eduUser', JSON.stringify({ username: displayName, role: 'Administrator' }));
+      currentUser = { username: displayName, role: 'Administrator' };
 
       closeLandingAuth('login');
       closeLandingAuth('signup');
@@ -5695,7 +5761,7 @@ init();
 <!-- PHASE 1 ROLE MANAGEMENT -->
 <script>
 const USER_KEY='eduGenius_users_v1';
-let currentUser={username:'admin',role:'Super Admin'};
+let currentUser={username:'admin',role:'Administrator'};
 
 // ==================== PASSWORD HASHING (PBKDF2) ====================
 // Passwords are hashed with PBKDF2-SHA-256 (100,000 iterations + 32-byte salt).
@@ -5779,7 +5845,7 @@ function loadUsers(){
    // Stored as legacy SHA-256 records (no kdf tag); they will be silently upgraded
    // to PBKDF2 on first successful login via _upgradeHashIfNeeded().
    const defaults=[
-    {username:'admin',passwordHash:'50f97ae909cb31e000effc0cb4626e5e61d560eb158da6ee826ab237b8acec96',salt:'eg-default-seed-v1',role:'Super Admin'},
+    {username:'admin',passwordHash:'50f97ae909cb31e000effc0cb4626e5e61d560eb158da6ee826ab237b8acec96',salt:'eg-default-seed-v1',role:'Administrator'},
     {username:'head',passwordHash:'f9a15b335c4ea17188dc79057d5c566196064e53fcb15ab9e16eee40f0bf50eb',salt:'eg-default-seed-v1',role:'Head Teacher'},
     {username:'teacher',passwordHash:'a37a43048cceb581d1e2f6d3665471f5e801d5fecee30e97b16b100064e6875e',salt:'eg-default-seed-v1',role:'Teacher'},
     {username:'bursar',passwordHash:'cba1ece51e073ec51081890ed6c5d9936ac638f50b28437a4e661809a2ce0bb5',salt:'eg-default-seed-v1',role:'Bursar'}
@@ -5816,8 +5882,7 @@ function loadUsers(){
 // this one table, so nav visibility and actual access can never disagree
 // again — fix a permission here once, and it's correct everywhere.
 window.ROLE_SECTIONS = {
-  'Super Admin':         ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','admin'],
-  'Administrator':       ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','admin'],
+  'Administrator':       ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','admin','staff'],
   'Head Teacher':        ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','admin'],
   'Deputy Head Teacher': ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports'],
   'Senior Teacher':      ['dashboard','database','assessments','classmarks','attendance','conduct','announcements','reports'],
@@ -5939,15 +6004,18 @@ function renderUsersEdu(){
  let el=document.getElementById('userListEdu');
  if(!el) return;
  // firebaseUid present = a real "Staff Cloud Login" account (createStaffLogin) —
- // can log in from any device. Super Admin is always the school owner, who
- // signed up with their OWN Firebase account (email/password or Google) even
- // though that account has no firebaseUid stamped on THIS local record — so
- // it's excluded from the "can't log in" warning below. Everything else with
- // no firebaseUid is a locally-hashed password that only ever lived in this
- // browser's storage and was never reachable from any live login screen —
- // effectively a dead entry with no way to actually log in.
+ // can log in from any device. The owner is always the school's own Firebase
+ // account (email/password or Google) — role 'Administrator' with NO
+ // firebaseUid stamped on this local record — so it's excluded from the
+ // "can't log in" warning below. Note: Administrator can now also be granted
+ // to a staff cloud login (createStaffLogin), so role alone no longer
+ // identifies the owner — a staff Administrator account WILL have a
+ // firebaseUid and must show as "Cloud Login", not "Owner". Everything else
+ // with no firebaseUid is a locally-hashed password that only ever lived in
+ // this browser's storage and was never reachable from any live login
+ // screen — effectively a dead entry with no way to actually log in.
  el.innerHTML=users.map((u,i)=>{
-   const isOwner = u.role === 'Super Admin';
+   const isOwner = u.role === 'Administrator' && !u.firebaseUid;
    const isCloud = !!u.firebaseUid;
    const tag = isOwner
      ? '<span style="color:var(--accent, #2e7d32);font-size:12px">☁️ Owner (Firebase account)</span>'
@@ -6004,7 +6072,7 @@ function applyRoleAccess(role){
 
 document.addEventListener('DOMContentLoaded',()=>{
  const stored = sessionStorage.getItem('eduUser');
- const role = stored ? JSON.parse(stored).role : 'Super Admin';
+ const role = stored ? JSON.parse(stored).role : 'Administrator';
  applyRoleAccess(role);
 });
 </script>
