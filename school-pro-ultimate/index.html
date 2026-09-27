@@ -1483,6 +1483,12 @@ function _attachConnectionListener() {
 // If the signed-in user IS the admin (no directory entry, or entry points to
 // self), _fbResolvedAdminUid simply equals their own uid.
 let _fbResolvedAdminUid = null;
+// True only when the most recent staffDirectory read for the current login
+// attempt could NOT be confirmed (timeout, permission error, offline, etc.).
+// Callers MUST check this before treating "no directory entry" as "this
+// account is the Administrator" — otherwise a staff member whose read fails
+// gets silently (and, via caching, permanently) logged in as the owner.
+let _fbStaffResolveFailed = false;
 
 function _fbSchoolPath() {
   const uid = (window._fbAuth && window._fbAuth.currentUser) ? window._fbAuth.currentUser.uid : null;
@@ -1547,15 +1553,18 @@ async function _resolveStaffSchoolNetwork(uid) {
     ]);
     const entry = snap.exists() ? snap.val() : null;
     if (entry && entry.adminUid) result = entry;
+    _fbStaffResolveFailed = false; // confirmed read — safe to trust/cache below
   } catch(e) {
-    // directory miss, permission-denied, or timeout = treat as "not a staff
-    // member" for THIS attempt. On timeout we deliberately do NOT cache the
-    // null result (see below), so the next login retries the network instead
-    // of permanently assuming this uid is an admin.
-    if (e && e.message === 'staff-directory-timeout') {
-      _fbResolvedAdminUid = uid;
-      return null;
-    }
+    // ANY read failure (timeout, permission-denied, offline, etc.) means we
+    // could NOT confirm this uid's role — NOT that it's confirmed to have no
+    // entry. Bail out here, before the caching below, and flag it unresolved.
+    // Previously only the timeout case skipped caching; a permission-denied
+    // or other error fell through and cached `null` — permanently marking a
+    // staff member's device as belonging to an Administrator, since a cached
+    // miss is applied instantly on every future login with no re-check.
+    _fbResolvedAdminUid = uid;
+    _fbStaffResolveFailed = true;
+    return null;
   }
   _fbResolvedAdminUid = result ? result.adminUid : uid;
   if (result && result.schoolId) config.currentSchool = result.schoolId;
@@ -1579,6 +1588,7 @@ async function _resolveStaffSchool(uid) {
     // wait on a network read to unlock, same as MDM's local password check.
     _fbResolvedAdminUid = (cached && cached.adminUid) ? cached.adminUid : uid;
     if (cached && cached.schoolId) config.currentSchool = cached.schoolId;
+    _fbStaffResolveFailed = false; // a cached result was a past confirmed read
     _ensureStaffNetworkRefresh(uid).catch(() => {}); // silent background refresh
     return cached;
   }
@@ -5311,8 +5321,18 @@ async function loginFromLanding(){
     const fbUser = window._fbAuth.currentUser;
     const directoryEntry = await _resolveStaffSchool(fbUser.uid);
 
+    // If we couldn't confirm whether this account has a staffDirectory entry
+    // (network/permission failure, not a genuine miss), do NOT fall back to
+    // Administrator — that's exactly how a Teacher/Bursar/Head Teacher/Parent
+    // account used to end up with full admin access. Ask them to retry.
+    if (!directoryEntry && _fbStaffResolveFailed) {
+      await window._fbSignOut().catch(() => {});
+      _showLoginError('Could not verify your account. Check your connection and try again.');
+      return;
+    }
+
     const username = directoryEntry?.name || fbUser.displayName || email.split('@')[0];
-    const role = directoryEntry?.role || 'Administrator'; // no directory entry = this account is the school admin
+    const role = directoryEntry?.role || 'Administrator'; // confirmed no directory entry = this account is the school admin
     currentUser = { username, role };
     sessionStorage.setItem('eduUser', JSON.stringify(currentUser));
 
@@ -5645,6 +5665,14 @@ async function _completeGoogleSignIn(fbUser) {
       console.log('[_completeGoogleSignIn] staffDirectory check done:', directoryEntry ? 'found' : 'not staff');
     } catch (e) {
       console.warn('[_completeGoogleSignIn] staffDirectory check failed:', e && e.message);
+      _fbStaffResolveFailed = true;
+    }
+    // Same guard as the email/password path: an unresolved (not confirmed-
+    // absent) staffDirectory read must never fall back to Administrator.
+    if (!directoryEntry && _fbStaffResolveFailed) {
+      await window._fbSignOut().catch(() => {});
+      showToast('Could not verify your account. Check your connection and try again.', 'error');
+      return;
     }
 
     let existingSchoolId = null;
