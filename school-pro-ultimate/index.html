@@ -5794,34 +5794,6 @@ document.addEventListener('DOMContentLoaded',()=>{
 </script>
 
 
-<!-- Phase 1.1 Authentication Upgrade -->
-<style>
-#authLogin{position:fixed;inset:0;background:#f4f4f4;z-index:20000;display:none;align-items:center;justify-content:center}
-.auth-box{background:white;padding:25px;border-radius:12px;width:320px;box-shadow:0 10px 30px rgba(0,0,0,.2)}
-.auth-box input,.auth-box select{width:100%;margin:6px 0;padding:10px}
-</style>
-<div id="authLogin">
-<div class="auth-box">
-<h3>School Pro Login</h3>
-<input id="loginUser" placeholder="Username">
-<input id="loginPass" type="password" placeholder="Password">
-<select id="loginRole">
-<option>Super Admin</option>
-<option>Head Teacher</option>
-<option>Deputy Head Teacher</option>
-<option>Senior Teacher</option>
-<option>Head of Department</option>
-<option>Teacher</option>
-<option>Grade Teacher</option>
-<option>Subject Teacher</option>
-<option>Bursar</option>
-<option>Accountant</option>
-<option>Counsellor</option>
-<option>Parent</option>
-</select>
-<button onclick="loginEdu()" style="width:100%">Login</button>
-</div>
-</div>
 <script>
 // --- Users: load from localStorage, kept live by Firebase listener ---
 window.eduUsers = JSON.parse(localStorage.getItem('eduGenius_users_v1') || '[]');
@@ -5872,48 +5844,6 @@ window.addEventListener('firebaseReady', () => {
   // _attachUsersListener is called from onAuthStateChanged once user is confirmed
 });
 
-// Brute-force guard for legacy loginEdu panel
-let _loginEduAttempts = parseInt(sessionStorage.getItem('_loginEduAttempts') || '0', 10);
-let _loginEduUntil    = parseInt(sessionStorage.getItem('_loginEduUntil')    || '0', 10);
-
-async function loginEdu(){
-  const now = Date.now();
-  if (_loginEduUntil > now) {
-    const secs = Math.ceil((_loginEduUntil - now) / 1000);
-    alert('Too many failed attempts. Try again in ' + secs + ' second' + (secs === 1 ? '' : 's') + '.');
-    return;
-  }
-  let u=document.getElementById('loginUser').value.trim();
-  let p=document.getElementById('loginPass').value;
-  let r=document.getElementById('loginRole').value;
-  let users=window.eduUsers;
-  let ok=users.find(x=>x.username.trim().toLowerCase()===u.toLowerCase()&&x.role===r);
-  if(ok && await verifyPassword(ok, p)){
-    _loginEduAttempts = 0; _loginEduUntil = 0;
-    sessionStorage.setItem('_loginEduAttempts', '0');
-    sessionStorage.setItem('_loginEduUntil', '0');
-    await _upgradeHashIfNeeded(ok, p, users);
-    currentUser = { username: ok.username, role: ok.role };
-    sessionStorage.setItem('eduUser',JSON.stringify(currentUser));
-    document.getElementById('authLogin').style.display='none';
-    hideLandingPage();
-    if(!config.isSetup){ showSetupWizard(); return; }
-    showApp();
-    if(typeof applyRoleAccess === 'function') applyRoleAccess(currentUser.role);
-  } else {
-    _loginEduAttempts++;
-    sessionStorage.setItem('_loginEduAttempts', String(_loginEduAttempts));
-    if (_loginEduAttempts >= 5) {
-      const delay = Math.min(30000 * Math.pow(2, _loginEduAttempts - 5), 600000);
-      _loginEduUntil = Date.now() + delay;
-      sessionStorage.setItem('_loginEduUntil', String(_loginEduUntil));
-      const mins = Math.ceil(delay / 60000);
-      alert('Too many failed attempts. Try again in ' + (delay < 60000 ? Math.ceil(delay/1000) + ' seconds' : mins + ' minute' + (mins===1?'':'s')) + '.');
-    } else {
-      alert('Invalid username, password, or role.');
-    }
-  }
-}
 async function logoutEdu(){
   sessionStorage.removeItem('eduUser');
   if(window._fbSignOut) {
@@ -5940,23 +5870,12 @@ document.addEventListener('DOMContentLoaded',()=>{
    div.className='card';
    div.innerHTML=`
    <h3>👥 User Management</h3>
-   <input id="newUser" placeholder="Username">
-   <input id="newEmail" type="email" placeholder="Email (for login)">
-   <input id="newPass" placeholder="Password">
-   <select id="newRole">
-     <option>Teacher</option>
-     <option>Grade Teacher</option>
-     <option>Subject Teacher</option>
-     <option>Senior Teacher</option>
-     <option>Head of Department</option>
-     <option>Deputy Head Teacher</option>
-     <option>Head Teacher</option>
-     <option>Bursar</option>
-     <option>Accountant</option>
-     <option>Counsellor</option>
-     <option>Parent</option>
-   </select>
-   <button onclick="addUserEdu()">Add User</button>
+   <p style="font-size:13px;color:var(--text-light);margin-bottom:10px">
+     To add a new staff member, use <strong>"Give Staff a Cloud Login"</strong>
+     below — it creates a real account they can use to log in on their own
+     device. This list is read-only: it shows everyone with a role at this
+     school, for reference and audit purposes.
+   </p>
    <div id="userListEdu"></div>
    <hr>
    <h3>📜 Audit Logs</h3>
@@ -5967,41 +5886,42 @@ document.addEventListener('DOMContentLoaded',()=>{
  renderAuditEdu();
 });
 
-async function addUserEdu(){
- let users=JSON.parse(localStorage.getItem('eduGenius_users_v1')||'[]');
- const newUsername = document.getElementById('newUser').value.trim();
- const newEmail    = document.getElementById('newEmail').value.trim();
- const newPassword = document.getElementById('newPass').value;
- const newRole     = document.getElementById('newRole').value;
- if(!newUsername || !newPassword){ alert('Username and password required.'); return; }
- if(!newEmail || !newEmail.includes('@')){ alert('A valid email is required for login.'); return; }
- if(users.find(x=>x.username.trim().toLowerCase()===newUsername.toLowerCase())){ alert('Username already exists.'); return; }
- if(users.find(x=>(x.email||'').toLowerCase()===newEmail.toLowerCase())){ alert('Email already in use.'); return; }
- const { passwordHash, salt } = await makePasswordRecord(newPassword);
- users.push({ username:newUsername, passwordHash, salt, role:newRole, email:newEmail });
- _saveUsers(users);
- addAudit('User added: ' + newUsername);
- renderUsersEdu();
- document.getElementById('newUser').value='';
- document.getElementById('newEmail').value='';
- document.getElementById('newPass').value='';
-}
-
 function renderUsersEdu(){
  let users=JSON.parse(localStorage.getItem('eduGenius_users_v1')||'[]');
  let el=document.getElementById('userListEdu');
  if(!el) return;
- el.innerHTML=users.map((u,i)=>
- '<div>'+escHtml(u.username)+' ('+escHtml(u.role)+') <button onclick="delUserEdu('+i+')">Delete</button></div>'
- ).join('');
+ // firebaseUid present = a real "Staff Cloud Login" account (createStaffLogin) —
+ // can log in from any device. Super Admin is always the school owner, who
+ // signed up with their OWN Firebase account (email/password or Google) even
+ // though that account has no firebaseUid stamped on THIS local record — so
+ // it's excluded from the "can't log in" warning below. Everything else with
+ // no firebaseUid is a locally-hashed password that only ever lived in this
+ // browser's storage and was never reachable from any live login screen —
+ // effectively a dead entry with no way to actually log in.
+ el.innerHTML=users.map((u,i)=>{
+   const isOwner = u.role === 'Super Admin';
+   const isCloud = !!u.firebaseUid;
+   const tag = isOwner
+     ? '<span style="color:var(--accent, #2e7d32);font-size:12px">☁️ Owner (Firebase account)</span>'
+     : isCloud
+       ? '<span style="color:var(--accent, #2e7d32);font-size:12px">☁️ Cloud Login</span>'
+       : '<span style="color:#b23b3b;font-size:12px">⚠️ Local only — cannot log in remotely</span>';
+   return '<div style="margin-bottom:4px">'+escHtml(u.username)+' ('+escHtml(u.role)+') '+tag
+        + ' <button onclick="delUserEdu('+i+')" title="'
+        + (isCloud ? 'This only removes them from this list — use Revoke in Staff Cloud Logins below to actually block their access' : 'Removes this entry')
+        + '">Delete</button></div>';
+ }).join('');
 }
 
 function delUserEdu(i){
  let users=JSON.parse(localStorage.getItem('eduGenius_users_v1')||'[]');
- const removed = users[i] ? users[i].username : '?';
+ const removed = users[i];
+ if (removed && removed.firebaseUid) {
+   if (!confirm('This only removes ' + removed.username + ' from this list — it does NOT revoke their Cloud Login access. Use "Revoke" in Staff Cloud Logins below to actually block them. Continue anyway?')) return;
+ }
  users.splice(i,1);
  _saveUsers(users);
- addAudit('User removed: ' + removed);
+ addAudit('User removed: ' + (removed ? removed.username : '?'));
  renderUsersEdu();
 }
 
