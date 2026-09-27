@@ -1536,8 +1536,8 @@ function _saveStaffCache(uid, entryOrNull) {
 // Does the actual Firebase read. Only touches live state (_fbResolvedAdminUid,
 // config.currentSchool) once it has the authoritative answer, so a background
 // refresh can never stomp a value that was just applied from cache.
-async function _resolveStaffSchoolNetwork(uid) {
-  if (!window._fbDb || !window._fbGet || !window._fbRef) return null;
+async function _resolveStaffSchoolNetwork(uid, _isRetry) {
+  if (!window._fbDb || !window._fbGet || !window._fbRef) { _fbStaffResolveFailed = true; return null; }
   let result = null;
   try {
     // LOGIN HANG FIX: a bare Firebase read has no built-in timeout. If the
@@ -1557,11 +1557,21 @@ async function _resolveStaffSchoolNetwork(uid) {
   } catch(e) {
     // ANY read failure (timeout, permission-denied, offline, etc.) means we
     // could NOT confirm this uid's role — NOT that it's confirmed to have no
-    // entry. Bail out here, before the caching below, and flag it unresolved.
-    // Previously only the timeout case skipped caching; a permission-denied
-    // or other error fell through and cached `null` — permanently marking a
-    // staff member's device as belonging to an Administrator, since a cached
-    // miss is applied instantly on every future login with no re-check.
+    // entry. Previously only the timeout case skipped caching; a
+    // permission-denied or other error fell through and cached `null` —
+    // permanently marking a staff member's device as belonging to an
+    // Administrator, since a cached miss is applied instantly on every
+    // future login with no re-check.
+    console.warn('[_resolveStaffSchoolNetwork] staffDirectory read failed for', uid, '—', e && (e.code || e.message) || e);
+    // A permission-denied error right after sign-in is often just the
+    // Realtime Database connection not having picked up the fresh Auth
+    // token yet — a known brief race, not a real access problem. One quick
+    // retry after a short delay clears this in the common case instead of
+    // making every login run into the "check your connection" message.
+    if (!_isRetry && e && e.code === 'PERMISSION_DENIED') {
+      await new Promise(r => setTimeout(r, 700));
+      return _resolveStaffSchoolNetwork(uid, true);
+    }
     _fbResolvedAdminUid = uid;
     _fbStaffResolveFailed = true;
     return null;
