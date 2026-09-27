@@ -1394,12 +1394,47 @@ function _doWrite(path, data, attempt) {
     });
 }
 
+// MERGE WRITE: identical retry/offline-queue behavior to _fbWrite above, but
+// uses Firebase's update() instead of set() — it only touches the keys given
+// in `data`, leaving every other key at `path` untouched. This matters
+// specifically for '/config': PINs are synced there too now (see
+// _syncPinsToCloud), and a routine saveConfig() from ANY device (which
+// intentionally omits PIN fields — see saveConfig() below) must never wipe
+// out PINs another device already set. A full set() would; update() can't.
+function _fbWriteMerge(path, data) {
+  if (!_fbSyncEnabled || !window._fbDb) return;
+  _fbSyncPending++;
+  _fbUpdateSyncBadge('syncing');
+  _doWriteMerge(path, data, 0);
+}
+
+function _doWriteMerge(path, data, attempt) {
+  window._fbUpdate(window._fbRef(window._fbDb, path), data)
+    .then(() => {
+      _fbSyncPending = Math.max(0, _fbSyncPending - 1);
+      if (_fbSyncPending === 0) _fbUpdateSyncBadge(_fbConnected ? 'live' : 'offline');
+    })
+    .catch(err => {
+      _fbSyncPending = Math.max(0, _fbSyncPending - 1);
+      const code = err.code || err.message || '';
+      console.warn('FB merge-write failed (attempt ' + (attempt+1) + '):', code);
+      if (attempt < 2) {
+        setTimeout(() => _doWriteMerge(path, data, attempt + 1), 1500 * Math.pow(2, attempt));
+      } else {
+        _fbRetryQueue = _fbRetryQueue.filter(q => !(q.path === path && q.merge));
+        _fbRetryQueue.push({ path, data, merge: true });
+        _fbUpdateSyncBadge('queued');
+        _scheduleRetryFlush();
+      }
+    });
+}
+
 // Flush the retry queue once connection is confirmed
 function _flushRetryQueue() {
   if (!_fbConnected || !_fbRetryQueue.length) return;
   const batch = _fbRetryQueue.slice();
   _fbRetryQueue = [];
-  batch.forEach(item => _fbWrite(item.path, item.data));
+  batch.forEach(item => item.merge ? _fbWriteMerge(item.path, item.data) : _fbWrite(item.path, item.data));
 }
 
 function _scheduleRetryFlush() {
@@ -1570,15 +1605,41 @@ function saveConfig() {
     return;
   }
   try {
+    // localStorage here is an offline CACHE, not the source of truth — the
+    // app still needs to work with no connection (that's the whole point of
+    // "runs offline in the classroom"). Firebase is authoritative; this is
+    // just what the device reads back on next launch before Firebase's
+    // listener catches up.
     localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
-    // Strip PINs before sending to Firebase
+    // Deliberately omit PINs from this push — not "PINs never go to
+    // Firebase" (they do — see _syncPinsToCloud, called only from the two
+    // places a human actually changes a PIN: the setup wizard and Admin
+    // Settings). This is a routine, frequent, often-automatic save
+    // triggered by any config edit; using a MERGE write (_fbWriteMerge)
+    // means simply not mentioning PIN fields here is enough to leave
+    // whatever's already in Firebase untouched, on every device, every time.
     const safeCfg = Object.assign({}, config);
     delete safeCfg.appPin;
     delete safeCfg.headTeacherPin;
     delete safeCfg.masterPin;
     safeCfg._lastModified = Date.now();
-    _fbWrite(_fbSchoolPath() + '/config', safeCfg);
+    _fbWriteMerge(_fbSchoolPath() + '/config', safeCfg);
   } catch(e) { showToast('Storage error','error'); }
+}
+
+// Pushes the CURRENT hashed PINs (already set in `config` by whichever flow
+// called this — completeSetup() or savePins()) to Firebase, merge-only, so
+// they never touch any other config field. This is the ONE path PINs travel
+// to the cloud through, and it's identical regardless of whether this admin
+// signed up with email/password or Google — both funnel through the same
+// `config`/`_fbSchoolPath()`, so both get the same cross-device PIN sync.
+function _syncPinsToCloud() {
+  _fbWriteMerge(_fbSchoolPath() + '/config', {
+    appPin: config.appPin,
+    headTeacherPin: config.headTeacherPin,
+    masterPin: config.masterPin,
+    _lastModified: Date.now()
+  });
 }
 
 // Track last-synced student count to detect deletions
@@ -1645,7 +1706,17 @@ function attachFirebaseListeners() {
     if (!remote) return;
     const localModified = config._lastModified || 0;
     if (remote._lastModified && remote._lastModified > localModified) {
-      const pins = { appPin: config.appPin, headTeacherPin: config.headTeacherPin, masterPin: config.masterPin };
+      // PINs now sync through Firebase too (see _syncPinsToCloud) — same
+      // config path regardless of whether this admin signed up with
+      // email/password or Google, so both get the same cross-device
+      // behavior. Only fall back to this device's local PIN when Firebase
+      // genuinely has none yet (a school whose PINs were set before this
+      // sync existed, and haven't been re-saved since).
+      const pins = {
+        appPin: remote.appPin !== undefined ? remote.appPin : config.appPin,
+        headTeacherPin: remote.headTeacherPin !== undefined ? remote.headTeacherPin : config.headTeacherPin,
+        masterPin: remote.masterPin !== undefined ? remote.masterPin : config.masterPin
+      };
       config = Object.assign(config, remote, pins);
       delete config._lastModified;
       try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch(e) {}
@@ -1731,7 +1802,7 @@ window.addEventListener('firebaseReady', () => {
         const safeCfg = Object.assign({}, config);
         delete safeCfg.appPin; delete safeCfg.headTeacherPin; delete safeCfg.masterPin;
         safeCfg._lastModified = Date.now();
-        _fbWrite(_fbSchoolPath() + '/config', safeCfg);
+        _fbWriteMerge(_fbSchoolPath() + '/config', safeCfg);
         // Keep the operator directory fresh (name changes, last-seen time)
         // without touching createdAt — update() merges instead of overwriting.
         const sid = (config && config.currentSchool) ? config.currentSchool : 'default';
@@ -2375,6 +2446,7 @@ function completeSetup() {
     config.headTeacherPin = h;
     config.masterPin = m;
     saveConfig();
+    _syncPinsToCloud();
     document.getElementById('setupWizard').style.display = 'none';
     showApp();
   });
@@ -4011,10 +4083,11 @@ function savePins() {
     config.masterPin = m;
     delete config._pinsNotSet;
     saveConfig();
+    _syncPinsToCloud();
     // Re-lock the PIN change form after saving
     document.getElementById('pinChangeForm').style.display = 'none';
     document.getElementById('adminCurrentMasterPin').value = '';
-    showToast('PINs saved');
+    showToast('PINs saved — synced to all your devices');
   });
 }
 
@@ -4932,11 +5005,15 @@ async function exportFromCloud() {
       window._fbGet(window._fbRef(window._fbDb, basePath + '/students')),
       window._fbGet(window._fbRef(window._fbDb, basePath + '/alerts'))
     ]);
-    // Config — restore local PINs (never stored in cloud)
+    // Config — PINs are now genuinely synced to Firebase (see
+    // _syncPinsToCloud), so a cloud export should reflect the real current
+    // PINs, not this device's local ones. Only fall back to local for a
+    // school whose PINs were set before this sync existed and haven't been
+    // re-saved since (cloud simply won't have the fields yet).
     const cloudConfig = cfgSnap.val() || {};
-    cloudConfig.appPin        = config.appPin;
-    cloudConfig.headTeacherPin = config.headTeacherPin;
-    cloudConfig.masterPin     = config.masterPin;
+    if (cloudConfig.appPin === undefined) cloudConfig.appPin = config.appPin;
+    if (cloudConfig.headTeacherPin === undefined) cloudConfig.headTeacherPin = config.headTeacherPin;
+    if (cloudConfig.masterPin === undefined) cloudConfig.masterPin = config.masterPin;
     // Students — rebuild array from RTDB keyed object
     const stuData = stuSnap.val() || {};
     const cloudStudents = [];
@@ -5553,15 +5630,16 @@ async function _completeGoogleSignIn(fbUser) {
 
       closeLandingAuth('login');
       closeLandingAuth('signup');
-      hideLandingPage();
-      showApp();
-      // Force the user straight to Admin Settings to change their PINs
-      // before they can do anything else. 0000 is a known default — it
-      // must be changed immediately.
-      setTimeout(() => {
-        showSection('admin');
-        showToast('⚠️ Security: your PINs are set to 0000. Change them now in Admin Settings.', 'error');
-      }, 600);
+      // Same required step as the email/password signup flow (signupFromLanding):
+      // the wizard forces real, hashed PINs — synced to Firebase via
+      // completeSetup() -> _syncPinsToCloud() — before showApp() is ever
+      // reached. Previously this branch went straight to showApp() with the
+      // 0000 placeholder still active and just a dismissible warning toast,
+      // which a user could ignore indefinitely — inconsistent with, and
+      // less secure than, the email/password path. showSetupWizard() already
+      // hides the school-name field and shows "One last step, {schoolName}"
+      // when config.schoolName is pre-filled, exactly as it is here.
+      showSetupWizard();
     }
   } finally {
     _setGoogleButtonsBusy(false);
