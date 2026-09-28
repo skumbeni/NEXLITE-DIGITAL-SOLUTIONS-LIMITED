@@ -1489,6 +1489,7 @@ let _fbResolvedAdminUid = null;
 // account is the Administrator" — otherwise a staff member whose read fails
 // gets silently (and, via caching, permanently) logged in as the owner.
 let _fbStaffResolveFailed = false;
+let _fbStaffResolveErr = ''; // last failure code/message, shown in the login error for diagnosis
 
 function _fbSchoolPath() {
   const uid = (window._fbAuth && window._fbAuth.currentUser) ? window._fbAuth.currentUser.uid : null;
@@ -1574,6 +1575,7 @@ async function _resolveStaffSchoolNetwork(uid, _isRetry) {
     }
     _fbResolvedAdminUid = uid;
     _fbStaffResolveFailed = true;
+    _fbStaffResolveErr = String((e && (e.code || e.message)) || e);
     return null;
   }
   _fbResolvedAdminUid = result ? result.adminUid : uid;
@@ -5337,7 +5339,7 @@ async function loginFromLanding(){
     // account used to end up with full admin access. Ask them to retry.
     if (!directoryEntry && _fbStaffResolveFailed) {
       await window._fbSignOut().catch(() => {});
-      _showLoginError('Could not verify your account. Check your connection and try again.');
+      _showLoginError('Could not verify your account. Check your connection and try again. [' + (_fbStaffResolveErr || 'unknown') + ']');
       return;
     }
 
@@ -5681,7 +5683,7 @@ async function _completeGoogleSignIn(fbUser) {
     // absent) staffDirectory read must never fall back to Administrator.
     if (!directoryEntry && _fbStaffResolveFailed) {
       await window._fbSignOut().catch(() => {});
-      showToast('Could not verify your account. Check your connection and try again.', 'error');
+      showToast('Could not verify your account. Check your connection and try again. [' + (_fbStaffResolveErr || 'unknown') + ']', 'error');
       return;
     }
 
