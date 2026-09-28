@@ -1615,6 +1615,7 @@ async function _resolveStaffSchoolNetwork(uid, _isRetry) {
   }
   _fbResolvedAdminUid = result ? result.adminUid : uid;
   if (result && result.schoolId) config.currentSchool = result.schoolId;
+  if (result && result.perms && window.registerCustomRole) window.registerCustomRole(result.role, result.perms);
   _saveStaffCache(uid, result);
   return result;
 }
@@ -1636,6 +1637,7 @@ async function _resolveStaffSchool(uid) {
     _fbResolvedAdminUid = (cached && cached.adminUid) ? cached.adminUid : uid;
     if (cached && cached.schoolId) config.currentSchool = cached.schoolId;
     _fbStaffResolveFailed = false; // a cached result was a past confirmed read
+    if (cached && cached.perms && window.registerCustomRole) window.registerCustomRole(cached.role, cached.perms);
     _ensureStaffNetworkRefresh(uid).catch(() => {}); // silent background refresh
     return cached;
   }
@@ -1715,6 +1717,39 @@ function _syncPinsToCloud() {
 // Track last-synced student count to detect deletions
 let _fbLastStudentCount = -1;
 
+// Field-level student sync for custom-role staff. Mirrors the database rules:
+// appends write only the new student node, edits write only the fields the
+// role has edit access to, deletes need Full access on Database.
+function _saveStudentsCustom(basePath, ts, changedIdx) {
+  const prev = _fbLastStudentCount;
+  _fbLastStudentCount = students.length;
+  const lean = st => { const c = Object.assign({}, st); if (c.photo && c.photo.length > 500) c.photo = '__photo__'; return c; };
+  if (prev !== -1 && students.length > prev) {
+    const upd = {};
+    for (let i = prev; i < students.length; i++) upd['s' + i] = lean(students[i]);
+    upd._count = students.length; upd._lastModified = ts;
+    _fbWriteMerge(basePath, upd);
+    return;
+  }
+  if (prev !== -1 && students.length < prev) {
+    const all = {};
+    students.forEach((st, i) => { all['s' + i] = lean(st); });
+    all._count = students.length; all._lastModified = ts;
+    _fbWrite(basePath, all);
+    return;
+  }
+  const fields = window.permittedStudentFields();
+  if (!fields.length) return;
+  const idxs = (changedIdx !== undefined && changedIdx >= 0) ? [changedIdx] : students.map((_, i) => i);
+  const upd = {};
+  idxs.forEach(i => {
+    const st = lean(students[i]);
+    fields.forEach(f => { if (st[f] !== undefined) upd['s' + i + '/' + f] = st[f]; });
+  });
+  upd._lastModified = ts;
+  _fbWriteMerge(basePath, upd);
+}
+
 function saveStudents(changedIdx) {
   // changedIdx (optional): index of the single student that changed.
   // When provided, only that student's node is patched — much leaner than
@@ -1725,6 +1760,14 @@ function saveStudents(changedIdx) {
 
     const basePath = _fbSchoolPath() + '/students';
     const ts = Date.now();
+
+    // Custom-role staff can't rewrite the whole students node (the database
+    // rules only let them write the specific fields their role covers), so
+    // they take a field-level path instead.
+    if (typeof window.isCustomRoleUser === 'function' && window.isCustomRoleUser()) {
+      _saveStudentsCustom(basePath, ts, changedIdx);
+      return;
+    }
 
     const countChanged = (_fbLastStudentCount !== -1 && students.length !== _fbLastStudentCount);
     _fbLastStudentCount = students.length;
@@ -4846,6 +4889,7 @@ async function resyncStaffLink(firebaseUid) {
     role: u.role, name: u.username, email: u.email || '', _createdAt: Date.now()
   };
   if (u.role === 'Parent' && u.studentId) entry.studentId = u.studentId;
+  if ((config.customRoles || {})[u.role]) entry.perms = config.customRoles[u.role];
   try {
     await _staffDirectoryRestPut(firebaseUid, entry);
     showToast((u.username || 'Staff') + ' is now linked to this school. Ask them to log in again.');
@@ -4870,7 +4914,7 @@ function renderStaffLogins() {
       <span style="font-size:12px;color:var(--text-light);min-width:160px">${esc(u.email||'')}</span>
       ${canManage
         ? `<select style="min-width:150px" onchange="assignStaffRole('${esc(u.firebaseUid)}', this.value)">
-             ${CLOUD_ROLES.map(r => `<option value="${r}" ${r===u.role?'selected':''}>${r}</option>`).join('')}
+             ${(getStaffRoles().includes(u.role) ? getStaffRoles() : [u.role].concat(getStaffRoles())).map(r => `<option value="${r}" ${r===u.role?'selected':''}>${r}</option>`).join('')}
            </select>`
         : `<span class="badge">${esc(u.role)}</span>`
       }
@@ -4892,6 +4936,7 @@ function assignStaffRole(firebaseUid, newRole) {
     renderStaffLogins();
     return;
   }
+  if (!getStaffRoles().includes(newRole)) { showToast('Staff cannot be made Administrator', 'error'); renderStaffLogins(); return; }
   const users = JSON.parse(localStorage.getItem(USER_KEY) || '[]');
   const idx = users.findIndex(u => u.firebaseUid === firebaseUid);
   if (idx === -1) return;
@@ -4909,7 +4954,7 @@ function assignStaffRole(firebaseUid, newRole) {
   users[idx].role = newRole;
   if (typeof _saveUsers === 'function') _saveUsers(users);
   else { localStorage.setItem(USER_KEY, JSON.stringify(users)); window.eduUsers = users; }
-  _fbWriteMerge(_staffDirectoryPath(firebaseUid), { role: newRole });
+  _fbWriteMerge(_staffDirectoryPath(firebaseUid), { role: newRole, perms: (config.customRoles || {})[newRole] || null });
   showToast(users[idx].username + '\u2019s role changed to ' + newRole);
   renderStaffLogins();
 }
@@ -4946,11 +4991,18 @@ async function revokeStaffLogin(firebaseUid) {
 // staff login, when changing an existing staff member's role from the Staff
 // page, and for validating role values coming from either flow.
 const CLOUD_ROLES = ['Administrator','Teacher','Senior Teacher','Grade Teacher','Subject Teacher','Head of Department','Deputy Head Teacher','Head Teacher','Bursar','Accountant','Counsellor','Parent'];
+// Staff logins are never Administrators: the Administrator is the account that
+// created the school (first signup). Staff pickers/validation use this list.
+const BUILTIN_STAFF_ROLES = CLOUD_ROLES.filter(r => r !== 'Administrator');
+// Built-in staff roles plus any custom roles the Administrator has defined.
+function getStaffRoles() {
+  return BUILTIN_STAFF_ROLES.concat(Object.keys((typeof config !== 'undefined' && config && config.customRoles) || {}));
+}
 
 async function createStaffLogin(name, email, password, role, studentId) {
   if (!name || !email || !email.includes('@')) { showToast('Enter a name and valid email', 'error'); return false; }
   if (!password || password.length < 6) { showToast('Password must be at least 6 characters', 'error'); return false; }
-  const VALID_ROLES = CLOUD_ROLES;
+  const VALID_ROLES = getStaffRoles();
   if (!VALID_ROLES.includes(role)) { showToast('Invalid role. Choose from: ' + VALID_ROLES.join(', '), 'error'); return false; }
   if (role === 'Parent' && !studentId) { showToast('Select which student this parent is linked to', 'error'); return false; }
   if (!window._fbAuth || !window._fbAuth.currentUser) { showToast('You must be signed in as the school admin to add staff', 'error'); return false; }
@@ -4987,6 +5039,8 @@ async function createStaffLogin(name, email, password, role, studentId) {
     // Write the global directory entry so the teacher's own device can resolve their school
     const dirEntry = { adminUid, schoolId, role, name, email, _createdAt: Date.now() };
     if (role === 'Parent' && studentId) dirEntry.studentId = studentId;
+    const _cr = (config.customRoles || {})[role];
+    if (_cr) dirEntry.perms = _cr; // custom role: staff device gets its permissions at login
     const dirPath = _staffDirectoryPath(newUid);
     let dirWriteTimedOut = false;
     try {
@@ -5041,7 +5095,7 @@ async function createStaffLogin(name, email, password, role, studentId) {
 }
 
 function promptAddStaffLogin() {
-  const roleOptions = CLOUD_ROLES.map(r => `<option value="${r}">${r}</option>`).join('');
+  const roleOptions = getStaffRoles().map(r => `<option value="${r}">${r}</option>`).join('');
   const studentOptions = students.map((s, i) => `<option value="${escHtml(s.id)}">${escHtml(s.name)} (${escHtml(s.id)})</option>`).join('');
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
@@ -6557,6 +6611,186 @@ document.addEventListener('DOMContentLoaded', () => {
   // No stored session (or setup incomplete) — leave the landing page / setup
   // wizard exactly as init() already displayed it.
 });
+</script>
+
+<script>
+// ==================== CUSTOM ROLES + ACTION-LEVEL PERMISSIONS ====================
+// Levels per section: 0 none, 1 view, 2 view+add/edit, 3 full (incl. delete).
+// Built-in roles are untouched (they keep their section access as before);
+// only Administrator-defined custom roles use these levels. Custom roles can
+// never reach Admin Settings or Staff.
+(function () {
+  const CFG = [['database','Database'],['register','Register'],['assessments','Assessments'],['classmarks','Class Marks'],
+    ['finance','Finance'],['attendance','Attendance'],['conduct','Conduct'],['analytics','Analytics'],
+    ['announcements','Announcements'],['reports','Reports']];
+  const LVL = ['No access','View only','View + add/edit','Full (incl. delete)'];
+  const BUILTIN = Object.keys(window.ROLE_SECTIONS);
+  window.CUSTOM_PERMS = window.CUSTOM_PERMS || {};
+
+  window.registerCustomRole = function (name, perms) {
+    if (!name || BUILTIN.includes(name)) return;
+    const clean = {};
+    CFG.forEach(([k]) => { const v = parseInt(perms && perms[k], 10); if (v >= 1 && v <= 3) clean[k] = v; });
+    window.CUSTOM_PERMS[name] = clean;
+    window.ROLE_SECTIONS[name] = ['dashboard'].concat(Object.keys(clean));
+  };
+  function ensureRole(role) {
+    const live = typeof config !== 'undefined' && config && config.customRoles && config.customRoles[role];
+    if (live) window.registerCustomRole(role, live); // live school config wins over the login-time snapshot
+  }
+  window.permLevel = function (section) {
+    const role = typeof currentUser !== 'undefined' && currentUser && currentUser.role;
+    if (!role) return 0;
+    ensureRole(role);
+    if (window.CUSTOM_PERMS[role]) return section === 'dashboard' ? 1 : (window.CUSTOM_PERMS[role][section] || 0);
+    return (window.ROLE_SECTIONS[role] || []).includes(section) ? 3 : 0;
+  };
+  window.canDo = (section, need) => window.permLevel(section) >= need;
+  window.isCustomRoleUser = function () {
+    const role = typeof currentUser !== 'undefined' && currentUser && currentUser.role;
+    if (!role) return false;
+    ensureRole(role);
+    return !!window.CUSTOM_PERMS[role];
+  };
+  // Student-record fields a custom role may write. MUST match the database rules.
+  window.permittedStudentFields = function () {
+    const f = [];
+    if (window.canDo('database', 2)) f.push('name', 'sex', 'class', 'phones', 'photo');
+    if (window.canDo('assessments', 2) || window.canDo('classmarks', 2)) f.push('subjects', 'terms');
+    if (window.canDo('finance', 2)) f.push('finance', 'paymentHistory');
+    if (window.canDo('attendance', 2)) f.push('attendance');
+    if (window.canDo('conduct', 2)) f.push('conduct');
+    return f;
+  };
+  const isCustom = () => typeof currentUser !== 'undefined' && currentUser && window.CUSTOM_PERMS[currentUser.role];
+
+  // ---- Enforcement: guard the mutating functions (custom roles only) ----
+  const GUARDS = {
+    saveInlineEdit:['database',2], deleteStudent:['database',3], addProfilePhone:['database',2],
+    removeProfilePhone:['database',2], saveProfilePhones:['database',2],
+    addRegPhone:['register',2], registerStudent:['register',2],
+    saveAssessment:['assessments',2], saveClassMarks:['classmarks',2],
+    recordPayment:['finance',2], applyBulkFee:['finance',2],
+    saveAttendance:['attendance',2], saveConduct:['conduct',2],
+    saveAnnouncement:['announcements',2], deleteAnnouncement:['announcements',3],
+    confirmFeeSubmission:['finance',2]
+  };
+  // Never available to custom roles: undo/redo can restore other people's data, import/clear replace it.
+  ['undoLastAction','redoLastAction','importData','clearAllData'].forEach(name => {
+    const orig = window[name]; if (typeof orig !== 'function') return;
+    window[name] = function () {
+      if (window.isCustomRoleUser()) { showToast('\u26d4 Your role can\u2019t use this action.', 'error'); return false; }
+      return orig.apply(this, arguments);
+    };
+  });
+  Object.keys(GUARDS).forEach(name => {
+    const orig = window[name];
+    if (typeof orig !== 'function') return;
+    const [sec, need] = GUARDS[name];
+    window[name] = function () {
+      ensureRole(currentUser && currentUser.role);
+      if (isCustom() && !window.canDo(sec, need)) {
+        showToast('\u26d4 Your role has "' + LVL[window.permLevel(sec)] + '" on this section \u2014 that action isn\u2019t allowed.', 'error');
+        return false;
+      }
+      return orig.apply(this, arguments);
+    };
+  });
+
+  // ---- UI hints: banner + hidden delete buttons on restricted sections ----
+  const css = document.createElement('style');
+  css.textContent = '.perm-nodel .btn-danger{display:none!important}.perm-note{font-size:12px;background:var(--bg,#f3f4f6);border:1px solid var(--border,#ddd);border-radius:8px;padding:6px 10px;margin:0 0 10px;color:var(--text-light)}';
+  document.head.appendChild(css);
+  const origApply = window.applyRoleAccess;
+  window.applyRoleAccess = function (role) {
+    ensureRole(role);
+    const r = origApply.apply(this, arguments);
+    CFG.forEach(([k]) => {
+      const el = document.getElementById('sec-' + k); if (!el) return;
+      el.querySelectorAll(':scope > .perm-note').forEach(n => n.remove());
+      el.classList.remove('perm-nodel');
+      const lv = window.CUSTOM_PERMS[role] ? (window.CUSTOM_PERMS[role][k] || 0) : 3;
+      if (lv === 1 || lv === 2) {
+        el.classList.add('perm-nodel');
+        const n = document.createElement('div'); n.className = 'perm-note';
+        n.textContent = lv === 1 ? '\ud83d\udc41 View only \u2014 you can\u2019t add or change anything here.' : '\u270f\ufe0f You can add and edit here, but not delete.';
+        const t = el.querySelector('.section-title');
+        if (t && t.nextSibling) el.insertBefore(n, t.nextSibling); else el.prepend(n);
+      }
+    });
+    return r;
+  };
+
+  // ---- Administrator UI: manage custom roles (Staff section) ----
+  function roles() { config.customRoles = config.customRoles || {}; return config.customRoles; }
+  function summary(p) {
+    return CFG.filter(([k]) => p[k]).map(([k, l]) => l + ': ' + ['','view','edit','full'][p[k]]).join(' \u00b7 ') || 'No access';
+  }
+  window.renderCustomRoles = function () {
+    const el = document.getElementById('customRolesList'); if (!el) return;
+    const names = Object.keys(roles());
+    if (!names.length) { el.innerHTML = '<div style="color:var(--text-light)">No custom roles yet</div>'; return; }
+    el.innerHTML = names.map(n => `<div style="margin:8px 0;padding:8px;border:1px solid var(--border,#ddd);border-radius:8px">
+      <strong>${esc(n)}</strong><div style="font-size:12px;color:var(--text-light);margin:4px 0">${esc(summary(roles()[n]))}</div>
+      <button class="btn btn-sm" onclick="openRoleEditor(this.dataset.n)" data-n="${esc(n)}">Edit</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteCustomRole(this.dataset.n)" data-n="${esc(n)}">Delete</button></div>`).join('');
+  };
+  window.openRoleEditor = function (name) {
+    const editing = !!name, cur = editing ? roles()[name] || {} : {};
+    const rows = CFG.map(([k, l]) => `<div class="form-group" style="margin-bottom:8px"><label>${l}</label>
+      <select id="cr_${k}">${LVL.map((t, i) => `<option value="${i}" ${(cur[k] || 0) === i ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`).join('');
+    const m = document.createElement('div'); m.className = 'modal-overlay'; m.id = 'roleEditorModal';
+    m.innerHTML = `<div class="modal" style="max-width:420px;max-height:88vh;overflow:auto">
+      <h3>${editing ? 'Edit role' : 'New custom role'}</h3>
+      <div class="form-group"><label>Role name</label><input type="text" id="crName" maxlength="30" placeholder="e.g. Librarian" ${editing ? 'disabled' : ''} value="${esc(name || '')}"></div>
+      ${rows}
+      <p style="font-size:11px;color:var(--text-light)">Every role can open the Dashboard. Admin Settings and Staff are never available to custom roles.</p>
+      <div class="modal-actions"><button class="btn btn-outline" onclick="document.getElementById('roleEditorModal').remove()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveCustomRole(${editing ? 'true' : 'false'})">Save role</button></div></div>`;
+    document.body.appendChild(m);
+  };
+  window.saveCustomRole = async function (editing) {
+    const name = document.getElementById('crName').value.trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9 &'\-]{1,29}$/.test(name)) { showToast('Role name: 2\u201330 letters/numbers', 'error'); return; }
+    if (!editing && (BUILTIN.concat(['Administrator']).some(b => b.toLowerCase() === name.toLowerCase()) ||
+        Object.keys(roles()).some(b => b.toLowerCase() === name.toLowerCase()))) { showToast('That role name already exists', 'error'); return; }
+    const perms = {};
+    CFG.forEach(([k]) => { const v = parseInt(document.getElementById('cr_' + k).value, 10); if (v > 0) perms[k] = v; });
+    if (!Object.keys(perms).length) { showToast('Give the role access to at least one section', 'error'); return; }
+    roles()[name] = perms;
+    saveConfig();
+    document.getElementById('roleEditorModal').remove();
+    renderCustomRoles();
+    if (typeof renderStaffLogins === 'function') renderStaffLogins();
+    // Push the new permissions to staff already holding this role
+    const users = JSON.parse(localStorage.getItem(USER_KEY) || '[]').filter(u => u.firebaseUid && u.role === name);
+    for (const u of users) {
+      try {
+        const tok = await window._fbAuth.currentUser.getIdToken();
+        const r = await fetch('https://school-pro-ultimate-default-rtdb.firebaseio.com/' + _staffDirectoryPath(u.firebaseUid) + '.json?auth=' + encodeURIComponent(tok),
+          { method: 'PATCH', body: JSON.stringify({ perms }) });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+      } catch (e) { _fbWriteMerge(_staffDirectoryPath(u.firebaseUid), { perms }); }
+    }
+    showToast('Role saved' + (users.length ? ' \u2014 staff pick it up next login' : ''));
+  };
+  window.deleteCustomRole = function (name) {
+    const inUse = JSON.parse(localStorage.getItem(USER_KEY) || '[]').some(u => u.role === name);
+    if (inUse) { showToast('Reassign or remove staff with this role first', 'error'); return; }
+    if (!confirm('Delete the role "' + name + '"?')) return;
+    delete roles()[name]; delete window.CUSTOM_PERMS[name]; delete window.ROLE_SECTIONS[name];
+    saveConfig(); renderCustomRoles();
+  };
+  document.addEventListener('DOMContentLoaded', () => {
+    const sec = document.getElementById('sec-staff'); if (!sec || document.getElementById('customRolesCard')) return;
+    const card = document.createElement('div'); card.className = 'card'; card.id = 'customRolesCard';
+    card.innerHTML = '<div class="card-header"><span class="card-title">\ud83e\udde9 Custom Roles</span><button class="btn btn-primary btn-sm" onclick="openRoleEditor()">+ New Role</button></div>' +
+      '<p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Define your own roles and choose, per section, whether they can view, add/edit, or fully manage. New roles appear when you give staff a login.</p><div id="customRolesList"></div>';
+    sec.appendChild(card); renderCustomRoles();
+  });
+  const origShow = window.showSection;
+  window.showSection = function (s) { const r = origShow.apply(this, arguments); if (s === 'staff') renderCustomRoles(); return r; };
+})();
 </script>
 
 </body>
