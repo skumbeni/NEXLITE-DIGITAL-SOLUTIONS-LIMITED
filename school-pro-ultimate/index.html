@@ -1534,6 +1534,29 @@ function _saveStaffCache(uid, entryOrNull) {
   } catch {}
 }
 
+// Plain-HTTPS read of staffDirectory/{uid}. Resolves to the node's value
+// (null = confirmed no entry) or throws with a code. See the REST-first note
+// in _resolveStaffSchoolNetwork.
+async function _staffDirectoryRest(uid) {
+  const user = window._fbAuth && window._fbAuth.currentUser;
+  if (!user) throw new Error('rest-no-user');
+  const token = await user.getIdToken();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 10000);
+  try {
+    const url = 'https://school-pro-ultimate-default-rtdb.firebaseio.com/' +
+      _staffDirectoryPath(uid) + '.json?auth=' + encodeURIComponent(token);
+    const r = await fetch(url, { signal: ctrl.signal });
+    if (!r.ok) {
+      const e = new Error('rest-http-' + r.status);
+      e.code = (r.status === 401 || r.status === 403) ? 'PERMISSION_DENIED' : 'rest-http-' + r.status;
+      if (e.code === 'PERMISSION_DENIED') e.message = 'rest-http-' + r.status;
+      throw e;
+    }
+    return await r.json();
+  } finally { clearTimeout(timer); }
+}
+
 // Does the actual Firebase read. Only touches live state (_fbResolvedAdminUid,
 // config.currentSchool) once it has the authoritative answer, so a background
 // refresh can never stomp a value that was just applied from cache.
@@ -1548,11 +1571,23 @@ async function _resolveStaffSchoolNetwork(uid, _isRetry) {
     // with no cache to fall back on (the "stuck on landing page, nothing
     // happens" bug). Racing it against a timeout guarantees this always
     // settles, so the login button/error UI can recover either way.
-    const snap = await Promise.race([
-      window._fbGet(window._fbRef(window._fbDb, _staffDirectoryPath(uid))),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('staff-directory-timeout')), _isRetry ? 15000 : 8000))
-    ]);
-    const entry = snap.exists() ? snap.val() : null;
+    // REST-first read: a plain HTTPS fetch of the same node, using the user's
+    // ID token. It bypasses the Realtime Database websocket, which is what
+    // hangs on some networks/domains (the staff-directory-timeout). It also
+    // fails FAST with an explicit HTTP status (401/403 = rules or App Check)
+    // instead of hanging. Only a network-level failure falls back to the SDK.
+    let entry;
+    try {
+      entry = await _staffDirectoryRest(uid);
+    } catch (restErr) {
+      if (restErr && restErr.code === 'PERMISSION_DENIED') throw restErr;
+      console.warn('[_resolveStaffSchoolNetwork] REST read failed, trying SDK:', restErr && (restErr.code || restErr.message));
+      const snap = await Promise.race([
+        window._fbGet(window._fbRef(window._fbDb, _staffDirectoryPath(uid))),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('staff-directory-timeout')), _isRetry ? 15000 : 8000))
+      ]);
+      entry = snap.exists() ? snap.val() : null;
+    }
     if (entry && entry.adminUid) result = entry;
     _fbStaffResolveFailed = false; // confirmed read — safe to trust/cache below
   } catch(e) {
@@ -1575,7 +1610,7 @@ async function _resolveStaffSchoolNetwork(uid, _isRetry) {
     }
     _fbResolvedAdminUid = uid;
     _fbStaffResolveFailed = true;
-    _fbStaffResolveErr = String((e && (e.code || e.message)) || e);
+    _fbStaffResolveErr = String((e && (e.message || e.code)) || e);
     return null;
   }
   _fbResolvedAdminUid = result ? result.adminUid : uid;
