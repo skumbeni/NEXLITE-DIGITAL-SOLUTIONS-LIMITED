@@ -741,6 +741,8 @@ tr:hover td { background:rgba(108,52,131,0.04); }
       <div class="nav-item" onclick="showSection('analytics')" data-section="analytics"><span class="icon">📈</span> Analytics</div>
       <div class="nav-item" onclick="showSection('announcements')" data-section="announcements"><span class="icon">📢</span> Announcements</div>
       <div class="nav-item" onclick="showSection('reports')" data-section="reports"><span class="icon">📄</span> Reports</div>
+      <div class="nav-item" onclick="showSection('documents')" data-section="documents"><span class="icon">📁</span> Documents</div>
+      <div class="nav-item" onclick="showSection('notices')" data-section="notices"><span class="icon">📌</span> Staff Notices <span id="noticeBadge" style="display:none;background:#E74C3C;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:6px"></span></div>
       <div class="nav-item" onclick="showSection('staff')" data-section="staff"><span class="icon">👥</span> Staff</div>
       <div class="nav-item" onclick="showSection('admin')" data-section="admin"><span class="icon">⚙️</span> Admin Settings</div>
       <div style="margin-top:auto;padding:16px 20px;border-top:1px solid rgba(255,255,255,0.1)">
@@ -872,6 +874,50 @@ tr:hover td { background:rgba(108,52,131,0.04); }
             <tr><th>Student</th><th>Amount</th><th>Network</th><th>Txn ID</th><th>Submitted</th><th>Actions</th></tr>
             <tbody id="feeSubmissionsTableBody"><tr><td colspan="6" style="text-align:center;color:var(--text-light)">Loading…</td></tr></tbody>
           </table></div>
+        </div>
+      </div>
+
+      <!-- Staff Notices Section -->
+      <div class="section" id="sec-notices">
+        <div class="section-title">📌 Staff Notices</div>
+        <div class="card" id="noticePostCard" style="display:none">
+          <div class="card-header"><span class="card-title">Post a notice to all staff</span></div>
+          <div class="form-row">
+            <div class="form-group"><label>Title</label><input type="text" id="noticeTitle" placeholder="e.g. Staff meeting Friday 14:00"></div>
+            <div class="form-group"><label>Priority</label><select id="noticePriority"><option>Normal</option><option>Urgent</option></select></div>
+          </div>
+          <div class="form-group"><label>Message</label><textarea id="noticeBody" rows="4"></textarea></div>
+          <div class="form-group"><label>Attachments (optional — up to 3 files: PDF, Word, Excel or CSV, max 5 MB each)</label><input type="file" id="noticeFiles" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv"></div>
+          <div id="noticeProgress" style="font-size:12px;color:var(--text-light);margin:6px 0"></div>
+          <button class="btn btn-primary" id="noticePostBtn" onclick="postNotice()">Post Notice</button>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title">Notices</span><button class="btn btn-sm" onclick="renderNotices()">↻ Refresh</button></div>
+          <div id="noticeList"></div>
+        </div>
+      </div>
+
+      <!-- Documents Section -->
+      <div class="section" id="sec-documents">
+        <div class="section-title">📁 Documents</div>
+        <div class="card" id="docUploadCard">
+          <div class="card-header"><span class="card-title">Upload a document</span></div>
+          <div class="form-row">
+            <div class="form-group"><label>Title</label><input type="text" id="docTitle" placeholder="e.g. Staff meeting minutes – Term 3"></div>
+            <div class="form-group"><label>Category</label><select id="docCategory"><option>Minutes</option><option>Report</option><option>Letter</option><option>Circular</option><option>Other</option></select></div>
+          </div>
+          <div class="form-group"><label>Note (optional)</label><input type="text" id="docNote" placeholder="Short note for the Head / Deputy"></div>
+          <div class="form-group"><label>File (PDF, Word, Excel or CSV — max 10 MB)</label><input type="file" id="docFile" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv"></div>
+          <div id="docProgress" style="font-size:12px;color:var(--text-light);margin:6px 0"></div>
+          <button class="btn btn-primary" id="docUploadBtn" onclick="uploadDocument()">Upload</button>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title" id="docListTitle">My uploads</span><button class="btn btn-sm" onclick="renderDocuments()">↻ Refresh</button></div>
+          <div id="docFilterRow" class="form-row" style="display:none">
+            <div class="form-group"><label>Staff</label><select id="docFilterStaff" onchange="renderDocuments(true)"></select></div>
+            <div class="form-group"><label>Category</label><select id="docFilterCat" onchange="renderDocuments(true)"><option value="">All</option><option>Minutes</option><option>Report</option><option>Letter</option><option>Circular</option><option>Other</option></select></div>
+          </div>
+          <div id="docList"></div>
         </div>
       </div>
 
@@ -1755,13 +1801,69 @@ function _saveStudentsCustom(basePath, ts, changedIdx) {
   _fbWriteMerge(basePath, upd);
 }
 
+
+// ==================== PHOTO CLOUD BACKUP ====================
+// Photos are stripped to '__photo__' in the students node (keeps it small), so
+// they used to live only in localStorage and vanished on "clear browsing data".
+// They now also go to <school>/photos/<studentId> (already <=200px JPEG, ~10KB).
+let _photoSynced = {};      // studentId -> fingerprint already uploaded this session
+let _photoHydrating = false;
+function _photoKey(id) { return String(id).replace(/[.$#\[\]\/]/g, '_'); }
+function _photoFp(p) { return p.length + ':' + p.slice(-24); }
+function _photoWritable() {
+  const r = (typeof currentUser !== 'undefined' && currentUser && currentUser.role) || '';
+  return r !== 'Parent';
+}
+function _fbSyncPhotos() {
+  try {
+    if (!_fbSyncEnabled || !window._fbDb || !_photoWritable()) return;
+    (students || []).forEach(st => {
+      if (!st || !st.id || !st.photo || st.photo.length < 500 || st.photo === '__photo__') return;
+      if (!/^data:image\//.test(st.photo)) return;
+      const fp = _photoFp(st.photo);
+      if (_photoSynced[st.id] === fp) return;
+      _photoSynced[st.id] = fp;
+      window._fbSet(window._fbRef(window._fbDb, _fbSchoolPath() + '/photos/' + _photoKey(st.id)), st.photo)
+        .catch(e => { delete _photoSynced[st.id]; console.warn('[photos] upload skipped:', e && e.code); });
+    });
+  } catch (e) { console.warn('[photos] sync error', e); }
+}
+// Pull photos missing on this device; push local photos the cloud doesn't have yet.
+async function _fbHydratePhotos() {
+  if (_photoHydrating || !_fbSyncEnabled || !window._fbDb || !window._fbGet) return;
+  if (typeof currentUser !== 'undefined' && currentUser && currentUser.role === 'Parent') return;
+  _photoHydrating = true;
+  try {
+    const snap = await window._fbGet(window._fbRef(window._fbDb, _fbSchoolPath() + '/photos'));
+    const cloud = snap.val() || {};
+    let changed = false;
+    (students || []).forEach(st => {
+      if (!st || !st.id) return;
+      if ((!st.photo || st.photo === '__photo__') && typeof cloud[_photoKey(st.id)] === 'string' && cloud[_photoKey(st.id)].startsWith('data:image/')) {
+        st.photo = cloud[_photoKey(st.id)]; _photoSynced[st.id] = _photoFp(st.photo); changed = true;
+      } else if (st.photo && st.photo.length >= 500 && cloud[_photoKey(st.id)] === st.photo) {
+        _photoSynced[st.id] = _photoFp(st.photo);
+      }
+    });
+    if (changed) {
+      try { localStorage.setItem(_schoolStorageKey(DB_KEY, config.currentSchool || 'default'), JSON.stringify(students)); } catch (e) {}
+      refreshCurrentSection();
+    }
+    _fbSyncPhotos(); // backfill: upload any local photos the cloud is missing
+  } catch (e) { console.warn('[photos] hydrate skipped:', e && (e.code || e.message)); }
+  finally { _photoHydrating = false; }
+}
+
 function saveStudents(changedIdx) {
+  if (students && students._childOnly) return; // parent view holds only their own children: never persist/push
   // changedIdx (optional): index of the single student that changed.
   // When provided, only that student's node is patched — much leaner than
   // a full array rewrite. Metadata (_count, _lastModified) is always updated.
   try {
     localStorage.setItem(_schoolStorageKey(DB_KEY, config.currentSchool || 'default'), JSON.stringify(students));
     if (!_fbSyncEnabled || !window._fbDb) return;
+    _fbSyncPhotos();
+    _fbSyncStudentIndex();
 
     const basePath = _fbSchoolPath() + '/students';
     const ts = Date.now();
@@ -1865,9 +1967,16 @@ function attachFirebaseListeners() {
           rebuilt.push(s);
         }
       }
+      if (window._parentView && window._pv) { // staff is in Parent view: update the hidden real list, leave the child view alone
+        window._pv.students = rebuilt; if (!rebuilt.some(x => x && x._hidden)) window._positionPool = rebuilt;
+        try { localStorage.setItem(_schoolStorageKey(DB_KEY, config.currentSchool || 'default'), JSON.stringify(rebuilt)); } catch(e) {}
+        return;
+      }
       students = rebuilt;
       try { localStorage.setItem(_schoolStorageKey(DB_KEY, config.currentSchool || 'default'), JSON.stringify(students)); } catch(e) {}
       refreshCurrentSection();
+      _fbHydratePhotos();
+      _fbSyncStudentIndex();
     }
   });
 
@@ -1895,6 +2004,8 @@ function attachFirebaseListeners() {
     });
   });
 
+  setTimeout(_fbHydratePhotos, 2500);
+  setTimeout(_fbSyncStudentIndex, 3500);
   _fbUpdateSyncBadge('live');
 }
 
@@ -1913,19 +2024,61 @@ window.addEventListener('firebaseReady', () => {
       const staffEntry = await _resolveStaffSchool(user.uid);
       if (staffEntry && staffEntry.role) {
         currentUser = { username: user.email || user.uid, role: staffEntry.role, studentId: staffEntry.studentId || null };
+        if (staffEntry.role === 'Parent') { students = []; students._childOnly = true; } // never show cached school-wide data to a parent
         sessionStorage.setItem('eduUser', JSON.stringify(currentUser));
       }
       _fbDetachListeners();
       attachFirebaseListeners();
       if (typeof _attachUsersListener === 'function') _attachUsersListener();
+      if (staffEntry) {
+        loadMyChildren(staffEntry);
+        _ensureStaffNetworkRefresh(user.uid).then(fresh => {
+          if (fresh && JSON.stringify(_childIdsOf(fresh)) !== JSON.stringify(_childIdsOf(staffEntry))) loadMyChildren(fresh);
+        }).catch(() => {});
+      }
       // Seed / refresh Firebase with local config on first connect.
       // Staff members (non-admins) never overwrite the school's config —
       // only the admin's own device should push config writes.
       if (!staffEntry) {
+        // FRESH-DEVICE GUARD: after "clear browsing data" (or a new phone) the local
+        // config is just defaults. Never push those over the real cloud config.
+        // Adopt the cloud copy instead; only seed when the cloud truly has nothing.
+        let _skipSeed = false;
+        if (!config.isSetup) {
+          try {
+            const _cfgRef = () => window._fbRef(window._fbDb, _fbSchoolPath() + '/config');
+            let rc = (await window._fbGet(_cfgRef())).val();
+            if (!(rc && rc.isSetup)) {
+              // Local currentSchool resets to 'default' too — recover the real one.
+              const dir = (await window._fbGet(window._fbRef(window._fbDb, 'schoolsDirectory/' + user.uid))).val();
+              if (dir && typeof dir === 'object') {
+                let best = null, bScore = -1;
+                Object.keys(dir).forEach(id => {
+                  const e = dir[id] || {};
+                  const sc = (e.schoolName ? 1e15 : 0) + (e.lastLogin || 0);
+                  if (sc > bScore) { bScore = sc; best = id; }
+                });
+                if (best && best !== config.currentSchool) {
+                  config.currentSchool = best;
+                  try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch(e) {}
+                  _fbDetachListeners(); attachFirebaseListeners();
+                  if (typeof _attachUsersListener === 'function') _attachUsersListener();
+                  rc = (await window._fbGet(_cfgRef())).val();
+                }
+              }
+            }
+            if (rc && rc.isSetup) _skipSeed = true;
+          } catch (e) {
+            _skipSeed = true; // cannot verify the cloud copy: safer to skip than overwrite
+            console.warn('[EduGenius] fresh-device config check failed, seed skipped:', e && e.message);
+          }
+        }
+        if (!_skipSeed) {
         const safeCfg = Object.assign({}, config);
         delete safeCfg.appPin; delete safeCfg.headTeacherPin; delete safeCfg.masterPin;
         safeCfg._lastModified = Date.now();
         _fbWriteMerge(_fbSchoolPath() + '/config', safeCfg);
+        }
         // Keep the operator directory fresh (name changes, last-seen time)
         // without touching createdAt — update() merges instead of overwriting.
         const sid = (config && config.currentSchool) ? config.currentSchool : 'default';
@@ -2134,6 +2287,7 @@ function pushUndo() {
 }
 
 function undoLastAction() {
+  if (window._parentView) return;
   if (undoStack.length === 0) return;
   redoStack.push(JSON.parse(JSON.stringify(students)));
   students = undoStack.pop();
@@ -2146,6 +2300,7 @@ function undoLastAction() {
 }
 
 function redoLastAction() {
+  if (window._parentView) return;
   if (redoStack.length === 0) return;
   undoStack.push(JSON.parse(JSON.stringify(students)));
   students = redoStack.pop();
@@ -2270,6 +2425,8 @@ function refreshCurrentSection() {
     case 'reports': initReports(); break;
     case 'admin': renderAdmin(); break;
     case 'staff': renderStaffLogins(); break;
+    case 'documents': initDocuments(); break;
+    case 'notices': initNotices(); break;
   }
 }
 
@@ -2347,7 +2504,11 @@ function getStudentAverage(s) {
 // Ranks a student against classmates in their OWN class only (exact s.class match),
 // never the whole school. Ties share the same position (standard competition ranking).
 function getClassPosition(s) {
-  const classmates = students.filter(st => st.class === s.class);
+  // Parent-style views only hold the child's own record, so class rank can't be computed from them.
+  // A staff member's Parent view supplies the full school list via _positionPool (null = unknown).
+  if (students && students._childOnly && !window._positionPool) return { position: null, totalInClass: 0 };
+  const pool = (students && students._childOnly && window._positionPool) ? window._positionPool : students;
+  const classmates = pool.filter(st => st && !st._hidden && st.class === s.class);
   const ranked = classmates
     .map(st => ({ id: st.id, avg: Math.round((getStudentAverage(st) ?? 0) * 10) / 10 })) // no marks = 0, still ranked (lands at the bottom)
     .sort((a, b) => b.avg - a.avg);
@@ -3264,8 +3425,9 @@ function initFinance() {
     if (finRow) finRow.style.display = 'none';
     if (bulkCard) bulkCard.style.display = 'none';
     if (subsCard) subsCard.style.display = 'none';
-    const idx = _findStudentIndexById(currentUser.studentId);
+    const idx = (students && students._childOnly && students.length) ? Math.min(window._activeChild || 0, students.length - 1) : _findStudentIndexById(currentUser.studentId);
     renderParentFinance(idx);
+    try { const _b = document.getElementById('financeContent'); if (_b) _b.insertAdjacentHTML('afterbegin', _childSwitcherHtml()); } catch (e) {}
     return;
   }
 
@@ -3791,6 +3953,9 @@ function deleteAnnouncement(idx) {
 
 // ==================== REPORTS ====================
 function initReports() {
+  { const par = currentUser && currentUser.role === 'Parent';
+    const pg = document.getElementById('reportPin'); if (pg && pg.closest('.form-group')) pg.closest('.form-group').style.display = par ? 'none' : '';
+    const bc = document.getElementById('bulkReportClass'); if (bc && bc.closest('.card')) bc.closest('.card').style.display = par ? 'none' : ''; }
   const sel = document.getElementById('reportStudent');
   sel.innerHTML = '<option value="">Select Student</option>';
   students.forEach((s, i) => { if (window.classInScope && !window.classInScope(s.class)) return; sel.innerHTML += `<option value="${i}">${escHtml(s.name)} (${escHtml(s.id)})</option>`; });
@@ -3987,7 +4152,8 @@ function generateReport() {
   const pin = document.getElementById('reportPin').value.trim();
 
   if (idx === '') return showToast('Select a student','error');
-  Promise.all([pinMatches(pin, config.masterPin), pinMatches(pin, config.headTeacherPin)]).then(([m, h]) => {
+  const _isParent = currentUser && currentUser.role === 'Parent'; // parents only ever hold their own children's records, so no school PIN is needed
+  (_isParent ? Promise.resolve([true, true]) : Promise.all([pinMatches(pin, config.masterPin), pinMatches(pin, config.headTeacherPin)])).then(([m, h]) => {
     if (!m && !h) return showToast('Incorrect authorization PIN','error');
 
     const s = students[idx];
@@ -4902,7 +5068,7 @@ async function resyncStaffLink(firebaseUid) {
     schoolId: config.currentSchool || 'default',
     role: u.role, name: u.username, email: u.email || '', _createdAt: Date.now()
   };
-  if (u.role === 'Parent' && u.studentId) entry.studentId = u.studentId;
+  { const kids = _childIdsOf(u); const cm = _childrenMap(kids); if (cm) entry.children = cm; if (u.role === 'Parent' && kids.length) entry.studentId = kids[0]; }
   if ((config.customRoles || {})[u.role]) entry.perms = config.customRoles[u.role];
   try {
     await _staffDirectoryRestPut(firebaseUid, entry);
@@ -4912,10 +5078,25 @@ async function resyncStaffLink(firebaseUid) {
   }
 }
 
+
+// One-time repair for staff whose cloud record predates firebaseUid syncing.
+// UID = Firebase Console > Authentication > Users > "User UID" (match by email).
+function repairStaffUid(email) {
+  const uid = (prompt('Paste the User UID for ' + email + ' (Firebase Console > Authentication > Users):') || '').trim();
+  if (!uid) return;
+  const users = JSON.parse(localStorage.getItem(USER_KEY) || '[]');
+  const u = users.find(x => x.email === email && !x.firebaseUid);
+  if (!u) return;
+  u.firebaseUid = uid;
+  if (typeof _saveUsers === 'function') _saveUsers(users);
+  renderStaffLogins();
+  if (typeof resyncStaffLink === 'function') resyncStaffLink(uid);
+}
+
 function renderStaffLogins() {
   const el = document.getElementById('staffLoginsList');
   if (!el) return;
-  const users = JSON.parse(localStorage.getItem(USER_KEY) || '[]').filter(u => u.firebaseUid);
+  const users = JSON.parse(localStorage.getItem(USER_KEY) || '[]').filter(u => u.firebaseUid || (u.email && !u.passwordHash));
   if (!users.length) {
     el.innerHTML = '<div style="color:var(--text-light)">No staff have cloud logins yet</div>';
     return;
@@ -4926,13 +5107,14 @@ function renderStaffLogins() {
     <div style="display:flex;gap:8px;align-items:center;margin:4px 0;flex-wrap:wrap">
       <span style="min-width:120px">${esc(u.username)}</span>
       <span style="font-size:12px;color:var(--text-light);min-width:160px">${esc(u.email||'')}</span>
-      ${canManage
+      ${!u.firebaseUid ? `<span class="badge">${esc(u.role)}</span><button class="btn btn-sm" onclick="repairStaffUid('${esc(u.email)}')">Restore link</button>` : ''}
+      ${!u.firebaseUid ? '' : canManage
         ? `<select style="min-width:150px" onchange="assignStaffRole('${esc(u.firebaseUid)}', this.value)">
              ${(getStaffRoles().includes(u.role) ? getStaffRoles() : [u.role].concat(getStaffRoles())).map(r => `<option value="${r}" ${r===u.role?'selected':''}>${r}</option>`).join('')}
            </select>`
         : `<span class="badge">${esc(u.role)}</span>`
       }
-      ${canManage ? `<button class="btn btn-sm" onclick="resyncStaffLink('${esc(u.firebaseUid)}')">Re-link</button><button class="btn btn-danger btn-sm" onclick="revokeStaffLogin('${esc(u.firebaseUid)}')">Remove</button>` : ''}
+      ${canManage && u.firebaseUid ? `<button class="btn btn-sm" onclick="editStaffChildren('${esc(u.firebaseUid)}')">Children${_childIdsOf(u).length ? ' (' + _childIdsOf(u).length + ')' : ''}</button><button class="btn btn-sm" onclick="resyncStaffLink('${esc(u.firebaseUid)}')">Re-link</button><button class="btn btn-danger btn-sm" onclick="revokeStaffLogin('${esc(u.firebaseUid)}')">Remove</button>` : ''}
     </div>`).join('');
 }
 
@@ -4960,15 +5142,16 @@ function assignStaffRole(firebaseUid, newRole) {
     renderStaffLogins();
     return;
   }
-  if (newRole === 'Parent' && !users[idx].studentId) {
-    showToast('Cannot switch to Parent here — Parent roles need a linked student. Remove this login and re-add as Parent instead.', 'error');
+  if (newRole === 'Parent' && !_childIdsOf(users[idx]).length) {
+    showToast('Cannot switch to Parent here — Parent roles need a linked student. Use the Children button on this login first.', 'error');
     renderStaffLogins();
     return;
   }
   users[idx].role = newRole;
   if (typeof _saveUsers === 'function') _saveUsers(users);
   else { localStorage.setItem(USER_KEY, JSON.stringify(users)); window.eduUsers = users; }
-  _fbWriteMerge(_staffDirectoryPath(firebaseUid), { role: newRole, perms: (config.customRoles || {})[newRole] || null });
+  { const _k = _childIdsOf(users[idx]); if (newRole === 'Parent' && _k.length) users[idx].studentId = _k[0]; }
+  _fbWriteMerge(_staffDirectoryPath(firebaseUid), { role: newRole, perms: (config.customRoles || {})[newRole] || null, studentId: (newRole === 'Parent' ? (_childIdsOf(users[idx])[0] || null) : null) });
   showToast(users[idx].username + '\u2019s role changed to ' + newRole);
   renderStaffLogins();
 }
@@ -5014,11 +5197,13 @@ function getStaffRoles() {
 }
 
 async function createStaffLogin(name, email, password, role, studentId) {
+  const kids = Array.isArray(studentId) ? studentId.filter(Boolean) : (studentId ? [studentId] : []);
   if (!name || !email || !email.includes('@')) { showToast('Enter a name and valid email', 'error'); return false; }
   if (!password || password.length < 6) { showToast('Password must be at least 6 characters', 'error'); return false; }
   const VALID_ROLES = getStaffRoles();
   if (!VALID_ROLES.includes(role)) { showToast('Invalid role. Choose from: ' + VALID_ROLES.join(', '), 'error'); return false; }
-  if (role === 'Parent' && !studentId) { showToast('Select which student this parent is linked to', 'error'); return false; }
+  if (role === 'Parent' && !kids.length) { showToast('Select at least one student this parent is linked to', 'error'); return false; }
+  { const _ke = _kidsError(kids, role); if (_ke) { showToast(_ke, 'error'); return false; } }
   if (!window._fbAuth || !window._fbAuth.currentUser) { showToast('You must be signed in as the school admin to add staff', 'error'); return false; }
   const staffManagementRoles = ['Administrator'];
   if (typeof currentUser !== 'undefined' && !staffManagementRoles.includes(currentUser.role)) {
@@ -5052,7 +5237,7 @@ async function createStaffLogin(name, email, password, role, studentId) {
 
     // Write the global directory entry so the teacher's own device can resolve their school
     const dirEntry = { adminUid, schoolId, role, name, email, _createdAt: Date.now() };
-    if (role === 'Parent' && studentId) dirEntry.studentId = studentId;
+    { const _cm = _childrenMap(kids); if (_cm) dirEntry.children = _cm; if (role === 'Parent' && kids.length) dirEntry.studentId = kids[0]; }
     const _cr = (config.customRoles || {})[role];
     if (_cr) dirEntry.perms = _cr; // custom role: staff device gets its permissions at login
     const dirPath = _staffDirectoryPath(newUid);
@@ -5084,7 +5269,8 @@ async function createStaffLogin(name, email, password, role, studentId) {
     // Add to the school's local + cloud users list for role-gated UI
     const existing = JSON.parse(localStorage.getItem(USER_KEY) || '[]');
     const newUserEntry = { username: name, email, role, firebaseUid: newUid };
-    if (role === 'Parent' && studentId) newUserEntry.studentId = studentId;
+    if (kids.length) newUserEntry.childIds = kids;
+    if (role === 'Parent' && kids.length) newUserEntry.studentId = kids[0];
     const newUsers = existing.concat([newUserEntry]);
     if (typeof _saveUsers === 'function') _saveUsers(newUsers);
     else { localStorage.setItem(USER_KEY, JSON.stringify(newUsers)); window.eduUsers = newUsers; }
@@ -5121,11 +5307,12 @@ function promptAddStaffLogin() {
       <div class="form-group"><label>Full Name</label><input type="text" id="slName" placeholder="e.g. Mary Phiri"></div>
       <div class="form-group"><label>Email Address</label><input type="email" id="slEmail" placeholder="e.g. mary@school.edu"></div>
       <div class="form-group"><label>Role / Designation</label>
-        <select id="slRole" onchange="document.getElementById('slStudentRow').style.display = this.value==='Parent' ? 'block' : 'none'">${roleOptions}</select>
+        <select id="slRole" onchange="document.getElementById('slChildReq').textContent = this.value==='Parent' ? '*' : ''">${roleOptions}</select>
       </div>
-      <div class="form-group" id="slStudentRow" style="display:none">
-        <label>Linked Student <span style="color:var(--accent)">*</span></label>
-        <select id="slStudentId"><option value="">Select student</option>${studentOptions}</select>
+      <div class="form-group" id="slStudentRow">
+        <label>Children at this school <span id="slChildReq" style="color:var(--accent)"></span></label>
+        <div style="font-size:11px;color:var(--text-light);margin-bottom:6px">Required for Parents. Optional for staff who are also parents. Tick every child.</div>
+        ${_childPickerHtml('slChildren', [])}
       </div>
       <div class="form-group"><label>Temporary Password <span style="font-size:11px;color:var(--text-light)">(min 6 chars)</span></label>
         <input type="password" id="slPass" placeholder="Staff changes this after first login">
@@ -5137,7 +5324,7 @@ function promptAddStaffLogin() {
           const e=document.getElementById('slEmail').value.trim();
           const r=document.getElementById('slRole').value;
           const p=document.getElementById('slPass').value;
-          const sid=document.getElementById('slStudentId').value;
+          const sid=_pickedChildren('slChildren');
           const btn=this, origLabel=btn.textContent;
           btn.disabled=true; btn.textContent='Creating\u2026';
           createStaffLogin(n,e,p,r,sid).then(ok=>{
@@ -6267,17 +6454,17 @@ function loadUsers(){
 // this one table, so nav visibility and actual access can never disagree
 // again — fix a permission here once, and it's correct everywhere.
 window.ROLE_SECTIONS = {
-  'Administrator':       ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','admin','staff'],
-  'Head Teacher':        ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','admin'],
-  'Deputy Head Teacher': ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports'],
-  'Senior Teacher':      ['dashboard','database','assessments','classmarks','attendance','conduct','announcements','reports'],
-  'Head of Department':  ['dashboard','database','assessments','classmarks','attendance','reports'],
-  'Teacher':             ['dashboard','database','assessments','classmarks','attendance','reports'],
-  'Grade Teacher':       ['dashboard','database','assessments','classmarks','attendance','conduct','reports'],
-  'Subject Teacher':     ['dashboard','assessments','classmarks','reports'],
-  'Bursar':              ['dashboard','database','finance','reports'],
-  'Accountant':          ['dashboard','finance','reports'],
-  'Counsellor':          ['dashboard','database','conduct','attendance','reports'],
+  'Administrator':       ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','documents','notices','admin','staff'],
+  'Head Teacher':        ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','documents','notices','admin'],
+  'Deputy Head Teacher': ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','documents','notices'],
+  'Senior Teacher':      ['dashboard','database','assessments','classmarks','attendance','conduct','announcements','reports','documents','notices'],
+  'Head of Department':  ['dashboard','database','assessments','classmarks','attendance','reports','documents','notices'],
+  'Teacher':             ['dashboard','database','assessments','classmarks','attendance','reports','documents','notices'],
+  'Grade Teacher':       ['dashboard','database','assessments','classmarks','attendance','conduct','reports','documents','notices'],
+  'Subject Teacher':     ['dashboard','assessments','classmarks','reports','documents','notices'],
+  'Bursar':              ['dashboard','database','finance','reports','documents','notices'],
+  'Accountant':          ['dashboard','finance','reports','documents','notices'],
+  'Counsellor':          ['dashboard','database','conduct','attendance','reports','documents','notices'],
   'Parent':              ['dashboard','reports','finance']
 };
 
@@ -6305,6 +6492,10 @@ function _saveUsers(users) {
     // Never store passwordHash or salt in Firebase
     users.forEach((u, i) => {
       usersObj['u' + i] = { username: u.username, role: u.role, email: u.email || '' };
+      if (u.firebaseUid) usersObj['u' + i].firebaseUid = u.firebaseUid;
+      if (u.googleAuth) usersObj['u' + i].googleAuth = true;
+      if (u.childIds && u.childIds.length) usersObj['u' + i].childIds = u.childIds;
+      if (u.studentId) usersObj['u' + i].studentId = u.studentId;
     });
     usersObj._count = users.length;
     usersObj._lastModified = Date.now();
@@ -6358,9 +6549,35 @@ if(!localStorage.getItem('edu_audit_logs')){
 }
 function addAudit(action){
  let logs=JSON.parse(localStorage.getItem('edu_audit_logs')||'[]');
- logs.unshift({action:action,time:new Date().toLocaleString()});
+ const entry={action:action,time:new Date().toLocaleString(),ts:Date.now()};
+ logs.unshift(entry);
+ if(logs.length>500) logs.length=500;
  localStorage.setItem('edu_audit_logs',JSON.stringify(logs));
+ // Cloud copy (append-only, one node per entry) so a browser clear can't erase the trail.
+ try{
+  if(window._fbDb && window._fbSet && window._fbRef && window._fbAuth && window._fbAuth.currentUser && typeof _fbSchoolPath==='function'){
+   const who=(typeof currentUser!=='undefined'&&currentUser&&currentUser.username)?currentUser.username:'';
+   window._fbSet(window._fbRef(window._fbDb,_fbSchoolPath()+'/auditLogs/'+entry.ts+'_'+Math.random().toString(36).slice(2,6)),
+     {action:String(action).slice(0,300),time:entry.time,ts:entry.ts,by:String(who).slice(0,80)}).catch(()=>{});
+  }
+ }catch(e){}
 }
+// Restore the trail from the cloud on a fresh device (admin / head teacher / deputy only by rules).
+async function restoreAuditLogs(){
+ try{
+  if(!(window._fbDb&&window._fbGet&&window._fbRef&&window._fbAuth&&window._fbAuth.currentUser)) return;
+  const snap=await window._fbGet(window._fbRef(window._fbDb,_fbSchoolPath()+'/auditLogs'));
+  const v=snap.val(); if(!v) return;
+  const remote=Object.keys(v).map(k=>v[k]).filter(x=>x&&x.action);
+  const local=JSON.parse(localStorage.getItem('edu_audit_logs')||'[]');
+  const seen=new Set(local.map(l=>(l.ts||l.time)+'|'+l.action));
+  remote.forEach(r=>{ if(!seen.has((r.ts||r.time)+'|'+r.action)) local.push({action:r.action,time:r.time,ts:r.ts}); });
+  local.sort((a,b)=>(b.ts||0)-(a.ts||0));
+  localStorage.setItem('edu_audit_logs',JSON.stringify(local.slice(0,500)));
+  if(typeof renderAuditEdu==='function') renderAuditEdu();
+ }catch(e){ console.warn('[audit] restore skipped:',e&&(e.code||e.message)); }
+}
+window.addEventListener('load',()=>setTimeout(restoreAuditLogs,4000));
 document.addEventListener('DOMContentLoaded',()=>{
  let admin=document.getElementById('sec-admin');
  if(admin){
@@ -6835,7 +7052,7 @@ document.addEventListener('DOMContentLoaded', () => {
 (function () {
   const CFG = [['database','Database'],['register','Register'],['assessments','Assessments'],['classmarks','Class Marks'],
     ['finance','Finance'],['attendance','Attendance'],['conduct','Conduct'],['analytics','Analytics'],
-    ['announcements','Announcements'],['reports','Reports']];
+    ['announcements','Announcements'],['reports','Reports'],['documents','Documents'],['notices','Staff Notices']];
   const LVL = ['No access','View only','View + add/edit','Full (incl. delete)'];
   const BUILTIN = Object.keys(window.ROLE_SECTIONS);
   window.CUSTOM_PERMS = window.CUSTOM_PERMS || {};
@@ -7129,6 +7346,7 @@ document.addEventListener('DOMContentLoaded', () => {
           } else out[i] = HIDDEN();
         });
       }
+      if (window._parentView && window._pv) { window._pv.students = out; out._lastModified = ts; _fbLastStudentCount = cnt; return; }
       students = out; students._lastModified = ts; _fbLastStudentCount = cnt;
       try { localStorage.setItem(_schoolStorageKey(DB_KEY, config.currentSchool || 'default'), JSON.stringify(students)); } catch (e) {}
       if (typeof refreshCurrentSection === 'function') refreshCurrentSection();
@@ -7615,6 +7833,582 @@ document.addEventListener('DOMContentLoaded', () => {
   document.addEventListener('DOMContentLoaded', () => setTimeout(() => { renderCard(); fillTermSelects(); }, 100));
 })();
 </script>
+
+
+<script>
+// ==================== PARENTS WITH SEVERAL CHILDREN / STAFF WHO ARE PARENTS ====================
+// A login can be linked to any number of students (staffDirectory/<uid>/children/<studentId>=true).
+// Works for Parent logins and for any staff role (e.g. a teacher whose child attends the school).
+window.MY_CHILDREN = [];
+window._activeChild = 0;
+function _childKeyOk(id) { return /^[A-Za-z0-9_-]+$/.test(String(id || '')); }
+function _childIdsOf(u) {
+  const out = []; const add = x => { if (x && typeof x === 'string' && !out.includes(x)) out.push(x); };
+  if (!u) return out;
+  if (Array.isArray(u.childIds)) u.childIds.forEach(add);
+  else if (u.childIds && typeof u.childIds === 'object') Object.keys(u.childIds).forEach(k => add(u.childIds[k]));
+  if (u.children && typeof u.children === 'object') Object.keys(u.children).forEach(add);
+  add(u.studentId);
+  return out;
+}
+function _childrenMap(ids) { const m = {}; (ids || []).forEach(id => { if (_childKeyOk(id)) m[id] = true; }); return Object.keys(m).length ? m : null; }
+// Firebase rules can only match "plain" IDs for extra children. A Parent may still have ONE child whose ID has special characters.
+function _kidsError(kids, role) {
+  const bad = (kids || []).filter(id => !_childKeyOk(id));
+  if (!bad.length) return '';
+  if (role === 'Parent' && kids.length === 1) return '';
+  return 'Student ID "' + bad[0] + '" contains special characters (/ . # $ [ ]) so it can only be linked on its own to a Parent login. Change that student\u2019s ID, or link it separately.';
+}
+function _childPickerHtml(id, selected) {
+  const sel = new Set(selected || []);
+  const rows = (students || []).filter(s => s && s.id && !s._hidden).map(s =>
+    '<label class="cp-row" data-t="' + escHtml(((s.name || '') + ' ' + s.id).toLowerCase()) + '" style="display:flex;gap:8px;align-items:center;padding:4px 2px">' +
+    '<input type="checkbox" value="' + escHtml(s.id) + '"' + (sel.has(s.id) ? ' checked' : '') + '> <span>' + escHtml(s.name || '') +
+    ' <span style="color:var(--text-light);font-size:12px">' + escHtml(s.class || '') + ' \u00b7 ' + escHtml(s.id) + '</span></span></label>').join('');
+  return '<input type="search" placeholder="Search students\u2026" oninput="_filterChildPicker(\'' + id + '\',this.value)" style="width:100%;margin-bottom:6px">' +
+    '<div id="' + id + '" style="max-height:180px;overflow:auto;border:1px solid var(--border);border-radius:8px;padding:6px">' + (rows || '<div style="color:var(--text-light)">No students yet</div>') + '</div>';
+}
+function _filterChildPicker(id, q) {
+  q = (q || '').toLowerCase().trim();
+  document.querySelectorAll('#' + id + ' .cp-row').forEach(r => { r.style.display = (!q || r.dataset.t.includes(q)) ? 'flex' : 'none'; });
+}
+function _pickedChildren(id) { return Array.from(document.querySelectorAll('#' + id + ' input:checked')).map(i => i.value); }
+
+function editStaffChildren(uid) {
+  const u = JSON.parse(localStorage.getItem(USER_KEY) || '[]').find(x => x.firebaseUid === uid);
+  if (!u) return;
+  const m = document.createElement('div'); m.className = 'modal-overlay'; m.id = 'staffChildrenModal';
+  m.innerHTML = '<div class="modal" style="max-width:420px"><h3>\ud83d\udc68\u200d\ud83d\udc67 Children of ' + escHtml(u.username || 'this login') + '</h3>' +
+    '<p style="font-size:13px;color:var(--text-light);margin-bottom:10px">Tick every child linked to this login' + (u.role === 'Parent' ? ' (at least one).' : '. They\u2019ll see them under \u201cMy Children\u201d on their dashboard.') + '</p>' +
+    _childPickerHtml('scChildren', _childIdsOf(u)) +
+    '<div class="modal-actions"><button class="btn btn-outline" onclick="document.getElementById(\'staffChildrenModal\').remove()">Cancel</button>' +
+    '<button class="btn btn-primary" onclick="setStaffChildren(\'' + escHtml(uid) + '\', _pickedChildren(\'scChildren\')).then(ok=>{ if(ok) document.getElementById(\'staffChildrenModal\').remove(); })">Save</button></div></div>';
+  document.body.appendChild(m);
+}
+async function setStaffChildren(uid, ids) {
+  const users = JSON.parse(localStorage.getItem(USER_KEY) || '[]');
+  const u = users.find(x => x.firebaseUid === uid); if (!u) return false;
+  if (u.role === 'Parent' && !ids.length) { showToast('A Parent login needs at least one child', 'error'); return false; }
+  const err = _kidsError(ids, u.role); if (err) { showToast(err, 'error'); return false; }
+  u.childIds = ids;
+  if (u.role === 'Parent') u.studentId = ids[0]; else delete u.studentId;
+  _saveUsers(users);
+  _fbWriteMerge(_staffDirectoryPath(uid), { children: _childrenMap(ids), studentId: (u.role === 'Parent' && ids.length) ? ids[0] : null });
+  showToast('Children updated for ' + (u.username || 'login') + '. They see the change next time they open the app.');
+  renderStaffLogins();
+  return true;
+}
+
+// ---- Student index: studentIndex/<studentId> -> array position, so a parent can fetch only their child's record ----
+let _idxFp = '';
+function _fbSyncStudentIndex() {
+  try {
+    if (!_fbSyncEnabled || !window._fbDb || !window._fbSet) return;
+    const r = (typeof currentUser !== 'undefined' && currentUser && currentUser.role) || '';
+    if (r === 'Parent') return;
+    if ((typeof window.isScopedUser === 'function' && window.isScopedUser()) || (typeof window.isCustomRoleUser === 'function' && window.isCustomRoleUser())) return;
+    if (!students.length || students.some(x => x && x._hidden)) return;
+    const m = {}; students.forEach((x, i) => { if (x && x.id) m[_photoKey(x.id)] = i; });
+    const fp = JSON.stringify(m); if (fp === _idxFp) return; _idxFp = fp;
+    window._fbSet(window._fbRef(window._fbDb, _fbSchoolPath() + '/studentIndex'), m).catch(e => { _idxFp = ''; console.warn('[index] skipped:', e && e.code); });
+  } catch (e) {}
+}
+
+// ---- Load my children (read-only) ----
+async function loadMyChildren(entry) {
+  try {
+    const role = (entry && entry.role) || '';
+    const ids = _childIdsOf(entry);
+    if (role === 'Parent') { students = []; students._childOnly = true; }
+    if (!ids.length) { window.MY_CHILDREN = []; if (typeof refreshCurrentSection === 'function') refreshCurrentSection(); return; }
+    const base = _fbSchoolPath();
+    const g = p => window._fbGet(window._fbRef(window._fbDb, base + p)).then(x => x.val());
+    const out = [];
+    for (const id of ids) {
+      try {
+        const key = _photoKey(id);
+        const idx = await g('/studentIndex/' + key);
+        if (typeof idx !== 'number') { console.warn('[children] no index entry for', id); continue; }
+        const v = await g('/students/s' + idx);
+        if (!v || v.id !== id) { console.warn('[children] index out of date for', id); continue; }
+        if (!v.photo || v.photo === '__photo__') {
+          delete v.photo;
+          try { const ph = await g('/photos/' + key); if (typeof ph === 'string' && ph.startsWith('data:image/')) v.photo = ph; } catch (e) {}
+        }
+        v.subjects = v.subjects || []; v.phones = v.phones || []; v.attendance = v.attendance || {};
+        v.conduct = v.conduct || []; v.terms = v.terms || {}; v.paymentHistory = v.paymentHistory || [];
+        v.finance = v.finance || { total: 0, paid: 0, categories: [] };
+        out.push(v);
+      } catch (e) { console.warn('[children] load failed for', id, e && e.code); }
+    }
+    window.MY_CHILDREN = out;
+    if (window._parentView && role !== 'Parent') { students = out.map(k => JSON.parse(JSON.stringify(k))); students._childOnly = true; }
+    if (role === 'Parent') {
+      students = out.slice(); students._childOnly = true;
+      if ((window._activeChild || 0) >= students.length) window._activeChild = 0;
+    }
+    if (typeof refreshCurrentSection === 'function') refreshCurrentSection();
+  } catch (e) { console.warn('[children] load error', e); }
+}
+
+
+// ---- Parent view for staff who are also parents: shows exactly what a Parent login sees (Dashboard, Reports, Finance) ----
+window._parentView = false; window._pv = null; window._positionPool = null;
+function _pvBanner(on) {
+  let b = document.getElementById('pvBanner');
+  if (!on) { if (b) b.remove(); return; }
+  if (!b) {
+    b = document.createElement('div'); b.id = 'pvBanner';
+    b.style.cssText = 'position:sticky;top:0;z-index:9998;background:#6c3483;color:#fff;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px';
+    b.innerHTML = '<span>\ud83d\udc68\u200d\ud83d\udc67 Parent view \u2014 you are seeing what a parent sees</span><button class="btn btn-sm" style="background:#fff;color:#6c3483" onclick="exitParentView()">Exit</button>';
+    document.body.insertBefore(b, document.body.firstChild);
+  }
+}
+function enterParentView() {
+  const kids = window.MY_CHILDREN || [];
+  if (window._parentView || !kids.length || !currentUser || currentUser.role === 'Parent') return;
+  const real = students;
+  window._pv = { students: real, user: currentUser, section: currentSection };
+  // Class position needs the whole school; unknown if part of it is hidden from this staff member.
+  window._positionPool = (real && real.length && !real.some(x => x && x._hidden)) ? real : null;
+  students = kids.map(k => JSON.parse(JSON.stringify(k))); students._childOnly = true;
+  currentUser = Object.assign({}, currentUser, { role: 'Parent', studentId: kids[0].id, _pv: true });
+  window._activeChild = 0; window._parentView = true;
+  if (typeof applyRoleAccess === 'function') applyRoleAccess('Parent');
+  _pvBanner(true);
+  showSection('dashboard');
+}
+function exitParentView() {
+  if (!window._parentView || !window._pv) return;
+  const pv = window._pv;
+  students = pv.students; currentUser = pv.user;
+  window._parentView = false; window._pv = null; window._positionPool = null; window._activeChild = 0;
+  if (typeof applyRoleAccess === 'function') applyRoleAccess(currentUser.role);
+  _pvBanner(false);
+  showSection('dashboard');
+}
+
+function _childSwitcherHtml() {
+  if (!(students && students._childOnly && students.length > 1)) return '';
+  return '<div style="margin-bottom:12px"><label style="font-size:12px;color:var(--text-light)">Child</label>' +
+    '<select onchange="switchChild(this.value)" style="width:100%">' +
+    students.map((x, i) => '<option value="' + i + '"' + (i === (window._activeChild || 0) ? ' selected' : '') + '>' + escHtml(x.name) + ' \u2014 ' + escHtml(x.class || '') + '</option>').join('') + '</select></div>';
+}
+window.switchChild = function (i) { window._activeChild = parseInt(i, 10) || 0; refreshCurrentSection(); };
+
+function renderMyChildrenCard() {
+  const host = document.getElementById('dashStats'); if (!host) return;
+  const kids = window.MY_CHILDREN || [];
+  let card = document.getElementById('myChildrenCard');
+  const _r = (currentUser && currentUser.role) || '';
+  if (!kids.length || _r === 'Parent' || window._parentView) { if (card) card.remove(); return; }
+  if (!card) { card = document.createElement('div'); card.className = 'card'; card.id = 'myChildrenCard'; host.parentNode.insertBefore(card, host); }
+  card.innerHTML = '<div class="card-header"><span class="card-title">\ud83d\udc68\u200d\ud83d\udc67 My Children</span><button class="btn btn-primary btn-sm" onclick="enterParentView()">Open full parent view</button></div>' + kids.map(k => {
+    const f = k.finance || { total: 0, paid: 0 }; const bal = (f.total || 0) - (f.paid || 0);
+    let avg = null; try { avg = getStudentAverage(k); } catch (e) {}
+    const av = k.photo ? '<img src="' + safePhotoSrc(k.photo) + '" class="photo-avatar">' : '<div class="photo-placeholder">' + escHtml((k.name || '?').charAt(0)) + '</div>';
+    return '<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">' + av +
+      '<div style="flex:1;min-width:0"><strong>' + escHtml(k.name) + '</strong><div style="font-size:12px;color:var(--text-light)">' + escHtml(k.class || '') +
+      (avg !== null && avg !== undefined ? ' \u00b7 Avg ' + Number(avg).toFixed(1) + '%' : '') + ' \u00b7 Balance K' + bal.toLocaleString() + '</div></div>' +
+      '<button class="btn btn-success btn-sm" onclick="openParentPaymentModal(\'' + escHtml(k.id) + '\',\'' + escHtml(k.name) + '\')">\ud83d\udcb3 Pay</button></div>';
+  }).join('');
+}
+(function () {
+  const _rd = window.renderDashboard;
+  if (typeof _rd === 'function') window.renderDashboard = function () { const r = _rd.apply(this, arguments); try { renderMyChildrenCard(); } catch (e) { console.warn(e); } return r; };
+})();
+</script>
+<script>
+// ==================== STAFF DOCUMENTS ====================
+// Metadata:  <school>/documents/<uploaderUid>/<docId>
+// File data: <school>/documentFiles/<uploaderUid>/<docId>/<n>  (base64 chunks)
+// Both are role-protected by the database rules: staff see their own; Administrator /
+// Head Teacher / Deputy Head Teacher see all and can delete any. Uploads made offline are
+// kept on the device (IndexedDB) and sent automatically when the connection returns.
+const DOC_VIEWER_ROLES = ['Administrator', 'Head Teacher', 'Deputy Head Teacher'];
+const DOC_MAX_BYTES = 10 * 1024 * 1024;
+const DOC_CHUNK = 180000;
+const DOC_MIME = {
+  pdf: 'application/pdf', doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  csv: 'text/csv'
+};
+let _docCache = [], _dqBusy = false;
+
+function _docIsViewer() { return typeof currentUser !== 'undefined' && currentUser && DOC_VIEWER_ROLES.includes(currentUser.role); }
+function _docUid() { return window._fbAuth && window._fbAuth.currentUser ? window._fbAuth.currentUser.uid : null; }
+function _docFmtSize(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; }
+function _docExt(n) { const m = /\.(pdf|docx?|xlsx?|csv)$/i.exec(n || ''); return m ? m[1].toLowerCase() : null; }
+function _docTimeout(p, ms) { return Promise.race([p, new Promise((_, r) => setTimeout(() => r(new Error('timeout')), ms))]); }
+function _docReadB64(file) {
+  return new Promise((res, rej) => {
+    const fr = new FileReader();
+    fr.onload = () => res(String(fr.result).split(',')[1] || '');
+    fr.onerror = () => rej(fr.error);
+    fr.readAsDataURL(file);
+  });
+}
+
+// ---- offline queue (IndexedDB) ----
+function _dqOpen() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('edu_doc_queue', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('q', { keyPath: 'id' });
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function _dqTx(mode, fn) {
+  const db = await _dqOpen();
+  return new Promise((res, rej) => {
+    const t = db.transaction('q', mode); let out;
+    out = fn(t.objectStore('q'));
+    t.oncomplete = () => res(out && 'result' in out ? out.result : undefined); t.onerror = () => rej(t.error);
+  });
+}
+const _dqPut = rec => _dqTx('readwrite', s => s.put(rec));
+const _dqDel = id => _dqTx('readwrite', s => s.delete(id));
+const _dqAll = () => _dqTx('readonly', s => s.getAll()).catch(() => []);
+
+// ---- sending ----
+async function _docSend(rec, onProgress) {
+  const n = Math.max(1, Math.ceil(rec.b64.length / DOC_CHUNK));
+  const fbase = rec.base + '/documentFiles/' + rec.uid + '/' + rec.id + '/';
+  for (let i = 0; i < n; i += 4) {
+    const batch = [];
+    for (let k = i; k < Math.min(i + 4, n); k++) {
+      batch.push(window._fbSet(window._fbRef(window._fbDb, fbase + k), rec.b64.slice(k * DOC_CHUNK, (k + 1) * DOC_CHUNK)));
+    }
+    await _docTimeout(Promise.all(batch), 30000);
+    if (onProgress) onProgress(Math.round(100 * Math.min(i + 4, n) / n));
+  }
+  // Metadata last: a document only appears in lists once every chunk is stored.
+  await _docTimeout(window._fbSet(window._fbRef(window._fbDb, rec.base + '/documents/' + rec.uid + '/' + rec.id), Object.assign({}, rec.meta, { chunks: n })), 30000);
+}
+
+async function _docProcessQueue() {
+  if (_dqBusy || !navigator.onLine || !_docUid() || !window._fbDb) return;
+  _dqBusy = true;
+  let sent = 0;
+  try {
+    for (const rec of await _dqAll()) {
+      if (rec.uid !== _docUid()) continue;
+      try { await (rec.kind === 'notice' ? _noticeSend(rec) : _docSend(rec)); await _dqDel(rec.id); sent++; }
+      catch (e) { if (e && e.code === 'PERMISSION_DENIED') { await _dqDel(rec.id); showToast('A queued document was rejected: ' + rec.meta.title, 'error'); } else break; }
+    }
+  } finally { _dqBusy = false; }
+  if (sent) { showToast(sent + ' queued item' + (sent > 1 ? 's' : '') + ' sent'); if (currentSection === 'documents') renderDocuments(); if (currentSection === 'notices') renderNotices(); }
+}
+window.addEventListener('online', () => setTimeout(_docProcessQueue, 1500));
+document.addEventListener('DOMContentLoaded', () => setTimeout(_docProcessQueue, 6000));
+
+function initDocuments() {
+  const canUpload = typeof canDo !== 'function' || canDo('documents', 2);
+  document.getElementById('docUploadCard').style.display = canUpload ? '' : 'none';
+  document.getElementById('docFilterRow').style.display = _docIsViewer() ? '' : 'none';
+  document.getElementById('docListTitle').textContent = _docIsViewer() ? 'All staff documents' : 'My uploads';
+  renderDocuments();
+  _docProcessQueue();
+}
+
+async function uploadDocument() {
+  const uid = _docUid();
+  if (!uid || !window._fbDb) return showToast('Sign in with your cloud login to upload documents.', 'error');
+  const file = document.getElementById('docFile').files[0];
+  const title = document.getElementById('docTitle').value.trim();
+  if (!file) return showToast('Choose a file first.', 'error');
+  if (!title) return showToast('Enter a title.', 'error');
+  const ext = _docExt(file.name);
+  if (!ext) return showToast('Only PDF, Word, Excel and CSV files are allowed.', 'error');
+  if (file.size > DOC_MAX_BYTES) return showToast('File is too large (max 10 MB).', 'error');
+
+  const btn = document.getElementById('docUploadBtn'), prog = document.getElementById('docProgress');
+  btn.disabled = true; prog.textContent = 'Preparing…';
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  try {
+    const rec = {
+      id, uid, base: _fbSchoolPath(), b64: await _docReadB64(file),
+      meta: {
+        id, title, name: file.name, category: document.getElementById('docCategory').value,
+        note: document.getElementById('docNote').value.trim(), size: file.size, mime: DOC_MIME[ext],
+        uploaderUid: uid, uploaderName: currentUser.username || '', uploaderRole: currentUser.role || '', ts: Date.now()
+      }
+    };
+    let queued = false;
+    if (!navigator.onLine) queued = true;
+    else {
+      try { await _docSend(rec, p => { prog.textContent = 'Uploading… ' + p + '%'; }); }
+      catch (e) {
+        if (e && e.code === 'PERMISSION_DENIED') throw e;
+        queued = true;
+      }
+    }
+    if (queued) { await _dqPut(rec); showToast('Saved on this device — it will upload when you are back online.'); }
+    else showToast('Document uploaded');
+    document.getElementById('docTitle').value = ''; document.getElementById('docNote').value = ''; document.getElementById('docFile').value = '';
+    renderDocuments();
+  } catch (e) {
+    console.warn('[documents] upload failed', e);
+    showToast('Upload failed: ' + ((e && (e.code || e.message)) || 'unknown error'), 'error');
+  } finally { btn.disabled = false; prog.textContent = ''; }
+}
+
+async function renderDocuments(useCache) {
+  const el = document.getElementById('docList');
+  if (!el) return;
+  const me = _docUid();
+  const pending = (await _dqAll()).filter(r => r.uid === me && r.kind !== 'notice');
+  if (!useCache) {
+    el.innerHTML = '<div style="color:var(--text-light)">Loading…</div>';
+    try {
+      if (!me || !window._fbDb) throw new Error('not signed in');
+      const base = _fbSchoolPath() + '/documents' + (_docIsViewer() ? '' : '/' + me);
+      const v = (await _docTimeout(window._fbGet(window._fbRef(window._fbDb, base)), 15000)).val() || {};
+      _docCache = _docIsViewer() ? [].concat(...Object.values(v).map(o => Object.values(o || {}))) : Object.values(v);
+      _docCache.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    } catch (e) {
+      if (!pending.length) { el.innerHTML = '<div style="color:var(--text-light)">Could not load documents (offline or no cloud login).</div>'; return; }
+    }
+    if (_docIsViewer()) {
+      const sel = document.getElementById('docFilterStaff'), cur = sel.value;
+      const names = [...new Set(_docCache.map(d => d.uploaderName || d.uploaderUid))];
+      sel.innerHTML = '<option value="">All staff</option>' + names.map(n => '<option>' + esc(n) + '</option>').join('');
+      sel.value = names.includes(cur) ? cur : '';
+    }
+  }
+  let list = _docCache;
+  if (_docIsViewer()) {
+    const s = document.getElementById('docFilterStaff').value, c = document.getElementById('docFilterCat').value;
+    if (s) list = list.filter(d => (d.uploaderName || d.uploaderUid) === s);
+    if (c) list = list.filter(d => d.category === c);
+  }
+  const pendHtml = pending.map(r => `
+    <div style="padding:10px 0;border-bottom:1px solid var(--border,#eee)">
+      <div style="font-weight:600">${esc(r.meta.title)} <span class="badge">⏳ Waiting to upload</span></div>
+      <div style="font-size:12px;color:var(--text-light)">${esc(r.meta.name)} · ${_docFmtSize(r.meta.size || 0)} · stored on this device</div>
+      <div style="margin-top:6px;display:flex;gap:8px">
+        <button class="btn btn-sm btn-primary" onclick="_docProcessQueue()">Retry now</button>
+        <button class="btn btn-danger btn-sm" onclick="dropQueuedDoc('${esc(r.id)}')">Cancel</button>
+      </div>
+    </div>`).join('');
+  if (!list.length && !pending.length) { el.innerHTML = '<div style="color:var(--text-light)">No documents yet</div>'; return; }
+  el.innerHTML = pendHtml + list.map(d => `
+    <div style="padding:10px 0;border-bottom:1px solid var(--border,#eee)">
+      <div style="font-weight:600">${esc(d.title)} <span class="badge">${esc(d.category)}</span></div>
+      <div style="font-size:12px;color:var(--text-light)">${esc(d.uploaderName)} (${esc(d.uploaderRole)}) · ${new Date(d.ts).toLocaleString()} · ${_docFmtSize(d.size || 0)} · ${esc(d.name)}</div>
+      ${d.note ? `<div style="font-size:13px;margin-top:2px">${esc(d.note)}</div>` : ''}
+      <div style="margin-top:6px;display:flex;gap:8px">
+        <button class="btn btn-sm btn-primary" onclick="openDocument('${esc(d.uploaderUid)}','${esc(d.id)}')">Download</button>
+        ${(_docIsViewer() || d.uploaderUid === me) ? `<button class="btn btn-danger btn-sm" onclick="deleteDocument('${esc(d.uploaderUid)}','${esc(d.id)}')">Delete</button>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+async function dropQueuedDoc(id) {
+  if (!confirm('Cancel this waiting upload?')) return;
+  await _dqDel(id); renderDocuments(true);
+}
+
+async function openDocument(uid, id) {
+  const d = _docCache.find(x => x.uploaderUid === uid && x.id === id);
+  if (!d) return;
+  showToast('Preparing download…');
+  try {
+    const base = _fbSchoolPath() + '/documentFiles/' + uid + '/' + id + '/';
+    const n = d.chunks || 1, parts = new Array(n);
+    for (let i = 0; i < n; i += 6) {
+      await Promise.all(Array.from({ length: Math.min(6, n - i) }, (_, j) =>
+        _docTimeout(window._fbGet(window._fbRef(window._fbDb, base + (i + j))), 30000).then(s => { parts[i + j] = s.val(); })));
+    }
+    if (parts.some(x => typeof x !== 'string')) throw new Error('file is incomplete');
+    const bin = atob(parts.join('')), u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([u8], { type: d.mime || 'application/octet-stream' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = d.name || 'document'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) { showToast('Could not download: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+}
+
+async function deleteDocument(uid, id) {
+  const d = _docCache.find(x => x.uploaderUid === uid && x.id === id);
+  if (!d || !confirm('Delete "' + d.title + '"? This cannot be undone.')) return;
+  try {
+    const base = _fbSchoolPath();
+    await window._fbSet(window._fbRef(window._fbDb, base + '/documents/' + uid + '/' + id), null);
+    await window._fbSet(window._fbRef(window._fbDb, base + '/documentFiles/' + uid + '/' + id), null); // removes the file data too
+    showToast('Document deleted');
+    renderDocuments();
+  } catch (e) { showToast('Could not delete: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+}
+</script>
+
+<script>
+// ==================== STAFF NOTICES ====================
+// Notices:     <school>/staffNotices/<noticeId>
+// Attachments: <school>/staffNoticeFiles/<noticeId>/<fileIndex>/<chunk>  (base64 chunks)
+// Posted by Administrator / Head Teacher / Deputy Head Teacher; readable by all staff
+// (never parents) — enforced by the database rules. Posts made offline are queued on the
+// device and sent automatically (shared queue with Documents).
+const NOTICE_POSTERS = ['Administrator', 'Head Teacher', 'Deputy Head Teacher'];
+const NOTICE_MAX_BYTES = 5 * 1024 * 1024, NOTICE_MAX_FILES = 3;
+let _noticeCache = [];
+
+function _noticeIsPoster() { return typeof currentUser !== 'undefined' && currentUser && NOTICE_POSTERS.includes(currentUser.role); }
+function _noticeSeenKey() { try { return 'noticeSeen:' + _fbSchoolPath(); } catch (e) { return 'noticeSeen'; } }
+function _noticeBadge() {
+  const b = document.getElementById('noticeBadge'); if (!b) return;
+  const seen = +localStorage.getItem(_noticeSeenKey()) || 0, me = _docUid();
+  const n = _noticeCache.filter(x => x.ts > seen && x.authorUid !== me).length;
+  b.style.display = n ? 'inline-block' : 'none'; b.textContent = n;
+}
+async function _noticeFetch() {
+  const v = (await _docTimeout(window._fbGet(window._fbRef(window._fbDb, _fbSchoolPath() + '/staffNotices')), 15000)).val() || {};
+  _noticeCache = Object.values(v).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+}
+async function _noticeCheck() {
+  if (!_docUid() || !window._fbDb || !navigator.onLine) return;
+  if (typeof canAccess === 'function' && !canAccess('notices')) return;
+  try { await _noticeFetch(); _noticeBadge(); } catch (e) {}
+}
+window.addEventListener('online', () => setTimeout(_noticeCheck, 2000));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) _noticeCheck(); });
+document.addEventListener('DOMContentLoaded', () => { setTimeout(_noticeCheck, 8000); setInterval(_noticeCheck, 10 * 60 * 1000); });
+
+function initNotices() {
+  document.getElementById('noticePostCard').style.display = _noticeIsPoster() ? '' : 'none';
+  renderNotices();
+}
+
+async function _noticeSend(rec, onProgress) {
+  const files = [];
+  for (let j = 0; j < rec.files.length; j++) {
+    const f = rec.files[j], n = Math.max(1, Math.ceil(f.b64.length / DOC_CHUNK));
+    const fbase = rec.base + '/staffNoticeFiles/' + rec.id + '/' + j + '/';
+    for (let i = 0; i < n; i += 4) {
+      const batch = [];
+      for (let k = i; k < Math.min(i + 4, n); k++) batch.push(window._fbSet(window._fbRef(window._fbDb, fbase + k), f.b64.slice(k * DOC_CHUNK, (k + 1) * DOC_CHUNK)));
+      await _docTimeout(Promise.all(batch), 30000);
+      if (onProgress) onProgress('file ' + (j + 1) + '/' + rec.files.length + ' — ' + Math.round(100 * Math.min(i + 4, n) / n) + '%');
+    }
+    files.push({ name: f.name, size: f.size, mime: f.mime, chunks: n });
+  }
+  // Notice record last: it only appears once every attachment is fully stored.
+  const meta = Object.assign({}, rec.meta); if (files.length) meta.files = files;
+  await _docTimeout(window._fbSet(window._fbRef(window._fbDb, rec.base + '/staffNotices/' + rec.id), meta), 30000);
+}
+
+async function postNotice() {
+  const uid = _docUid();
+  if (!_noticeIsPoster()) return showToast('Only the Head Teacher, Deputy or Administrator can post notices.', 'error');
+  if (!uid || !window._fbDb) return showToast('Sign in with your cloud login to post notices.', 'error');
+  const title = document.getElementById('noticeTitle').value.trim(), body = document.getElementById('noticeBody').value.trim();
+  const picked = Array.from(document.getElementById('noticeFiles').files);
+  if (!title) return showToast('Enter a title.', 'error');
+  if (!body && !picked.length) return showToast('Write a message or attach a file.', 'error');
+  if (picked.length > NOTICE_MAX_FILES) return showToast('Attach at most ' + NOTICE_MAX_FILES + ' files.', 'error');
+  for (const f of picked) {
+    if (!_docExt(f.name)) return showToast(f.name + ': only PDF, Word, Excel and CSV files are allowed.', 'error');
+    if (f.size > NOTICE_MAX_BYTES) return showToast(f.name + ' is larger than 5 MB.', 'error');
+  }
+  const btn = document.getElementById('noticePostBtn'), prog = document.getElementById('noticeProgress');
+  btn.disabled = true; prog.textContent = 'Preparing…';
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  try {
+    const files = [];
+    for (const f of picked) files.push({ name: f.name, size: f.size, mime: DOC_MIME[_docExt(f.name)], b64: await _docReadB64(f) });
+    const rec = {
+      id, uid, kind: 'notice', base: _fbSchoolPath(), files,
+      meta: { id, title, body, priority: document.getElementById('noticePriority').value,
+        authorUid: uid, authorName: currentUser.username || '', authorRole: currentUser.role || '', ts: Date.now() }
+    };
+    let queued = !navigator.onLine;
+    if (!queued) {
+      try { await _noticeSend(rec, p => { prog.textContent = 'Uploading ' + p; }); }
+      catch (e) { if (e && e.code === 'PERMISSION_DENIED') throw e; queued = true; }
+    }
+    if (queued) { await _dqPut(rec); showToast('Saved on this device — it will post when you are back online.'); }
+    else showToast('Notice posted to all staff');
+    ['noticeTitle', 'noticeBody', 'noticeFiles'].forEach(k => { document.getElementById(k).value = ''; });
+    document.getElementById('noticePriority').value = 'Normal';
+    renderNotices();
+  } catch (e) {
+    console.warn('[notices] post failed', e);
+    showToast('Could not post: ' + ((e && (e.code || e.message)) || 'unknown error'), 'error');
+  } finally { btn.disabled = false; prog.textContent = ''; }
+}
+
+async function renderNotices() {
+  const el = document.getElementById('noticeList'); if (!el) return;
+  const me = _docUid();
+  const pending = (await _dqAll()).filter(r => r.uid === me && r.kind === 'notice');
+  el.innerHTML = '<div style="color:var(--text-light)">Loading…</div>';
+  let loaded = true;
+  try { if (!me || !window._fbDb) throw new Error('not signed in'); await _noticeFetch(); }
+  catch (e) { loaded = false; if (!pending.length && !_noticeCache.length) { el.innerHTML = '<div style="color:var(--text-light)">Could not load notices (offline or no cloud login).</div>'; return; } }
+  if (loaded && _noticeCache.length) { localStorage.setItem(_noticeSeenKey(), String(Math.max(..._noticeCache.map(x => x.ts || 0)))); }
+  _noticeBadge();
+  const pendHtml = pending.map(r => `
+    <div style="padding:12px 0;border-bottom:1px solid var(--border,#eee)">
+      <div style="font-weight:600">${esc(r.meta.title)} <span class="badge">⏳ Waiting to post</span></div>
+      <div style="font-size:12px;color:var(--text-light)">Stored on this device${r.files.length ? ' · ' + r.files.length + ' attachment(s)' : ''}</div>
+      <div style="margin-top:6px;display:flex;gap:8px">
+        <button class="btn btn-sm btn-primary" onclick="_docProcessQueue()">Retry now</button>
+        <button class="btn btn-danger btn-sm" onclick="dropQueuedNotice('${esc(r.id)}')">Cancel</button>
+      </div>
+    </div>`).join('');
+  if (!_noticeCache.length && !pending.length) { el.innerHTML = '<div style="color:var(--text-light)">No notices yet</div>'; return; }
+  el.innerHTML = pendHtml + _noticeCache.map(n => `
+    <div style="padding:12px 0;border-bottom:1px solid var(--border,#eee)">
+      <div style="font-weight:600">${n.priority === 'Urgent' ? '🔴 ' : ''}${esc(n.title)} ${n.priority === 'Urgent' ? '<span class="badge badge-f">Urgent</span>' : ''}</div>
+      <div style="font-size:12px;color:var(--text-light)">${esc(n.authorName)} (${esc(n.authorRole)}) · ${new Date(n.ts).toLocaleString()}</div>
+      ${n.body ? `<div style="font-size:14px;margin-top:6px;white-space:pre-wrap">${esc(n.body)}</div>` : ''}
+      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+        ${(n.files || []).map((f, j) => `<button class="btn btn-sm" onclick="openNoticeFile('${esc(n.id)}',${j})">📎 ${esc(f.name)} (${_docFmtSize(f.size || 0)})</button>`).join('')}
+        ${_noticeIsPoster() ? `<button class="btn btn-danger btn-sm" onclick="deleteNotice('${esc(n.id)}')">Delete</button>` : ''}
+      </div>
+    </div>`).join('');
+}
+
+async function dropQueuedNotice(id) {
+  if (!confirm('Cancel this waiting notice?')) return;
+  await _dqDel(id); renderNotices();
+}
+
+async function openNoticeFile(id, j) {
+  const n = _noticeCache.find(x => x.id === id), f = n && n.files && n.files[j];
+  if (!f) return;
+  showToast('Preparing download…');
+  try {
+    const base = _fbSchoolPath() + '/staffNoticeFiles/' + id + '/' + j + '/';
+    const cnt = f.chunks || 1, parts = new Array(cnt);
+    for (let i = 0; i < cnt; i += 6) {
+      await Promise.all(Array.from({ length: Math.min(6, cnt - i) }, (_, k) =>
+        _docTimeout(window._fbGet(window._fbRef(window._fbDb, base + (i + k))), 30000).then(s => { parts[i + k] = s.val(); })));
+    }
+    if (parts.some(x => typeof x !== 'string')) throw new Error('file is incomplete');
+    const bin = atob(parts.join('')), u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    const url = URL.createObjectURL(new Blob([u8], { type: f.mime || 'application/octet-stream' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = f.name || 'attachment'; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) { showToast('Could not download: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+}
+
+async function deleteNotice(id) {
+  const n = _noticeCache.find(x => x.id === id);
+  if (!n || !confirm('Delete notice "' + n.title + '" for all staff?')) return;
+  try {
+    const base = _fbSchoolPath();
+    await window._fbSet(window._fbRef(window._fbDb, base + '/staffNotices/' + id), null);
+    await window._fbSet(window._fbRef(window._fbDb, base + '/staffNoticeFiles/' + id), null);
+    showToast('Notice deleted'); renderNotices();
+  } catch (e) { showToast('Could not delete: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+}
+</script>
+
 
 </body>
 </html>
