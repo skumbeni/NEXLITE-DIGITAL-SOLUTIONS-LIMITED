@@ -5830,6 +5830,7 @@ async function _completeGoogleSignIn(fbUser) {
     }
 
     let existingSchoolId = null;
+    let dirLookupFailed = false;
     if (!directoryEntry) {
       try {
         // LOGIN HANG FIX (same pattern as _resolveStaffSchoolNetwork above):
@@ -5840,15 +5841,36 @@ async function _completeGoogleSignIn(fbUser) {
           window._fbGet(window._fbRef(window._fbDb, 'schoolsDirectory/' + fbUser.uid)),
           new Promise((_, reject) => setTimeout(() => reject(new Error('schools-directory-timeout')), 8000))
         ]);
-        if (dirSnap.exists()) existingSchoolId = Object.keys(dirSnap.val())[0];
+        if (dirSnap.exists()) {
+          // Oldest school first. If the account owns several, let the person choose instead of guessing.
+          const all = dirSnap.val() || {};
+          const ids = Object.keys(all).sort((x, y) => ((all[x] && all[x].createdAt) || 0) - ((all[y] && all[y].createdAt) || 0));
+          existingSchoolId = ids[0];
+          config.schools = config.schools || {};
+          ids.forEach(id => { if (!config.schools[id]) config.schools[id] = (all[id] && all[id].schoolName) || id; });
+          if (ids.length > 1) {
+            const lines = ids.map((id, i) => (i + 1) + '. ' + ((all[id] && all[id].schoolName) || id) + ' \u2014 created ' + ((all[id] && all[id].createdAt) ? new Date(all[id].createdAt).toLocaleString() : 'unknown')).join('\n');
+            const pick = parseInt(prompt('This account has ' + ids.length + ' schools:\n\n' + lines + '\n\nType the number of the school to open (1 = oldest):', '1'), 10);
+            if (pick >= 1 && pick <= ids.length) existingSchoolId = ids[pick - 1];
+          }
+        }
         console.log('[_completeGoogleSignIn] schoolsDirectory check done:', existingSchoolId || 'not found');
       } catch (e) {
+        dirLookupFailed = true;
         console.warn('[_completeGoogleSignIn] schoolsDirectory check failed/timed out:', e && e.message);
       }
     }
 
     const users = JSON.parse(localStorage.getItem('eduGenius_users_v1') || '[]');
     let candidate = users.find(x => (x.email || '').toLowerCase() === email.toLowerCase());
+
+    // SAFETY: if we could not check for an existing school (slow/failed lookup) and this device has no local
+    // record either, do NOT fall through to "new school" \u2014 that is how duplicate schools were being created.
+    if (!directoryEntry && !existingSchoolId && dirLookupFailed && !candidate) {
+      await window._fbSignOut().catch(() => {});
+      showToast('Could not check for your existing school. Check your connection and sign in again.', 'error');
+      return;
+    }
 
     if (directoryEntry || candidate || existingSchoolId) {
       console.log('[_completeGoogleSignIn] resolved as existing user, role source:', directoryEntry ? 'staffDirectory' : (candidate ? 'local cache' : 'schoolsDirectory'));
@@ -7045,12 +7067,17 @@ document.addEventListener('DOMContentLoaded', () => {
       const ref = admin.id === 'sec-staff' ? document.getElementById('customRolesCard') : document.getElementById('staffPointerCard');
       if (ref && ref.parentNode === admin) admin.insertBefore(card, ref); else admin.appendChild(card);
     }
-    await loadAll();
-    const list = staffList();
+    const paint = () => { const list = staffList();
     card.innerHTML = '<div class="card-header"><span class="card-title">\ud83c\udf93 Teacher Class &amp; Subject Access</span></div>' +
       '<p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Limit a teacher to specific classes and subjects. Teachers with no restriction keep full access.</p>' +
       (list.length ? list.map(u => '<div style="display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap"><span style="min-width:120px">' + E(u.username) + '</span><span style="font-size:12px;color:var(--text-light);min-width:110px">' + E(u.role) + '</span>' + summary(window.ASSIGN.all[u.firebaseUid]) + '<button class="btn btn-sm" onclick="openAssignPanel(\'' + E(u.firebaseUid) + '\')">Assign</button></div>').join('')
         : '<div style="color:var(--text-light)">No staff with cloud logins yet</div>');
+    };
+    // Draw at once from local data; never wait on the network to show the card.
+    try { paint(); } catch (e) { card.innerHTML = '<div class="card-header"><span class="card-title">\ud83c\udf93 Teacher Class &amp; Subject Access</span></div><div style="color:#c0392b;font-size:13px">Could not draw: ' + E(e && e.message || e) + '</div>'; console.error('[assign] paint:', e); return; }
+    // Then fetch saved assignments (max 6s) and redraw so the badges are accurate.
+    await Promise.race([loadAll(), new Promise(r => setTimeout(r, 6000))]);
+    try { paint(); } catch (e) { console.error('[assign] repaint:', e); }
   }
   window.renderAssignCard = renderCard;
 
