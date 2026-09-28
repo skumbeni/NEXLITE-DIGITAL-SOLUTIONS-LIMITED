@@ -1550,7 +1550,7 @@ async function _resolveStaffSchoolNetwork(uid, _isRetry) {
     // settles, so the login button/error UI can recover either way.
     const snap = await Promise.race([
       window._fbGet(window._fbRef(window._fbDb, _staffDirectoryPath(uid))),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('staff-directory-timeout')), 8000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('staff-directory-timeout')), _isRetry ? 15000 : 8000))
     ]);
     const entry = snap.exists() ? snap.val() : null;
     if (entry && entry.adminUid) result = entry;
@@ -1569,7 +1569,7 @@ async function _resolveStaffSchoolNetwork(uid, _isRetry) {
     // token yet — a known brief race, not a real access problem. One quick
     // retry after a short delay clears this in the common case instead of
     // making every login run into the "check your connection" message.
-    if (!_isRetry && e && e.code === 'PERMISSION_DENIED') {
+    if (!_isRetry && e && (e.code === 'PERMISSION_DENIED' || e.message === 'staff-directory-timeout')) {
       await new Promise(r => setTimeout(r, 700));
       return _resolveStaffSchoolNetwork(uid, true);
     }
