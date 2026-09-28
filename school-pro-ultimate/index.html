@@ -5192,6 +5192,34 @@ async function _restGet(path, ms) {
     throw e;
   } finally { clearTimeout(t); }
 }
+async function _restPut(path, value, ms) {
+  const u = window._fbAuth && window._fbAuth.currentUser;
+  if (!u) throw Object.assign(new Error('not signed in'), { code: 'not-signed-in' });
+  const token = await u.getIdToken();
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch('https://school-pro-ultimate-default-rtdb.firebaseio.com/' + path + '.json?auth=' + encodeURIComponent(token),
+      { method: 'PUT', body: JSON.stringify(value === undefined ? null : value), signal: ctrl.signal });
+    if (!r.ok) throw Object.assign(new Error('HTTP ' + r.status), { code: (r.status === 401 || r.status === 403) ? 'PERMISSION_DENIED' : 'HTTP_' + r.status });
+    return true;
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw Object.assign(new Error('timeout'), { code: 'timeout' });
+    throw e;
+  } finally { clearTimeout(t); }
+}
+// Plain HTTPS write first (works where the live Firebase connection stalls on weak mobile signal), SDK as fallback.
+async function _dbWrite(path, value) {
+  let restErr;
+  try { return await _restPut(path, value, 15000); }
+  catch (e) { restErr = e; if (e && e.code === 'PERMISSION_DENIED') throw e; }
+  try {
+    await Promise.race([
+      window._fbSet(window._fbRef(window._fbDb, path), value),
+      new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'timeout' })), 12000))
+    ]);
+    return true;
+  } catch (e) { throw restErr || e; }
+}
 async function _dbRead(path) {
   let restErr;
   try { return await _restGet(path, 20000); }
@@ -7280,14 +7308,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (gradesSel.length) { rec.grades = {}; gradesSel.forEach(g => rec.grades[g] = true); }
       if (subjects.length) { rec.subjects = {}; subjects.forEach(s => rec.subjects[s] = true); }
     }
-    if (!window._fbSet || !window._fbDb || !(window._fbAuth && window._fbAuth.currentUser)) { say('Not connected to the cloud. Sign in with your cloud account and try again.', true); return; }
+    if (!window._fbAuth || !window._fbAuth.currentUser) { say('Not connected to the cloud. Sign in with your cloud account and try again.', true); return; }
     if (btn) btn.disabled = true;
-    say('Saving\u2026');
+    say('Saving\u2026 (up to 27 seconds on a weak connection)');
     try {
-      await Promise.race([
-        window._fbSet(window._fbRef(window._fbDb, _fbSchoolPath() + '/assignments/' + uid), rec),
-        new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'timeout' })), 12000))
-      ]);
+      await _dbWrite(_fbSchoolPath() + '/assignments/' + uid, rec);
       showToast(restricted ? 'Access saved' : 'Restriction removed');
       const ov = document.getElementById('assignOverlay'); if (ov) ov.remove();
       renderCard();
