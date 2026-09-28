@@ -4815,6 +4815,45 @@ function deleteTeacherPayment(ti, ri) {
   });
 }
 
+// Plain-HTTPS write of staffDirectory/{uid} (bypasses the RTDB websocket,
+// which is unreliable on some networks/domains). Uses the signed-in admin's
+// token; rules allow it because newData.adminUid === auth.uid.
+async function _staffDirectoryRestPut(uid, entry) {
+  const user = window._fbAuth && window._fbAuth.currentUser;
+  if (!user) throw new Error('not signed in');
+  const token = await user.getIdToken();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 12000);
+  try {
+    const url = 'https://school-pro-ultimate-default-rtdb.firebaseio.com/' +
+      _staffDirectoryPath(uid) + '.json?auth=' + encodeURIComponent(token);
+    const r = await fetch(url, { method: 'PUT', body: JSON.stringify(entry), signal: ctrl.signal });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return true;
+  } finally { clearTimeout(timer); }
+}
+
+// Re-writes a staff member's directory link from the local record. Fixes
+// accounts whose original link write never reached Firebase (they then log
+// in as a brand-new owner and see the school setup screen).
+async function resyncStaffLink(firebaseUid) {
+  const u = JSON.parse(localStorage.getItem(USER_KEY) || '[]').find(x => x.firebaseUid === firebaseUid);
+  const admin = window._fbAuth && window._fbAuth.currentUser;
+  if (!u || !admin) { showToast('Staff record not found', 'error'); return; }
+  const entry = {
+    adminUid: _fbResolvedAdminUid || admin.uid,
+    schoolId: config.currentSchool || 'default',
+    role: u.role, name: u.username, email: u.email || '', _createdAt: Date.now()
+  };
+  if (u.role === 'Parent' && u.studentId) entry.studentId = u.studentId;
+  try {
+    await _staffDirectoryRestPut(firebaseUid, entry);
+    showToast((u.username || 'Staff') + ' is now linked to this school. Ask them to log in again.');
+  } catch (e) {
+    showToast('Could not re-link \u2014 ' + (e.message || 'check your connection'), 'error');
+  }
+}
+
 function renderStaffLogins() {
   const el = document.getElementById('staffLoginsList');
   if (!el) return;
@@ -4835,7 +4874,7 @@ function renderStaffLogins() {
            </select>`
         : `<span class="badge">${esc(u.role)}</span>`
       }
-      ${canManage ? `<button class="btn btn-danger btn-sm" onclick="revokeStaffLogin('${esc(u.firebaseUid)}')">Remove</button>` : ''}
+      ${canManage ? `<button class="btn btn-sm" onclick="resyncStaffLink('${esc(u.firebaseUid)}')">Re-link</button><button class="btn btn-danger btn-sm" onclick="revokeStaffLogin('${esc(u.firebaseUid)}')">Remove</button>` : ''}
     </div>`).join('');
 }
 
@@ -4951,10 +4990,14 @@ async function createStaffLogin(name, email, password, role, studentId) {
     const dirPath = _staffDirectoryPath(newUid);
     let dirWriteTimedOut = false;
     try {
-      await Promise.race([
+      try { await _staffDirectoryRestPut(newUid, dirEntry); }
+      catch (restPutErr) {
+        console.warn('[createStaffLogin] REST directory write failed, trying SDK:', restPutErr.message);
+        await Promise.race([
         window._fbSet(window._fbRef(window._fbDb, dirPath), dirEntry),
         new Promise((_, reject) => setTimeout(() => reject(new Error('directory-write-timeout')), 10000))
-      ]);
+        ]);
+      }
     } catch (dirErr) {
       // The Firebase Auth account now genuinely exists (that can't be undone
       // from here) but the directory link telling THEIR device which school
