@@ -7027,17 +7027,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const c = Object.keys(a.classes || {}).length, s = a.subjects ? Object.keys(a.subjects).length : 0;
     return '<span class="badge">' + c + ' class' + (c === 1 ? '' : 'es') + ' \u00b7 ' + (s ? s + ' subject' + (s === 1 ? '' : 's') : 'all subjects') + '</span>';
   }
+  // Administrator: Staff page. Head Teacher / Deputy: their own page (they cannot open Staff).
+  function assignHost() {
+    const r = role();
+    return document.getElementById(r === 'Administrator' ? 'sec-staff' : (r === 'Deputy Head Teacher' ? 'sec-dashboard' : 'sec-admin'));
+  }
   async function renderCard() {
     try { await renderCardInner(); } catch (e) { console.error('[assign] card failed:', e); }
   }
   async function renderCardInner() {
-    const admin = document.getElementById(role() === 'Deputy Head Teacher' ? 'sec-dashboard' : 'sec-admin'); if (!admin) return;
+    const admin = assignHost(); if (!admin) return;
     let card = document.getElementById('assignCard');
+    if (card && card.parentNode !== admin) { card.remove(); card = null; }
     if (!canAssign()) { if (card) card.remove(); return; }
     if (!card) {
       card = document.createElement('div'); card.className = 'card'; card.id = 'assignCard';
-      const ref = document.getElementById('staffPointerCard');
-      if (ref && ref.parentNode) ref.parentNode.insertBefore(card, ref); else admin.appendChild(card);
+      const ref = admin.id === 'sec-staff' ? document.getElementById('customRolesCard') : document.getElementById('staffPointerCard');
+      if (ref && ref.parentNode === admin) admin.insertBefore(card, ref); else admin.appendChild(card);
     }
     await loadAll();
     const list = staffList();
@@ -7106,10 +7112,10 @@ document.addEventListener('DOMContentLoaded', () => {
   let _busy = false;
   setInterval(async () => {
     if (_busy || document.hidden || !canAssign()) return;
-    const host = document.getElementById(role() === 'Deputy Head Teacher' ? 'sec-dashboard' : 'sec-admin');
+    const host = assignHost();
     if (!host || host.offsetParent === null) return;
     const c = document.getElementById('assignCard');
-    if (c && c.children.length) return;
+    if (c && c.parentNode === host && c.children.length) return;
     _busy = true; try { await renderCard(); } finally { _busy = false; }
   }, 1500);
 })();
@@ -7145,7 +7151,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!isAdmin()) { if (card) card.remove(); return; }
     if (!card) {
       card = document.createElement('div'); card.className = 'card'; card.id = 'promoteCard';
-      const ref = document.getElementById('assignCard') || document.getElementById('staffPointerCard');
+      const ref = document.getElementById('staffPointerCard');
       if (ref && ref.parentNode) ref.parentNode.insertBefore(card, ref); else admin.appendChild(card);
     }
     const lp = config.lastPromotion;
@@ -7371,7 +7377,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!canManage()) { if (card) card.remove(); return; }
     if (!card) {
       card = document.createElement('div'); card.className = 'card'; card.id = 'termCard';
-      const ref = document.getElementById('promoteCard') || document.getElementById('assignCard') || document.getElementById('staffPointerCard');
+      const ref = document.getElementById('promoteCard') || document.getElementById('staffPointerCard');
       if (ref && ref.parentNode === host || ref && ref.parentNode) ref.parentNode.insertBefore(card, ref); else host.appendChild(card);
     }
     const lc = config.lastClosed;
