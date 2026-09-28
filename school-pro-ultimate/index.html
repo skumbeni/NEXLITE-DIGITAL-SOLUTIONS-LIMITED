@@ -830,7 +830,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
         <div class="card">
           <div class="form-row">
             <div class="form-group"><label>Student</label><select id="assessStudent" onchange="loadAssessment()"></select></div>
-            <div class="form-group"><label>Term</label><select id="assessTerm"></select></div>
+            <div class="form-group"><label>Term</label><select id="assessTerm" onchange="loadAssessment()"></select></div>
           </div>
           <div id="assessFields"></div>
           <button class="btn btn-primary" onclick="saveAssessment()" style="margin-top:12px">Save Marks</button>
@@ -927,6 +927,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
         <div class="section-title">📄 Reports</div>
         <div class="card">
           <div class="form-group"><label>Student</label><select id="reportStudent" onchange="loadReportPreview()"></select></div>
+          <div class="form-group"><label>Term / Period</label><select id="reportTerm"></select></div>
           <div class="form-group"><label>Report Type</label>
             <select id="reportType"><option value="overall">Overall Report</option><option value="academic">Academic Report</option><option value="finance">Financial Statement</option><option value="whatsapp">WhatsApp Summary</option></select>
           </div>
@@ -1670,8 +1671,8 @@ function _fbUpdateSyncBadge(state) {
 
 // --- Public save functions (localStorage + Firebase mirror) ---
 function saveConfig() {
-  // Only Administrator and Head Teacher may persist config changes
-  const adminRoles = ['Administrator', 'Head Teacher'];
+  // Only Administrator, Head Teacher and Deputy Head Teacher may persist config changes
+  const adminRoles = ['Administrator', 'Head Teacher', 'Deputy Head Teacher'];
   if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
     console.warn('saveConfig blocked: insufficient role (' + currentUser.role + ')');
     return;
@@ -1764,6 +1765,11 @@ function saveStudents(changedIdx) {
     // Custom-role staff can't rewrite the whole students node (the database
     // rules only let them write the specific fields their role covers), so
     // they take a field-level path instead.
+    if (typeof window.isScopedUser === 'function' && window.isScopedUser()) {
+      _fbLastStudentCount = students.length;
+      window._saveStudentsScoped(basePath, ts, changedIdx);
+      return;
+    }
     if (typeof window.isCustomRoleUser === 'function' && window.isCustomRoleUser()) {
       _saveStudentsCustom(basePath, ts, changedIdx);
       return;
@@ -2581,10 +2587,11 @@ function showApp() {
 }
 
 // ==================== DASHBOARD ====================
+function activeStudents() { return students.filter(s => s && s.class !== 'Alumni' && !s._hidden); }
 function renderDashboard() {
-  const total = students.length;
-  const male = students.filter(s => s.sex === 'Male').length;
-  const female = students.filter(s => s.sex === 'Female').length;
+  const total = activeStudents().length;
+  const male = activeStudents().filter(s => s.sex === 'Male').length;
+  const female = activeStudents().filter(s => s.sex === 'Female').length;
   const totalFees = students.reduce((s,st) => s + (st.finance?.total || 0), 0);
   const totalPaid = students.reduce((s,st) => s + (st.finance?.paid || 0), 0);
   const balance = totalFees - totalPaid;
@@ -2601,7 +2608,7 @@ function renderDashboard() {
   // Quick stats by grade
   let qsHtml = '';
   config.grades.forEach(g => {
-    const gStudents = students.filter(s => s.class.startsWith(g.name));
+    const gStudents = students.filter(s => s.class.startsWith(g.name) && (!window.classInScope || window.classInScope(s.class)));
     qsHtml += `<div class="stat-card"><div class="stat-value">${gStudents.length}</div><div class="stat-label">${g.name}</div></div>`;
   });
   document.getElementById('dashQuickStats').innerHTML = qsHtml;
@@ -2625,6 +2632,7 @@ function initDatabaseFilters() {
   const sf = document.getElementById('dbSubFilter');
   gf.innerHTML = '<option value="">All Grades</option>';
   config.grades.forEach(g => { gf.innerHTML += `<option value="${esc(g.name)}">${esc(g.name)}</option>`; });
+  gf.innerHTML += '<option value="Alumni">Alumni</option>';
   sf.innerHTML = '<option value="">All Sub-grades</option>';
 }
 
@@ -2657,6 +2665,8 @@ function renderDatabase() {
   const search = (document.getElementById('dbSearch').value || '').toLowerCase();
 
   let filtered = students.filter(s => {
+    if (window.classInScope && !window.classInScope(s.class)) return false;
+    if (!gradeFilter && s.class === 'Alumni') return false;
     if (gradeFilter && !s.class.startsWith(gradeFilter)) return false;
     if (subFilter && !s.class.includes(subFilter)) return false;
     if (search && !s.name.toLowerCase().includes(search) && !s.id.toLowerCase().includes(search)) return false;
@@ -2799,6 +2809,8 @@ function exportFilteredData() {
   const subFilter = document.getElementById('dbSubFilter').value;
   const search = (document.getElementById('dbSearch').value || '').toLowerCase();
   let filtered = students.filter(s => {
+    if (window.classInScope && !window.classInScope(s.class)) return false;
+    if (!gradeFilter && s.class === 'Alumni') return false;
     if (gradeFilter && !s.class.startsWith(gradeFilter)) return false;
     if (subFilter && !s.class.includes(subFilter)) return false;
     if (search && !s.name.toLowerCase().includes(search) && !s.id.toLowerCase().includes(search)) return false;
@@ -3075,7 +3087,7 @@ async function registerStudent() {
 function initAssessments() {
   const sel = document.getElementById('assessStudent');
   sel.innerHTML = '<option value="">Select Student</option>';
-  students.forEach((s, i) => { sel.innerHTML += `<option value="${i}">${escHtml(s.name)} (${escHtml(s.id)})</option>`; });
+  students.forEach((s, i) => { if (s.class === 'Alumni') return; if (window.classInScope && !window.classInScope(s.class)) return; sel.innerHTML += `<option value="${i}">${escHtml(s.name)} (${escHtml(s.id)})</option>`; });
 
   const termSel = document.getElementById('assessTerm');
   termSel.innerHTML = '<option value="current">Current Term</option><option value="Term 1">Term 1</option><option value="Term 2">Term 2</option><option value="Term 3">Term 3</option>';
@@ -3085,17 +3097,18 @@ function loadAssessment() {
   const idx = document.getElementById('assessStudent').value;
   if (idx === '') { document.getElementById('assessFields').innerHTML = ''; return; }
   const s = students[idx];
+  const arr = assessArr(s);
   const gradeSubjects = getSubjectsForClass(s.class);
 
   // Ensure student has all grade subjects
   gradeSubjects.forEach(subName => {
-    if (!s.subjects.find(sub => sub.name === subName)) {
-      s.subjects.push({ name: subName, ca1: '', ca2: '', final: '' });
+    if (!arr.find(sub => sub.name === subName)) {
+      arr.push({ name: subName, ca1: '', ca2: '', final: '' });
     }
   });
 
   let html = '<div class="table-wrap"><table><tr><th>Subject</th><th>CA1</th><th>CA2</th><th>Final</th><th>Total</th><th>Grade</th></tr>';
-  s.subjects.forEach((sub, si) => {
+  arr.forEach((sub, si) => {
     const tot = calcWeightedTotal(sub);
     html += `<tr>
       <td>
@@ -3135,14 +3148,14 @@ function updateAssessRowTotal(si) {
 function addAssessSubject() {
   const idx = document.getElementById('assessStudent').value;
   if (idx === '') return;
-  students[idx].subjects.push({ name: 'New Subject', ca1: '', ca2: '', final: '' });
+  assessArr(students[idx]).push({ name: 'New Subject', ca1: '', ca2: '', final: '' });
   loadAssessment();
 }
 
 function removeLastAssessSubject() {
   const idx = document.getElementById('assessStudent').value;
-  if (idx === '' || students[idx].subjects.length === 0) return;
-  students[idx].subjects.pop();
+  if (idx === '' || assessArr(students[idx]).length === 0) return;
+  assessArr(students[idx]).pop();
   loadAssessment();
 }
 
@@ -3154,13 +3167,10 @@ function saveAssessment() {
   requestApproval('Save assessment marks for ' + s.name, () => {
     pushUndo();
     const termKey = document.getElementById('assessTerm').value;
-    // Save current subjects to term
-    if (termKey !== 'current') {
-      s.terms[termKey] = JSON.parse(JSON.stringify(s.subjects));
-    }
+    const arr = assessArr(s);
 
     // Read values from inputs
-    s.subjects.forEach((sub, si) => {
+    arr.forEach((sub, si) => {
       const nameEl = document.querySelector(`.assess-subject-name[data-si="${si}"]`);
       const ca1El = document.querySelector(`.assess-ca1[data-si="${si}"]`);
       const ca2El = document.querySelector(`.assess-ca2[data-si="${si}"]`);
@@ -3261,7 +3271,7 @@ function initFinance() {
 
   const sel = document.getElementById('finStudent');
   sel.innerHTML = '<option value="">Select Student</option>';
-  students.forEach((s, i) => { sel.innerHTML += `<option value="${i}">${escHtml(s.name)} (${escHtml(s.id)})</option>`; });
+  students.forEach((s, i) => { if (window.classInScope && !window.classInScope(s.class)) return; sel.innerHTML += `<option value="${i}">${escHtml(s.name)} (${escHtml(s.id)})</option>`; });
 
   const bcls = document.getElementById('bulkFeeClass');
   bcls.innerHTML = '<option value="">Select Class</option>';
@@ -3644,7 +3654,7 @@ function saveAttendance() {
 function initConduct() {
   const sel = document.getElementById('conductStudent');
   sel.innerHTML = '<option value="">Select Student</option>';
-  students.forEach((s, i) => { sel.innerHTML += `<option value="${i}">${escHtml(s.name)} (${escHtml(s.id)})</option>`; });
+  students.forEach((s, i) => { if (s.class === 'Alumni') return; if (window.classInScope && !window.classInScope(s.class)) return; sel.innerHTML += `<option value="${i}">${escHtml(s.name)} (${escHtml(s.id)})</option>`; });
   document.getElementById('conductDate').value = new Date().toISOString().split('T')[0];
 }
 
@@ -3676,9 +3686,9 @@ function saveConduct() {
 
 // ==================== ANALYTICS ====================
 function renderAnalytics() {
-  const total = students.length;
-  const male = students.filter(s => s.sex === 'Male').length;
-  const female = students.filter(s => s.sex === 'Female').length;
+  const total = activeStudents().length;
+  const male = activeStudents().filter(s => s.sex === 'Male').length;
+  const female = activeStudents().filter(s => s.sex === 'Female').length;
 
   document.getElementById('analyticsStats').innerHTML = `
     <div class="stat-card"><div class="stat-value">${total}</div><div class="stat-label">Total Students</div></div>
@@ -3779,7 +3789,7 @@ function deleteAnnouncement(idx) {
 function initReports() {
   const sel = document.getElementById('reportStudent');
   sel.innerHTML = '<option value="">Select Student</option>';
-  students.forEach((s, i) => { sel.innerHTML += `<option value="${i}">${escHtml(s.name)} (${escHtml(s.id)})</option>`; });
+  students.forEach((s, i) => { if (window.classInScope && !window.classInScope(s.class)) return; sel.innerHTML += `<option value="${i}">${escHtml(s.name)} (${escHtml(s.id)})</option>`; });
 
   const bulkCls = document.getElementById('bulkReportClass');
   if (bulkCls) {
@@ -3792,7 +3802,7 @@ function loadReportPreview() {
   const idx = document.getElementById('reportStudent').value;
   if (idx === '') { document.getElementById('reportPreview').innerHTML = ''; return; }
   const s = students[idx];
-  document.getElementById('reportPreview').innerHTML = `<div style="color:var(--text-light)">Report will be generated for: <strong>${escHtml(s.name)}</strong> (${escHtml(s.class)})</div>`;
+  document.getElementById('reportPreview').innerHTML = `<div style="color:var(--text-light)">Report will be generated for: <strong>${escHtml(s.name)}</strong> (${escHtml(s.class)}) <button class="btn btn-outline btn-sm" onclick="showStudentHistory(${idx})">📚 Past years</button></div>`;
 }
 
 // ---- Report text builders (shared by single-student and bulk generation) ----
@@ -6355,7 +6365,7 @@ async function checkSubscription() {
   const expiry = new Date(sub.expiry);
   const expired = now > expiry;
   const tier = TIERS[sub.tier];
-  const studentCount = (typeof students !== 'undefined') ? students.length : 0;
+  const studentCount = (typeof students !== 'undefined') ? activeStudents().length : 0;
   const overLimit = tier && tier.students !== Infinity && studentCount > tier.students;
   const daysLeft = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
 
@@ -6377,7 +6387,7 @@ async function isWithinStudentLimit() {
   if (!sub) return true; // no sub = allow during trial
   const tier = TIERS[sub.tier];
   if (!tier) return true;
-  const count = (typeof students !== 'undefined') ? students.length : 0;
+  const count = (typeof students !== 'undefined') ? activeStudents().length : 0;
   return count < tier.students;
 }
 
@@ -6790,6 +6800,575 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   const origShow = window.showSection;
   window.showSection = function (s) { const r = origShow.apply(this, arguments); if (s === 'staff') renderCustomRoles(); return r; };
+})();
+</script>
+
+<script>
+// ==================== TEACHER ASSIGNMENTS (per-class / per-subject) ====================
+// Data: schools/{adminUid}/{schoolId}/assignments/{staffUid} = { restricted:true, classes:{"Grade 7 - 7A":true}, subjects:{"Mathematics":true} }
+// No record (or restricted:false) = unchanged behaviour. Missing `subjects` = all subjects in the assigned classes.
+// Only the Administrator and Head Teacher can write it (database rules enforce this).
+// Writes by restricted staff are enforced in the rules; reads of other classes are hidden in the UI only.
+(function () {
+  const ADMINISH = ['Administrator', 'Head Teacher', 'Deputy Head Teacher'];
+  const BAD = /[.$#\[\]\/]/;   // characters Firebase forbids in keys
+  const MARK_ROLES = ['Teacher','Senior Teacher','Grade Teacher','Head of Department','Subject Teacher','Deputy Head Teacher'];
+  const ATT_ROLES  = ['Teacher','Senior Teacher','Grade Teacher','Head of Department','Deputy Head Teacher','Counsellor'];
+  const CON_ROLES  = ['Senior Teacher','Grade Teacher','Deputy Head Teacher','Counsellor'];
+  window.ASSIGN = { mine: null, all: {} };
+
+  const myUid = () => (window._fbAuth && window._fbAuth.currentUser) ? window._fbAuth.currentUser.uid : null;
+  const cKey = () => 'assign_mine_' + (myUid() || '');
+  const role = () => (typeof currentUser !== 'undefined' && currentUser && currentUser.role) || '';
+  const mine = () => {
+    if (window.ASSIGN.mine) return window.ASSIGN.mine;
+    try { return JSON.parse(localStorage.getItem(cKey()) || 'null'); } catch (e) { return null; }
+  };
+  const E = s => (typeof escHtml === 'function' ? escHtml(s) : String(s));
+
+  window.isScopedUser = function () {
+    const r = role();
+    if (!r || ADMINISH.includes(r) || r === 'Parent') return false;
+    const m = mine();
+    return !!(m && m.restricted);
+  };
+  window.assignedClasses  = () => Object.keys((mine() || {}).classes || {});
+  window.assignedSubjects = () => { const s = (mine() || {}).subjects; return s ? Object.keys(s) : null; }; // null = all
+  window.classInScope = c => !window.isScopedUser() || window.assignedClasses().includes(c);
+
+  // ---- UI filtering ----
+  const _gac = window.getAllClasses;
+  window.getAllClasses = function () {
+    const all = _gac.apply(this, arguments);
+    return window.isScopedUser() ? all.filter(c => window.assignedClasses().includes(c)) : all;
+  };
+  const _gsc = window.getSubjectsForClass;
+  window.getSubjectsForClass = function () {
+    const all = _gsc.apply(this, arguments);
+    if (!window.isScopedUser()) return all;
+    const a = window.assignedSubjects();
+    return a ? all.filter(s => a.includes(s)) : all;
+  };
+
+  // ---- Client-side guards (rules are the real enforcement) ----
+  const DENY = ['saveInlineEdit','deleteStudent','registerStudent','addProfilePhone','removeProfilePhone','saveProfilePhones',
+    'addRegPhone','recordPayment','applyBulkFee','confirmFeeSubmission','importData','clearAllData','undoLastAction','redoLastAction'];
+  DENY.forEach(n => {
+    const o = window[n]; if (typeof o !== 'function') return;
+    window[n] = function () {
+      if (window.isScopedUser()) { showToast('\u26d4 Your access is limited to your assigned classes \u2014 this action isn\u2019t available.', 'error'); return false; }
+      return o.apply(this, arguments);
+    };
+  });
+  const _scm = window.saveClassMarks;
+  if (typeof _scm === 'function') window.saveClassMarks = function () {
+    if (window.isScopedUser()) {
+      const c = (document.getElementById('cmClass') || {}).value, s = (document.getElementById('cmSubject') || {}).value;
+      const subs = window.assignedSubjects();
+      if (!window.classInScope(c) || (subs && !subs.includes(s))) { showToast('\u26d4 That class/subject isn\u2019t assigned to you.', 'error'); return false; }
+    }
+    return _scm.apply(this, arguments);
+  };
+
+  // ---- Field-level sync for restricted staff (mirrors the rules) ----
+  window._saveStudentsScoped = function (basePath, ts, changedIdx) {
+    const r = role();
+    const cust = typeof window.isCustomRoleUser === 'function' && window.isCustomRoleUser();
+    const okMarks = cust ? (window.canDo('assessments', 2) || window.canDo('classmarks', 2)) : MARK_ROLES.includes(r);
+    const okAtt = cust ? false : ATT_ROLES.includes(r);
+    const okCon = cust ? false : CON_ROLES.includes(r);
+    const subs = window.assignedSubjects();
+    const idxs = (changedIdx !== undefined && changedIdx >= 0) ? [changedIdx] : students.map((_, i) => i);
+    const upd = {}; let n = 0;
+    idxs.forEach(i => {
+      const st = students[i]; if (!st || !window.classInScope(st.class)) return;
+      if (okMarks) (st.subjects || []).forEach((sub, k) => {
+        if (!sub || !sub.name || (subs && !subs.includes(sub.name))) return;
+        upd['s' + i + '/subjects/' + k] = { name: sub.name, ca1: sub.ca1 == null ? '' : sub.ca1, ca2: sub.ca2 == null ? '' : sub.ca2, final: sub.final == null ? '' : sub.final };
+        n++;
+      });
+      if (okMarks && st.terms) Object.keys(st.terms).forEach(t => {
+        if (BAD.test(t)) return;
+        (st.terms[t] || []).forEach((sub, k) => {
+          if (!sub || !sub.name || (subs && !subs.includes(sub.name))) return;
+          upd['s' + i + '/terms/' + t + '/' + k] = { name: sub.name, ca1: sub.ca1 == null ? '' : sub.ca1, ca2: sub.ca2 == null ? '' : sub.ca2, final: sub.final == null ? '' : sub.final };
+          n++;
+        });
+      });
+      if (okAtt && st.attendance && Object.keys(st.attendance).length) { upd['s' + i + '/attendance'] = st.attendance; n++; }
+      if (okCon && st.conduct && st.conduct.length) { upd['s' + i + '/conduct'] = st.conduct; n++; }
+    });
+    if (!n) return;
+    upd._lastModified = ts; window._scopedSelfTs = ts;
+    _fbWriteMerge(basePath, upd);
+  };
+
+  // ---- Scoped reads: restricted staff can't read the whole students node, so load only their classes ----
+  const HIDDEN = () => ({ id: '', name: '', sex: '', class: '__hidden__', phones: [], subjects: [], finance: { total: 0, paid: 0, categories: [] }, paymentHistory: [], attendance: {}, conduct: [], terms: {}, _hidden: true });
+  async function scopedLoad() {
+    const base = _fbSchoolPath() + '/students';
+    const g = p => window._fbGet(window._fbRef(window._fbDb, base + p));
+    try {
+      const cnt = (await g('/_count')).val() || 0;
+      const ts = (await g('/_lastModified')).val() || 0;
+      const out = new Array(cnt);
+      for (let b = 0; b < cnt; b += 25) {
+        const part = [];
+        for (let i = b; i < Math.min(cnt, b + 25); i++) part.push(g('/s' + i).then(x => x.val()).catch(() => null));
+        const vals = await Promise.all(part);
+        vals.forEach((v, k) => {
+          const i = b + k;
+          if (v && window.classInScope(v.class)) {
+            if (v.photo === '__photo__') { const l = students[i]; if (l && l.photo) v.photo = l.photo; else delete v.photo; }
+            v.subjects = v.subjects || []; v.phones = v.phones || []; v.attendance = v.attendance || {}; v.conduct = v.conduct || []; v.terms = v.terms || {};
+            v.paymentHistory = v.paymentHistory || [];
+            out[i] = v;
+          } else out[i] = HIDDEN();
+        });
+      }
+      students = out; students._lastModified = ts; _fbLastStudentCount = cnt;
+      try { localStorage.setItem(_schoolStorageKey(DB_KEY, config.currentSchool || 'default'), JSON.stringify(students)); } catch (e) {}
+      if (typeof refreshCurrentSection === 'function') refreshCurrentSection();
+    } catch (e) { console.warn('[assign] scoped load:', e && e.code); }
+  }
+
+  // Never let a full-node write push placeholder rows to the cloud.
+  const _ss = window.saveStudents;
+  window.saveStudents = function () {
+    if (!window.isScopedUser() && students.some(s => s && s._hidden)) {
+      showToast('Reloading school data \u2014 try again in a moment.', 'error');
+      return;
+    }
+    return _ss.apply(this, arguments);
+  };
+
+  // ---- Load my own assignment, then attach listeners (skipping the full students listener when restricted) ----
+  const _afl = window.attachFirebaseListeners;
+  let _attaching = false;
+  window.attachFirebaseListeners = async function () {
+    if (_attaching || window._fbListenersAttached) return;
+    _attaching = true;
+    const u = myUid(), base = () => _fbSchoolPath() + '/assignments/' + u;
+    try {
+      if (u && window._fbDb) {
+        try { window.ASSIGN.mine = (await window._fbGet(window._fbRef(window._fbDb, base()))).val() || {}; localStorage.setItem(cKey(), JSON.stringify(window.ASSIGN.mine)); }
+        catch (e) { window.ASSIGN.mine = mine() || {}; }
+      }
+    } catch (e) {}
+    const scoped = !!(window.ASSIGN.mine && window.ASSIGN.mine.restricted);
+    const origOn = window._fbOnValue;
+    if (scoped) window._fbOnValue = function (ref) {
+      if (String(ref).endsWith('/students')) return function () {};
+      return origOn.apply(this, arguments);
+    };
+    try { _afl.apply(this, arguments); } finally { window._fbOnValue = origOn; }
+    _attaching = false;
+    if (scoped) window._fbOnValue(window._fbRef(window._fbDb, _fbSchoolPath() + '/students/_lastModified'), snap => {
+      const v = snap.val();
+      if (v && v !== window._scopedSelfTs && v !== (students && students._lastModified)) scopedLoad();
+    }, err => console.warn('[assign] students listener:', err && err.code));
+    if (u && window._fbDb) window._fbOnValue(window._fbRef(window._fbDb, base()), snap => {
+      const v = snap.val() || {}, was = !!(window.ASSIGN.mine && window.ASSIGN.mine.restricted);
+      window.ASSIGN.mine = v;
+      try { localStorage.setItem(cKey(), JSON.stringify(v)); } catch (e) {}
+      if (was !== !!v.restricted) { location.reload(); return; }   // access changed: reload cleanly
+      if (v.restricted) scopedLoad(); else if (typeof refreshCurrentSection === 'function') refreshCurrentSection();
+    }, err => console.warn('[assign] listener:', err && err.code));
+  };
+
+  // ---- Bad-character guard for class/grade/subject names (rules can't look up keys containing . $ # [ ] /) ----
+  const _ag = window.addGrade;
+  if (typeof _ag === 'function') window.addGrade = function () {
+    const n = config.grades.length; const r = _ag.apply(this, arguments);
+    const g = config.grades[config.grades.length - 1];
+    if (config.grades.length > n && g && BAD.test(g.name)) { config.grades.pop(); saveConfig(); renderGradesManager(); showToast('Name can\u2019t contain . $ # [ ] /', 'error'); }
+    return r;
+  };
+  const _asg = window.addSubGrade;
+  if (typeof _asg === 'function') window.addSubGrade = function (gi) {
+    const el = document.getElementById('newSubGrade-' + gi);
+    if (el && BAD.test(el.value)) return showToast('Name can\u2019t contain . $ # [ ] /', 'error');
+    const r = _asg.apply(this, arguments); window.syncGradeAssignments(); return r;
+  };
+  const _ags = window.addGradeSubject;
+  if (typeof _ags === 'function') window.addGradeSubject = function (gi) {
+    const t = (document.getElementById('newSubjectText-' + gi) || {}).value || '';
+    if (BAD.test(t)) return showToast('Name can\u2019t contain . $ # [ ] /', 'error');
+    return _ags.apply(this, arguments);
+  };
+
+  // ---- Keep "whole grade" assignments current when classes are added ----
+  window.syncGradeAssignments = async function () {
+    if (!ADMINISH.includes(role())) return;
+    try {
+      await loadAll();
+      for (const uid of Object.keys(window.ASSIGN.all)) {
+        const a = window.ASSIGN.all[uid]; if (!a || !a.restricted || !a.grades) continue;
+        const add = {};
+        (config.grades || []).forEach(g => { if (a.grades[g.name]) (g.subGrades || []).map(sg => g.name + ' - ' + sg).concat([g.name]).forEach(c => { if (!BAD.test(c) && !(a.classes || {})[c]) add[c] = true; }); });
+        if (Object.keys(add).length) await window._fbUpdate(window._fbRef(window._fbDb, _fbSchoolPath() + '/assignments/' + uid + '/classes'), add);
+      }
+    } catch (e) { console.warn('[assign] grade sync:', e && e.code); }
+  };
+
+  // ---- Admin / Head Teacher UI (Admin Settings) ----
+  const canAssign = () => ADMINISH.includes(role());
+  const staffList = () => JSON.parse(localStorage.getItem(USER_KEY) || '[]')
+    .filter(u => u.firebaseUid && !ADMINISH.includes(u.role) && u.role !== 'Parent');
+
+  async function loadAll() {
+    try {
+      const s = await window._fbGet(window._fbRef(window._fbDb, _fbSchoolPath() + '/assignments'));
+      window.ASSIGN.all = s.val() || {};
+    } catch (e) { console.warn('[assign] load all:', e && e.code); }
+  }
+  function summary(a) {
+    if (!a || !a.restricted) return '<span class="badge">All classes</span>';
+    const c = Object.keys(a.classes || {}).length, s = a.subjects ? Object.keys(a.subjects).length : 0;
+    return '<span class="badge">' + c + ' class' + (c === 1 ? '' : 'es') + ' \u00b7 ' + (s ? s + ' subject' + (s === 1 ? '' : 's') : 'all subjects') + '</span>';
+  }
+  async function renderCard() {
+    const admin = document.getElementById(role() === 'Deputy Head Teacher' ? 'sec-dashboard' : 'sec-admin'); if (!admin) return;
+    let card = document.getElementById('assignCard');
+    if (!canAssign()) { if (card) card.remove(); return; }
+    if (!card) {
+      card = document.createElement('div'); card.className = 'card'; card.id = 'assignCard';
+      const ref = document.getElementById('staffPointerCard');
+      if (ref && ref.parentNode) ref.parentNode.insertBefore(card, ref); else admin.appendChild(card);
+    }
+    await loadAll();
+    const list = staffList();
+    card.innerHTML = '<div class="card-header"><span class="card-title">\ud83c\udf93 Teacher Class &amp; Subject Access</span></div>' +
+      '<p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Limit a teacher to specific classes and subjects. Teachers with no restriction keep full access.</p>' +
+      (list.length ? list.map(u => '<div style="display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap"><span style="min-width:120px">' + E(u.username) + '</span><span style="font-size:12px;color:var(--text-light);min-width:110px">' + E(u.role) + '</span>' + summary(window.ASSIGN.all[u.firebaseUid]) + '<button class="btn btn-sm" onclick="openAssignPanel(\'' + E(u.firebaseUid) + '\')">Assign</button></div>').join('')
+        : '<div style="color:var(--text-light)">No staff with cloud logins yet</div>');
+  }
+  window.renderAssignCard = renderCard;
+
+  window.openAssignPanel = function (uid) {
+    if (!canAssign()) return;
+    const u = staffList().find(x => x.firebaseUid === uid); if (!u) return;
+    const cur = window.ASSIGN.all[uid] || {};
+    const cls = cur.classes || {}, subs = cur.subjects || {};
+    const grades = config.grades || [];
+    const subjectSet = []; grades.forEach(g => (g.subjects || []).forEach(s => { if (!subjectSet.includes(s)) subjectSet.push(s); }));
+    const box = (v, checked, cls2) => BAD.test(v)
+      ? '<label style="display:block;opacity:.5;font-size:13px"><input type="checkbox" disabled> ' + E(v) + ' <em>(name has a character Firebase can\u2019t store: . $ # [ ] /)</em></label>'
+      : '<label style="display:block;font-size:13px;margin:2px 0"><input type="checkbox" class="' + cls2 + '" value="' + E(v) + '" ' + (checked ? 'checked' : '') + '> ' + E(v) + '</label>';
+    const classHtml = grades.map((g, gi) => {
+      const names = (g.subGrades || []).map(sg => g.name + ' - ' + sg).concat([g.name]);
+      return '<div style="margin:8px 0"><label style="font-weight:600;font-size:13px"><input type="checkbox" class="asg-grade" value="' + E(g.name) + '" ' + ((cur.grades || {})[g.name] ? 'checked' : '') + ' onchange="this.closest(\'div\').querySelectorAll(\'.asg-cls\').forEach(c=>c.checked=this.checked)"> ' + E(g.name) + ' (whole grade, incl. future classes)</label><div style="margin-left:18px">' + names.map(n => box(n, cls[n], 'asg-cls')).join('') + '</div></div>';
+    }).join('');
+    const ov = document.createElement('div'); ov.id = 'assignOverlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:12px';
+    ov.innerHTML = '<div class="card" style="max-width:520px;width:100%;max-height:90vh;overflow:auto;margin:0">' +
+      '<div class="card-header"><span class="card-title">' + E(u.username) + ' \u2014 ' + E(u.role) + '</span></div>' +
+      '<label style="display:block;font-weight:600;margin-bottom:8px"><input type="checkbox" id="asgRestrict" ' + (cur.restricted ? 'checked' : '') + '> Restrict to assigned classes</label>' +
+      '<div style="font-weight:600;font-size:13px">Classes</div>' + classHtml +
+      '<div style="font-weight:600;font-size:13px;margin-top:10px">Subjects <span style="font-weight:400;color:var(--text-light)">(none ticked = all subjects in their classes)</span></div>' +
+      subjectSet.map(s => box(s, subs[s], 'asg-sub')).join('') +
+      '<div style="display:flex;gap:8px;margin-top:14px"><button class="btn btn-primary" onclick="saveAssignPanel(\'' + E(uid) + '\')">Save</button><button class="btn btn-outline" onclick="document.getElementById(\'assignOverlay\').remove()">Cancel</button></div></div>';
+    document.body.appendChild(ov);
+  };
+
+  window.saveAssignPanel = async function (uid) {
+    if (!canAssign()) return;
+    const restricted = document.getElementById('asgRestrict').checked;
+    const classes = [...document.querySelectorAll('.asg-cls:checked')].map(c => c.value);
+    const gradesSel = [...document.querySelectorAll('.asg-grade:checked')].map(c => c.value);
+    const subjects = [...document.querySelectorAll('.asg-sub:checked')].map(c => c.value);
+    if (restricted && !classes.length && !confirm('No classes ticked \u2014 this teacher will see no students. Continue?')) return;
+    let rec = null;
+    if (restricted) {
+      rec = { restricted: true };
+      if (classes.length) { rec.classes = {}; classes.forEach(c => rec.classes[c] = true); }
+      if (gradesSel.length) { rec.grades = {}; gradesSel.forEach(g => rec.grades[g] = true); }
+      if (subjects.length) { rec.subjects = {}; subjects.forEach(s => rec.subjects[s] = true); }
+    }
+    try {
+      await window._fbSet(window._fbRef(window._fbDb, _fbSchoolPath() + '/assignments/' + uid), rec);
+      showToast(restricted ? 'Access saved' : 'Restriction removed');
+      document.getElementById('assignOverlay').remove();
+      renderCard();
+    } catch (e) { showToast('Could not save \u2014 ' + (e.code || e.message || 'check connection'), 'error'); }
+  };
+
+  const _ra = window.renderAdmin;
+  if (typeof _ra === 'function') window.renderAdmin = function () { const r = _ra.apply(this, arguments); renderCard(); return r; };
+  const _rd = window.renderDashboard;
+  if (typeof _rd === 'function') window.renderDashboard = function () { const r = _rd.apply(this, arguments); renderCard(); return r; };
+  document.addEventListener('DOMContentLoaded', () => setTimeout(() => { renderCard(); window.syncGradeAssignments(); }, 0));
+})();
+</script>
+
+<script>
+// ==================== YEAR-END PROMOTION ====================
+// Administrator only. Archives each student's year under student.history[year], moves them to the next class
+// (last grade -> class "Alumni", kept, never deleted), resets marks/attendance/conduct, carries fee balance forward.
+(function () {
+  const ALUMNI = 'Alumni';
+  const E = s => escHtml(String(s == null ? '' : s));
+  const isAdmin = () => typeof currentUser !== 'undefined' && currentUser && ['Administrator', 'Head Teacher', 'Deputy Head Teacher'].includes(currentUser.role);
+  const safeKey = k => String(k).replace(/[.$#\[\]\/]/g, '-');
+
+  function nextClass(c) {
+    const gs = config.grades || [];
+    const parts = c.split(' - '); const gname = parts[0]; const sg = parts.slice(1).join(' - ');
+    const gi = gs.findIndex(g => g.name === gname);
+    if (gi < 0) return null;
+    const nx = gs[gi + 1];
+    if (!nx) return ALUMNI;
+    if (!sg || !(nx.subGrades || []).length) return nx.name;
+    const letters = x => (String(x).match(/[A-Za-z]+$/) || [''])[0].toLowerCase();
+    let m = nx.subGrades.find(x => letters(x) && letters(x) === letters(sg));
+    if (!m) { const p = (gs[gi].subGrades || []).indexOf(sg); m = nx.subGrades[p] !== undefined ? nx.subGrades[p] : nx.subGrades[0]; }
+    return nx.name + ' - ' + m;
+  }
+
+  function renderCard() {
+    const admin = document.getElementById(currentUser && currentUser.role === 'Deputy Head Teacher' ? 'sec-dashboard' : 'sec-admin'); if (!admin) return;
+    let card = document.getElementById('promoteCard');
+    if (!isAdmin()) { if (card) card.remove(); return; }
+    if (!card) {
+      card = document.createElement('div'); card.className = 'card'; card.id = 'promoteCard';
+      const ref = document.getElementById('assignCard') || document.getElementById('staffPointerCard');
+      if (ref && ref.parentNode) ref.parentNode.insertBefore(card, ref); else admin.appendChild(card);
+    }
+    const lp = config.lastPromotion;
+    card.innerHTML = '<div class="card-header"><span class="card-title">\ud83d\udcc8 Promote to Next Year</span></div>' +
+      '<p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Moves students up a class, archives this year\u2019s marks, and carries fee balances forward. Last-grade students become Alumni (kept, not deleted).</p>' +
+      (lp ? '<p style="font-size:12px;margin:0 0 10px">Last run: ' + E(lp.from) + ' \u2192 ' + E(lp.to) + ' (' + E(lp.count) + ' students, ' + new Date(lp.ts).toLocaleDateString() + ')</p>' : '') +
+      '<button class="btn btn-primary btn-sm" onclick="openPromotion()">Promote\u2026</button>';
+  }
+  window.renderPromoteCard = renderCard;
+
+  window.openPromotion = function () {
+    if (!isAdmin()) return showToast('\u26d4 Only Administrator, Head Teacher or Deputy Head Teacher can promote students.', 'error');
+    const active = students.map((s, i) => ({ s, i })).filter(x => x.s && !x.s._hidden && x.s.class !== ALUMNI);
+    if (!active.length) return showToast('No students to promote', 'error');
+    const lp = config.lastPromotion;
+    if (lp && String(lp.to) === String(config.academicYear) && !confirm('Students were already promoted into ' + config.academicYear + ' on ' + new Date(lp.ts).toLocaleDateString() + '. Run again?')) return;
+    const byClass = {}; active.forEach(x => (byClass[x.s.class] = byClass[x.s.class] || []).push(x));
+    const order = getAllClasses(); const classes = Object.keys(byClass).sort((a, b) => (order.indexOf(a) < 0 ? 999 : order.indexOf(a)) - (order.indexOf(b) < 0 ? 999 : order.indexOf(b)));
+    const yr = parseInt(config.academicYear, 10);
+    const opts = (cur, sel) => order.concat([ALUMNI]).map(c => '<option value="' + E(c) + '" ' + (c === sel ? 'selected' : '') + '>' + (c === cur ? 'Stay in ' : '') + E(c) + '</option>').join('');
+    const rows = classes.map((c, k) => {
+      const nx = nextClass(c) || c;
+      return '<div style="border:1px solid var(--border,#ddd);border-radius:8px;padding:8px;margin:8px 0">' +
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><strong>' + E(c) + '</strong><span style="color:var(--text-light);font-size:12px">' + byClass[c].length + ' students \u2192</span>' +
+        '<select class="promo-map" data-from="' + E(c) + '">' + opts(c, nx) + '</select></div>' +
+        '<details style="margin-top:6px"><summary style="font-size:12px;cursor:pointer">Repeaters (untick to keep in class)</summary>' +
+        byClass[c].map(x => '<label style="display:block;font-size:13px"><input type="checkbox" class="promo-stu" data-idx="' + x.i + '" checked> ' + E(x.s.name) + '</label>').join('') + '</details></div>';
+    }).join('');
+    const ov = document.createElement('div'); ov.id = 'promoOverlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:12px';
+    ov.innerHTML = '<div class="card" style="max-width:560px;width:100%;max-height:90vh;overflow:auto;margin:0">' +
+      '<div class="card-header"><span class="card-title">Promote students</span></div>' +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap"><div class="form-group"><label>New academic year</label><input id="promoYear" value="' + E(isNaN(yr) ? '' : yr + 1) + '"></div>' +
+      '<div class="form-group"><label>Starting term</label><input id="promoTerm" value="Term 1"></div></div>' +
+      '<p style="font-size:12px;color:var(--text-light)">Grades are assumed to be listed lowest to highest in Admin Settings. Check each mapping.</p>' + rows +
+      '<p style="font-size:12px;color:var(--text-light)">A backup file downloads automatically before anything changes.</p>' +
+      '<div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary" onclick="runPromotion()">Promote</button><button class="btn btn-outline" onclick="document.getElementById(\'promoOverlay\').remove()">Cancel</button></div></div>';
+    document.body.appendChild(ov);
+  };
+
+  window.runPromotion = function () {
+    if (!isAdmin()) return;
+    const year = document.getElementById('promoYear').value.trim(), term = document.getElementById('promoTerm').value.trim() || 'Term 1';
+    if (!year) return showToast('Enter the new academic year', 'error');
+    if (year === String(config.academicYear)) return showToast('New year must differ from the current year', 'error');
+    const map = {}; document.querySelectorAll('.promo-map').forEach(el => map[el.dataset.from] = el.value);
+    const stay = new Set(); document.querySelectorAll('.promo-stu').forEach(el => { if (!el.checked) stay.add(parseInt(el.dataset.idx, 10)); });
+    const idxs = []; document.querySelectorAll('.promo-stu').forEach(el => idxs.push(parseInt(el.dataset.idx, 10)));
+    const grads = idxs.filter(i => !stay.has(i) && map[students[i].class] === ALUMNI).length;
+    requestApproval('Promote ' + idxs.length + ' students to ' + year + ' (' + stay.size + ' repeating, ' + grads + ' becoming Alumni)', () => {
+      try {
+        exportData();
+        pushUndo();
+        const oldYear = String(config.academicYear), now = new Date().toISOString();
+        idxs.forEach(i => {
+          const s = students[i]; if (!s) return;
+          s.history = s.history || {};
+          let key = safeKey(oldYear); if (s.history[key]) key += '_' + Date.now().toString(36);
+          s.history[key] = { class: s.class, term: config.currentTerm, subjects: s.subjects || [], terms: s.terms || {}, attendance: s.attendance || {}, conduct: s.conduct || [], finance: s.finance || { total: 0, paid: 0, categories: [] }, paymentHistory: s.paymentHistory || [], archivedOn: now };
+          const fin = s.finance || { total: 0, paid: 0 };
+          const balance = (parseFloat(fin.total) || 0) - (parseFloat(fin.paid) || 0);
+          const target = stay.has(i) ? s.class : (map[s.class] || s.class);
+          if (target !== s.class) { s.previousClass = s.class; }
+          s.class = target;
+          s.subjects = target === ALUMNI ? [] : getSubjectsForClass(target).map(name => ({ name, ca1: '', ca2: '', final: '' }));
+          s.terms = {}; s.attendance = {}; s.conduct = []; s.paymentHistory = [];
+          const cats = target === ALUMNI ? [] : getFeeCategoriesForClass(target).map(c => ({ name: c.name, amount: parseFloat(c.amount) || 0 }));
+          if (balance !== 0) cats.unshift({ name: (balance > 0 ? 'Arrears b/f ' : 'Credit b/f ') + oldYear, amount: balance });
+          s.finance = { total: cats.reduce((a, c) => a + c.amount, 0), paid: 0, categories: cats };
+          if (target === ALUMNI) s.alumniYear = oldYear;
+        });
+        config.academicYear = year; config.currentTerm = term;
+        config.lastPromotion = { from: oldYear, to: year, ts: Date.now(), count: idxs.length };
+        saveConfig(); saveStudents();
+        const ov = document.getElementById('promoOverlay'); if (ov) ov.remove();
+        showToast('Promoted ' + idxs.length + ' students to ' + year);
+        renderCard(); refreshCurrentSection();
+      } catch (e) { console.error(e); showToast('Promotion failed \u2014 use Undo, then restore from the backup', 'error'); }
+    }, true);
+  };
+
+  // ---- Past years viewer ----
+  window.showStudentHistory = function (idx) {
+    const s = students[idx]; if (!s) return;
+    const h = s.history || {}; const years = Object.keys(h).sort();
+    const tbl = (subs) => '<table><tr><th>Subject</th><th>CA1</th><th>CA2</th><th>Final</th><th>%</th></tr>' + (subs || []).map(x => '<tr><td>' + E(x.name) + '</td><td>' + E(x.ca1) + '</td><td>' + E(x.ca2) + '</td><td>' + E(x.final) + '</td><td>' + calcWeightedTotal(x).toFixed(1) + '</td></tr>').join('') + '</table>';
+    const body = years.length ? years.map(y => {
+      const r = h[y], f = r.finance || {}; const bal = (f.total || 0) - (f.paid || 0);
+      return '<div style="margin:12px 0"><strong>' + E(y.split('_')[0]) + ' \u2014 ' + E(r.class) + '</strong><div style="font-size:12px;margin-top:6px"><em>' + E(r.term || 'Latest') + '</em></div>' + tbl(r.subjects) +
+        Object.keys(r.terms || {}).map(t => '<div style="font-size:12px;margin-top:6px"><em>' + E(t) + '</em></div>' + tbl(r.terms[t])).join('') +
+        '<div style="font-size:12px;color:var(--text-light);margin-top:4px">Fees: K' + (f.paid || 0).toLocaleString() + ' paid of K' + (f.total || 0).toLocaleString() + ' (balance K' + bal.toLocaleString() + ')</div></div>';
+    }).join('') : '<p style="color:var(--text-light)">No archived years yet.</p>';
+    const ov = document.createElement('div'); ov.id = 'histOverlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:12px';
+    ov.innerHTML = '<div class="card" style="max-width:560px;width:100%;max-height:90vh;overflow:auto;margin:0"><div class="card-header"><span class="card-title">' + E(s.name) + ' \u2014 past years</span></div>' + body +
+      '<button class="btn btn-outline" onclick="document.getElementById(\'histOverlay\').remove()">Close</button></div>';
+    document.body.appendChild(ov);
+  };
+
+  const _ra = window.renderAdmin;
+  if (typeof _ra === 'function') window.renderAdmin = function () { const r = _ra.apply(this, arguments); renderCard(); return r; };
+  const _rd = window.renderDashboard;
+  if (typeof _rd === 'function') window.renderDashboard = function () { const r = _rd.apply(this, arguments); renderCard(); return r; };
+  document.addEventListener('DOMContentLoaded', () => setTimeout(renderCard, 50));
+})();
+</script>
+
+<script>
+// ==================== TERMS: close term, term-aware assessments & reports ====================
+// Live marks (student.subjects) always belong to config.currentTerm. Past terms live in student.terms[termName].
+(function () {
+  const MGR = ['Administrator', 'Head Teacher', 'Deputy Head Teacher'];
+  const BAD = /[.$#\[\]\/]/;
+  const E = s => escHtml(String(s == null ? '' : s));
+  const role = () => (typeof currentUser !== 'undefined' && currentUser && currentUser.role) || '';
+  const canManage = () => MGR.includes(role());
+  const blank = arr => arr.map(x => ({ name: x.name, ca1: '', ca2: '', final: '' }));
+  const hasMarks = x => x && (x.ca1 !== '' && x.ca1 != null || x.ca2 !== '' && x.ca2 != null || x.final !== '' && x.final != null);
+
+  // Which marks array the Assessments screen is editing
+  window.assessArr = function (s) {
+    const t = (document.getElementById('assessTerm') || {}).value;
+    if (!t || t === 'current' || t === config.currentTerm) return s.subjects;
+    s.terms = s.terms || {};
+    if (!s.terms[t]) s.terms[t] = getSubjectsForClass(s.class).map(n => ({ name: n, ca1: '', ca2: '', final: '' }));
+    return s.terms[t];
+  };
+
+  function setSelectOptions(id, opts, keep) {
+    const el = document.getElementById(id); if (!el) return;
+    const prev = el.value;
+    el.innerHTML = opts.map(o => '<option value="' + E(o[0]) + '">' + E(o[1]) + '</option>').join('');
+    if (keep && [...el.options].some(o => o.value === prev)) el.value = prev;
+  }
+  const termNames = () => { const l = ['Term 1', 'Term 2', 'Term 3']; if (config.currentTerm && !l.includes(config.currentTerm)) l.push(config.currentTerm); return l; };
+  function fillTermSelects() {
+    setSelectOptions('assessTerm', [['current', 'Current Term (' + config.currentTerm + ')']].concat(termNames().filter(t => t !== config.currentTerm).map(t => [t, t])), true);
+    setSelectOptions('reportTerm', [['current', 'Current Term (' + config.currentTerm + ')']].concat(termNames().filter(t => t !== config.currentTerm).map(t => [t, t])).concat([['year', 'Full year summary']]), true);
+  }
+  ['initAssessments', 'initReports'].forEach(n => {
+    const o = window[n]; if (typeof o !== 'function') return;
+    window[n] = function () { const r = o.apply(this, arguments); fillTermSelects(); return r; };
+  });
+
+  // ---- Reports by term / full year ----
+  function withTermView(term, fn) {
+    const saved = students.map(s => s && s.subjects);
+    try { students.forEach(s => { if (s) s.subjects = (s.terms && s.terms[term]) || []; }); return fn(); }
+    finally { students.forEach((s, i) => { if (s) s.subjects = saved[i]; }); }
+  }
+  function yearStats(s) {
+    const terms = Object.assign({}, s.terms || {}); terms[config.currentTerm] = s.subjects || [];
+    const tn = Object.keys(terms).sort();
+    const names = []; tn.forEach(t => (terms[t] || []).forEach(x => { if (x && x.name && !names.includes(x.name)) names.push(x.name); }));
+    const rows = names.map(n => {
+      const per = tn.map(t => { const x = (terms[t] || []).find(y => y.name === n); return hasMarks(x) ? calcWeightedTotal(x) : null; });
+      const got = per.filter(v => v !== null);
+      return { name: n, per, avg: got.length ? got.reduce((a, b) => a + b, 0) / got.length : null };
+    });
+    const av = rows.filter(r => r.avg !== null);
+    return { tn, rows, overall: av.length ? av.reduce((a, r) => a + r.avg, 0) / av.length : null };
+  }
+  function yearText(s) {
+    const st = yearStats(s);
+    const mates = students.filter(x => x && x.class === s.class).map(x => yearStats(x).overall).filter(v => v !== null);
+    const pos = st.overall === null ? null : mates.filter(v => v > st.overall).length + 1;
+    let r = 'FULL YEAR REPORT\n' + '='.repeat(40) + '\nSchool: ' + config.schoolName + '\nStudent: ' + s.name + '\nID: ' + s.id + '\nClass: ' + s.class + '\nYear: ' + config.academicYear + '\n\n';
+    st.rows.forEach(x => { r += x.name + ': ' + st.tn.map((t, i) => t + '=' + (x.per[i] === null ? '-' : x.per[i].toFixed(1))).join(', ') + ', Average=' + (x.avg === null ? '-' : x.avg.toFixed(1)) + (x.avg === null ? '' : ', Grade=' + getLetterGrade(x.avg)) + '\n'; });
+    r += '\nYear Average: ' + (st.overall === null ? 'N/A' : st.overall.toFixed(1) + '%') + '\nGrade: ' + (st.overall === null ? 'N/A' : getLetterGrade(st.overall)) + '\nPosition in Class: ' + (pos === null ? 'N/A' : ordinal(pos) + ' out of ' + mates.length) + ' (' + s.class + ')';
+    return r;
+  }
+  ['buildAcademicReportText', 'buildWhatsAppReportText', 'buildOverallReportText'].forEach(n => {
+    const o = window[n]; if (typeof o !== 'function') return;
+    window[n] = function (s) {
+      const t = (document.getElementById('reportTerm') || {}).value || 'current';
+      if (t === 'current' || t === config.currentTerm) return o.apply(this, arguments);
+      if (t === 'year') {
+        if (n === 'buildOverallReportText') { const full = o.call(this, s); const k = full.indexOf('\n--- ATTENDANCE ---'); return yearText(s) + '\n' + (k >= 0 ? full.slice(k) : ''); }
+        return yearText(s);
+      }
+      const txt = withTermView(t, () => o.call(this, s));
+      return txt.replace('Term: ' + config.currentTerm + ' ', 'Term: ' + t + ' ');
+    };
+  });
+
+  // ---- Close term ----
+  function nextTerm(cur) {
+    const m = String(cur).match(/^(.*?)(\d+)\s*$/); if (!m) return undefined;
+    const n = parseInt(m[2], 10); return n >= 3 ? null : m[1] + (n + 1);
+  }
+  window.closeTerm = function () {
+    if (!canManage()) return showToast('\u26d4 Only Administrator, Head Teacher or Deputy Head Teacher can close a term.', 'error');
+    const cur = config.currentTerm || 'Term 1';
+    if (BAD.test(cur)) return showToast('Term name can\u2019t contain . $ # [ ] /', 'error');
+    let nxt = nextTerm(cur);
+    if (nxt === undefined) { nxt = (prompt('Name of the next term:') || '').trim(); if (!nxt) return; if (BAD.test(nxt)) return showToast('Term name can\u2019t contain . $ # [ ] /', 'error'); }
+    const lc = config.lastClosed;
+    if (lc && lc.term === cur && String(lc.year) === String(config.academicYear) && !confirm(cur + ' was already closed on ' + new Date(lc.ts).toLocaleDateString() + '. Close it again?')) return;
+    const n = students.filter(s => s && !s._hidden && s.class !== 'Alumni').length;
+    const msg = nxt === null ? 'Save ' + cur + ' marks for ' + n + ' students (final term \u2014 marks are kept; use Promote Year next)' : 'Close ' + cur + ' for ' + n + ' students and start ' + nxt;
+    if (!confirm(msg + '?')) return;
+    requestApproval(msg, () => {
+      try {
+        exportData(); pushUndo();
+        students.forEach(s => {
+          if (!s || s._hidden || s.class === 'Alumni') return;
+          s.terms = s.terms || {};
+          s.terms[cur] = JSON.parse(JSON.stringify(s.subjects || []));
+          if (nxt !== null) s.subjects = (s.subjects && s.subjects.length) ? blank(s.subjects) : blank(getSubjectsForClass(s.class).map(name => ({ name })));
+        });
+        if (nxt !== null) config.currentTerm = nxt;
+        config.lastClosed = { term: cur, year: config.academicYear, ts: Date.now() };
+        saveConfig(); saveStudents();
+        showToast(nxt === null ? cur + ' saved. Use Promote Year when ready.' : cur + ' closed \u2014 now ' + nxt);
+        renderCard(); if (typeof refreshCurrentSection === 'function') refreshCurrentSection();
+      } catch (e) { console.error(e); showToast('Close term failed \u2014 use Undo, then restore from the backup', 'error'); }
+    }, true);
+  };
+
+  function renderCard() {
+    const host = document.getElementById(role() === 'Deputy Head Teacher' ? 'sec-dashboard' : 'sec-admin'); if (!host) return;
+    let card = document.getElementById('termCard');
+    if (!canManage()) { if (card) card.remove(); return; }
+    if (!card) {
+      card = document.createElement('div'); card.className = 'card'; card.id = 'termCard';
+      const ref = document.getElementById('promoteCard') || document.getElementById('assignCard') || document.getElementById('staffPointerCard');
+      if (ref && ref.parentNode === host || ref && ref.parentNode) ref.parentNode.insertBefore(card, ref); else host.appendChild(card);
+    }
+    const lc = config.lastClosed;
+    card.innerHTML = '<div class="card-header"><span class="card-title">\ud83d\udcc5 Close Term</span></div>' +
+      '<p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Current: <strong>' + E(config.currentTerm) + ' ' + E(config.academicYear) + '</strong>. Saves every student\u2019s marks under this term, clears them for the next term, and advances the term.</p>' +
+      (lc ? '<p style="font-size:12px;margin:0 0 10px">Last closed: ' + E(lc.term) + ' ' + E(lc.year) + ' (' + new Date(lc.ts).toLocaleDateString() + ')</p>' : '') +
+      '<button class="btn btn-primary btn-sm" onclick="closeTerm()">Close ' + E(config.currentTerm) + '\u2026</button>';
+  }
+  const _ra = window.renderAdmin; if (typeof _ra === 'function') window.renderAdmin = function () { const r = _ra.apply(this, arguments); renderCard(); return r; };
+  const _rd = window.renderDashboard; if (typeof _rd === 'function') window.renderDashboard = function () { const r = _rd.apply(this, arguments); renderCard(); return r; };
+  document.addEventListener('DOMContentLoaded', () => setTimeout(() => { renderCard(); fillTermSelects(); }, 100));
 })();
 </script>
 
