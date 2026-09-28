@@ -5176,13 +5176,37 @@ function _loadSchoolLocalData(schoolId) {
 
 // ==================== CLOUD SCHOOL RECOVERY ====================
 // Shared by Google sign-in, email/password sign-in and the Multi-School switcher.
-// Reads this account's schools from schoolsDirectory (owner-only, 8s timeout). Throws on failure.
+// Reliable reader for slow mobile networks: tries the plain HTTPS (REST) endpoint first, which works where the
+// Firebase websocket stalls, then falls back to the SDK. Throws Error with .code = PERMISSION_DENIED | timeout | HTTP_xxx.
+async function _restGet(path, ms) {
+  const u = window._fbAuth && window._fbAuth.currentUser;
+  if (!u) throw Object.assign(new Error('not signed in'), { code: 'not-signed-in' });
+  const token = await u.getIdToken();
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch('https://school-pro-ultimate-default-rtdb.firebaseio.com/' + path + '.json?auth=' + encodeURIComponent(token), { signal: ctrl.signal });
+    if (!r.ok) throw Object.assign(new Error('HTTP ' + r.status), { code: (r.status === 401 || r.status === 403) ? 'PERMISSION_DENIED' : 'HTTP_' + r.status });
+    return await r.json();
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw Object.assign(new Error('timeout'), { code: 'timeout' });
+    throw e;
+  } finally { clearTimeout(t); }
+}
+async function _dbRead(path) {
+  let restErr;
+  try { return await _restGet(path, 20000); }
+  catch (e) { restErr = e; if (e && e.code === 'PERMISSION_DENIED') throw e; }
+  try {
+    const snap = await Promise.race([
+      window._fbGet(window._fbRef(window._fbDb, path)),
+      new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'timeout' })), 15000))
+    ]);
+    return snap.val();
+  } catch (e) { throw restErr || e; }
+}
+// Reads this account's schools from schoolsDirectory (owner-only). Throws on failure.
 async function _fetchOwnSchools(uid) {
-  const snap = await Promise.race([
-    window._fbGet(window._fbRef(window._fbDb, 'schoolsDirectory/' + uid)),
-    new Promise((_, reject) => setTimeout(() => reject(new Error('schools-directory-timeout')), 8000))
-  ]);
-  const all = snap.exists() ? (snap.val() || {}) : {};
+  const all = (await _dbRead('schoolsDirectory/' + uid)) || {};
   const ids = Object.keys(all).sort((x, y) => ((all[x] && all[x].createdAt) || 0) - ((all[y] && all[y].createdAt) || 0));
   return { ids, all };
 }
@@ -5201,13 +5225,8 @@ function _pickSchoolId(ids, all) {
 // without pushing this device's local settings over it. Returns false only if the cloud could not be read.
 async function _adoptCloudSchool(uid, schoolId, nameHint) {
   let remote = null;
-  try {
-    const snap = await Promise.race([
-      window._fbGet(window._fbRef(window._fbDb, 'schools/' + uid + '/' + schoolId + '/config')),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('config-timeout')), 8000))
-    ]);
-    remote = snap.val();
-  } catch (e) { console.warn('[adoptCloudSchool] read failed:', e && e.message); return false; }
+  try { remote = await _dbRead('schools/' + uid + '/' + schoolId + '/config'); }
+  catch (e) { console.warn('[adoptCloudSchool] read failed:', e && (e.code || e.message)); window._lastAdoptError = e; return false; }
   try { _saveCurrentSchoolLocalData(); } catch (e) {}
   _fbDetachListeners();
   const prev = config || {};
@@ -5226,7 +5245,7 @@ async function _adoptCloudSchool(uid, schoolId, nameHint) {
   try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch (e) {}
   try { _loadSchoolLocalData(schoolId); } catch (e) {}
   attachFirebaseListeners();
-  return true;
+  return remote ? true : 'empty';
 }
 // Wiped/new device, email or Google admin: find this account's existing school(s) before offering a brand-new setup.
 // Returns 'adopted' | 'none' | 'failed'.
@@ -5239,18 +5258,53 @@ async function _restoreAdminSchool(fbUser) {
   const ok = await _adoptCloudSchool(fbUser.uid, id, found.all[id] && found.all[id].schoolName);
   return ok ? 'adopted' : 'failed';
 }
-// Multi-School card button: list every school on this account (including ones this device has never opened).
+// "Find my school": one clear screen that lists every school on this login and opens the one you tap.
 async function findMySchools() {
   const u = window._fbAuth && window._fbAuth.currentUser;
   if (!u) { showToast('Sign in with your cloud account first', 'error'); return; }
-  showToast('Looking for your schools\u2026');
-  try {
-    const found = await _fetchOwnSchools(u.uid);
+  const old = document.getElementById('recoverOverlay'); if (old) old.remove();
+  const ov = document.createElement('div'); ov.id = 'recoverOverlay';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:12px';
+  ov.innerHTML = '<div class="card" style="max-width:520px;width:100%;max-height:90vh;overflow:auto;margin:0"><div class="card-header"><span class="card-title">\u2601\ufe0f Find my school</span></div>' +
+    '<div style="font-size:12px;color:var(--text-light);margin-bottom:8px">Signed in as <b>' + esc(u.email || u.displayName || u.uid) + '</b></div>' +
+    '<div id="recoverBody"></div><div style="margin-top:14px"><button class="btn btn-outline" onclick="document.getElementById(\'recoverOverlay\').remove()">Close</button></div></div>';
+  document.body.appendChild(ov);
+  const body = () => document.getElementById('recoverBody');
+  const showErr = (e, retry) => {
+    const code = String((e && (e.code || e.message)) || 'unknown');
+    let hint = 'Check your connection and try again.';
+    if (/permission/i.test(code)) hint = 'The database refused the read. Publish the latest Firebase rules, then try again.';
+    else if (code === 'timeout') hint = 'The cloud did not answer in time. Move to a stronger signal or Wi-Fi and retry.';
+    if (body()) body().innerHTML = '<div style="color:#c0392b;font-size:13px;margin-bottom:8px">Could not load: ' + esc(hint) + ' <span style="opacity:.7">[' + esc(code) + ']</span></div><button class="btn btn-primary btn-sm" onclick="' + retry + '">Retry</button>';
+  };
+  window._recoverRun = async function () {
+    if (body()) body().innerHTML = '<div style="font-size:13px">Looking for your schools\u2026 this can take up to 30 seconds on a slow connection.</div>';
+    let found;
+    try { found = await _fetchOwnSchools(u.uid); } catch (e) { showErr(e, '_recoverRun()'); return; }
+    window._recoverFound = found;
+    if (!found.ids.length) {
+      if (body()) body().innerHTML = '<div style="font-size:13px">No schools are registered under this login. If your school was created with a different sign-in (for example Google instead of email, or another email), log out and sign in with that one.</div>';
+      return;
+    }
     _rememberSchoolNames(found.ids, found.all);
-    saveConfig();
-    renderSchools();
-    showToast(found.ids.length + ' school' + (found.ids.length === 1 ? '' : 's') + ' on this account');
-  } catch (e) { showToast('Could not reach the cloud. Try again on a better connection.', 'error'); }
+    if (body()) body().innerHTML = found.ids.map(id => {
+      const r = found.all[id] || {};
+      const when = r.createdAt ? new Date(r.createdAt).toLocaleString() : 'unknown date';
+      return '<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;margin:8px 0;padding:8px;border:1px solid var(--border,#ddd);border-radius:8px"><div><div style="font-weight:600">' + esc(r.schoolName || id) + '</div><div style="font-size:11px;color:var(--text-light)">Created ' + esc(when) + '</div></div>' +
+        (id === config.currentSchool ? '<span class="badge badge-wa">Open now</span>' : '<button class="btn btn-primary btn-sm" onclick="_recoverOpen(\'' + esc(id) + '\')">Open</button>') + '</div>';
+    }).join('');
+  };
+  window._recoverOpen = async function (id) {
+    const r = ((window._recoverFound || {}).all || {})[id] || {};
+    if (body()) body().innerHTML = '<div style="font-size:13px">Loading <b>' + esc(r.schoolName || id) + '</b> from the cloud\u2026</div>';
+    const ok = await _adoptCloudSchool(u.uid, id, r.schoolName);
+    if (!ok) { showErr(window._lastAdoptError, "_recoverOpen('" + id + "')"); return; }
+    const o = document.getElementById('recoverOverlay'); if (o) o.remove();
+    const sn = document.getElementById('sidebarSchoolName'); if (sn) sn.textContent = config.schoolName || r.schoolName || '';
+    showSection('dashboard');
+    showToast(ok === 'empty' ? 'Opened, but no saved settings were found in the cloud for this school' : 'Loaded ' + (config.schoolName || 'school'));
+  };
+  window._recoverRun();
 }
 
 function renderSchools() {
@@ -5934,12 +5988,9 @@ async function _completeGoogleSignIn(fbUser) {
         // a bare Firebase read has no built-in timeout, so a slow/flaky
         // connection can leave this await pending forever with no error —
         // exactly the "signed in but stuck" symptom this guards against.
-        const dirSnap = await Promise.race([
-          window._fbGet(window._fbRef(window._fbDb, 'schoolsDirectory/' + fbUser.uid)),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('schools-directory-timeout')), 8000))
-        ]);
-        if (dirSnap.exists()) {
-          const all = dirSnap.val() || {};
+        const dirVal = await _dbRead('schoolsDirectory/' + fbUser.uid);
+        if (dirVal && Object.keys(dirVal).length) {
+          const all = dirVal;
           const ids = Object.keys(all).sort((x, y) => ((all[x] && all[x].createdAt) || 0) - ((all[y] && all[y].createdAt) || 0));
           _rememberSchoolNames(ids, all);
           if (config.isSetup && config.currentSchool && ids.includes(config.currentSchool)) {
