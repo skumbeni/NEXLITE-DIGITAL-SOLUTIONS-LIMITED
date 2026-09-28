@@ -7028,6 +7028,9 @@ document.addEventListener('DOMContentLoaded', () => {
     return '<span class="badge">' + c + ' class' + (c === 1 ? '' : 'es') + ' \u00b7 ' + (s ? s + ' subject' + (s === 1 ? '' : 's') : 'all subjects') + '</span>';
   }
   async function renderCard() {
+    try { await renderCardInner(); } catch (e) { console.error('[assign] card failed:', e); }
+  }
+  async function renderCardInner() {
     const admin = document.getElementById(role() === 'Deputy Head Teacher' ? 'sec-dashboard' : 'sec-admin'); if (!admin) return;
     let card = document.getElementById('assignCard');
     if (!canAssign()) { if (card) card.remove(); return; }
@@ -7098,6 +7101,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const _rd = window.renderDashboard;
   if (typeof _rd === 'function') window.renderDashboard = function () { const r = _rd.apply(this, arguments); renderCard(); return r; };
   document.addEventListener('DOMContentLoaded', () => setTimeout(() => { renderCard(); window.syncGradeAssignments(); }, 0));
+  // Watchdog: (re)build the card whenever the Admin/Dashboard page is on screen and the card is missing or empty.
+  // Covers login finishing after page load, cached/old renders, and other scripts re-drawing the page.
+  let _busy = false;
+  setInterval(async () => {
+    if (_busy || document.hidden || !canAssign()) return;
+    const host = document.getElementById(role() === 'Deputy Head Teacher' ? 'sec-dashboard' : 'sec-admin');
+    if (!host || host.offsetParent === null) return;
+    const c = document.getElementById('assignCard');
+    if (c && c.children.length) return;
+    _busy = true; try { await renderCard(); } finally { _busy = false; }
+  }, 1500);
 })();
 </script>
 
