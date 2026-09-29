@@ -1506,6 +1506,7 @@ function _doWrite(path, data, attempt) {
       const code = err.code || err.message || '';
       window._fbLastErr = path.split('/').slice(-2).join('/') + ' — ' + code;
       console.warn('FB write failed (attempt ' + (attempt+1) + '):', code);
+      if (/permission[_ ]denied/i.test(code) && typeof _isReadOnly === 'function' && _isReadOnly()) { _roNotice(); _fbUpdateSyncBadge(_fbRetryQueue.length ? 'queued' : 'live'); return; }
       if (attempt < 2) {
         // Exponential backoff: 1.5s, 3s
         setTimeout(() => _doWrite(path, data, attempt + 1), 1500 * Math.pow(2, attempt));
@@ -1544,6 +1545,7 @@ function _doWriteMerge(path, data, attempt) {
       const code = err.code || err.message || '';
       window._fbLastErr = path.split('/').slice(-2).join('/') + ' — ' + code;
       console.warn('FB merge-write failed (attempt ' + (attempt+1) + '):', code);
+      if (/permission[_ ]denied/i.test(code) && typeof _isReadOnly === 'function' && _isReadOnly()) { _roNotice(); _fbUpdateSyncBadge(_fbRetryQueue.length ? 'queued' : 'live'); return; }
       if (attempt < 2) {
         setTimeout(() => _doWriteMerge(path, data, attempt + 1), 1500 * Math.pow(2, attempt));
       } else {
@@ -1928,6 +1930,7 @@ async function _fbHydratePhotos() {
 
 function saveStudents(changedIdx) {
   if (students && students._childOnly) return; // parent view holds only their own children: never persist/push
+  if (typeof _isReadOnly === 'function' && _isReadOnly()) { _roNotice(); return; } // expired / trial ended: read-only
   // changedIdx (optional): index of the single student that changed.
   // When provided, only that student's node is patched — much leaner than
   // a full array rewrite. Metadata (_count, _lastModified) is always updated.
@@ -2063,7 +2066,14 @@ function attachFirebaseListeners() {
   // --- Subscription listener (operator pushes from admin panel) ---
   window._fbOnValue(window._fbRef(window._fbDb, basePath + '/subscription'), snapshot => {
     const remote = snapshot.val();
-    if (!remote || !remote.tier) return;
+    if (!remote) return;
+    if (!remote.tier) {
+      // Operator-stamped trial record (no paid plan yet)
+      const te = remote.trialEnds || remote.accessUntil;
+      if (te) { _setTrialEnds(te); checkSubscription(); renderSubscriptionStatus(); }
+      return;
+    }
+    if (remote.accessUntil || remote.trialEnds) _setTrialEnds(null);
     getSubscription().then(local => {
       // Accept remote if newer or no local record
       if (!local || !local._ts || (remote._ts && remote._ts > local._ts)) {
@@ -3286,11 +3296,8 @@ async function registerStudent() {
   if (!cls) return showToast('Select class','error');
 
   // Check subscription student limit
-  if (typeof isWithinStudentLimit === 'function' && !(await isWithinStudentLimit())) {
-    const sub = await getSubscription();
-    const tier = sub ? TIERS[sub.tier] : null;
-    return showToast(`Student limit reached (${tier ? tier.students : '?'} on ${sub ? sub.tier : ''} plan). Please upgrade.`, 'error');
-  }
+  await getSubscription();
+  { const _why = _tierBlockReason(_studentTotal() + 1); if (_why) return showToast(_why, 'error'); }
 
   // Collect phones
   const phoneNums = document.querySelectorAll('#regPhones .reg-phone-num');
@@ -5821,6 +5828,11 @@ function importData(event) {
       const data = JSON.parse(e.target.result);
       // V7 fix: require Master or Head Teacher PIN before overwriting any data
       requestApproval('Import backup data (this will overwrite current config and students)', () => {
+        if (data.students) {
+          const _n = data.students.length;
+          const _why = _tierBlockReason(_n);
+          if (_why) { showToast(_why + ' (backup has ' + _n + ' students)', 'error'); return; }
+        }
         if (data.config) {
           // Preserve existing hashed PINs — never let an import overwrite them
           const existingPins = {
@@ -6915,48 +6927,116 @@ async function saveSubscription(data) {
   _subCache = data;
   const sig = await _subSign(data);
   localStorage.setItem('edu_subscription', JSON.stringify({ data, sig }));
-  // Mirror to Firebase so operator activations from mdm-admin push through
-  _fbWrite(_fbSchoolPath() + '/subscription', data);
+  // NOTE: no Firebase mirror here. /subscription is operator-write-only in the
+  // rules, so a school-side write is always denied and would sit in the retry
+  // queue forever (sync badge stuck on "queued"). Firebase is the authority.
 }
 
-async function checkSubscription() {
-  const sub = await getSubscription();
-  const badge = document.getElementById('subStatusBadge');
+// ==================== ENTITLEMENT ENGINE (single source of truth) ====================
+// Trial = TRIAL_DAYS from sign-up. The operator panel stamps the authoritative end
+// (subscription.trialEnds / accessUntil) and can extend it. Until a stamp arrives,
+// the admin device falls back to the Firebase account creation date.
+// POLICY_START gives schools that existed before this rule a 14-day grace period.
+const TRIAL_DAYS = 30;
+const TRIAL_STUDENT_LIMIT = Infinity;   // trial = full access; set a number to cap trials
+const POLICY_START = 1790708400000;     // 2026-09-29T19:00Z
+const GRACE_DAYS = 14;
+let _trialEndsCache = null;
 
-  if (!sub) {
-    if (badge) badge.innerHTML = '⚠️ <span style="color:#E67E22">No subscription</span>';
-    return;
+function _trialKey() { try { return 'edu_trial:' + _fbSchoolPath(); } catch(e) { return 'edu_trial:x'; } }
+function _loadTrialEnds() {
+  if (_trialEndsCache) return _trialEndsCache;
+  try { const v = parseInt(localStorage.getItem(_trialKey()), 10); if (v > 0) _trialEndsCache = v; } catch(e) {}
+  return _trialEndsCache;
+}
+function _setTrialEnds(v) {
+  _trialEndsCache = v || null;
+  try { if (v) localStorage.setItem(_trialKey(), String(v)); else localStorage.removeItem(_trialKey()); } catch(e) {}
+}
+function _trialEnd() {
+  const stamped = _loadTrialEnds();
+  if (stamped) return stamped;
+  const u = window._fbAuth && window._fbAuth.currentUser;
+  const isOwner = u && (!_fbResolvedAdminUid || _fbResolvedAdminUid === u.uid);
+  if (isOwner && u.metadata && u.metadata.creationTime) {
+    const t = Date.parse(u.metadata.creationTime);
+    if (!isNaN(t)) return Math.max(t + TRIAL_DAYS * 864e5, POLICY_START + GRACE_DAYS * 864e5);
   }
+  return null; // unknown (e.g. staff device before the operator stamp arrives): allow
+}
 
-  const now = new Date();
-  const expiry = new Date(sub.expiry);
-  const expired = now > expiry;
-  const tier = TIERS[sub.tier];
-  const studentCount = (typeof students !== 'undefined') ? activeStudents().length : 0;
-  const overLimit = tier && tier.students !== Infinity && studentCount > tier.students;
-  const daysLeft = Math.ceil((expiry - now) / (1000 * 60 * 60 * 24));
-
-  if (expired) {
-    if (badge) badge.innerHTML = '🔴 <span style="color:#E74C3C">Expired</span>';
-    showToast('⚠️ Your subscription has expired. Please renew to continue.', 'error');
-  } else if (overLimit) {
-    if (badge) badge.innerHTML = `🟡 <span style="color:#E67E22">${escHtml(String(sub.tier))} — Over limit</span>`;
-    showToast(`⚠️ Student count (${studentCount}) exceeds your ${escHtml(String(sub.tier))} plan limit (${tier.students}). Please upgrade.`, 'error');
-  } else if (daysLeft <= 7) {
-    if (badge) badge.innerHTML = `🟡 <span style="color:#E67E22">${escHtml(String(sub.tier))} — ${daysLeft}d left</span>`;
-  } else {
-    if (badge) badge.innerHTML = `🟢 <span style="color:#27AE60">${escHtml(String(sub.tier))}</span>`;
+// -> { state, limit, readOnly, tier, daysLeft, endsAt, message }
+function _entitlement() {
+  const sub = _subCache, now = Date.now();
+  if (sub && sub.tier) {
+    const tier = TIERS[sub.tier], exp = new Date(sub.expiry).getTime();
+    if (!tier || isNaN(exp)) return { state: 'invalid', limit: 0, readOnly: true, message: 'Your plan could not be verified. Contact your School Pro operator.' };
+    const daysLeft = Math.ceil((exp - now) / 864e5);
+    if (now > exp) return { state: 'expired', tier: sub.tier, limit: tier.students, readOnly: true, daysLeft, endsAt: exp, message: 'Your subscription has expired. The school is now read-only. Renew to continue.' };
+    return { state: daysLeft <= 7 ? 'expiring' : 'active', tier: sub.tier, limit: tier.students, readOnly: false, daysLeft, endsAt: exp };
   }
+  const end = _trialEnd();
+  if (end && now > end) return { state: 'trial-ended', limit: TRIAL_STUDENT_LIMIT, readOnly: true, daysLeft: 0, endsAt: end, message: 'Your free trial has ended. The school is now read-only. Subscribe to continue.' };
+  return { state: 'trial', limit: TRIAL_STUDENT_LIMIT, readOnly: false, daysLeft: end ? Math.ceil((end - now) / 864e5) : null, endsAt: end };
+}
+function _studentTotal() { return (typeof students !== 'undefined' && students) ? students.length : 0; }  // everyone counts: active, Alumni and hidden
+function _isReadOnly() { return _entitlement().readOnly; }
+
+// Message if the school may NOT hold `newCount` active students, else null.
+function _tierBlockReason(newCount) {
+  const e = _entitlement();
+  if (e.readOnly) return e.message;
+  if (e.limit !== Infinity && newCount > e.limit) return `Student limit reached (${e.limit} on ${e.tier || 'trial'} plan). Please upgrade.`;
+  return null;
 }
 
 async function isWithinStudentLimit() {
-  const sub = await getSubscription();
-  if (!sub) return true; // no sub = allow during trial
-  const tier = TIERS[sub.tier];
-  if (!tier) return true;
-  const count = (typeof students !== 'undefined') ? activeStudents().length : 0;
-  return count < tier.students;
+  await getSubscription();
+  const count = _studentTotal();
+  return _tierBlockReason(count + 1) === null;
 }
+
+let _roToastAt = 0;
+function _roNotice() {
+  if (Date.now() - _roToastAt < 8000) return;
+  _roToastAt = Date.now();
+  const e = _entitlement();
+  showToast('\u26A0 ' + (e.message || 'Read-only: subscription inactive.'), 'error');
+}
+
+function _renderPlanBanner(e) {
+  let el = document.getElementById('planBanner');
+  const show = e.readOnly || e.state === 'expiring' || (e.state === 'trial' && e.daysLeft !== null && e.daysLeft <= 7);
+  if (!show) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement('div'); el.id = 'planBanner';
+    el.style.cssText = 'position:sticky;top:0;z-index:9998;padding:8px 14px;font-size:13px;font-weight:600;text-align:center;color:#fff;';
+    document.body.insertBefore(el, document.body.firstChild);
+  }
+  let txt, bg = '#E67E22';
+  if (e.readOnly) { txt = (e.state === 'trial-ended' ? 'Free trial ended' : 'Subscription expired') + ' \u2014 read-only. Renew: 0960271128 / +260977638790'; bg = '#C0392B'; }
+  else if (e.state === 'expiring') txt = `Subscription ends in ${Math.max(e.daysLeft,0)} day(s). Renew to avoid read-only mode.`;
+  else txt = `Free trial ends in ${Math.max(e.daysLeft,0)} day(s). Subscribe to keep full access.`;
+  el.textContent = txt; el.style.background = bg;
+}
+
+async function checkSubscription() {
+  await getSubscription();
+  const e = _entitlement();
+  const badge = document.getElementById('subStatusBadge');
+  const count = _studentTotal();
+  const over = e.limit !== Infinity && count > e.limit;
+  if (badge) {
+    if (e.readOnly) badge.innerHTML = '\u26D4 <span style="color:#E74C3C">' + (e.state === 'trial-ended' ? 'Trial ended' : 'Expired') + ' (read-only)</span>';
+    else if (over) badge.innerHTML = `\u26A0 <span style="color:#E67E22">${escHtml(String(e.tier))} \u2014 Over limit</span>`;
+    else if (e.state === 'trial') badge.innerHTML = '\u23F3 <span style="color:#E67E22">Trial' + (e.daysLeft !== null ? ` \u2014 ${e.daysLeft}d left` : '') + '</span>';
+    else if (e.state === 'expiring') badge.innerHTML = `\u26A0 <span style="color:#E67E22">${escHtml(String(e.tier))} \u2014 ${e.daysLeft}d left</span>`;
+    else badge.innerHTML = `\u2705 <span style="color:#27AE60">${escHtml(String(e.tier))}</span>`;
+  }
+  if (over) showToast(`Student count (${count}) exceeds your ${e.tier} plan limit (${e.limit}). Please upgrade. New registrations are blocked.`, 'error');
+  _renderPlanBanner(e);
+}
+setInterval(() => { try { checkSubscription(); } catch(e) {} }, 3600000);
 
 // Subscription activation is handled by the operator panel (schoolpro-admin.html).
 // Schools receive their subscription status via Firebase real-time sync.
@@ -6966,6 +7046,8 @@ async function renderSubscriptionStatus() {
   if (!el) return;
   const sub = await getSubscription();
   if (!sub) {
+    { const _e = _entitlement(); if (_e.state === 'trial-ended') { el.innerHTML = '<span style="color:#E74C3C">Free trial ended \u2014 read-only. Subscribe below to continue.</span>'; return; }
+      if (_e.state === 'trial' && _e.daysLeft !== null) { el.innerHTML = '<span style="color:#E67E22">Free trial \u2014 ' + _e.daysLeft + ' day(s) left.</span>'; return; } }
     el.innerHTML = '<span style="color:#E67E22">No active subscription — 1-month free trial active.</span>';
     return;
   }
@@ -8655,6 +8737,7 @@ async function resetStaffPin(uid) {
 const APPROVAL_HANDLERS = {
   registerStudent(a) {
     if (_findStudentIndexById(a.student.id) >= 0) throw new Error('A student with ID ' + a.student.id + ' already exists');
+    { const _why = _tierBlockReason(_studentTotal() + 1); if (_why) throw new Error(_why); }
     pushUndo(); students.push(a.student); saveStudents();
   },
   editStudent(a) {
