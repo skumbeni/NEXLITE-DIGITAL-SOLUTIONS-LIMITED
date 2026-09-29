@@ -1496,14 +1496,15 @@ function _fbWrite(path, data) {
 }
 
 function _doWrite(path, data, attempt) {
-  window._fbSet(window._fbRef(window._fbDb, path), data)
+  _dbWrite(path, data)
     .then(() => {
       _fbSyncPending = Math.max(0, _fbSyncPending - 1);
-      if (_fbSyncPending === 0) _fbUpdateSyncBadge(_fbConnected ? 'live' : 'offline');
+      if (_fbSyncPending === 0) _fbUpdateSyncBadge(_fbRetryQueue.length ? 'queued' : 'live');
     })
     .catch(err => {
       _fbSyncPending = Math.max(0, _fbSyncPending - 1);
       const code = err.code || err.message || '';
+      window._fbLastErr = path.split('/').slice(-2).join('/') + ' — ' + code;
       console.warn('FB write failed (attempt ' + (attempt+1) + '):', code);
       if (attempt < 2) {
         // Exponential backoff: 1.5s, 3s
@@ -1533,14 +1534,15 @@ function _fbWriteMerge(path, data) {
 }
 
 function _doWriteMerge(path, data, attempt) {
-  window._fbUpdate(window._fbRef(window._fbDb, path), data)
+  _dbUpdate(path, data)
     .then(() => {
       _fbSyncPending = Math.max(0, _fbSyncPending - 1);
-      if (_fbSyncPending === 0) _fbUpdateSyncBadge(_fbConnected ? 'live' : 'offline');
+      if (_fbSyncPending === 0) _fbUpdateSyncBadge(_fbRetryQueue.length ? 'queued' : 'live');
     })
     .catch(err => {
       _fbSyncPending = Math.max(0, _fbSyncPending - 1);
       const code = err.code || err.message || '';
+      window._fbLastErr = path.split('/').slice(-2).join('/') + ' — ' + code;
       console.warn('FB merge-write failed (attempt ' + (attempt+1) + '):', code);
       if (attempt < 2) {
         setTimeout(() => _doWriteMerge(path, data, attempt + 1), 1500 * Math.pow(2, attempt));
@@ -1555,7 +1557,7 @@ function _doWriteMerge(path, data, attempt) {
 
 // Flush the retry queue once connection is confirmed
 function _flushRetryQueue() {
-  if (!_fbConnected || !_fbRetryQueue.length) return;
+  if (!navigator.onLine || !_fbRetryQueue.length) return;
   const batch = _fbRetryQueue.slice();
   _fbRetryQueue = [];
   batch.forEach(item => item.merge ? _fbWriteMerge(item.path, item.data) : _fbWrite(item.path, item.data));
@@ -1576,7 +1578,8 @@ function _attachConnectionListener() {
       _fbUpdateSyncBadge(_fbSyncPending > 0 ? 'syncing' : 'live');
       if (!wasConnected && _fbRetryQueue.length) _flushRetryQueue();
     } else {
-      _fbUpdateSyncBadge('offline');
+      const httpsOk = window._fbRestOkAt && (Date.now() - window._fbRestOkAt < 180000);
+      _fbUpdateSyncBadge(!navigator.onLine ? 'offline' : (_fbRetryQueue.length ? 'queued' : (httpsOk ? 'live' : 'offline')));
     }
   });
 }
@@ -1778,6 +1781,14 @@ function _fbUpdateSyncBadge(state) {
   const s = states[state] || states.disabled;
   badge.innerHTML = s.icon + ' <span style="color:' + s.color + '">' + s.text + '</span>';
   badge.title = _fbRetryQueue.length ? _fbRetryQueue.length + ' write(s) queued for retry' : '';
+  badge.style.cursor = 'pointer';
+  badge.onclick = () => {
+    const u = window._fbAuth && window._fbAuth.currentUser;
+    showToast(!u ? 'Local only: not signed in with a cloud login on this device.'
+      : (_fbRetryQueue.length ? _fbRetryQueue.length + ' change(s) waiting to upload. Last error: ' + (window._fbLastErr || 'none') : 'Cloud sync is working.'),
+      (!u || _fbRetryQueue.length) ? 'error' : undefined);
+    if (u && _fbRetryQueue.length) _flushRetryQueue();
+  };
 }
 
 // --- Public save functions (localStorage + Firebase mirror) ---
@@ -2078,6 +2089,7 @@ window.addEventListener('firebaseReady', () => {
 
   window._fbOnAuthStateChanged(async user => {
     if (user) {
+      _fbUpdateSyncBadge(_fbRetryQueue.length ? 'queued' : 'syncing');
       if (config) config._fbUid = user.uid;
       // Resolve whether this user is the school admin or a staff member
       // logging in on their own device — must happen BEFORE listeners attach,
@@ -5446,6 +5458,7 @@ async function _restGet(path, ms) {
   try {
     const r = await fetch('https://school-pro-ultimate-default-rtdb.firebaseio.com/' + path + '.json?auth=' + encodeURIComponent(token), { signal: ctrl.signal });
     if (!r.ok) throw Object.assign(new Error('HTTP ' + r.status), { code: (r.status === 401 || r.status === 403) ? 'PERMISSION_DENIED' : 'HTTP_' + r.status });
+    window._fbRestOkAt = Date.now();
     return await r.json();
   } catch (e) {
     if (e && e.name === 'AbortError') throw Object.assign(new Error('timeout'), { code: 'timeout' });
@@ -5461,6 +5474,7 @@ async function _restPut(path, value, ms) {
     const r = await fetch('https://school-pro-ultimate-default-rtdb.firebaseio.com/' + path + '.json?auth=' + encodeURIComponent(token),
       { method: 'PUT', body: JSON.stringify(value === undefined ? null : value), signal: ctrl.signal });
     if (!r.ok) throw Object.assign(new Error('HTTP ' + r.status), { code: (r.status === 401 || r.status === 403) ? 'PERMISSION_DENIED' : 'HTTP_' + r.status });
+    window._fbRestOkAt = Date.now();
     return true;
   } catch (e) {
     if (e && e.name === 'AbortError') throw Object.assign(new Error('timeout'), { code: 'timeout' });
@@ -5489,6 +5503,7 @@ async function _restPatch(path, obj, ms) {
     const r = await fetch('https://school-pro-ultimate-default-rtdb.firebaseio.com/' + path + '.json?auth=' + encodeURIComponent(token),
       { method: 'PATCH', body: JSON.stringify(obj), signal: ctrl.signal });
     if (!r.ok) throw Object.assign(new Error('HTTP ' + r.status), { code: (r.status === 401 || r.status === 403) ? 'PERMISSION_DENIED' : 'HTTP_' + r.status });
+    window._fbRestOkAt = Date.now();
     return true;
   } catch (e) {
     if (e && e.name === 'AbortError') throw Object.assign(new Error('timeout'), { code: 'timeout' });
