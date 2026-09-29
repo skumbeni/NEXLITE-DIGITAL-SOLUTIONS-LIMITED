@@ -5480,6 +5480,34 @@ async function _dbWrite(path, value) {
     return true;
   } catch (e) { throw restErr || e; }
 }
+async function _restPatch(path, obj, ms) {
+  const u = window._fbAuth && window._fbAuth.currentUser;
+  if (!u) throw Object.assign(new Error('not signed in'), { code: 'not-signed-in' });
+  const token = await Promise.race([u.getIdToken(), new Promise((_, r) => setTimeout(() => r(Object.assign(new Error('timeout'), { code: 'timeout' })), 10000))]);
+  const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch('https://school-pro-ultimate-default-rtdb.firebaseio.com/' + path + '.json?auth=' + encodeURIComponent(token),
+      { method: 'PATCH', body: JSON.stringify(obj), signal: ctrl.signal });
+    if (!r.ok) throw Object.assign(new Error('HTTP ' + r.status), { code: (r.status === 401 || r.status === 403) ? 'PERMISSION_DENIED' : 'HTTP_' + r.status });
+    return true;
+  } catch (e) {
+    if (e && e.name === 'AbortError') throw Object.assign(new Error('timeout'), { code: 'timeout' });
+    throw e;
+  } finally { clearTimeout(t); }
+}
+// Multi-path update (keys may contain '/'): plain HTTPS first, SDK as fallback.
+async function _dbUpdate(path, obj) {
+  let restErr;
+  try { return await _restPatch(path, obj, 20000); }
+  catch (e) { restErr = e; if (e && e.code === 'PERMISSION_DENIED') throw e; }
+  try {
+    await Promise.race([
+      window._fbUpdate(window._fbRef(window._fbDb, path), obj),
+      new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'timeout' })), 12000))
+    ]);
+    return true;
+  } catch (e) { throw restErr || e; }
+}
 async function _dbRead(path) {
   let restErr;
   try { return await _restGet(path, 20000); }
@@ -8151,13 +8179,13 @@ async function _docSend(rec, onProgress) {
   for (let i = 0; i < n; i += 4) {
     const batch = [];
     for (let k = i; k < Math.min(i + 4, n); k++) {
-      batch.push(window._fbSet(window._fbRef(window._fbDb, fbase + k), rec.b64.slice(k * DOC_CHUNK, (k + 1) * DOC_CHUNK)));
+      batch.push(_dbWrite(fbase + k, rec.b64.slice(k * DOC_CHUNK, (k + 1) * DOC_CHUNK)));
     }
     await _docTimeout(Promise.all(batch), 30000);
     if (onProgress) onProgress(Math.round(100 * Math.min(i + 4, n) / n));
   }
   // Metadata last: a document only appears in lists once every chunk is stored.
-  await _docTimeout(window._fbSet(window._fbRef(window._fbDb, rec.base + '/documents/' + rec.uid + '/' + rec.id), Object.assign({}, rec.meta, { chunks: n })), 30000);
+  await _docTimeout(_dbWrite(rec.base + '/documents/' + rec.uid + '/' + rec.id, Object.assign({}, rec.meta, { chunks: n })), 40000);
 }
 
 async function _docProcessQueue(manual) {
@@ -8367,7 +8395,7 @@ async function _noticeSend(rec, onProgress) {
     const fbase = rec.base + '/staffNoticeFiles/' + rec.id + '/' + j + '/';
     for (let i = 0; i < n; i += 4) {
       const batch = [];
-      for (let k = i; k < Math.min(i + 4, n); k++) batch.push(window._fbSet(window._fbRef(window._fbDb, fbase + k), f.b64.slice(k * DOC_CHUNK, (k + 1) * DOC_CHUNK)));
+      for (let k = i; k < Math.min(i + 4, n); k++) batch.push(_dbWrite(fbase + k, f.b64.slice(k * DOC_CHUNK, (k + 1) * DOC_CHUNK)));
       await _docTimeout(Promise.all(batch), 30000);
       if (onProgress) onProgress('file ' + (j + 1) + '/' + rec.files.length + ' — ' + Math.round(100 * Math.min(i + 4, n) / n) + '%');
     }
@@ -8375,7 +8403,7 @@ async function _noticeSend(rec, onProgress) {
   }
   // Notice record last: it only appears once every attachment is fully stored.
   const meta = Object.assign({}, rec.meta); if (files.length) meta.files = files;
-  await _docTimeout(window._fbSet(window._fbRef(window._fbDb, rec.base + '/staffNotices/' + rec.id), meta), 30000);
+  await _docTimeout(_dbWrite(rec.base + '/staffNotices/' + rec.id, meta), 40000);
 }
 
 async function postNotice() {
@@ -8654,7 +8682,7 @@ async function _putChunks(fbase, b64) {
   const n = Math.max(1, Math.ceil(b64.length / DOC_CHUNK));
   for (let i = 0; i < n; i += 4) {
     const batch = [];
-    for (let k = i; k < Math.min(i + 4, n); k++) batch.push(window._fbSet(window._fbRef(window._fbDb, fbase + k), b64.slice(k * DOC_CHUNK, (k + 1) * DOC_CHUNK)));
+    for (let k = i; k < Math.min(i + 4, n); k++) batch.push(_dbWrite(fbase + k, b64.slice(k * DOC_CHUNK, (k + 1) * DOC_CHUNK)));
     await _docTimeout(Promise.all(batch), 30000);
   }
   return n;
@@ -8685,7 +8713,7 @@ async function _inboxSend(rec, onProgress) {
   const inbox = Object.assign({}, rec.meta); if (files.length) inbox.files = files;
   const sent = Object.assign({}, inbox); delete sent.args;
   const upd = {}; upd['inbox/' + rec.meta.to + '/' + rec.id] = inbox; upd['sent/' + rec.uid + '/' + rec.id] = sent;
-  await _docTimeout(window._fbUpdate(window._fbRef(window._fbDb, rec.base), upd), 30000);
+  await _docTimeout(_dbUpdate(rec.base, upd), 40000);
 }
 let _lastSendErr = '';
 async function _inboxDeliver(rec, okMsg, after, onProgress) {
@@ -8742,7 +8770,7 @@ const _inbFind = id => _inb.inbox.concat(_inb.sent, _inb.all).find(x => x.id ===
 async function _inbFetch(which) {
   const me = _docUid(), role = currentUser.role;
   const path = which === 'inbox' ? 'inbox/' + role : which === 'sent' ? 'sent/' + me : 'sent';
-  const v = (await _docTimeout(window._fbGet(_iref(path)), 15000)).val() || {};
+  const v = (await _docTimeout(_dbRead(_fbSchoolPath() + '/' + path), 30000)) || {};
   _inb[which] = (which === 'all' ? _flat2(v) : Object.values(v)).sort((a, b) => (b.updatedAt || b.ts || 0) - (a.updatedAt || a.ts || 0));
 }
 function _inbBadge() {
@@ -8840,7 +8868,7 @@ async function inbFile(uid, id, key) {
 function _inbPatch(upd, it, fields) {
   for (const k in fields) { upd['inbox/' + it.to + '/' + it.id + '/' + k] = fields[k]; upd['sent/' + it.fromUid + '/' + it.id + '/' + k] = fields[k]; }
 }
-const _inbApply = upd => window._fbUpdate(window._fbRef(window._fbDb, _fbSchoolPath()), upd);
+const _inbApply = upd => _dbUpdate(_fbSchoolPath(), upd);
 async function _inbFresh(id) {
   const s = await window._fbGet(_iref('inbox/' + currentUser.role + '/' + id));
   return s.exists() ? s.val() : null;
