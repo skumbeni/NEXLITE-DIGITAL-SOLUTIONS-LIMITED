@@ -309,7 +309,7 @@ input:focus,select:focus,textarea:focus { border-color:var(--primary); }
 /* App Layout */
 #appContainer { display:none; }
 .app-layout { display:flex; min-height:100vh; }
-.sidebar { width:250px; background:var(--bg-sidebar); color:var(--text-sidebar); padding:16px 0; position:fixed; top:0; left:0; height:100vh; overflow-y:auto; z-index:100; transition:transform var(--transition); }
+.sidebar { width:250px; background:var(--bg-sidebar); color:var(--text-sidebar); padding:16px 0; position:fixed; top:0; left:0; height:100vh; height:100dvh; overflow-y:auto; z-index:100; transition:transform var(--transition); }
 .sidebar-logo { padding:16px 20px; font-size:20px; font-weight:700; border-bottom:1px solid rgba(255,255,255,0.1); margin-bottom:8px; }
 .sidebar-logo span { color:var(--primary-light); }
 .nav-item { display:flex; align-items:center; gap:10px; padding:10px 20px; cursor:pointer; transition:all var(--transition); font-size:14px; border-left:3px solid transparent; }
@@ -406,7 +406,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
 
 /* Responsive */
 @media(max-width:768px) {
-  .sidebar { transform:translateX(-100%); }
+  .sidebar { transform:translateX(-100%); height:100dvh; padding-bottom:90px; overscroll-behavior:contain; }
   .sidebar.open { transform:translateX(0); }
   .main-content { margin-left:0; padding:12px; padding-bottom:80px; }
   .mobile-nav { display:block; }
@@ -8155,15 +8155,21 @@ async function _docSend(rec, onProgress) {
   await _docTimeout(window._fbSet(window._fbRef(window._fbDb, rec.base + '/documents/' + rec.uid + '/' + rec.id), Object.assign({}, rec.meta, { chunks: n })), 30000);
 }
 
-async function _docProcessQueue() {
-  if (_dqBusy || !navigator.onLine || !_docUid() || !window._fbDb) return;
+async function _docProcessQueue(manual) {
+  if (_dqBusy) return;
+  if (!navigator.onLine || !_docUid() || !window._fbDb) {
+    if (manual) showToast(!navigator.onLine ? 'The browser reports no internet connection.'
+      : !window._fbDb ? 'Cloud service is still loading — wait a few seconds and try again.'
+      : 'You are not signed in with a cloud login on this device. Log out, then log in with your email and password.', 'error');
+    return;
+  }
   _dqBusy = true;
   let sent = 0;
   try {
     for (const rec of await _dqAll()) {
       if (rec.uid !== _docUid()) continue;
       try { await (rec.kind === 'notice' ? _noticeSend(rec) : rec.kind === 'inbox' ? _inboxSend(rec) : _docSend(rec)); await _dqDel(rec.id); sent++; }
-      catch (e) { if (e && e.code === 'PERMISSION_DENIED') { await _dqDel(rec.id); showToast('A queued document was rejected: ' + rec.meta.title, 'error'); } else break; }
+      catch (e) { if (e && e.code === 'PERMISSION_DENIED') { await _dqDel(rec.id); showToast('A queued document was rejected: ' + (rec.meta.title || rec.meta.subject || 'item'), 'error'); } else { if (manual) showToast('Send failed: ' + ((e && (e.code || e.message)) || 'server not reachable'), 'error'); break; } }
     }
   } finally { _dqBusy = false; }
   if (sent) { showToast(sent + ' queued item' + (sent > 1 ? 's' : '') + ' sent'); if (currentSection === 'documents') renderDocuments(); if (currentSection === 'notices') renderNotices(); if (currentSection === 'inbox') initInbox(); }
@@ -8256,7 +8262,7 @@ async function renderDocuments(useCache) {
       <div style="font-weight:600">${esc(r.meta.title)} <span class="badge">⏳ Waiting to upload</span></div>
       <div style="font-size:12px;color:var(--text-light)">${esc(r.meta.name)} · ${_docFmtSize(r.meta.size || 0)} · stored on this device</div>
       <div style="margin-top:6px;display:flex;gap:8px">
-        <button class="btn btn-sm btn-primary" onclick="_docProcessQueue()">Retry now</button>
+        <button class="btn btn-sm btn-primary" onclick="_docProcessQueue(true)">Retry now</button>
         <button class="btn btn-danger btn-sm" onclick="dropQueuedDoc('${esc(r.id)}')">Cancel</button>
       </div>
     </div>`).join('');
@@ -8422,7 +8428,7 @@ async function renderNotices() {
       <div style="font-weight:600">${esc(r.meta.title)} <span class="badge">⏳ Waiting to post</span></div>
       <div style="font-size:12px;color:var(--text-light)">Stored on this device${r.files.length ? ' · ' + r.files.length + ' attachment(s)' : ''}</div>
       <div style="margin-top:6px;display:flex;gap:8px">
-        <button class="btn btn-sm btn-primary" onclick="_docProcessQueue()">Retry now</button>
+        <button class="btn btn-sm btn-primary" onclick="_docProcessQueue(true)">Retry now</button>
         <button class="btn btn-danger btn-sm" onclick="dropQueuedNotice('${esc(r.id)}')">Cancel</button>
       </div>
     </div>`).join('');
@@ -8676,13 +8682,14 @@ async function _inboxSend(rec, onProgress) {
   const upd = {}; upd['inbox/' + rec.meta.to + '/' + rec.id] = inbox; upd['sent/' + rec.uid + '/' + rec.id] = sent;
   await _docTimeout(window._fbUpdate(window._fbRef(window._fbDb, rec.base), upd), 30000);
 }
+let _lastSendErr = '';
 async function _inboxDeliver(rec, okMsg, after, onProgress) {
   let queued = !navigator.onLine;
   if (!queued) {
     try { await _inboxSend(rec, onProgress); }
-    catch (e) { if (e && e.code === 'PERMISSION_DENIED') { showToast('Not permitted to send this.', 'error'); return false; } queued = true; }
+    catch (e) { if (e && e.code === 'PERMISSION_DENIED') { showToast('Not permitted to send this.', 'error'); return false; } queued = true; _lastSendErr = (e && (e.code || e.message)) || 'server not reachable'; }
   }
-  if (queued) { await _dqPut(rec); showToast('Saved on this device — it will be sent when you are back online.'); } else showToast(okMsg);
+  if (queued) { await _dqPut(rec); showToast(navigator.onLine ? 'Could not reach the server (' + _lastSendErr + '). Saved on this device — use Retry now in Sent.' : 'Saved on this device — it will be sent when you are back online.', navigator.onLine ? 'error' : undefined); } else showToast(okMsg);
   if (after) after();
   _inbCheck(); return true;
 }
@@ -8780,7 +8787,7 @@ async function renderInbox() {
   const queued = tab === 'sent' ? (await _dqAll()).filter(r => r.uid === me && r.kind === 'inbox') : [];
   try { if (!me || !window._fbDb) throw new Error('x'); await _inbFetch(tab); }
   catch (e) { if (!_inb[tab].length && !queued.length) { el.innerHTML = '<div style="color:var(--text-light)">Could not load (offline or no cloud login).</div>'; return; } }
-  const qHtml = queued.map(r => `<div style="padding:12px 0;border-bottom:1px solid var(--border,#eee)"><div style="font-weight:600">${esc(r.meta.subject || r.meta.description)} <span class="badge">⏳ Waiting to send</span></div><div style="font-size:12px;color:var(--text-light)">To ${esc(r.meta.to)} · stored on this device</div><div style="margin-top:6px;display:flex;gap:8px"><button class="btn btn-sm btn-primary" onclick="_docProcessQueue()">Retry now</button><button class="btn btn-danger btn-sm" onclick="inbDropQueued('${esc(r.id)}')">Cancel</button></div></div>`).join('');
+  const qHtml = queued.map(r => `<div style="padding:12px 0;border-bottom:1px solid var(--border,#eee)"><div style="font-weight:600">${esc(r.meta.subject || r.meta.description)} <span class="badge">⏳ Waiting to send</span></div><div style="font-size:12px;color:var(--text-light)">To ${esc(r.meta.to)} · stored on this device</div><div style="margin-top:6px;display:flex;gap:8px"><button class="btn btn-sm btn-primary" onclick="_docProcessQueue(true)">Retry now</button><button class="btn btn-danger btn-sm" onclick="inbDropQueued('${esc(r.id)}')">Cancel</button></div></div>`).join('');
   el.innerHTML = qHtml + (_inb[tab].length ? _inb[tab].map(it => _inbCard(it, tab)).join('') : (qHtml ? '' : '<div style="color:var(--text-light)">Nothing here yet</div>'));
   if (tab === 'sent') localStorage.setItem(_inbSeenKey(), String(Date.now()));
   _inbBadge();
