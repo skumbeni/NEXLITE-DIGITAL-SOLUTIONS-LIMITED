@@ -1018,7 +1018,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
             <select id="reportType"><option value="overall">Overall Report</option><option value="academic">Academic Report</option><option value="finance">Financial Statement</option><option value="whatsapp">WhatsApp Summary</option></select>
           </div>
           <div id="reportPreview" style="margin-top:12px"></div>
-          <div class="form-group" style="margin-top:12px"><label>Authorization PIN</label><input type="password" id="reportPin" maxlength="6" placeholder="Enter PIN to generate"></div>
+          <div class="form-group" style="margin-top:12px"><label>Your PIN (account owner)</label><input type="password" id="reportPin" maxlength="6" inputmode="numeric" autocomplete="off" placeholder="Enter your PIN to generate"></div>
           <button class="btn btn-primary" onclick="generateReport()">Generate Report</button>
         </div>
 
@@ -1029,7 +1029,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
           <div class="form-group"><label>Report Type</label>
             <select id="bulkReportType"><option value="overall">Overall Report</option><option value="academic">Academic Report</option><option value="finance">Financial Statement</option></select>
           </div>
-          <div class="form-group"><label>Authorization PIN</label><input type="password" id="bulkReportPin" maxlength="6" placeholder="Enter PIN to generate"></div>
+          <div class="form-group"><label>Your PIN (account owner)</label><input type="password" id="bulkReportPin" maxlength="6" inputmode="numeric" autocomplete="off" placeholder="Enter your PIN to generate"></div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button class="btn btn-success" onclick="generateBulkReports()">📥 Download PDF</button>
             <button class="btn btn-primary" onclick="shareBulkReports()">📤 Share PDF</button>
@@ -4230,6 +4230,37 @@ function shareReportDrive() {
   window.open('https://drive.google.com/drive/my-drive', '_blank');
 }
 
+// Report authorization: the PIN must belong to whoever is signed in right now
+// (the Administrator, or any staff member who has access to Reports). The
+// Administrator's Master PIN also works as break-glass (see _verifyOwnPin).
+// Local-only mode (no cloud login) keeps the old Master / Head Teacher PIN.
+// Resolves true/false and shows its own toast when false.
+async function _verifyReportPin(pin) {
+  if (!pin) { showToast('Enter your PIN', 'error'); return false; }
+  if (!_docUid()) {
+    const [m, h] = await Promise.all([pinMatches(pin, config.masterPin), pinMatches(pin, config.headTeacherPin)]);
+    if (!m && !h) showToast('Incorrect PIN', 'error');
+    return !!(m || h);
+  }
+  const lock = JSON.parse(localStorage.getItem('pinLock') || '{}');
+  if (lock.until && Date.now() < lock.until) {
+    showToast('Too many wrong PINs. Try again in ' + Math.ceil((lock.until - Date.now()) / 60000) + ' min.', 'error');
+    return false;
+  }
+  const rec = await _ownPinRecord();
+  if (!rec) {
+    const adminBreakGlass = currentUser && currentUser.role === 'Administrator' && config.masterPin && await pinMatches(pin, config.masterPin);
+    if (adminBreakGlass) return true;
+    showToast('Set your personal PIN first', 'error');
+    openPinSetup(null);
+    return false;
+  }
+  const ok = await _verifyOwnPin(pin);
+  _pinAttempt(ok);
+  if (!ok) showToast('Incorrect PIN', 'error');
+  return ok;
+}
+
 function generateReport() {
   const idx = document.getElementById('reportStudent').value;
   const type = document.getElementById('reportType').value;
@@ -4237,8 +4268,8 @@ function generateReport() {
 
   if (idx === '') return showToast('Select a student','error');
   const _isParent = currentUser && currentUser.role === 'Parent'; // parents only ever hold their own children's records, so no school PIN is needed
-  (_isParent ? Promise.resolve([true, true]) : Promise.all([pinMatches(pin, config.masterPin), pinMatches(pin, config.headTeacherPin)])).then(([m, h]) => {
-    if (!m && !h) return showToast('Incorrect authorization PIN','error');
+  (_isParent ? Promise.resolve(true) : _verifyReportPin(pin)).then(ok => {
+    if (!ok) return;
 
     const s = students[idx];
   let report = '';
@@ -4313,10 +4344,10 @@ function _buildBulkReportFor(s, type) {
 // Returns the students targeted by the current bulk-report class filter, or null
 // (after showing a toast) if the PIN was wrong or there are no matching students.
 function _getBulkTargets(pin) {
-  return Promise.all([pinMatches(pin, config.masterPin), pinMatches(pin, config.headTeacherPin)]).then(([m, h]) => {
-    if (!m && !h) { showToast('Incorrect authorization PIN', 'error'); return null; }
+  return _verifyReportPin(pin).then(ok => {
+    if (!ok) return null;
     const classFilter = document.getElementById('bulkReportClass').value;
-    const targets = classFilter ? students.filter(s => s.class === classFilter) : students.slice();
+    const targets = students.filter(s => s && !s._hidden && (!window.classInScope || window.classInScope(s.class)) && (!classFilter || s.class === classFilter));
     if (targets.length === 0) { showToast('No students found for the selected class', 'error'); return null; }
     return { targets, classFilter };
   });
@@ -7584,7 +7615,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     const paint = () => { const list = staffList();
     card.innerHTML = '<div class="card-header"><span class="card-title">\ud83c\udf93 Teacher Class &amp; Subject Access</span></div>' +
-      '<p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Limit a teacher to specific classes and subjects. Teachers with no restriction keep full access.</p>' +
+      '<p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Assign whole grades (e.g. early childhood, primary, secondary) or single classes to a Senior Teacher or any other teacher. They will only see and work with their own grades. Staff with no restriction keep full access.</p>' +
       (list.length ? list.map(u => '<div style="display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap"><span style="min-width:120px">' + E(u.username) + '</span><span style="font-size:12px;color:var(--text-light);min-width:110px">' + E(u.role) + '</span>' + summary(window.ASSIGN.all[u.firebaseUid]) + '<button class="btn btn-sm" onclick="openAssignPanel(\'' + E(u.firebaseUid) + '\')">Assign</button></div>').join('')
         : '<div style="color:var(--text-light)">No staff with cloud logins yet</div>');
     };
