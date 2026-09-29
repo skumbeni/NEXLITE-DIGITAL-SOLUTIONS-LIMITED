@@ -741,8 +741,8 @@ tr:hover td { background:rgba(108,52,131,0.04); }
       <div class="nav-item" onclick="showSection('analytics')" data-section="analytics"><span class="icon">📈</span> Analytics</div>
       <div class="nav-item" onclick="showSection('announcements')" data-section="announcements"><span class="icon">📢</span> Announcements</div>
       <div class="nav-item" onclick="showSection('reports')" data-section="reports"><span class="icon">📄</span> Reports</div>
-      <div class="nav-item" onclick="showSection('documents')" data-section="documents"><span class="icon">📁</span> Documents</div>
       <div class="nav-item" onclick="showSection('notices')" data-section="notices"><span class="icon">📌</span> Staff Notices <span id="noticeBadge" style="display:none;background:#E74C3C;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:6px"></span></div>
+      <div class="nav-item" onclick="showSection('inbox')" data-section="inbox"><span class="icon">📥</span> Inbox <span id="inbBadge" style="display:none;background:#E74C3C;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:6px"></span></div>
       <div class="nav-item" onclick="showSection('staff')" data-section="staff"><span class="icon">👥</span> Staff</div>
       <div class="nav-item" onclick="showSection('admin')" data-section="admin"><span class="icon">⚙️</span> Admin Settings</div>
       <div style="margin-top:auto;padding:16px 20px;border-top:1px solid rgba(255,255,255,0.1)">
@@ -752,6 +752,9 @@ tr:hover td { background:rgba(108,52,131,0.04); }
         <div style="margin-top:8px;font-size:11px;opacity:0.6" id="sidebarSchoolName"></div>
         <div id="fbSyncBadge" style="margin-top:8px;font-size:11px;display:flex;align-items:center;gap:4px">⚪ <span style="color:#7F8C8D">Local only</span></div>
         <div id="subStatusBadge" style="margin-top:6px;font-size:11px;display:flex;align-items:center;gap:4px">⚪ <span style="color:#7F8C8D">No plan</span></div>
+        <div style="margin-top:12px;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="openMyPin()">
+          <span>🔑</span> <span>My PIN</span>
+        </div>
         <div style="margin-top:12px;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="logoutEdu()">
           <span>🚪</span> <span>Logout</span>
         </div>
@@ -877,6 +880,42 @@ tr:hover td { background:rgba(108,52,131,0.04); }
         </div>
       </div>
 
+      <!-- Inbox Section -->
+      <div class="section" id="sec-inbox">
+        <div class="section-title">📥 Inbox</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+          <button class="btn btn-sm" id="inbTabInbox" onclick="inbTab('inbox')">Inbox</button>
+          <button class="btn btn-sm" id="inbTabSent" onclick="inbTab('sent')">Sent</button>
+          <button class="btn btn-sm" id="inbTabAll" style="display:none" onclick="inbTab('all')">All (admin)</button>
+          <button class="btn btn-sm btn-primary" onclick="inbToggleCompose()">＋ New</button>
+          <button class="btn btn-sm" onclick="showSection('documents')">📁 Older documents</button>
+        </div>
+        <div class="card" id="inbComposeCard" style="display:none">
+          <div class="card-header"><span class="card-title">Send to a role</span></div>
+          <div class="form-row">
+            <div class="form-group"><label>Send to</label><select id="inTo"></select></div>
+            <div class="form-group"><label>Type</label><select id="inCategory"><option>Message</option><option>Minutes</option><option>Report</option><option>Letter</option><option>Request</option><option>Other</option></select></div>
+          </div>
+          <div class="form-group"><label>Subject</label><input type="text" id="inSubject" placeholder="e.g. Staff meeting minutes – Term 3"></div>
+          <div class="form-group"><label>Message (optional)</label><textarea id="inBody" rows="3"></textarea></div>
+          <div class="form-row">
+            <div class="form-group"><label>Reply needed by (optional)</label><input type="date" id="inDue"></div>
+            <div class="form-group"><label>Files (up to 3: PDF, Word, Excel, CSV — 10 MB each)</label><input type="file" id="inFiles" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv"></div>
+          </div>
+          <div id="inProgress" style="font-size:12px;color:var(--text-light);margin:6px 0"></div>
+          <button class="btn btn-primary" id="inSendBtn" onclick="sendSubmission()">Send</button>
+        </div>
+        <div class="card">
+          <div class="card-header"><span class="card-title" id="inbTitle">Inbox</span><button class="btn btn-sm" onclick="renderInbox()">↻ Refresh</button></div>
+          <div id="inbList"></div>
+        </div>
+        <div class="card" id="inbMatrixCard" style="display:none">
+          <details><summary style="cursor:pointer;font-weight:600">⚙️ Who can approve what</summary>
+            <p style="font-size:12px;color:var(--text-light);margin:8px 0">When staff below Deputy level do one of these actions, they choose one of the roles ticked here to approve it.</p>
+            <div id="inbMatrix"></div></details>
+        </div>
+      </div>
+
       <!-- Staff Notices Section -->
       <div class="section" id="sec-notices">
         <div class="section-title">📌 Staff Notices</div>
@@ -899,7 +938,8 @@ tr:hover td { background:rgba(108,52,131,0.04); }
 
       <!-- Documents Section -->
       <div class="section" id="sec-documents">
-        <div class="section-title">📁 Documents</div>
+        <div class="section-title">📁 Older documents</div>
+        <p style="font-size:13px;color:var(--text-light);margin-bottom:10px">Files sent before the Inbox. New files are sent from <a href="#" onclick="showSection('inbox');return false">Inbox</a>.</p>
         <div class="card" id="docUploadCard">
           <div class="card-header"><span class="card-title">Upload a document</span></div>
           <div class="form-row">
@@ -1175,14 +1215,30 @@ tr:hover td { background:rgba(108,52,131,0.04); }
 <!-- Approval Dialog -->
 <div id="approvalDialog" style="display:none" class="modal-overlay">
   <div class="modal">
-    <h3>🔒 Confirm Save</h3>
+    <h3 id="approvalTitle">🔒 Confirm Save</h3>
     <p id="approvalDesc" style="color:var(--text-light);margin-bottom:12px"></p>
-    <label style="font-weight:600">Enter Master or Head Teacher PIN</label>
+    <div id="approvalToRow" style="display:none"><label style="font-weight:600">Send to</label><select id="approvalTo" style="width:100%;margin:6px 0 12px;padding:10px;font-size:15px"></select></div>
+    <label id="approvalLabel" style="font-weight:600">Enter Master or Head Teacher PIN</label>
     <input type="password" class="pin-field" id="approvalPin" maxlength="6" placeholder="••••••" autocomplete="off">
     <div id="approvalError" style="color:var(--accent);font-size:13px;min-height:18px;margin-top:4px"></div>
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="cancelApproval()">Cancel</button>
-      <button class="btn btn-primary" onclick="confirmApproval()">Approve & Save</button>
+      <button class="btn btn-primary" id="approvalBtn" onclick="confirmApproval()">Approve & Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="pinSetDialog" style="display:none" class="modal-overlay">
+  <div class="modal" style="max-width:420px;border-top:4px solid var(--primary)">
+    <h3 id="pinSetTitle">🔑 Set your PIN</h3>
+    <p style="color:var(--text-light);font-size:13px;margin-bottom:10px">Your personal 4–6 digit PIN confirms your saves. Don't share it.</p>
+    <div id="pinCurRow" style="display:none"><label style="font-weight:600" id="pinCurLabel">Current PIN</label><input type="password" inputmode="numeric" class="pin-field" id="pinCur" maxlength="12" autocomplete="off"></div>
+    <label style="font-weight:600">New PIN</label><input type="password" inputmode="numeric" class="pin-field" id="pinNew" maxlength="6" autocomplete="off">
+    <label style="font-weight:600">Repeat new PIN</label><input type="password" inputmode="numeric" class="pin-field" id="pinNew2" maxlength="6" autocomplete="off">
+    <div id="pinSetError" style="color:var(--accent);font-size:13px;min-height:18px"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closePinSetup()">Cancel</button>
+      <button class="btn btn-primary" onclick="savePinSetup()">Save PIN</button>
     </div>
   </div>
 </div>
@@ -2344,38 +2400,72 @@ function updateUndoRedoBar() {
 }
 
 // ==================== APPROVAL SYSTEM ====================
-function requestApproval(description, callback, forcePin = false) {
-  if (!forcePin && !config.requireApproval) {
-    callback();
-    return;
+let approvalMode = 'legacy', approvalAction = null, approvalDescription = '';
+const APPROVER_ROLES = ['Administrator', 'Head Teacher', 'Deputy Head Teacher'];
+function _isApprover() { return !!(typeof currentUser !== 'undefined' && currentUser && APPROVER_ROLES.includes(currentUser.role)); }
+
+// Routine saves: confirmed with the user's OWN PIN.
+// "Serious" actions (pass `action`): staff who are not Head/Deputy/Administrator do not complete
+// them — after their own PIN they are SUBMITTED for approval (see Approvals section).
+// Local-only mode (no cloud login) keeps the old Master/Head PIN behaviour.
+function requestApproval(description, callback, forcePin = false, action = null) {
+  const uid = window._fbAuth && window._fbAuth.currentUser ? window._fbAuth.currentUser.uid : null;
+  const submit = !!(action && uid && !_isApprover());
+  if (!submit && !forcePin && !config.requireApproval) { callback(); return; }
+  if (!uid) { _openApprovalDialog(description, callback, 'legacy', null); return; }
+  _ownPinRecord().then(rec => {
+    if (!rec) { openPinSetup(() => requestApproval(description, callback, forcePin, action)); return; }
+    _openApprovalDialog(description, callback, submit ? 'submit' : 'own', action);
+  });
+}
+
+function _openApprovalDialog(description, callback, mode, action) {
+  const toRow = document.getElementById('approvalToRow'), toSel = document.getElementById('approvalTo');
+  toRow.style.display = mode === 'submit' ? '' : 'none';
+  if (mode === 'submit') {
+    const roles = _recipientRoles(_actionRoles(action.type));
+    if (!roles.length) { showToast('No role is set up to approve this. Ask the Administrator (Inbox → who can approve what).', 'error'); return; }
+    const last = localStorage.getItem('lastTo:' + action.type);
+    toSel.innerHTML = roles.map(r => '<option>' + esc(r) + '</option>').join('');
+    toSel.value = roles.includes(last) ? last : roles[0];
   }
-  approvalCallback = callback;
-  document.getElementById('approvalDesc').textContent = description;
+  approvalCallback = callback; approvalMode = mode; approvalAction = action; approvalDescription = description;
+  const T = { legacy: ['🔒 Confirm Save', 'Enter Master or Head Teacher PIN', 'Approve & Save'],
+              own: ['🔒 Confirm with your PIN', 'Enter your PIN', 'Confirm'],
+              submit: ['📨 Submit for approval', 'Enter your PIN to submit', 'Submit'] }[mode];
+  document.getElementById('approvalTitle').textContent = T[0];
+  document.getElementById('approvalLabel').textContent = T[1];
+  document.getElementById('approvalBtn').textContent = T[2];
+  document.getElementById('approvalDesc').textContent = description + (mode === 'submit' ? ' — choose who should approve it. It will not take effect until they do.' : '');
   document.getElementById('approvalPin').value = '';
   document.getElementById('approvalError').textContent = '';
   document.getElementById('approvalDialog').style.display = 'flex';
   setTimeout(() => document.getElementById('approvalPin').focus(), 100);
 }
 
-function confirmApproval() {
+async function confirmApproval() {
   const pin = document.getElementById('approvalPin').value.trim();
-  Promise.all([
-    pinMatches(pin, config.masterPin),
-    pinMatches(pin, config.headTeacherPin)
-  ]).then(([m, h]) => {
-    if (m || h) {
-      document.getElementById('approvalDialog').style.display = 'none';
-      if (approvalCallback) approvalCallback();
-      approvalCallback = null;
-    } else {
-      document.getElementById('approvalError').textContent = 'Incorrect PIN. Try again.';
-    }
-  });
+  const err = document.getElementById('approvalError');
+  let ok = false;
+  if (approvalMode === 'legacy') {
+    const [m, hd] = await Promise.all([pinMatches(pin, config.masterPin), pinMatches(pin, config.headTeacherPin)]);
+    ok = m || hd;
+  } else {
+    if (_pinLockedMsg(err)) return;
+    ok = await _verifyOwnPin(pin);
+    _pinAttempt(ok);
+  }
+  if (!ok) { err.textContent = 'Incorrect PIN. Try again.'; return; }
+  document.getElementById('approvalDialog').style.display = 'none';
+  const cb = approvalCallback, mode = approvalMode, act = approvalAction, desc = approvalDescription, to = document.getElementById('approvalTo').value;
+  approvalCallback = null; approvalAction = null;
+  if (mode === 'submit') _submitApproval(act, desc, to);
+  else if (cb) cb();
 }
 
 function cancelApproval() {
   document.getElementById('approvalDialog').style.display = 'none';
-  approvalCallback = null;
+  approvalCallback = null; approvalAction = null;
 }
 
 // ==================== TOAST ====================
@@ -2427,6 +2517,7 @@ function refreshCurrentSection() {
     case 'staff': renderStaffLogins(); break;
     case 'documents': initDocuments(); break;
     case 'notices': initNotices(); break;
+    case 'inbox': initInbox(); break;
   }
 }
 
@@ -2928,37 +3019,26 @@ function cancelInlineEdit() {
 }
 
 function saveInlineEdit(idx) {
-  requestApproval('Edit student: ' + students[idx].name, () => {
-    pushUndo();
-    const s = students[idx];
-    s.name = document.getElementById('ie-name-'+idx).value.trim() || s.name;
-    s.sex = document.getElementById('ie-sex-'+idx).value;
-    s.class = document.getElementById('ie-class-'+idx).value;
-    // Update WhatsApp phone
-    const newPhone = document.getElementById('ie-phone-'+idx).value.trim();
-    if (newPhone) {
-      const waIdx = s.phones.findIndex(p => p.isWhatsApp);
-      if (waIdx >= 0) s.phones[waIdx].number = newPhone;
-      else s.phones.push({ number: newPhone, label: 'WhatsApp', isWhatsApp: true });
-    }
-    editingStudentIdx = -1;
-    saveStudents();
-    renderDatabase();
-    showToast('Student updated');
-  });
+  const s0 = students[idx];
+  const args = {
+    id: s0.id, name: document.getElementById('ie-name-'+idx).value.trim(),
+    sex: document.getElementById('ie-sex-'+idx).value, class: document.getElementById('ie-class-'+idx).value,
+    phone: document.getElementById('ie-phone-'+idx).value.trim()
+  };
+  requestApproval('Edit student: ' + s0.name, () => {
+    try { APPROVAL_HANDLERS.editStudent(args); } catch (e) { return showToast(e.message, 'error'); }
+    editingStudentIdx = -1; renderDatabase(); showToast('Student updated');
+  }, false, { type: 'editStudent', args, after: () => { editingStudentIdx = -1; renderDatabase(); } });
 }
 
 function deleteStudent(idx) {
   if (!confirm('Delete student ' + students[idx].name + '?')) return;
-  // V11 fix: forcePin=true ensures deletion always requires PIN,
-  // even when requireApproval is toggled off for routine saves.
-  requestApproval('Delete student: ' + students[idx].name, () => {
-    pushUndo();
-    students.splice(idx, 1);
-    saveStudents();
-    renderDatabase();
-    showToast('Student deleted');
-  }, true);
+  // forcePin=true: deletion always needs confirmation, even when routine approvals are off.
+  const args = { id: students[idx].id, name: students[idx].name };
+  requestApproval('Delete student: ' + args.name, () => {
+    try { APPROVAL_HANDLERS.deleteStudent(args); } catch (e) { return showToast(e.message, 'error'); }
+    renderDatabase(); showToast('Student deleted');
+  }, true, { type: 'deleteStudent', args });
 }
 
 function viewProfile(idx) {
@@ -3229,23 +3309,24 @@ async function registerStudent() {
   };
 
   requestApproval('Register new student: ' + name, () => {
-    pushUndo();
-    students.push(student);
-    saveStudents();
+    try { APPROVAL_HANDLERS.registerStudent({ student }); } catch (e) { return showToast(e.message, 'error'); }
     showToast('Student registered successfully');
-    // Clear form
-    document.getElementById('regName').value = '';
-    document.getElementById('regSex').value = '';
-    document.getElementById('regId').value = '';
-    document.getElementById('regClass').value = '';
-    document.getElementById('regPhones').innerHTML = '';
-    document.getElementById('regPhotoPreview').innerHTML = '';
-    regPhotoData = null;
-    document.getElementById('regPhoto').value = '';
-    addRegPhone(); addRegPhone();
-    const firstWa = document.querySelector('#regPhones .wa-check input');
-    if (firstWa) firstWa.checked = true;
-  });
+    _regClearForm();
+  }, false, { type: 'registerStudent', args: { student }, after: _regClearForm });
+}
+
+function _regClearForm() {
+  document.getElementById('regName').value = '';
+  document.getElementById('regSex').value = '';
+  document.getElementById('regId').value = '';
+  document.getElementById('regClass').value = '';
+  document.getElementById('regPhones').innerHTML = '';
+  document.getElementById('regPhotoPreview').innerHTML = '';
+  regPhotoData = null;
+  document.getElementById('regPhoto').value = '';
+  addRegPhone(); addRegPhone();
+  const firstWa = document.querySelector('#regPhones .wa-check input');
+  if (firstWa) firstWa.checked = true;
 }
 
 // ==================== ASSESSMENTS ====================
@@ -3643,19 +3724,12 @@ function confirmFeeSubmission(studentId, key) {
   window._fbGet(window._fbRef(window._fbDb, path)).then(snap => {
     if (!snap.exists()) { showToast('Submission no longer exists', 'error'); loadFeeSubmissions(); return; }
     const sub = snap.val();
+    const args = { studentId, key };
     requestApproval('Confirm payment K' + (sub.amount || 0).toLocaleString() + ' for ' + students[idx].name, async () => {
-      pushUndo();
-      students[idx].finance.paid += (sub.amount || 0);
-      students[idx].paymentHistory.push({ amount: sub.amount || 0, date: sub.date || new Date().toISOString().split('T')[0], recordedAt: new Date().toISOString(), source: 'Parent submission (' + (sub.network || '') + ' ' + (sub.txn || '') + ')' });
-      saveStudents();
-      try {
-        await window._fbUpdate(window._fbRef(window._fbDb, path), { status: 'confirmed', confirmedAt: Date.now(), confirmedBy: (currentUser && currentUser.username) || '' });
-      } catch (err) {
-        console.warn('Failed to update submission status:', err.code || err.message || err);
-      }
-      showToast('Payment confirmed for ' + students[idx].name);
-      loadFeeSubmissions();
-    });
+      try { await APPROVAL_HANDLERS.confirmFeeSubmission(args); }
+      catch (e) { return showToast(e.message || 'Could not confirm payment', 'error'); }
+      showToast('Payment confirmed'); loadFeeSubmissions();
+    }, false, { type: 'confirmFeeSubmission', args, after: () => loadFeeSubmissions() });
   }).catch(err => showToast('Could not load submission: ' + (err.code || err.message || err), 'error'));
 }
 
@@ -3736,14 +3810,11 @@ function recordPayment(idx) {
   const date = document.getElementById('finPayDate').value || new Date().toISOString().split('T')[0];
   if (amount <= 0) return showToast('Enter a valid amount','error');
 
+  const args = { id: students[idx].id, amount, date, by: (currentUser && currentUser.username) || '' };
   requestApproval('Record payment K' + amount.toLocaleString() + ' for ' + students[idx].name, () => {
-    pushUndo();
-    students[idx].finance.paid += amount;
-    students[idx].paymentHistory.push({ amount, date, recordedAt: new Date().toISOString() });
-    saveStudents();
-    loadFinance();
-    showToast('Payment recorded');
-  });
+    try { APPROVAL_HANDLERS.recordPayment(args); } catch (e) { return showToast(e.message, 'error'); }
+    loadFinance(); showToast('Payment recorded');
+  }, false, { type: 'recordPayment', args, after: () => { const el = document.getElementById('finPayAmount'); if (el) el.value = ''; } });
 }
 
 function applyBulkFee() {
@@ -3752,15 +3823,11 @@ function applyBulkFee() {
   if (!cls) return showToast('Select a class','error');
   if (amount <= 0) return showToast('Enter a valid amount','error');
 
+  const args = { cls, amount };
   requestApproval('Set bulk fee K' + amount.toLocaleString() + ' for class ' + cls, () => {
-    pushUndo();
-    students.filter(s => s.class === cls).forEach(s => {
-      s.finance.total = amount;
-      s.finance.categories = [{ name: 'Total Fees', amount }];
-    });
-    saveStudents();
+    APPROVAL_HANDLERS.bulkFee(args);
     showToast('Bulk fee applied to ' + cls);
-  });
+  }, false, { type: 'bulkFee', args });
 }
 
 // ==================== ATTENDANCE ====================
@@ -5115,6 +5182,7 @@ function renderStaffLogins() {
         : `<span class="badge">${esc(u.role)}</span>`
       }
       ${canManage && u.firebaseUid ? `<button class="btn btn-sm" onclick="editStaffChildren('${esc(u.firebaseUid)}')">Children${_childIdsOf(u).length ? ' (' + _childIdsOf(u).length + ')' : ''}</button><button class="btn btn-sm" onclick="resyncStaffLink('${esc(u.firebaseUid)}')">Re-link</button><button class="btn btn-danger btn-sm" onclick="revokeStaffLogin('${esc(u.firebaseUid)}')">Remove</button>` : ''}
+      ${canManage && u.firebaseUid ? `<button class="btn btn-sm" onclick="resetStaffPin('${esc(u.firebaseUid)}')">Reset PIN</button>` : ''}
     </div>`).join('');
 }
 
@@ -6454,17 +6522,17 @@ function loadUsers(){
 // this one table, so nav visibility and actual access can never disagree
 // again — fix a permission here once, and it's correct everywhere.
 window.ROLE_SECTIONS = {
-  'Administrator':       ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','documents','notices','admin','staff'],
-  'Head Teacher':        ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','documents','notices','admin'],
-  'Deputy Head Teacher': ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','documents','notices'],
-  'Senior Teacher':      ['dashboard','database','assessments','classmarks','attendance','conduct','announcements','reports','documents','notices'],
-  'Head of Department':  ['dashboard','database','assessments','classmarks','attendance','reports','documents','notices'],
-  'Teacher':             ['dashboard','database','assessments','classmarks','attendance','reports','documents','notices'],
-  'Grade Teacher':       ['dashboard','database','assessments','classmarks','attendance','conduct','reports','documents','notices'],
-  'Subject Teacher':     ['dashboard','assessments','classmarks','reports','documents','notices'],
-  'Bursar':              ['dashboard','database','finance','reports','documents','notices'],
-  'Accountant':          ['dashboard','finance','reports','documents','notices'],
-  'Counsellor':          ['dashboard','database','conduct','attendance','reports','documents','notices'],
+  'Administrator':       ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','documents','notices','inbox','admin','staff'],
+  'Head Teacher':        ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','documents','notices','inbox','admin'],
+  'Deputy Head Teacher': ['dashboard','database','register','assessments','classmarks','finance','attendance','conduct','analytics','announcements','reports','documents','notices','inbox'],
+  'Senior Teacher':      ['dashboard','database','assessments','classmarks','attendance','conduct','announcements','reports','documents','notices','inbox'],
+  'Head of Department':  ['dashboard','database','assessments','classmarks','attendance','reports','documents','notices','inbox'],
+  'Teacher':             ['dashboard','database','assessments','classmarks','attendance','reports','documents','notices','inbox'],
+  'Grade Teacher':       ['dashboard','database','assessments','classmarks','attendance','conduct','reports','documents','notices','inbox'],
+  'Subject Teacher':     ['dashboard','assessments','classmarks','reports','documents','notices','inbox'],
+  'Bursar':              ['dashboard','database','finance','reports','documents','notices','inbox'],
+  'Accountant':          ['dashboard','finance','reports','documents','notices','inbox'],
+  'Counsellor':          ['dashboard','database','conduct','attendance','reports','documents','notices','inbox'],
   'Parent':              ['dashboard','reports','finance']
 };
 
@@ -7062,7 +7130,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const clean = {};
     CFG.forEach(([k]) => { const v = parseInt(perms && perms[k], 10); if (v >= 1 && v <= 3) clean[k] = v; });
     window.CUSTOM_PERMS[name] = clean;
-    window.ROLE_SECTIONS[name] = ['dashboard'].concat(Object.keys(clean));
+    window.ROLE_SECTIONS[name] = ['dashboard','inbox'].concat(Object.keys(clean));
   };
   function ensureRole(role) {
     const live = typeof config !== 'undefined' && config && config.customRoles && config.customRoles[role];
@@ -8094,18 +8162,18 @@ async function _docProcessQueue() {
   try {
     for (const rec of await _dqAll()) {
       if (rec.uid !== _docUid()) continue;
-      try { await (rec.kind === 'notice' ? _noticeSend(rec) : _docSend(rec)); await _dqDel(rec.id); sent++; }
+      try { await (rec.kind === 'notice' ? _noticeSend(rec) : rec.kind === 'inbox' ? _inboxSend(rec) : _docSend(rec)); await _dqDel(rec.id); sent++; }
       catch (e) { if (e && e.code === 'PERMISSION_DENIED') { await _dqDel(rec.id); showToast('A queued document was rejected: ' + rec.meta.title, 'error'); } else break; }
     }
   } finally { _dqBusy = false; }
-  if (sent) { showToast(sent + ' queued item' + (sent > 1 ? 's' : '') + ' sent'); if (currentSection === 'documents') renderDocuments(); if (currentSection === 'notices') renderNotices(); }
+  if (sent) { showToast(sent + ' queued item' + (sent > 1 ? 's' : '') + ' sent'); if (currentSection === 'documents') renderDocuments(); if (currentSection === 'notices') renderNotices(); if (currentSection === 'inbox') initInbox(); }
 }
 window.addEventListener('online', () => setTimeout(_docProcessQueue, 1500));
 document.addEventListener('DOMContentLoaded', () => setTimeout(_docProcessQueue, 6000));
 
 function initDocuments() {
   const canUpload = typeof canDo !== 'function' || canDo('documents', 2);
-  document.getElementById('docUploadCard').style.display = canUpload ? '' : 'none';
+  document.getElementById('docUploadCard').style.display = 'none';
   document.getElementById('docFilterRow').style.display = _docIsViewer() ? '' : 'none';
   document.getElementById('docListTitle').textContent = _docIsViewer() ? 'All staff documents' : 'My uploads';
   renderDocuments();
@@ -8158,7 +8226,7 @@ async function renderDocuments(useCache) {
   const el = document.getElementById('docList');
   if (!el) return;
   const me = _docUid();
-  const pending = (await _dqAll()).filter(r => r.uid === me && r.kind !== 'notice');
+  const pending = (await _dqAll()).filter(r => r.uid === me && r.kind !== 'notice' && r.kind !== 'inbox');
   if (!useCache) {
     el.innerHTML = '<div style="color:var(--text-light)">Loading…</div>';
     try {
@@ -8408,6 +8476,448 @@ async function deleteNotice(id) {
   } catch (e) { showToast('Could not delete: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
 }
 </script>
+
+<script>
+// ==================== PERSONAL PINS + APPROVALS ====================
+// PIN record: <school>/staffPins/<uid> {salt,hash,iter}  (readable only by its owner)
+// Requests:   <school>/approvals/<requesterUid>/<id>     (approvers read all; requester reads own)
+const _pinPath = uid => _fbSchoolPath() + '/staffPins/' + uid;
+let _pinMemo = null, _pinMemoAt = 0, _pinAfter = null;
+
+async function _pinDerive(pin, saltB64, iter) {
+  const salt = Uint8Array.from(atob(saltB64), c => c.charCodeAt(0));
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: iter, hash: 'SHA-256' }, key, 256);
+  return btoa(String.fromCharCode(...new Uint8Array(bits)));
+}
+async function _ownPinRecord(force) {
+  const uid = _docUid(); if (!uid) return null;
+  const key = 'ownPin:' + _fbSchoolPath() + ':' + uid;
+  if (!force && _pinMemoAt && Date.now() - _pinMemoAt < 300000) return _pinMemo;
+  if (navigator.onLine && window._fbDb) {
+    try {
+      const v = (await _docTimeout(window._fbGet(window._fbRef(window._fbDb, _pinPath(uid))), 8000)).val();
+      if (v) localStorage.setItem(key, JSON.stringify(v)); else localStorage.removeItem(key);
+      _pinMemo = v || null; _pinMemoAt = Date.now(); return _pinMemo;
+    } catch (e) {}
+  }
+  try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; }
+}
+async function _verifyOwnPin(pin) {
+  const rec = await _ownPinRecord();
+  if (rec && (await _pinDerive(pin, rec.salt, rec.iter)) === rec.hash) return true;
+  // Administrator break-glass: the school Master PIN also works (e.g. forgotten personal PIN)
+  return !!(currentUser && currentUser.role === 'Administrator' && config.masterPin && await pinMatches(pin, config.masterPin));
+}
+function _pinLockedMsg(el) {
+  const l = JSON.parse(localStorage.getItem('pinLock') || '{}');
+  if (l.until && Date.now() < l.until) { el.textContent = 'Too many wrong PINs. Try again in ' + Math.ceil((l.until - Date.now()) / 60000) + ' min.'; return true; }
+  return false;
+}
+function _pinAttempt(ok) {
+  if (ok) return localStorage.removeItem('pinLock');
+  const l = JSON.parse(localStorage.getItem('pinLock') || '{}'); l.n = (l.n || 0) + 1;
+  if (l.n >= 5) { l.until = Date.now() + 5 * 60000; l.n = 0; }
+  localStorage.setItem('pinLock', JSON.stringify(l));
+}
+
+async function openPinSetup(after) {
+  if (!_docUid() || !window._fbDb) return showToast('Sign in with your cloud login to set a PIN.', 'error');
+  _pinAfter = after || null;
+  const rec = await _ownPinRecord(true);
+  document.getElementById('pinSetTitle').textContent = rec ? '🔑 Change your PIN' : '🔑 Set your PIN';
+  document.getElementById('pinCurRow').style.display = rec ? '' : 'none';
+  document.getElementById('pinCurLabel').textContent = currentUser && currentUser.role === 'Administrator' ? 'Current PIN (or Master PIN if forgotten)' : 'Current PIN';
+  ['pinCur', 'pinNew', 'pinNew2'].forEach(i => { document.getElementById(i).value = ''; });
+  document.getElementById('pinSetError').textContent = '';
+  document.getElementById('pinSetDialog').style.display = 'flex';
+}
+function openMyPin() { openPinSetup(null); }
+function closePinSetup() { document.getElementById('pinSetDialog').style.display = 'none'; _pinAfter = null; }
+
+async function savePinSetup() {
+  const err = document.getElementById('pinSetError'), uid = _docUid();
+  const cur = document.getElementById('pinCur').value.trim(), n1 = document.getElementById('pinNew').value.trim(), n2 = document.getElementById('pinNew2').value.trim();
+  if (!/^\d{4,6}$/.test(n1)) { err.textContent = 'PIN must be 4–6 digits.'; return; }
+  if (n1 !== n2) { err.textContent = 'The two PINs do not match.'; return; }
+  if (/^(\d)\1+$/.test(n1) || '0123456789'.includes(n1) || '9876543210'.includes(n1)) { err.textContent = 'Choose a PIN that is not repeated or sequential digits.'; return; }
+  if (!navigator.onLine) { err.textContent = 'Connect to the internet to save your PIN.'; return; }
+  const existing = await _ownPinRecord(true);
+  if (existing) {
+    if (_pinLockedMsg(err)) return;
+    const ok = await _verifyOwnPin(cur); _pinAttempt(ok);
+    if (!ok) { err.textContent = 'Current PIN is incorrect.'; return; }
+  }
+  try {
+    const saltBytes = crypto.getRandomValues(new Uint8Array(16)), salt = btoa(String.fromCharCode(...saltBytes)), iter = 100000;
+    const rec = { salt, iter, hash: await _pinDerive(n1, salt, iter), ts: Date.now() };
+    await _docTimeout(window._fbSet(window._fbRef(window._fbDb, _pinPath(uid)), rec), 15000);
+    localStorage.setItem('ownPin:' + _fbSchoolPath() + ':' + uid, JSON.stringify(rec)); _pinMemo = rec; _pinMemoAt = Date.now();
+    document.getElementById('pinSetDialog').style.display = 'none';
+    showToast('PIN saved');
+    const cb = _pinAfter; _pinAfter = null; if (cb) cb();
+  } catch (e) { err.textContent = 'Could not save PIN: ' + ((e && (e.code || e.message)) || 'error'); }
+}
+
+async function resetStaffPin(uid) {
+  if (!currentUser || currentUser.role !== 'Administrator') return showToast('Only the Administrator can reset PINs.', 'error');
+  if (!confirm('Reset this staff member\'s PIN? They will be asked to set a new one on their next save.')) return;
+  try { await window._fbSet(window._fbRef(window._fbDb, _pinPath(uid)), null); showToast('PIN reset'); }
+  catch (e) { showToast('Could not reset: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+}
+
+// ---- actions that can be submitted for approval; each runs on the approver's device ----
+const APPROVAL_HANDLERS = {
+  registerStudent(a) {
+    if (_findStudentIndexById(a.student.id) >= 0) throw new Error('A student with ID ' + a.student.id + ' already exists');
+    pushUndo(); students.push(a.student); saveStudents();
+  },
+  editStudent(a) {
+    const i = _findStudentIndexById(a.id); if (i < 0) throw new Error('Student no longer exists');
+    pushUndo(); const s = students[i];
+    s.name = a.name || s.name; s.sex = a.sex; s.class = a.class;
+    if (a.phone) {
+      const w = s.phones.findIndex(p => p.isWhatsApp);
+      if (w >= 0) s.phones[w].number = a.phone; else s.phones.push({ number: a.phone, label: 'WhatsApp', isWhatsApp: true });
+    }
+    saveStudents();
+  },
+  deleteStudent(a) {
+    const i = _findStudentIndexById(a.id); if (i < 0) throw new Error('Student no longer exists');
+    pushUndo(); students.splice(i, 1); saveStudents();
+  },
+  recordPayment(a) {
+    const i = _findStudentIndexById(a.id); if (i < 0) throw new Error('Student no longer exists');
+    pushUndo(); students[i].finance.paid += a.amount;
+    students[i].paymentHistory.push({ amount: a.amount, date: a.date, recordedAt: new Date().toISOString(), recordedBy: a.by || '' });
+    saveStudents();
+  },
+  bulkFee(a) {
+    pushUndo();
+    students.filter(s => s.class === a.cls).forEach(s => { s.finance.total = a.amount; s.finance.categories = [{ name: 'Total Fees', amount: a.amount }]; });
+    saveStudents();
+  },
+  async confirmFeeSubmission(a) {
+    const path = _fbSchoolPath() + '/feePaymentSubmissions/' + a.studentId + '/' + a.key;
+    const snap = await window._fbGet(window._fbRef(window._fbDb, path));
+    if (!snap.exists()) throw new Error('Submission no longer exists');
+    const sub = snap.val();
+    if (sub.status && sub.status !== 'pending') throw new Error('Submission was already ' + sub.status);
+    const i = _findStudentIndexById(a.studentId); if (i < 0) throw new Error('Student record not found');
+    pushUndo();
+    students[i].finance.paid += (sub.amount || 0);
+    students[i].paymentHistory.push({ amount: sub.amount || 0, date: sub.date || new Date().toISOString().split('T')[0], recordedAt: new Date().toISOString(), source: 'Parent submission (' + (sub.network || '') + ' ' + (sub.txn || '') + ')' });
+    saveStudents();
+    try { await window._fbUpdate(window._fbRef(window._fbDb, path), { status: 'confirmed', confirmedAt: Date.now(), confirmedBy: (currentUser && currentUser.username) || '' }); }
+    catch (e) { console.warn('Failed to update submission status:', e.code || e.message || e); }
+  }
+};
+
+// ==================== INBOX: SEND TO A ROLE (both directions) ====================
+// <school>/inbox/<role>/<id>            item as seen by everyone holding that role
+// <school>/sent/<senderUid>/<id>        sender's copy (status mirrors the inbox copy)
+// <school>/threads/<senderUid>/<id>/<m> replies       <school>/submissionFiles/<senderUid>/<id>/<key>/<n> file chunks
+const _ACTION_LABELS = { recordPayment: 'Record a payment', bulkFee: 'Set bulk fees', confirmFeeSubmission: 'Confirm a parent payment', registerStudent: 'Register a student', editStudent: 'Edit a student', deleteStudent: 'Delete a student' };
+const _FIN_ROLES = ['Accountant', 'Bursar', 'Deputy Head Teacher', 'Head Teacher', 'Administrator'];
+const _REG_ROLES = ['Senior Teacher', 'Head of Department', 'Deputy Head Teacher', 'Head Teacher', 'Administrator'];
+const _DEL_ROLES = ['Deputy Head Teacher', 'Head Teacher', 'Administrator'];
+const ACTION_ROLES_DEFAULT = { recordPayment: _FIN_ROLES, bulkFee: _FIN_ROLES, confirmFeeSubmission: _FIN_ROLES, registerStudent: _REG_ROLES, editStudent: _REG_ROLES, deleteStudent: _DEL_ROLES };
+const _roleKeyOk = r => !!r && !/[.$#\[\]\/]/.test(r);
+function _actionRoles(type) { const c = config.approvalRoles && config.approvalRoles[type]; return Array.isArray(c) ? c : (ACTION_ROLES_DEFAULT[type] || ['Head Teacher', 'Administrator']); }
+function _allRoles() { return getStaffRoles().concat(['Administrator']).filter((r, i, a) => r !== 'Parent' && a.indexOf(r) === i); }
+// Roles you can send to: not your own; when this device has the staff list, only roles that have someone in them.
+function _recipientRoles(list) {
+  const me = currentUser && currentUser.role;
+  let a = list.filter(r => r !== me && _roleKeyOk(r));
+  try {
+    const u = JSON.parse(localStorage.getItem(USER_KEY) || '[]').filter(x => x.firebaseUid || x.email);
+    if (u.length >= 3) { const have = new Set(u.map(x => x.role)); const b = a.filter(r => have.has(r) || r === 'Administrator'); if (b.length) a = b; }
+  } catch (e) {}
+  return a;
+}
+const _inboxId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const _iref = p => window._fbRef(window._fbDb, _fbSchoolPath() + '/' + p);
+const _flat2 = o => [].concat(...Object.values(o || {}).map(x => Object.values(x || {})));
+
+async function _putChunks(fbase, b64) {
+  const n = Math.max(1, Math.ceil(b64.length / DOC_CHUNK));
+  for (let i = 0; i < n; i += 4) {
+    const batch = [];
+    for (let k = i; k < Math.min(i + 4, n); k++) batch.push(window._fbSet(window._fbRef(window._fbDb, fbase + k), b64.slice(k * DOC_CHUNK, (k + 1) * DOC_CHUNK)));
+    await _docTimeout(Promise.all(batch), 30000);
+  }
+  return n;
+}
+async function _saveChunks(base, n, name, mime) {
+  const parts = new Array(n);
+  for (let i = 0; i < n; i += 6) {
+    await Promise.all(Array.from({ length: Math.min(6, n - i) }, (_, j) =>
+      _docTimeout(window._fbGet(window._fbRef(window._fbDb, base + (i + j))), 30000).then(s => { parts[i + j] = s.val(); })));
+  }
+  if (parts.some(x => typeof x !== 'string')) throw new Error('file is incomplete');
+  const bin = atob(parts.join('')), u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([u8], { type: mime || 'application/octet-stream' }));
+  const a = document.createElement('a'); a.href = url; a.download = name || 'file'; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+// ---- sending (files first, then both copies in one atomic write) ----
+async function _inboxSend(rec, onProgress) {
+  const files = [];
+  for (let j = 0; j < rec.files.length; j++) {
+    const f = rec.files[j], key = 'm0_' + j;
+    if (onProgress) onProgress('file ' + (j + 1) + '/' + rec.files.length);
+    const n = await _putChunks(rec.base + '/submissionFiles/' + rec.uid + '/' + rec.id + '/' + key + '/', f.b64);
+    files.push({ key, name: f.name, size: f.size, mime: f.mime, chunks: n });
+  }
+  const inbox = Object.assign({}, rec.meta); if (files.length) inbox.files = files;
+  const sent = Object.assign({}, inbox); delete sent.args;
+  const upd = {}; upd['inbox/' + rec.meta.to + '/' + rec.id] = inbox; upd['sent/' + rec.uid + '/' + rec.id] = sent;
+  await _docTimeout(window._fbUpdate(window._fbRef(window._fbDb, rec.base), upd), 30000);
+}
+async function _inboxDeliver(rec, okMsg, after, onProgress) {
+  let queued = !navigator.onLine;
+  if (!queued) {
+    try { await _inboxSend(rec, onProgress); }
+    catch (e) { if (e && e.code === 'PERMISSION_DENIED') { showToast('Not permitted to send this.', 'error'); return false; } queued = true; }
+  }
+  if (queued) { await _dqPut(rec); showToast('Saved on this device — it will be sent when you are back online.'); } else showToast(okMsg);
+  if (after) after();
+  _inbCheck(); return true;
+}
+// Serious action from staff below Deputy level: delivered to the chosen role for approval
+async function _submitApproval(action, description, to) {
+  const uid = _docUid(), id = _inboxId(), now = Date.now();
+  localStorage.setItem('lastTo:' + action.type, to);
+  await _inboxDeliver({ id, uid, kind: 'inbox', base: _fbSchoolPath(), files: [], meta: {
+    id, kind: 'action', type: action.type, args: JSON.parse(JSON.stringify(action.args)), description: description.slice(0, 280), to,
+    fromUid: uid, fromName: currentUser.username || '', fromRole: currentUser.role || '', status: 'pending', ts: now, updatedAt: now, lastBy: uid } },
+    'Sent to ' + to + ' for approval', action.after);
+}
+async function sendSubmission() {
+  const uid = _docUid();
+  if (!uid || !window._fbDb) return showToast('Sign in with your cloud login to send.', 'error');
+  const to = document.getElementById('inTo').value, subject = document.getElementById('inSubject').value.trim(), body = document.getElementById('inBody').value.trim();
+  const picked = Array.from(document.getElementById('inFiles').files), due = document.getElementById('inDue').value;
+  if (!to) return showToast('Choose who to send to.', 'error');
+  if (!subject) return showToast('Enter a subject.', 'error');
+  if (!body && !picked.length) return showToast('Write a message or attach a file.', 'error');
+  if (picked.length > 3) return showToast('Attach at most 3 files.', 'error');
+  for (const f of picked) {
+    if (!_docExt(f.name)) return showToast(f.name + ': only PDF, Word, Excel and CSV files are allowed.', 'error');
+    if (f.size > DOC_MAX_BYTES) return showToast(f.name + ' is larger than 10 MB.', 'error');
+  }
+  const btn = document.getElementById('inSendBtn'), prog = document.getElementById('inProgress');
+  btn.disabled = true; prog.textContent = 'Preparing…';
+  try {
+    const files = []; for (const f of picked) files.push({ name: f.name, size: f.size, mime: DOC_MIME[_docExt(f.name)], b64: await _docReadB64(f) });
+    const id = _inboxId(), now = Date.now();
+    const meta = { id, kind: 'message', to, subject, category: document.getElementById('inCategory').value, fromUid: uid, fromName: currentUser.username || '', fromRole: currentUser.role || '', status: 'pending', ts: now, updatedAt: now, lastBy: uid };
+    if (body) meta.body = body; if (due) meta.due = due;
+    await _inboxDeliver({ id, uid, kind: 'inbox', base: _fbSchoolPath(), files, meta }, 'Sent to ' + to, () => {
+      ['inSubject', 'inBody', 'inDue', 'inFiles'].forEach(k => { document.getElementById(k).value = ''; });
+      document.getElementById('inbComposeCard').style.display = 'none'; if (currentSection === 'inbox') renderInbox();
+    }, p => { prog.textContent = 'Uploading ' + p; });
+  } catch (e) { showToast('Could not send: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+  finally { btn.disabled = false; prog.textContent = ''; }
+}
+
+// ---- page ----
+let _inb = { tab: 'inbox', inbox: [], sent: [], all: [], thread: {} };
+const _inbSeenKey = () => { try { return 'inbSeen:' + _fbSchoolPath(); } catch (e) { return 'inbSeen'; } };
+const _inbFind = id => _inb.inbox.concat(_inb.sent, _inb.all).find(x => x.id === id);
+async function _inbFetch(which) {
+  const me = _docUid(), role = currentUser.role;
+  const path = which === 'inbox' ? 'inbox/' + role : which === 'sent' ? 'sent/' + me : 'sent';
+  const v = (await _docTimeout(window._fbGet(_iref(path)), 15000)).val() || {};
+  _inb[which] = (which === 'all' ? _flat2(v) : Object.values(v)).sort((a, b) => (b.updatedAt || b.ts || 0) - (a.updatedAt || a.ts || 0));
+}
+function _inbBadge() {
+  const b = document.getElementById('inbBadge'); if (!b) return;
+  const me = _docUid(), seen = +localStorage.getItem(_inbSeenKey()) || 0;
+  const n = _inb.inbox.filter(x => x.status === 'pending' && x.fromUid !== me).length + _inb.sent.filter(x => (x.updatedAt || 0) > seen && x.lastBy !== me).length;
+  b.style.display = n ? 'inline-block' : 'none'; b.textContent = n;
+}
+async function _inbCheck() {
+  if (!_docUid() || !window._fbDb || !navigator.onLine) return;
+  if (typeof canAccess === 'function' && !canAccess('inbox')) return;
+  try { await Promise.all([_inbFetch('inbox'), _inbFetch('sent')]); _inbBadge(); } catch (e) {}
+}
+window.addEventListener('online', () => setTimeout(_inbCheck, 2500));
+document.addEventListener('visibilitychange', () => { if (!document.hidden) _inbCheck(); });
+document.addEventListener('DOMContentLoaded', () => { setTimeout(_inbCheck, 9000); setInterval(_inbCheck, 5 * 60 * 1000); });
+
+function initInbox() {
+  const admin = currentUser && currentUser.role === 'Administrator';
+  document.getElementById('inbTabAll').style.display = admin ? '' : 'none';
+  document.getElementById('inbMatrixCard').style.display = admin ? '' : 'none';
+  document.getElementById('inTo').innerHTML = _recipientRoles(_allRoles()).map(r => '<option>' + esc(r) + '</option>').join('');
+  if (admin) _renderMatrix();
+  renderInbox();
+}
+function inbToggleCompose() { const c = document.getElementById('inbComposeCard'); c.style.display = c.style.display === 'none' ? '' : 'none'; }
+function inbTab(t) { _inb.tab = t; renderInbox(); }
+
+function _inbCard(it, ctx) {
+  const st = { pending: '⏳ Pending', approved: '✅ Approved', rejected: '❌ Rejected', returned: '↩️ Returned', done: '✔ Done' }[it.status] || esc(it.status);
+  const overdue = it.due && it.status === 'pending' && it.due < new Date().toISOString().slice(0, 10);
+  return `<div style="padding:12px 0;border-bottom:1px solid var(--border,#eee)">
+    <div style="font-weight:600">${it.kind === 'action' ? '🔒 ' : ''}${esc((it.kind === 'action' ? it.description : it.subject) || '(no subject)')} <span class="badge">${st}</span>${it.category && it.category !== 'Message' ? ' <span class="badge">' + esc(it.category) + '</span>' : ''}</div>
+    <div style="font-size:12px;color:var(--text-light)">${esc(it.fromName)} (${esc(it.fromRole)}) → ${esc(it.to)} · ${new Date(it.ts).toLocaleString()}${it.due ? ' · reply by ' + esc(it.due) : ''}${overdue ? ' <span style="color:#E74C3C">overdue</span>' : ''}${it.forwardedFrom ? ' · forwarded from ' + esc(it.forwardedFrom) : ''}${it.decidedBy ? ' · by ' + esc(it.decidedBy) : ''}</div>
+    ${it.body ? `<div style="font-size:14px;margin-top:6px;white-space:pre-wrap">${esc(it.body)}</div>` : ''}
+    ${it.decidedNote ? `<div style="font-size:13px;margin-top:4px">💬 ${esc(it.decidedNote)}</div>` : ''}
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+      ${(it.files || []).map(f => `<button class="btn btn-sm" onclick="inbFile('${esc(it.fromUid)}','${esc(it.id)}','${esc(f.key)}')">📎 ${esc(f.name)} (${_docFmtSize(f.size || 0)})</button>`).join('')}
+      <button class="btn btn-sm btn-primary" onclick="inbOpen('${esc(it.fromUid)}','${esc(it.id)}','${ctx}')">Open</button>
+    </div><div id="inb-x-${esc(it.id)}"></div></div>`;
+}
+async function renderInbox() {
+  const el = document.getElementById('inbList'), me = _docUid(), tab = _inb.tab;
+  ['Inbox', 'Sent', 'All'].forEach(n => { const b = document.getElementById('inbTab' + n); if (b) b.classList.toggle('btn-primary', tab === n.toLowerCase()); });
+  document.getElementById('inbTitle').textContent = tab === 'inbox' ? 'Sent to my role (' + esc(currentUser.role) + ')' : tab === 'sent' ? 'Sent by me' : 'Everything sent in the school';
+  el.innerHTML = '<div style="color:var(--text-light)">Loading…</div>';
+  const queued = tab === 'sent' ? (await _dqAll()).filter(r => r.uid === me && r.kind === 'inbox') : [];
+  try { if (!me || !window._fbDb) throw new Error('x'); await _inbFetch(tab); }
+  catch (e) { if (!_inb[tab].length && !queued.length) { el.innerHTML = '<div style="color:var(--text-light)">Could not load (offline or no cloud login).</div>'; return; } }
+  const qHtml = queued.map(r => `<div style="padding:12px 0;border-bottom:1px solid var(--border,#eee)"><div style="font-weight:600">${esc(r.meta.subject || r.meta.description)} <span class="badge">⏳ Waiting to send</span></div><div style="font-size:12px;color:var(--text-light)">To ${esc(r.meta.to)} · stored on this device</div><div style="margin-top:6px;display:flex;gap:8px"><button class="btn btn-sm btn-primary" onclick="_docProcessQueue()">Retry now</button><button class="btn btn-danger btn-sm" onclick="inbDropQueued('${esc(r.id)}')">Cancel</button></div></div>`).join('');
+  el.innerHTML = qHtml + (_inb[tab].length ? _inb[tab].map(it => _inbCard(it, tab)).join('') : (qHtml ? '' : '<div style="color:var(--text-light)">Nothing here yet</div>'));
+  if (tab === 'sent') localStorage.setItem(_inbSeenKey(), String(Date.now()));
+  _inbBadge();
+}
+async function inbDropQueued(id) { if (!confirm('Cancel this waiting item?')) return; await _dqDel(id); renderInbox(); }
+
+async function inbOpen(uid, id, ctx) {
+  const box = document.getElementById('inb-x-' + id); if (!box) return;
+  if (box.innerHTML) { box.innerHTML = ''; return; }
+  box.innerHTML = '<div style="color:var(--text-light);padding:8px 0">Loading…</div>';
+  const it = _inbFind(id); if (!it) { box.innerHTML = ''; return; }
+  let msgs = [];
+  try { msgs = Object.values((await _docTimeout(window._fbGet(_iref('threads/' + uid + '/' + id)), 15000)).val() || {}).sort((a, b) => a.ts - b.ts); } catch (e) {}
+  _inb.thread[id] = msgs;
+  const me = _docUid(), pending = it.status === 'pending';
+  let acts = '';
+  if (ctx === 'inbox' && pending) {
+    acts += it.kind === 'action'
+      ? `<button class="btn btn-sm btn-primary" onclick="inbApprove('${id}')">Approve</button><button class="btn btn-danger btn-sm" onclick="inbDecide('${id}','rejected')">Reject</button>`
+      : `<button class="btn btn-sm btn-primary" onclick="inbDecide('${id}','done')">Mark done</button><button class="btn btn-sm" onclick="inbDecide('${id}','returned')">Return</button>`;
+    acts += `<button class="btn btn-sm" onclick="inbForwardUI('${id}')">Forward</button>`;
+  }
+  if (ctx === 'sent' && it.fromUid === me && pending) acts += `<button class="btn btn-danger btn-sm" onclick="inbCancel('${id}')">Cancel</button>`;
+  const canReply = ctx !== 'all';
+  box.innerHTML = `<div style="margin-top:10px;padding:10px;background:rgba(0,0,0,.04);border-radius:8px">
+    ${msgs.map(m => `<div style="padding:6px 0;border-bottom:1px solid var(--border,#eee)"><div style="font-size:12px;color:var(--text-light)">${esc(m.byName)} (${esc(m.byRole)}) · ${new Date(m.ts).toLocaleString()}</div>${m.text ? `<div style="white-space:pre-wrap;font-size:14px">${esc(m.text)}</div>` : ''}${(m.files || []).map(f => `<button class="btn btn-sm" style="margin-top:4px" onclick="inbFile('${esc(uid)}','${esc(id)}','${esc(f.key)}')">📎 ${esc(f.name)} (${_docFmtSize(f.size || 0)})</button>`).join('')}</div>`).join('') || '<div style="font-size:13px;color:var(--text-light)">No replies yet</div>'}
+    ${canReply ? `<textarea id="inb-rt-${id}" rows="2" placeholder="Reply…" style="width:100%;margin-top:8px"></textarea>
+    <input type="file" id="inb-rf-${id}" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.csv" style="margin-top:4px">` : ''}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">${canReply ? `<button class="btn btn-sm btn-primary" onclick="inbReply('${esc(uid)}','${id}')">Send reply</button>` : ''}${acts}</div>
+    <div id="inb-fw-${id}"></div></div>`;
+}
+function _inbFindFile(id, key) {
+  const it = _inbFind(id); let f = it && (it.files || []).find(x => x.key === key); if (f) return f;
+  for (const m of (_inb.thread[id] || [])) { f = (m.files || []).find(x => x.key === key); if (f) return f; }
+  return null;
+}
+async function inbFile(uid, id, key) {
+  const f = _inbFindFile(id, key); if (!f) return;
+  showToast('Preparing download…');
+  try { await _saveChunks(_fbSchoolPath() + '/submissionFiles/' + uid + '/' + id + '/' + key + '/', f.chunks || 1, f.name, f.mime); }
+  catch (e) { showToast('Could not download: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+}
+
+// patch both copies of an item in one multi-path update
+function _inbPatch(upd, it, fields) {
+  for (const k in fields) { upd['inbox/' + it.to + '/' + it.id + '/' + k] = fields[k]; upd['sent/' + it.fromUid + '/' + it.id + '/' + k] = fields[k]; }
+}
+const _inbApply = upd => window._fbUpdate(window._fbRef(window._fbDb, _fbSchoolPath()), upd);
+async function _inbFresh(id) {
+  const s = await window._fbGet(_iref('inbox/' + currentUser.role + '/' + id));
+  return s.exists() ? s.val() : null;
+}
+async function inbReply(uid, id) {
+  const it = _inbFind(id); if (!it) return;
+  const text = document.getElementById('inb-rt-' + id).value.trim(), picked = Array.from(document.getElementById('inb-rf-' + id).files);
+  if (!text && !picked.length) return showToast('Write a reply or attach a file.', 'error');
+  if (!navigator.onLine) return showToast('Connect to the internet to reply.', 'error');
+  if (picked.length > 3) return showToast('Attach at most 3 files.', 'error');
+  for (const f of picked) { if (!_docExt(f.name)) return showToast(f.name + ': file type not allowed.', 'error'); if (f.size > DOC_MAX_BYTES) return showToast(f.name + ' is larger than 10 MB.', 'error'); }
+  const me = _docUid(), mid = _inboxId(), now = Date.now(), files = [];
+  try {
+    showToast('Sending reply…');
+    for (let j = 0; j < picked.length; j++) {
+      const key = 'r' + mid + '_' + j, n = await _putChunks(_fbSchoolPath() + '/submissionFiles/' + uid + '/' + id + '/' + key + '/', await _docReadB64(picked[j]));
+      files.push({ key, name: picked[j].name, size: picked[j].size, mime: DOC_MIME[_docExt(picked[j].name)], chunks: n });
+    }
+    const msg = { id: mid, by: me, byName: currentUser.username || '', byRole: currentUser.role || '', ts: now }; if (text) msg.text = text; if (files.length) msg.files = files;
+    const upd = {}; upd['threads/' + uid + '/' + id + '/' + mid] = msg;
+    _inbPatch(upd, it, Object.assign({ updatedAt: now, lastBy: me }, it.status === 'returned' && it.fromUid === me ? { status: 'pending' } : {}));
+    await _docTimeout(_inbApply(upd), 30000);
+    showToast('Reply sent'); renderInbox();
+  } catch (e) { showToast('Could not reply: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+}
+async function inbApprove(id) {
+  const it = await _inbFresh(id);
+  if (!it || it.status !== 'pending') { showToast('This item is no longer pending.', 'error'); return renderInbox(); }
+  if (!APPROVAL_HANDLERS[it.type]) return showToast('This app version cannot apply "' + it.type + '".', 'error');
+  requestApproval('Approve: ' + it.description, async () => {
+    const cur = await _inbFresh(id);
+    if (!cur || cur.status !== 'pending') { showToast('Someone else already decided this.', 'error'); return renderInbox(); }
+    const me = _docUid(), now = Date.now(), by = (currentUser && currentUser.username) || '', upd = {};
+    _inbPatch(upd, cur, { status: 'approved', decidedBy: by, decidedAt: now, updatedAt: now, lastBy: me });
+    try { await _inbApply(upd); } catch (e) { return showToast('Could not record approval: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+    try { await APPROVAL_HANDLERS[cur.type](cur.args); showToast('Approved and applied'); }
+    catch (e) {
+      const u2 = {}; _inbPatch(u2, cur, { status: 'rejected', decidedNote: 'Could not be applied: ' + (e.message || 'error'), updatedAt: Date.now(), lastBy: me });
+      try { await _inbApply(u2); } catch (e2) {}
+      showToast('Could not apply: ' + (e.message || 'error'), 'error');
+    }
+    renderInbox();
+  }, true);
+}
+async function inbDecide(id, status) {
+  let note = '';
+  if (status !== 'done') { note = prompt(status === 'returned' ? 'What needs correcting?' : 'Reason (optional):'); if (note === null) return; note = note.trim().slice(0, 200); if (status === 'returned' && !note) return showToast('Say what needs correcting.', 'error'); }
+  const it = await _inbFresh(id);
+  if (!it || it.status !== 'pending') { showToast('This item is no longer pending.', 'error'); return renderInbox(); }
+  const me = _docUid(), now = Date.now(), f = { status, decidedBy: (currentUser && currentUser.username) || '', decidedAt: now, updatedAt: now, lastBy: me }; if (note) f.decidedNote = note;
+  const upd = {}; _inbPatch(upd, it, f);
+  try { await _inbApply(upd); showToast('Updated'); renderInbox(); } catch (e) { showToast('Could not update: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+}
+function inbForwardUI(id) {
+  const it = _inbFind(id), roles = _recipientRoles(it.kind === 'action' ? _actionRoles(it.type) : _allRoles()).filter(r => r !== it.to);
+  const el = document.getElementById('inb-fw-' + id);
+  if (!roles.length) { el.innerHTML = '<div style="font-size:13px;margin-top:6px">No other role can receive this.</div>'; return; }
+  el.innerHTML = `<div style="display:flex;gap:8px;margin-top:8px"><select id="inb-fs-${id}" style="flex:1;padding:8px">${roles.map(r => '<option>' + esc(r) + '</option>').join('')}</select><button class="btn btn-sm btn-primary" onclick="inbForward('${id}')">Forward</button></div>`;
+}
+async function inbForward(id) {
+  const newTo = document.getElementById('inb-fs-' + id).value, it = await _inbFresh(id);
+  if (!it || it.status !== 'pending') { showToast('This item is no longer pending.', 'error'); return renderInbox(); }
+  const me = _docUid(), now = Date.now(), mid = _inboxId(), upd = {};
+  upd['inbox/' + it.to + '/' + id] = null;
+  upd['inbox/' + newTo + '/' + id] = Object.assign({}, it, { to: newTo, forwardedBy: me, forwardedFrom: it.to, status: 'pending', updatedAt: now, lastBy: me });
+  ['to', 'forwardedFrom'].forEach(k => { upd['sent/' + it.fromUid + '/' + id + '/' + k] = k === 'to' ? newTo : it.to; });
+  upd['sent/' + it.fromUid + '/' + id + '/updatedAt'] = now; upd['sent/' + it.fromUid + '/' + id + '/lastBy'] = me;
+  upd['threads/' + it.fromUid + '/' + id + '/' + mid] = { id: mid, by: me, byName: currentUser.username || '', byRole: currentUser.role || '', ts: now, text: 'Forwarded from ' + it.to + ' to ' + newTo };
+  try { await _inbApply(upd); showToast('Forwarded to ' + newTo); renderInbox(); } catch (e) { showToast('Could not forward: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+}
+async function inbCancel(id) {
+  const it = _inbFind(id); if (!it || !confirm('Cancel this item?')) return;
+  const me = _docUid(), upd = {};
+  upd['inbox/' + it.to + '/' + id] = null; upd['sent/' + me + '/' + id] = null; upd['threads/' + me + '/' + id] = null; upd['submissionFiles/' + me + '/' + id] = null;
+  try { await _inbApply(upd); showToast('Cancelled'); renderInbox(); } catch (e) { showToast('Could not cancel: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+}
+
+// ---- Administrator: who can approve what ----
+function _renderMatrix() {
+  const roles = _allRoles(), el = document.getElementById('inbMatrix');
+  el.innerHTML = Object.keys(_ACTION_LABELS).map(t => { const cur = _actionRoles(t); return `<details style="margin:6px 0"><summary>${esc(_ACTION_LABELS[t])}</summary><div style="display:flex;flex-wrap:wrap;gap:10px;padding:6px 0">${roles.map(r => `<label style="font-size:13px"><input type="checkbox" ${cur.includes(r) ? 'checked' : ''} onchange="inbMatrixSet('${t}','${esc(r)}',this.checked)"> ${esc(r)}</label>`).join('')}</div></details>`; }).join('');
+}
+function inbMatrixSet(t, r, on) {
+  const cur = new Set(_actionRoles(t)); on ? cur.add(r) : cur.delete(r);
+  if (!cur.size) { showToast('At least one role must be able to approve.', 'error'); return _renderMatrix(); }
+  config.approvalRoles = config.approvalRoles || {}; config.approvalRoles[t] = Array.from(cur); saveConfig();
+}
+</script>
+
 
 
 </body>
