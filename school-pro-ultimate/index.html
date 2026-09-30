@@ -4055,7 +4055,7 @@ async function submitParentPayment(studentId, studentName) {
   submitBtn.disabled = true; cancelBtn.disabled = true; submitBtn.textContent = 'Submitting…';
   try {
     const path = _fbSchoolPath() + '/feePaymentSubmissions/' + studentId + '/' + key;
-    await window._fbSet(window._fbRef(window._fbDb, path), submission);
+    await _restPut(path, submission, 20000);
     const modal = document.getElementById('parentPayModal');
     if (modal) modal.remove();
     showToast('Payment submitted. The school office will review and confirm it.');
@@ -4076,9 +4076,8 @@ async function loadParentSubmissions(studentId) {
   if (!box) return;
   try {
     const path = _fbSchoolPath() + '/feePaymentSubmissions/' + studentId;
-    const snap = await window._fbGet(window._fbRef(window._fbDb, path));
-    if (!snap.exists()) { box.innerHTML = 'No payments submitted yet.'; return; }
-    const data = snap.val();
+    const data = await _restGet(path, 15000);
+    if (!data) { box.innerHTML = 'No payments submitted yet.'; return; }
     const rows = Object.values(data).sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
     box.innerHTML = rows.map(r => {
       const badge = r.status === 'confirmed' ? '<span style="color:var(--success)">✔ Confirmed</span>'
@@ -4092,14 +4091,15 @@ async function loadParentSubmissions(studentId) {
 }
 
 // ---- Staff review of parent fee submissions ----
+// Plain-HTTPS helpers for parent fee submissions (no websocket needed)
+async function _subGet(path) { return await _restGet(path, 20000); }
 async function loadFeeSubmissions() {
   const tbody = document.getElementById('feeSubmissionsTableBody');
   if (!tbody) return;
   try {
     const path = _fbSchoolPath() + '/feePaymentSubmissions';
-    const snap = await window._fbGet(window._fbRef(window._fbDb, path));
-    if (!snap.exists()) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-light)">No pending submissions</td></tr>'; return; }
-    const byStudent = snap.val();
+    const byStudent = await _subGet(path);
+    if (!byStudent) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-light)">No pending submissions</td></tr>'; return; }
     const pending = [];
     Object.keys(byStudent).forEach(studentId => {
       const entries = byStudent[studentId] || {};
@@ -4134,9 +4134,8 @@ function confirmFeeSubmission(studentId, key) {
   if (idx === -1) { showToast('Student record not found', 'error'); return; }
   const path = _fbSchoolPath() + '/feePaymentSubmissions/' + studentId + '/' + key;
 
-  window._fbGet(window._fbRef(window._fbDb, path)).then(snap => {
-    if (!snap.exists()) { showToast('Submission no longer exists', 'error'); loadFeeSubmissions(); return; }
-    const sub = snap.val();
+  _subGet(path).then(sub => {
+    if (!sub) { showToast('Submission no longer exists', 'error'); loadFeeSubmissions(); return; }
     const args = { studentId, key };
     requestApproval('Confirm payment K' + (sub.amount || 0).toLocaleString() + ' for ' + students[idx].name, async () => {
       try { await APPROVAL_HANDLERS.confirmFeeSubmission(args); }
@@ -4149,7 +4148,7 @@ function confirmFeeSubmission(studentId, key) {
 function dismissFeeSubmission(studentId, key) {
   if (!confirm('Dismiss this payment submission without recording it? Only do this if it was made in error or is a duplicate.')) return;
   const path = _fbSchoolPath() + '/feePaymentSubmissions/' + studentId + '/' + key;
-  window._fbUpdate(window._fbRef(window._fbDb, path), { status: 'dismissed', dismissedAt: Date.now(), dismissedBy: (currentUser && currentUser.username) || '' })
+  _dbUpdate(path, { status: 'dismissed', dismissedAt: Date.now(), dismissedBy: (currentUser && currentUser.username) || '' })
     .then(() => { showToast('Submission dismissed'); loadFeeSubmissions(); })
     .catch(err => showToast('Failed to dismiss: ' + (err.code || err.message || err), 'error'));
 }
@@ -5326,7 +5325,7 @@ function renderPayroll() {
       <td>${field('deductions', t.deductions)}</td>
       <td style="white-space:nowrap;font-weight:700">K${net.toLocaleString()}</td>
       <td style="white-space:nowrap">${status}${other > 0 ? `<div style="font-size:11px;color:var(--text-light)">+K${other.toLocaleString()} other payments</div>` : ''}</td>
-      <td style="white-space:nowrap">${net > 0 && left > 0 ? `<button class="btn btn-success btn-sm" onclick="payTeacherSalary(${ti})">Pay K${left.toLocaleString()}</button> ` : ''}<button class="btn btn-outline btn-sm" onclick="openTeacherPaymentModal(${ti})" title="All payments, receipts and pay slips">📋 History</button></td>
+      <td style="white-space:nowrap">${net > 0 && left > 0 ? `<button class="btn btn-success btn-sm" onclick="payTeacherSalary(${ti})">Pay…</button> ` : ''}<button class="btn btn-outline btn-sm" onclick="openTeacherPaymentModal(${ti})" title="All payments, receipts and pay slips">📋 History</button></td>
     </tr>`;
   }).join('');
   list.innerHTML = rows
@@ -5356,15 +5355,21 @@ function payTeacherSalary(ti) {
     return showToast('⛔ Access denied: only admins can record staff payments.', 'error');
   }
   const month = _payrollMonth();
-  const amount = payrollNet(t) - payrollPaidFor(t, month);
-  if (amount <= 0) return showToast('Nothing left to pay for this month', 'error');
+  const outstanding = payrollNet(t) - payrollPaidFor(t, month);
+  if (outstanding <= 0) return showToast('Nothing left to pay for this month', 'error');
   const label = _payrollMonthLabel(month);
+  // Full outstanding by default; type a smaller amount to pay part of the salary now
+  const typed = prompt('Amount to pay now for ' + label + ' (K' + outstanding.toLocaleString() + ' outstanding). Type a smaller amount for a part payment:', outstanding);
+  if (typed === null) return;
+  const amount = Math.round(parseFloat(typed) * 100) / 100;
+  if (!(amount > 0) || amount > outstanding) return showToast('Enter an amount between 1 and K' + outstanding.toLocaleString(), 'error');
   requestApproval('Pay K' + amount.toLocaleString() + ' salary (' + label + ') to ' + (t.name || 'staff member'), () => {
     if (!t.paymentHistory) t.paymentHistory = [];
-    // Re-check inside the approval so a double tap can't pay the month twice
+    // Re-check inside the approval so a double tap can't overpay the month
     const left = payrollNet(t) - payrollPaidFor(t, month);
     if (left <= 0) return showToast('This month is already fully paid', 'error');
-    t.paymentHistory.push({ amount: left, date: new Date().toISOString().split('T')[0], note: 'Salary – ' + label, period: month, recordedAt: new Date().toISOString(), acknowledged: false, acknowledgedAt: null, acknowledgedVia: null });
+    if (amount > left) return showToast('Only K' + left.toLocaleString() + ' is left for this month', 'error');
+    t.paymentHistory.push({ amount: amount, date: new Date().toISOString().split('T')[0], note: 'Salary – ' + label, period: month, recordedAt: new Date().toISOString(), acknowledged: false, acknowledgedAt: null, acknowledgedVia: null });
     const idx = t.paymentHistory.length - 1;
     saveConfig();
     renderTeachers();
@@ -5493,6 +5498,11 @@ async function confirmMyPaySign(ti, ri) {
   showToast('Payment signed — thank you');
 }
 
+async function _pullPaySigs() {
+  if (typeof currentUser === 'undefined' || !currentUser || !['Administrator', 'Head Teacher'].includes(currentUser.role)) return;
+  if (!window._fbAuth || !window._fbAuth.currentUser || !navigator.onLine) return;
+  try { window._lastPaySigs = (await _restGet(_fbSchoolPath() + '/paySignatures', 15000)) || {}; _reconcilePaySigs(); } catch (e) {}
+}
 // Admin side: fold staff signatures back into the payment records so the
 // Payments window and pay slips show them as signed.
 let _paySigAdminUid = null;
@@ -5592,6 +5602,7 @@ function openTeacherPaymentModal(ti) {
   const dateEl = document.getElementById('tpDate');
   if (dateEl) dateEl.value = new Date().toISOString().split('T')[0];
   renderTeacherPaymentHistory(ti);
+  _pullPaySigs().then(() => { if (document.getElementById('tpHistoryWrap')) renderTeacherPaymentHistory(ti); });
 }
 
 function renderTeacherPaymentHistory(ti) {
@@ -8829,8 +8840,9 @@ async function _pollLinkRequests() {
 function _startLinkPoll() {
   if (_lrPollOn || !_isApprover()) return;
   _lrPollOn = true;
-  _pollLinkRequests();
+  _pollLinkRequests(); _pullPaySigs();
   setInterval(_pollLinkRequests, 60000);
+  setInterval(_pullPaySigs, 60000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) _pollLinkRequests(); });
 }
 
@@ -9570,17 +9582,20 @@ const APPROVAL_HANDLERS = {
   },
   async confirmFeeSubmission(a) {
     const path = _fbSchoolPath() + '/feePaymentSubmissions/' + a.studentId + '/' + a.key;
-    const snap = await window._fbGet(window._fbRef(window._fbDb, path));
-    if (!snap.exists()) throw new Error('Submission no longer exists');
-    const sub = snap.val();
+    const sub = await _subGet(path);
+    if (!sub) throw new Error('Submission no longer exists');
     if (sub.status && sub.status !== 'pending') throw new Error('Submission was already ' + sub.status);
     const i = _findStudentIndexById(a.studentId); if (i < 0) throw new Error('Student record not found');
+    const subRef = a.studentId + '/' + a.key;
+    // Guard against double-counting if an earlier confirm saved the payment but the status update failed
+    const already = (students[i].paymentHistory || []).some(h => h.subKey === subRef);
+    if (already) { try { await _dbUpdate(path, { status: 'confirmed', confirmedAt: Date.now(), confirmedBy: (currentUser && currentUser.username) || '' }); } catch (e) {} return; }
     pushUndo();
     students[i].finance.paid += (sub.amount || 0);
-    students[i].paymentHistory.push({ amount: sub.amount || 0, date: sub.date || new Date().toISOString().split('T')[0], recordedAt: new Date().toISOString(), source: 'Parent submission (' + (sub.network || '') + ' ' + (sub.txn || '') + ')' });
+    students[i].paymentHistory.push({ amount: sub.amount || 0, date: sub.date || new Date().toISOString().split('T')[0], recordedAt: new Date().toISOString(), source: 'Parent submission (' + (sub.network || '') + ' ' + (sub.txn || '') + ')' , subKey: subRef});
     saveStudents();
-    try { await window._fbUpdate(window._fbRef(window._fbDb, path), { status: 'confirmed', confirmedAt: Date.now(), confirmedBy: (currentUser && currentUser.username) || '' }); }
-    catch (e) { console.warn('Failed to update submission status:', e.code || e.message || e); }
+    try { await _dbUpdate(path, { status: 'confirmed', confirmedAt: Date.now(), confirmedBy: (currentUser && currentUser.username) || '' }); }
+    catch (e) { showToast('Payment saved, but the parent still sees it as pending (' + (e.code || e.message || 'error') + '). Confirm it again to fix the status; it will not be counted twice.', 'error'); }
   }
 };
 
