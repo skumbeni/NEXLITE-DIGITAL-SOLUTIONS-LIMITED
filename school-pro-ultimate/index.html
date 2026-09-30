@@ -5373,8 +5373,7 @@ function payTeacherSalary(ti) {
     const idx = t.paymentHistory.length - 1;
     saveConfig();
     renderTeachers();
-    showToast('Salary recorded — now have the staff member confirm receipt');
-    openReceiptAcknowledgeModal(ti, idx);
+    showToast('Salary recorded. The staff member signs for it in My Pay.');
   });
 }
 
@@ -5616,7 +5615,7 @@ function renderTeacherPaymentHistory(ti) {
       <td>${escHtml(p.note||'')}</td>
       <td>${p.acknowledged
           ? '<span style="color:var(--success);font-size:12px;white-space:nowrap">✅ Signed</span>'
-          : '<button class="btn btn-warning btn-sm" onclick="openReceiptAcknowledgeModal('+ti+','+ri+')" title="Have the staff member confirm receipt">⏳ Awaiting signature</button>'}</td>
+          : (t.firebaseUid ? '<span style="color:var(--warning);font-size:12px;white-space:nowrap">⏳ Awaiting staff signature</span>' : '<span style="color:var(--text-light);font-size:12px">No login linked — cannot sign</span>')}</td>
       <td style="white-space:nowrap">
         <button class="btn btn-outline btn-sm" onclick="downloadTeacherPaySlip(${ti},${ri})" title="Pay slip">🧾</button>
         <button class="btn btn-danger btn-sm" onclick="deleteTeacherPayment(${ti},${ri})" title="Remove">✕</button>
@@ -5652,8 +5651,7 @@ function recordTeacherPayment(ti) {
     if (totalEl) totalEl.textContent = 'K' + teacherTotalPaid(t).toLocaleString();
     renderTeacherPaymentHistory(ti);
     renderTeachers();
-    showToast('Payment recorded — now have the staff member confirm receipt');
-    openReceiptAcknowledgeModal(ti, newIdx);
+    showToast('Payment recorded. The staff member signs for it in My Pay.');
   });
 }
 
@@ -5662,85 +5660,6 @@ function recordTeacherPayment(ti) {
 // confirms it themselves — with their own Staff PIN (set on their row in
 // Teacher & Staff Accounts), acting as their signature. If they have no PIN
 // set yet, the admin can fall back to a manual, PIN-approved confirmation.
-function openReceiptAcknowledgeModal(ti, ri) {
-  const t = config.teachers[ti];
-  if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
-  const p = t.paymentHistory[ri];
-  const hasPin = false; // staff sign on their own device with their own PIN (My Pay); the admin can only confirm manually
-  const modal = document.createElement('div');
-  modal.className = 'modal-overlay';
-  modal.id = 'ackModal';
-  modal.innerHTML = `
-    <div class="modal" style="max-width:400px">
-      <h3>✍️ Confirm Receipt</h3>
-      <p style="font-size:13px;color:var(--text-light);margin-bottom:14px">
-        Hand the device to <strong>${escHtml(t.name || 'the staff member')}</strong> to confirm they received
-        <strong>K${(p.amount || 0).toLocaleString()}</strong> on ${escHtml(p.date || '')}.
-      </p>
-      ${hasPin ? `
-        <div class="form-group"><label>${escHtml(t.name || 'Staff')}'s PIN</label>
-          <input type="password" id="ackPin" maxlength="6" class="pin-field" placeholder="Enter your PIN to sign">
-        </div>
-        <div id="ackError" style="color:var(--danger);font-size:12px;margin-bottom:8px"></div>
-        <div class="modal-actions">
-          <button class="btn btn-outline" onclick="document.getElementById('ackModal').remove()">Not now</button>
-          <button class="btn btn-success" onclick="confirmPaymentReceipt(${ti},${ri})">Sign & Confirm</button>
-        </div>
-      ` : `
-        <p style="font-size:12px;color:var(--accent);margin-bottom:12px">The staff member can sign this themselves in <strong>My Pay</strong> with their own PIN. If they can't, you can confirm manually below (requires approval).</p>
-        <div class="modal-actions">
-          <button class="btn btn-outline" onclick="document.getElementById('ackModal').remove()">Not now</button>
-          <button class="btn btn-warning" onclick="confirmPaymentReceiptManual(${ti},${ri})">Confirm Manually</button>
-        </div>
-      `}
-    </div>`;
-  document.body.appendChild(modal);
-  const pinEl = document.getElementById('ackPin');
-  if (pinEl) setTimeout(() => pinEl.focus(), 100);
-}
-
-async function confirmPaymentReceipt(ti, ri) {
-  if (!_payrollGuard()) return;
-  const t = config.teachers[ti];
-  if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
-  const entered = (document.getElementById('ackPin').value || '').trim();
-  const ok = entered && await pinMatches(entered, t.pin);
-  if (!ok) {
-    document.getElementById('ackError').textContent = 'Incorrect PIN. Try again.';
-    return;
-  }
-  t.paymentHistory[ri].acknowledged = true;
-  t.paymentHistory[ri].acknowledgedAt = new Date().toISOString();
-  t.paymentHistory[ri].acknowledgedVia = 'pin';
-  saveConfig();
-  const modal = document.getElementById('ackModal');
-  if (modal) modal.remove();
-  renderTeacherPaymentHistory(ti);
-  showToast('Payment signed by ' + (t.name || 'staff member'));
-  downloadTeacherPaySlip(ti, ri);
-}
-
-function confirmPaymentReceiptManual(ti, ri) {
-  if (!_payrollGuard()) return;
-  const t = config.teachers[ti];
-  if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
-  const adminRoles = ['Administrator', 'Head Teacher'];
-  if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
-    return showToast('⛔ Access denied: only admins can confirm receipt manually.', 'error');
-  }
-  requestApproval('Confirm ' + (t.name || 'staff member') + ' received this payment (no Staff PIN on file)', () => {
-    t.paymentHistory[ri].acknowledged = true;
-    t.paymentHistory[ri].acknowledgedAt = new Date().toISOString();
-    t.paymentHistory[ri].acknowledgedVia = 'manual';
-    saveConfig();
-    const modal = document.getElementById('ackModal');
-    if (modal) modal.remove();
-    renderTeacherPaymentHistory(ti);
-    showToast('Receipt confirmed manually');
-    downloadTeacherPaySlip(ti, ri);
-  }, true);
-}
-
 // ==================== PAY SLIP (PDF) ====================
 function buildTeacherPaySlipPdf(ti, ri) {
   const t = config.teachers[ti];
