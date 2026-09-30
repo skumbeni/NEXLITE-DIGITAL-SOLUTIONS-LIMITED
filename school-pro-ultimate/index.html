@@ -5261,10 +5261,14 @@ function renderAdmin() {
   document.getElementById('adminTerm').value = config.currentTerm;
   document.getElementById('adminYear').value = config.academicYear;
 
-  renderGradesManager();
-  renderFeeStructure();
-  renderTeachers();
-  renderSchools();
+  [['gradesManager', renderGradesManager], ['feeStructureManager', renderFeeStructure], [null, renderTeachers], [null, renderSchools]].forEach(([boxId, fn]) => {
+    try { fn(); }
+    catch (e) {
+      console.error('[admin] ' + fn.name + ' failed:', e);
+      const box = boxId && document.getElementById(boxId);
+      if (box) box.innerHTML = '<div style="color:var(--accent);padding:10px;font-size:13px">This section could not load (' + escHtml(String((e && e.message) || e)) + '). Reload the page; if it stays, tell support.</div>';
+    }
+  });
   const staffPointer = document.getElementById('staffPointerCard');
   if (staffPointer) {
     const canSeeStaffPage = typeof currentUser !== 'undefined' && currentUser.role === 'Administrator';
@@ -5435,6 +5439,14 @@ function _zmDialog(title, bodyHtml, onOk, okLabel) {
 
 function renderGradesManager() {
   let html = '';
+  // Repair older/partial records so one bad grade can never blank the whole Admin page
+  if (!Array.isArray(config.grades)) config.grades = [];
+  config.grades = config.grades.filter(g => g && typeof g === 'object' && String(g.name || '').trim());
+  config.grades.forEach(g => {
+    g.name = String(g.name).trim();
+    if (!Array.isArray(g.subGrades)) g.subGrades = [];
+    if (!Array.isArray(g.subjects)) g.subjects = [];
+  });
   config.grades.forEach((g, gi) => {
     html += `<div class="card" style="margin-bottom:8px">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
@@ -5800,7 +5812,8 @@ async function _zmApplyStandardise(levelMapIn, subjectMapIn) {
 
 // ==================== FEE STRUCTURE ====================
 function renderFeeStructure() {
-  const cats = config.feeStructure.categories || [];
+  if (!config.feeStructure || typeof config.feeStructure !== 'object') config.feeStructure = getDefaultConfig().feeStructure;
+  const cats = Array.isArray(config.feeStructure.categories) ? config.feeStructure.categories : [];
   let totalDefault = cats.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
 
   let html = `<div style="margin-bottom:16px">
