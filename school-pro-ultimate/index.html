@@ -7722,6 +7722,7 @@ window.addEventListener('firebaseReady', () => {
 });
 
 async function logoutEdu(){
+  if(!confirm('Log out of School Pro Ultimate?')) return;
   sessionStorage.removeItem('eduUser');
   if(window._fbSignOut) {
     try { await window._fbSignOut(); } catch(e) {}
@@ -10296,5 +10297,58 @@ function inbMatrixSet(t, r, on) {
 
 
 
+
+<!-- Back button: close open dialogs first, otherwise exit the app (never step to a previous page) -->
+<script>
+(function () {
+  var guarded = false, exiting = false;
+
+  function pushGuard() {
+    try { history.pushState({ eduGuard: true }, '', location.href); guarded = true; } catch (e) {}
+  }
+  // Browsers/WebViews ignore history entries added without a user gesture,
+  // so arm the guard on the first tap/key rather than at page load.
+  function arm() { if (!guarded) pushGuard(); }
+  ['pointerdown', 'touchstart', 'keydown'].forEach(function (ev) {
+    window.addEventListener(ev, arm, { once: true, passive: true, capture: true });
+  });
+
+  function visible(el) { return !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)); }
+
+  // Returns true if it closed something (so Back is "used up")
+  function closeTopLayer() {
+    var overlays = Array.prototype.filter.call(document.querySelectorAll('.modal-overlay'), visible);
+    if (overlays.length) {
+      var top = overlays[overlays.length - 1];
+      var btn = Array.prototype.find.call(top.querySelectorAll('button'), function (b) {
+        return /^\s*(✕|×|x|cancel|close|dismiss|no)\s*$/i.test(b.textContent || '');
+      });
+      if (btn) btn.click(); else top.remove();
+      return true;
+    }
+    var sb = document.getElementById('sidebar');
+    if (sb && sb.classList.contains('open')) { sb.classList.remove('open'); return true; }
+    return false;
+  }
+
+  function exitApp() {
+    exiting = true;
+    try {
+      var m = window.median || window.gonative;
+      if (m && m.app && typeof m.app.exit === 'function') { m.app.exit(); return; }
+    } catch (e) {}
+    try { window.close(); } catch (e) {}
+    // Fallback: step out of the guard entry we added; with no earlier page
+    // in the stack the Android wrapper closes the app natively.
+    try { history.back(); } catch (e) {}
+  }
+
+  window.addEventListener('popstate', function () {
+    if (exiting) return;
+    if (closeTopLayer()) { pushGuard(); return; }
+    exitApp();
+  });
+})();
+</script>
 </body>
 </html>
