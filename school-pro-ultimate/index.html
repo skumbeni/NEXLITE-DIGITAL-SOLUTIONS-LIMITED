@@ -869,6 +869,23 @@ tr:hover td { background:rgba(108,52,131,0.04); }
           </div>
           <button class="btn btn-warning" onclick="applyBulkFee()">Apply to Class</button>
         </div>
+        <div class="card" id="feeHistoryCard" style="display:none">
+          <div class="card-header"><span class="card-title">🧾 Fee Transaction History</span></div>
+          <div class="form-row">
+            <div class="form-group"><label>Search</label><input type="text" id="fhSearch" placeholder="Student, ref, method…" oninput="renderFeeHistory()"></div>
+            <div class="form-group"><label>Class</label><select id="fhClass" onchange="renderFeeHistory()"></select></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>From</label><input type="date" id="fhFrom" onchange="renderFeeHistory()"></div>
+            <div class="form-group"><label>To</label><input type="date" id="fhTo" onchange="renderFeeHistory()"></div>
+          </div>
+          <div id="fhSummary" style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;padding:8px 0;font-weight:600"></div>
+          <div class="table-wrap"><table>
+            <tr><th>Date</th><th>Student</th><th>Class</th><th>Amount</th><th>Method / Source</th><th>Recorded by</th></tr>
+            <tbody id="fhBody"></tbody>
+          </table></div>
+          <button class="btn btn-outline btn-sm" style="margin-top:10px" onclick="exportFeeHistoryCsv()">⬇ Export CSV</button>
+        </div>
         <div class="card" id="feeSubmissionsCard" style="display:none">
           <div class="card-header"><span class="card-title">📥 Pending Fee Payment Submissions</span></div>
           <div class="table-wrap"><table>
@@ -2755,7 +2772,7 @@ function showToast(msg, type = 'success') {
   t.className = 'toast toast-' + type;
   t.textContent = msg;
   document.getElementById('toastContainer').appendChild(t);
-  setTimeout(() => t.remove(), 3000);
+  setTimeout(() => t.remove(), type === 'error' ? 7000 : 3000);
 }
 
 // ==================== NAVIGATION ====================
@@ -3971,6 +3988,7 @@ function initFinance() {
     if (finRow) finRow.style.display = 'none';
     if (bulkCard) bulkCard.style.display = 'none';
     if (subsCard) subsCard.style.display = 'none';
+    const _fh0 = document.getElementById('feeHistoryCard'); if (_fh0) _fh0.style.display = 'none';
     const idx = (students && students._childOnly && students.length) ? Math.min(window._activeChild || 0, students.length - 1) : _findStudentIndexById(currentUser.studentId);
     renderParentFinance(idx);
     try { const _b = document.getElementById('financeContent'); if (_b) _b.insertAdjacentHTML('afterbegin', _childSwitcherHtml()); } catch (e) {}
@@ -3992,6 +4010,7 @@ function initFinance() {
   _applyDefSel('bulkFeeClass','finClass');
 
   loadFeeSubmissions();
+  initFeeHistory();
 }
 
 // ---- Parent finance view ----
@@ -4163,6 +4182,17 @@ async function loadFeeSubmissions() {
       });
     });
     if (!pending.length) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-light)">No pending submissions</td></tr>'; return; }
+    // Self-heal: a submission whose payment is already in the student's history is confirmed, whatever its stored status says.
+    const _healed = [];
+    for (let k = pending.length - 1; k >= 0; k--) {
+      const p = pending[k], si = _findStudentIndexById(p._studentId), ref = p._studentId + '/' + p._key;
+      if (si >= 0 && (students[si].paymentHistory || []).some(h => h.subKey === ref)) { _healed.push(p); pending.splice(k, 1); }
+    }
+    if (_healed.length && !_isReadOnly()) {
+      Promise.all(_healed.map(p => _markSubmissionConfirmed(path + '/' + p._studentId + '/' + p._key)))
+        .catch(e => showToast('Confirmation could not be synced to the parent view: ' + (e.code || e.message || 'error'), 'error'));
+    }
+    if (!pending.length) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-light)">No pending submissions</td></tr>'; _refreshFeeHistory(); return; }
     pending.sort((a, b) => (b.submittedAt || 0) - (a.submittedAt || 0));
     tbody.innerHTML = pending.map(p => {
       const submitted = p.submittedAt ? new Date(p.submittedAt).toLocaleString() : '—';
@@ -4192,9 +4222,11 @@ function confirmFeeSubmission(studentId, key) {
     if (!sub) { showToast('Submission no longer exists', 'error'); loadFeeSubmissions(); return; }
     const args = { studentId, key };
     requestApproval('Confirm payment K' + (sub.amount || 0).toLocaleString() + ' for ' + students[idx].name, async () => {
-      try { await APPROVAL_HANDLERS.confirmFeeSubmission(args); }
+      let r;
+      try { r = await APPROVAL_HANDLERS.confirmFeeSubmission(args); }
       catch (e) { return showToast(e.message || 'Could not confirm payment', 'error'); }
-      showToast('Payment confirmed'); loadFeeSubmissions();
+      if (!r || r.synced !== false) showToast('Payment confirmed');
+      loadFeeSubmissions(); _refreshFeeHistory();
     }, false, { type: 'confirmFeeSubmission', args, after: () => loadFeeSubmissions() });
   }).catch(err => showToast('Could not load submission: ' + (err.code || err.message || err), 'error'));
 }
@@ -4205,6 +4237,79 @@ function dismissFeeSubmission(studentId, key) {
   _dbUpdate(path, { status: 'dismissed', dismissedAt: Date.now(), dismissedBy: (currentUser && currentUser.username) || '' })
     .then(() => { showToast('Submission dismissed'); loadFeeSubmissions(); })
     .catch(err => showToast('Failed to dismiss: ' + (err.code || err.message || err), 'error'));
+}
+
+// Marks a parent submission confirmed and VERIFIES it by reading it back (retries on weak mobile networks).
+async function _markSubmissionConfirmed(path) {
+  const upd = { status: 'confirmed', confirmedAt: Date.now(), confirmedBy: (currentUser && currentUser.username) || '' };
+  let lastErr;
+  for (let n = 0; n < 3; n++) {
+    try {
+      await _dbUpdate(path, upd);
+      const back = await _subGet(path);
+      if (back && back.status === 'confirmed') return true;
+      lastErr = new Error('status did not stick');
+    } catch (e) { lastErr = e; if (e && e.code === 'PERMISSION_DENIED') break; }
+    await new Promise(r => setTimeout(r, 800 * (n + 1)));
+  }
+  throw lastErr || new Error('could not update status');
+}
+
+// ---- Fee transaction history (Accountant, Head Teacher, Deputy, Administrator) ----
+const FEE_HISTORY_ROLES = ['Accountant', 'Bursar', 'Deputy Head Teacher', 'Head Teacher', 'Administrator'];
+function _canSeeFeeHistory() { return !!(currentUser && FEE_HISTORY_ROLES.includes(currentUser.role)); }
+function initFeeHistory() {
+  const card = document.getElementById('feeHistoryCard'); if (!card) return;
+  if (!_canSeeFeeHistory()) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  const sel = document.getElementById('fhClass'), cur = sel.value;
+  sel.innerHTML = '<option value="">All classes</option>' + getAllClasses().map(c => `<option value="${esc(c)}">${escHtml(c)}</option>`).join('');
+  sel.value = cur;
+  renderFeeHistory();
+}
+function _refreshFeeHistory() { if (_canSeeFeeHistory() && document.getElementById('fhBody')) renderFeeHistory(); }
+function _feeHistoryRows() {
+  const q = (document.getElementById('fhSearch').value || '').trim().toLowerCase();
+  const cls = document.getElementById('fhClass').value;
+  const from = document.getElementById('fhFrom').value, to = document.getElementById('fhTo').value;
+  const rows = [];
+  (students || []).forEach(st => {
+    if (!st || st._hidden || !st.name) return;
+    if (cls && st.class !== cls) return;
+    (st.paymentHistory || []).forEach(p => {
+      const date = p.date || (p.recordedAt || '').slice(0, 10);
+      if (from && date < from) return;
+      if (to && date > to) return;
+      const row = { date, recordedAt: p.recordedAt || '', student: st.name, id: st.id || '', cls: st.class || '', amount: p.amount || 0,
+        method: p.method || (p.source ? '' : '—'), source: p.source || '', by: p.recordedBy || '', txn: p.txn || '' };
+      if (q && ![row.student, row.id, row.cls, row.method, row.source, row.by, row.txn].join(' ').toLowerCase().includes(q)) return;
+      rows.push(row);
+    });
+  });
+  rows.sort((a, b) => (b.recordedAt || b.date).localeCompare(a.recordedAt || a.date));
+  return rows;
+}
+function renderFeeHistory() {
+  const body = document.getElementById('fhBody'); if (!body) return;
+  const rows = _feeHistoryRows(), total = rows.reduce((t, r) => t + r.amount, 0);
+  document.getElementById('fhSummary').innerHTML = `<span>${rows.length} transaction${rows.length === 1 ? '' : 's'}</span><span style="color:var(--success)">Total: K${total.toLocaleString()}</span>`;
+  body.innerHTML = rows.length ? rows.map(r => `<tr>
+      <td>${escHtml(r.date || '—')}</td>
+      <td><strong>${escHtml(r.student)}</strong><br><span style="color:var(--text-light);font-size:12px">${escHtml(r.id)}</span></td>
+      <td>${escHtml(r.cls)}</td>
+      <td>K${r.amount.toLocaleString()}</td>
+      <td>${escHtml(r.method)}${r.source ? '<br><span style="color:var(--text-light);font-size:12px">' + escHtml(r.source) + '</span>' : ''}</td>
+      <td>${escHtml(r.by || '—')}</td></tr>`).join('')
+    : '<tr><td colspan="6" style="text-align:center;color:var(--text-light)">No transactions found</td></tr>';
+}
+function exportFeeHistoryCsv() {
+  if (!_canSeeFeeHistory()) return showToast('Not allowed', 'error');
+  const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const lines = [['Date', 'Student ID', 'Student', 'Class', 'Amount', 'Method', 'Source', 'Txn ID', 'Recorded by', 'Recorded at'].map(q).join(',')]
+    .concat(_feeHistoryRows().map(r => [r.date, r.id, r.student, r.cls, r.amount, r.method, r.source, r.txn, r.by, r.recordedAt].map(q).join(',')));
+  const url = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv' }));
+  const a = document.createElement('a'); a.href = url; a.download = 'fee-transactions-' + new Date().toISOString().slice(0, 10) + '.csv';
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 function loadFinance() {
@@ -4282,7 +4387,7 @@ function recordPayment(idx) {
   const args = { id: students[idx].id, amount, date, method, by: (currentUser && currentUser.username) || '' };
   requestApproval('Record payment K' + amount.toLocaleString() + ' (' + method + ') for ' + students[idx].name, () => {
     try { APPROVAL_HANDLERS.recordPayment(args); } catch (e) { return showToast(e.message, 'error'); }
-    loadFinance(); showToast('Payment recorded');
+    loadFinance(); _refreshFeeHistory(); showToast('Payment recorded');
   }, false, { type: 'recordPayment', args, after: () => { const el = document.getElementById('finPayAmount'); if (el) el.value = ''; } });
 }
 
@@ -9589,6 +9694,7 @@ const APPROVAL_HANDLERS = {
     pushUndo(); students.splice(i, 1); saveStudents();
   },
   recordPayment(a) {
+    if (_isReadOnly()) throw new Error((_entitlement().message) || 'Read-only: subscription inactive.');
     const i = _findStudentIndexById(a.id); if (i < 0) throw new Error('Student no longer exists');
     pushUndo(); students[i].finance.paid += a.amount;
     students[i].paymentHistory.push({ amount: a.amount, date: a.date, method: a.method || '', recordedAt: new Date().toISOString(), recordedBy: a.by || '' });
@@ -9600,21 +9706,32 @@ const APPROVAL_HANDLERS = {
     saveStudents();
   },
   async confirmFeeSubmission(a) {
+    if (_isReadOnly()) throw new Error((_entitlement().message) || 'Read-only: subscription inactive. Payment was NOT recorded.');
     const path = _fbSchoolPath() + '/feePaymentSubmissions/' + a.studentId + '/' + a.key;
     const sub = await _subGet(path);
     if (!sub) throw new Error('Submission no longer exists');
-    if (sub.status && sub.status !== 'pending') throw new Error('Submission was already ' + sub.status);
     const i = _findStudentIndexById(a.studentId); if (i < 0) throw new Error('Student record not found');
     const subRef = a.studentId + '/' + a.key;
-    // Guard against double-counting if an earlier confirm saved the payment but the status update failed
+    // Already applied to the student (an earlier confirm saved the payment but the status update failed): only repair the status, never count twice.
     const already = (students[i].paymentHistory || []).some(h => h.subKey === subRef);
-    if (already) { try { await _dbUpdate(path, { status: 'confirmed', confirmedAt: Date.now(), confirmedBy: (currentUser && currentUser.username) || '' }); } catch (e) {} return; }
-    pushUndo();
-    students[i].finance.paid += (sub.amount || 0);
-    students[i].paymentHistory.push({ amount: sub.amount || 0, date: sub.date || new Date().toISOString().split('T')[0], recordedAt: new Date().toISOString(), source: 'Parent submission (' + (sub.network || '') + ' ' + (sub.txn || '') + ')' , subKey: subRef});
-    saveStudents();
-    try { await _dbUpdate(path, { status: 'confirmed', confirmedAt: Date.now(), confirmedBy: (currentUser && currentUser.username) || '' }); }
-    catch (e) { showToast('Payment saved, but the parent still sees it as pending (' + (e.code || e.message || 'error') + '). Confirm it again to fix the status; it will not be counted twice.', 'error'); }
+    if (sub.status && sub.status !== 'pending' && !(already && sub.status !== 'confirmed' && sub.status !== 'dismissed')) throw new Error('Submission was already ' + sub.status);
+    if (!already) {
+      pushUndo();
+      students[i].finance.paid += (sub.amount || 0);
+      if (!students[i].paymentHistory) students[i].paymentHistory = [];
+      students[i].paymentHistory.push({
+        amount: sub.amount || 0, date: sub.date || new Date().toISOString().split('T')[0],
+        method: sub.network || 'Mobile Money', recordedAt: new Date().toISOString(),
+        recordedBy: (currentUser && currentUser.username) || '',
+        source: 'Parent submission (' + (sub.network || '') + ' ' + (sub.txn || '') + ')', txn: sub.txn || '', subKey: subRef
+      });
+      saveStudents();
+    }
+    try { await _markSubmissionConfirmed(path); return { synced: true }; }
+    catch (e) {
+      showToast('Payment saved, but the confirmed status did not sync (' + (e.code || e.message || 'error') + '). Open Finance again to retry; it will not be counted twice.', 'error');
+      return { synced: false };
+    }
   }
 };
 
