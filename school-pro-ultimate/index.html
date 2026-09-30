@@ -728,6 +728,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
       <div class="nav-item" onclick="showSection('mypay')" data-section="mypay" style="display:none"><span class="icon">💵</span> My Pay</div>
       <div class="nav-item" onclick="showSection('staff')" data-section="staff"><span class="icon">👥</span> Staff</div>
       <div class="nav-item" onclick="showSection('admin')" data-section="admin"><span class="icon">⚙️</span> Admin Settings</div>
+      <div class="nav-item" onclick="showSection('manual')" data-section="manual" style="display:none"><span class="icon">📖</span> User Manual</div>
       <div style="margin-top:auto;padding:16px 20px;border-top:1px solid rgba(255,255,255,0.1)">
         <div style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="toggleDarkMode()">
           <span id="darkModeIcon">🌙</span> <span id="darkModeLabel">Dark Mode</span>
@@ -1216,6 +1217,11 @@ tr:hover td { background:rgba(108,52,131,0.04); }
       </div>
 
       <!-- Student Profile (hidden section) -->
+      <div class="section" id="sec-manual">
+        <div class="section-title">📖 User Manual</div>
+        <div id="manualBody"></div>
+      </div>
+
       <div class="section" id="sec-profile">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
           <button class="btn btn-outline btn-sm" onclick="showSection('database')">← Back</button>
@@ -1940,7 +1946,7 @@ function _attachPayrollListener() {
 async function _payrollBoot() {
   if (_payrollBootBusy) return;
   const role = (typeof currentUser !== 'undefined' && currentUser && currentUser.role) || '';
-  if (!['Administrator', 'Head Teacher'].includes(role)) return;
+  if (!hasAnyRole(['Administrator', 'Head Teacher'])) return;
   if (!window._fbDb || !_fbSyncEnabled) return;
   _payrollBootBusy = true;
   try {
@@ -2055,7 +2061,7 @@ async function _pinsBoot() {
 function saveConfig() {
   // Only Administrator, Head Teacher and Deputy Head Teacher may persist config changes
   const adminRoles = ['Administrator', 'Head Teacher', 'Deputy Head Teacher'];
-  if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
+  if (typeof currentUser !== 'undefined' && !hasAnyRole(adminRoles)) {
     console.warn('saveConfig blocked: insufficient role (' + currentUser.role + ')');
     return;
   }
@@ -2113,7 +2119,7 @@ let _fbLastStudentCount = -1;
 function _saveStudentsCustom(basePath, ts, changedIdx) {
   const prev = _fbLastStudentCount;
   _fbLastStudentCount = students.length;
-  const lean = st => { const c = Object.assign({}, st); if (c.photo && c.photo.length > 500) c.photo = '__photo__'; return c; };
+  const lean = st => { const c = Object.assign({}, st); if (c.photo && c.photo.length > 500) c.photo = '__photo__'; return _finStripIf(c); };
   if (prev !== -1 && students.length > prev) {
     const upd = {};
     for (let i = prev; i < students.length; i++) upd['s' + i] = lean(students[i]);
@@ -2193,6 +2199,60 @@ async function _fbHydratePhotos() {
   finally { _photoHydrating = false; }
 }
 
+// ==================== FINANCE SPLIT (studentFinance/<id>) ====================
+// Fee data lives in its own node so only finance roles (and a parent, for their own
+// child) can read it. Fees are never written into students/.
+window._finMap = {}; let _finAttached = false;
+function _finStripIf(o) { if (o) { delete o.finance; delete o.paymentHistory; } return o; }
+function _visibleGrades() {
+  const all = config.grades || [];
+  if (typeof window.isScopedUser !== 'function' || !window.isScopedUser()) return all;
+  const mine = window.assignedClasses();
+  return all.filter(g => mine.some(c => c === g.name || c.startsWith(g.name + ' - ')));
+}
+function _allRoles() { const u = (typeof currentUser !== 'undefined' && currentUser) || null; return u ? [u.role].concat(u.extraRoles || []).filter(Boolean) : []; }
+function hasRole(r) { return _allRoles().includes(r); }
+function hasAnyRole(list) { const a = _allRoles(); return list.some(r => a.includes(r)); }
+function _regCustomRoles(roles) { try { (roles || []).forEach(r => { const live = config && config.customRoles && config.customRoles[r]; if (live && typeof window.registerCustomRole === 'function') window.registerCustomRole(r, live); }); } catch (e) {} }
+function _finIsScoped() { return typeof window.isScopedUser === 'function' && window.isScopedUser(); }
+function _finReader() { try { return _canSeeFees() && currentUser && currentUser.role !== 'Parent' && !_finIsScoped(); } catch (e) { return false; } }
+function _finWriter() { try { return _finReader() && (typeof window.canDo !== 'function' || window.canDo('finance', 2)); } catch (e) { return false; } }
+function _finDefaults(st) {
+  if (!st || st._hidden) return st;
+  if (!st.finance) st.finance = { total: 0, paid: 0, categories: [] };
+  if (!st.finance.categories) st.finance.categories = [];
+  if (!Array.isArray(st.paymentHistory)) st.paymentHistory = st.paymentHistory ? Object.values(st.paymentHistory) : [];
+  return st;
+}
+function _finApply(list) {
+  (list || []).forEach(st => {
+    if (!st || st._hidden || !st.id) return;
+    const r = window._finMap[_photoKey(st.id)];
+    if (r) { st.finance = r.finance || st.finance; st.paymentHistory = r.paymentHistory || []; }
+    _finDefaults(st);
+  });
+  return list;
+}
+function _finSave(changedIdx) {
+  if (!_fbSyncEnabled || !window._fbDb || !_finWriter()) return;
+  if (!window._finLoaded) { showToast('Fee data still loading - try again in a moment', 'error'); return; }
+  const idxs = (changedIdx !== undefined && changedIdx >= 0) ? [changedIdx] : students.map((_, i) => i);
+  const upd = {};
+  idxs.forEach(i => { const st = students[i]; if (!st || st._hidden || !st.id) return;
+    upd[_photoKey(st.id)] = { id: st.id, finance: st.finance || { total: 0, paid: 0, categories: [] }, paymentHistory: st.paymentHistory || [] }; });
+  if (Object.keys(upd).length) _fbWriteMerge(_fbSchoolPath() + '/studentFinance', upd);
+}
+function _finAttach() {
+  if (_finAttached || !window._fbDb || !_finReader()) return;
+  _finAttached = true;
+  window._fbOnValue(window._fbRef(window._fbDb, _fbSchoolPath() + '/studentFinance'), snap => {
+    window._finMap = snap.val() || {}; window._finLoaded = true;
+    _finApply(students);
+    try { localStorage.setItem(_schoolStorageKey(DB_KEY, config.currentSchool || 'default'), JSON.stringify(students)); } catch (e) {}
+    refreshCurrentSection();
+  }, err => console.warn('[finance] listener:', err && err.code));
+}
+
 function saveStudents(changedIdx) {
   if (students && students._childOnly) return; // parent view holds only their own children: never persist/push
   _publishRanksSoon();
@@ -2205,6 +2265,7 @@ function saveStudents(changedIdx) {
     if (!_fbSyncEnabled || !window._fbDb) return;
     _fbSyncPhotos();
     _fbSyncStudentIndex();
+    _finSave(changedIdx);
 
     const basePath = _fbSchoolPath() + '/students';
     const ts = Date.now();
@@ -2229,6 +2290,7 @@ function saveStudents(changedIdx) {
       // Patch only the changed student + metadata
       const lean = Object.assign({}, students[changedIdx]);
       if (lean.photo && lean.photo.length > 500) lean.photo = '__photo__';
+      _finStripIf(lean);
       _fbWrite(basePath + '/s' + changedIdx, lean);
       _fbWrite(basePath + '/_count', students.length);
       _fbWrite(basePath + '/_lastModified', ts);
@@ -2238,6 +2300,7 @@ function saveStudents(changedIdx) {
       students.forEach((s, i) => {
         const lean = Object.assign({}, s);
         if (lean.photo && lean.photo.length > 500) lean.photo = '__photo__';
+        _finStripIf(lean);
         studentsObj['s' + i] = lean;
       });
       studentsObj._count = students.length;
@@ -2298,6 +2361,7 @@ function attachFirebaseListeners() {
   window._fbOnValue(window._fbRef(window._fbDb, basePath + '/students'), snapshot => {
     const remote = snapshot.val();
     if (!remote || !remote._count) return;
+    _finAttach();
     const localModified = (students._lastModified) || 0;
     if (remote._lastModified && remote._lastModified > localModified) {
       const rebuilt = [];
@@ -2312,6 +2376,7 @@ function attachFirebaseListeners() {
           rebuilt.push(s);
         }
       }
+      _finApply(rebuilt);
       if (window._parentView && window._pv) { // staff is in Parent view: update the hidden real list, leave the child view alone
         window._pv.students = rebuilt; if (!rebuilt.some(x => x && x._hidden)) window._positionPool = rebuilt;
         try { localStorage.setItem(_schoolStorageKey(DB_KEY, config.currentSchool || 'default'), JSON.stringify(rebuilt)); } catch(e) {}
@@ -2376,7 +2441,7 @@ window.addEventListener('firebaseReady', () => {
       // since _fbSchoolPath() depends on the resolved adminUid.
       const staffEntry = await _resolveStaffSchool(user.uid);
       if (staffEntry && staffEntry.role) {
-        currentUser = { username: user.email || user.uid, role: staffEntry.role, studentId: staffEntry.studentId || null };
+        currentUser = { username: user.email || user.uid, role: staffEntry.role, studentId: staffEntry.studentId || null, extraRoles: Object.keys(staffEntry.extraRoles || {}) };
         if (staffEntry.role === 'Parent') { students = []; students._childOnly = true; window._childrenReady = false; } // never show cached school-wide data to a parent
         sessionStorage.setItem('eduUser', JSON.stringify(currentUser));
       }
@@ -2700,7 +2765,7 @@ function updateUndoRedoBar() {
 // ==================== APPROVAL SYSTEM ====================
 let approvalMode = 'legacy', approvalAction = null, approvalDescription = '';
 const APPROVER_ROLES = ['Administrator', 'Head Teacher', 'Deputy Head Teacher'];
-function _isApprover() { return !!(typeof currentUser !== 'undefined' && currentUser && APPROVER_ROLES.includes(currentUser.role)); }
+function _isApprover() { return !!(typeof currentUser !== 'undefined' && currentUser && hasAnyRole(APPROVER_ROLES)); }
 
 // Routine saves: confirmed with the user's OWN PIN.
 // "Serious" actions (pass `action`): staff who are not Head/Deputy/Administrator do not complete
@@ -2776,6 +2841,121 @@ function showToast(msg, type = 'success') {
 }
 
 // ==================== NAVIGATION ====================
+// ==================== IN-APP USER MANUAL ====================
+// Static, trusted text only: nothing typed by a user is ever written into the page as HTML.
+// It deliberately contains no technical internals, secrets or bypass steps.
+const MANUAL_TOPICS = [
+ { t:'Getting started', i:'🚀', html:`<p>Sign in with the email address and password your school gave you. If you forget your password, ask your school Administrator to help you reset it. Never share your password with anyone, including colleagues.</p>
+  <ul><li><strong>Finding your way:</strong> on a phone, use the bottom bar and the ☰ menu. On a larger screen the menu is on the left.</li>
+  <li><strong>What you see depends on your role.</strong> If a menu item is missing, your role does not include it. Ask your Administrator if you think you should have it.</li>
+  <li><strong>Extra roles:</strong> a staff member can hold more than one role. Extra roles start working the next time you sign in.</li>
+  <li><strong>Signing out:</strong> always sign out when you finish, especially on a shared or borrowed phone.</li></ul>` },
+ { t:'Roles and what each can do', i:'🧑‍🏫', staff:true, html:`<ul>
+  <li><strong>Administrator:</strong> runs the school account: settings, staff logins and roles, payroll, backups and every section.</li>
+  <li><strong>Head Teacher:</strong> almost everything an Administrator can, except managing staff logins. A Head Teacher can give staff extra roles.</li>
+  <li><strong>Deputy Head Teacher:</strong> learners, marks, finance, attendance, conduct, analytics, reports, documents, notices and inbox.</li>
+  <li><strong>Senior Teacher, Grade Teacher, Teacher, Head of Department:</strong> learners, marks, attendance and reports (Senior and Grade Teachers also record conduct).</li>
+  <li><strong>Subject Teacher:</strong> assessments, class marks and reports.</li>
+  <li><strong>Bursar:</strong> learners, finance and reports. <strong>Accountant:</strong> finance and reports.</li>
+  <li><strong>Counsellor:</strong> learners, conduct and attendance.</li>
+  <li><strong>Parent:</strong> only their own linked children.</li></ul>
+  <p>Every staff member also gets <em>My Pay</em>. Fees are visible only to finance roles. Teachers see only the classes assigned to them, and a teacher with no classes assigned sees an empty list until the Administrator assigns some.</p>` },
+ { t:'Working offline and syncing', i:'🔄', html:`<p>The app keeps working when the network is weak. Your changes are saved on the phone first and sent to the school account when a connection is available.</p>
+  <ul><li>Watch the sync indicator. It shows whether changes are being sent, waiting for a connection, or fully up to date.</li>
+  <li>If changes are waiting, keep the app open on a working connection until they finish.</li>
+  <li>If you see a message that school data is reloading, wait a moment and try your save again.</li>
+  <li>If two people edit the same learner at the same time, the most recent save wins, so avoid editing the same record together.</li></ul>` },
+ { t:'Keeping your account and data safe', i:'🔐', html:`<ul>
+  <li>Use a strong password you do not use anywhere else, and never write it where others can see it.</li>
+  <li>Keep your phone screen lock on. Sign out before handing your phone to anyone.</li>
+  <li>The school will never ask for your password or PIN over WhatsApp, SMS or a phone call. Treat such requests as scams.</li>
+  <li>Learner details, marks and fees are confidential. Do not post screenshots or forward reports to people who are not entitled to them.</li>
+  <li>Install the app only from the link your school gives you. Do not install copies from unknown sources.</li>
+  <li>If your phone is lost or stolen, tell the Administrator immediately so your access can be removed.</li>
+  <li>If you notice something that looks wrong, such as records you did not expect, tell your Administrator straight away.</li></ul>` },
+ { t:'Dashboard', i:'📊', need:'dashboard', staff:true, html:`<p>The dashboard shows a summary for the learners you are allowed to see: total learners, boys and girls, and the number of learners in each grade. Finance roles also see fees collected and outstanding balances. Tap a card to go deeper where available. Your name and role are shown at the top so you can confirm whose account is open.</p>` },
+ { t:'Database: finding and viewing learners', i:'🗃️', need:'database', html:`<ul><li>Search by name or ID, or filter by grade and class.</li>
+  <li>Open a learner to see their profile: contact numbers, subjects, results, attendance and conduct. Fee details appear only for finance roles.</li>
+  <li>You can export learner lists where your role allows it. Keep exported files private and delete them when done.</li></ul>` },
+ { t:'Register: adding a learner', i:'➕', need:'register', html:`<ol><li>Open <em>Register</em>.</li><li>Fill in the learner's name, sex, class and guardian phone numbers. Mark the number that uses WhatsApp.</li>
+  <li>Check the details carefully, then save.</li></ol>
+  <p>The school's fee structure and subjects for the class are applied for you. To correct a mistake, open the learner in the Database. To remove a learner, ask the Administrator or Head Teacher.</p>` },
+ { t:'Assessments and Class Marks', i:'📝', need:'assessments', html:`<p>Choose the class and subject, then enter each learner's marks (first test, second test and final exam). You can only enter marks for the classes and subjects assigned to you.</p>
+  <ul><li>Enter numbers only and check them before you leave the page.</li><li>The school's weighting and grade thresholds (set by the Administrator) are used to calculate totals and grades.</li>
+  <li>Class Marks gives a whole-class view so you can spot missing entries.</li></ul>` },
+ { t:'Attendance', i:'📅', need:'attendance', html:`<p>Pick your class and date, mark each learner present or absent, then save. You can only mark classes assigned to you. Mark attendance on the day so the records stay accurate.</p>` },
+ { t:'Conduct', i:'⚖️', need:'conduct', html:`<p>Record positive and negative conduct notes for a learner. Write facts, not opinions, be respectful and keep entries short. Conduct notes are sensitive, so discuss them only with people who are entitled to know.</p>` },
+ { t:'Finance: fees and payments', i:'💰', need:'finance', staff:true, html:`<ul><li><strong>Recording a payment:</strong> choose the learner, enter the amount, date and method, then save. The balance updates and the payment appears in the learner's payment history.</li>
+  <li><strong>Double-check amounts</strong> before saving. If a payment was entered wrongly, tell the Administrator or Head Teacher rather than entering a second correcting payment yourself.</li>
+  <li><strong>Payments submitted by parents</strong> appear for review. Approve one only after confirming the money was actually received.</li>
+  <li>Fee information is confidential. Do not discuss one family's fees with another.</li></ul>` },
+ { t:'Reports', i:'📄', need:'reports', staff:true, html:`<ul><li>Generate a learner report, a class report or an overall report. Choose the term and class first.</li>
+  <li>Reports can be shared, for example through WhatsApp. Check the learner's number before sending, since reports contain personal information.</li>
+  <li>Finance statements are available only to finance roles.</li>
+  <li>The Administrator can generate reports in bulk from Admin Settings.</li></ul>` },
+ { t:'Analytics and Announcements', i:'📈', need:'analytics', html:`<p>Analytics shows trends such as performance and attendance. Announcements (where your role allows) share school-wide messages. Keep announcements short, accurate and respectful.</p>` },
+ { t:'Staff Notices, Documents and Inbox', i:'📥', need:'inbox', staff:true, html:`<ul><li><strong>Staff Notices:</strong> messages from leadership to staff. Read them regularly.</li>
+  <li><strong>Documents:</strong> shared school files. Upload only what the school needs and avoid files with private information you do not need to share.</li>
+  <li><strong>Inbox:</strong> send a request or submission to a role (for example the Head Teacher). Items show a status, can receive replies, and can be forwarded. Anyone holding that role can see items sent to it.</li></ul>` },
+ { t:'My Pay', i:'💵', need:'mypay', staff:true, html:`<p>View your own pay records and payslips and acknowledge them. Only you and the people responsible for payroll can see your pay. If something looks wrong, tell the Administrator promptly.</p>` },
+ { t:'Staff page: logins, roles and extra roles', i:'👥', need:'staff', html:`<ul><li><strong>Create a login</strong> with the staff member's name, email, a strong password and the lowest role that does their job.</li>
+  <li><strong>Change a role</strong> from the role list. Only an Administrator can do this.</li>
+  <li><strong>Extra roles:</strong> the <em>Extra roles</em> button gives a person more access on top of their main role. Use it sparingly. Changes apply at their next sign in.</li>
+  <li><strong>Parents:</strong> use <em>Children</em> to link a parent login to their child or children.</li>
+  <li><strong>Reset PIN</strong> and <strong>Re-link</strong> help when a person is locked out or their account is out of step.</li>
+  <li><strong>Leavers:</strong> remove access for anyone who leaves the school on the same day.</li></ul>` },
+ { t:'Admin Settings', i:'⚙️', need:'admin', html:`<ul><li><strong>Grades & Subjects:</strong> add grades, sub-classes and subjects.</li>
+  <li><strong>Fee Structure:</strong> set fee categories and amounts per class.</li>
+  <li><strong>Assessment Weighting and Grade Thresholds:</strong> control how totals and grades are worked out.</li>
+  <li><strong>Term & Academic Year:</strong> moving to a new term or year changes learners' classes and resets term records. Take a backup first and check the preview before confirming.</li>
+  <li><strong>Teacher & Staff Accounts, Monthly Payroll:</strong> manage staff details and pay.</li>
+  <li><strong>Class assignments:</strong> give each teacher their classes and subjects.</li>
+  <li><strong>PIN Management and Idle Auto-Lock:</strong> protect the app on shared devices. Keep PINs private and change them if you think someone else knows them.</li>
+  <li><strong>Data Management:</strong> download backups regularly and store them somewhere private and safe.</li>
+  <li><strong>Multi-School:</strong> switch between schools you manage.</li></ul>` },
+ { t:'Good security practice for Administrators', i:'🛡️', need:'admin', html:`<ul><li>Give each person the smallest role that lets them do their job.</li>
+  <li>Review the staff list every term and remove anyone who should no longer have access.</li>
+  <li>Never share Administrator credentials. Create separate logins instead.</li>
+  <li>Keep backups private. A backup contains learner and fee information.</li>
+  <li>Use a strong password and keep your recovery details up to date.</li></ul>` },
+ { t:'For parents: your child on the app', i:'👨‍👩‍👧', only:['Parent'], html:`<ul><li>Your dashboard shows your linked children, their results and their fee balance. You can only see your own child's information.</li>
+  <li>If no child appears, open <em>My Settings</em> and use <em>Link a child to my account</em>, or ask the school to link your login.</li>
+  <li>Under Finance you can see what has been paid and what is owed, and submit a payment for the school to confirm.</li>
+  <li>Reports show your child's term results.</li>
+  <li>Never share your login. The school will never ask for your password.</li></ul>` },
+ { t:'Troubleshooting', i:'🧰', html:`<ul><li><strong>Lists are empty:</strong> a teacher with no assigned classes sees nothing. Ask the Administrator to assign classes.</li>
+  <li><strong>"Access denied":</strong> your role does not include that section.</li>
+  <li><strong>A new role or class has no effect:</strong> sign out and sign in again.</li>
+  <li><strong>Changes not showing on another phone:</strong> check both phones are online and the sync indicator is up to date.</li>
+  <li><strong>The app looks out of date:</strong> close it fully and reopen it while online to get the latest version.</li>
+  <li><strong>Still stuck:</strong> contact your school Administrator and describe what you were doing.</li></ul>` }
+];
+function renderManual() {
+  const box = document.getElementById('manualBody'); if (!box) return;
+  const isParent = hasRole('Parent');
+  const topics = MANUAL_TOPICS.filter(t => (!t.need || canAccess(t.need)) && (!t.only || hasAnyRole(t.only)) && !(t.staff && isParent));
+  box.textContent = '';
+  const search = document.createElement('input');
+  search.type = 'search'; search.placeholder = 'Search the manual…'; search.setAttribute('aria-label', 'Search the manual');
+  search.style.cssText = 'width:100%;margin-bottom:12px;padding:10px;border:1px solid var(--border,#ccc);border-radius:8px;font-size:15px';
+  box.appendChild(search);
+  const intro = document.createElement('p'); intro.style.cssText = 'color:var(--text-light);font-size:13px;margin:0 0 10px';
+  intro.textContent = 'This guide shows only what applies to your role.'; box.appendChild(intro);
+  const items = topics.map(t => {
+    const d = document.createElement('details'); d.className = 'card'; d.style.cssText = 'margin-bottom:8px;padding:10px 14px';
+    const sm = document.createElement('summary'); sm.style.cssText = 'cursor:pointer;font-weight:700'; sm.textContent = t.i + ' ' + t.t; d.appendChild(sm);
+    const body = document.createElement('div'); body.style.cssText = 'margin-top:8px;line-height:1.5;font-size:14px'; body.innerHTML = t.html; d.appendChild(body); // t.html is fixed text in this file
+    box.appendChild(d); return { d, text: (t.t + ' ' + body.textContent).toLowerCase() };
+  });
+  const none = document.createElement('div'); none.style.cssText = 'display:none;color:var(--text-light)'; none.textContent = 'Nothing matches your search.'; box.appendChild(none);
+  search.addEventListener('input', () => {
+    const q = search.value.trim().toLowerCase(); let n = 0;
+    items.forEach(x => { const show = !q || x.text.includes(q); x.d.style.display = show ? '' : 'none'; if (show) { n++; x.d.open = !!q; } });
+    none.style.display = n ? 'none' : 'block';
+  });
+}
+window.renderManual = renderManual;
+
 function showSection(section) {
   // Role gate — block direct calls (e.g. from browser console) for unauthorised sections
   if (typeof canAccess === 'function' && !canAccess(section)) {
@@ -2817,6 +2997,7 @@ function refreshCurrentSection() {
     case 'documents': initDocuments(); break;
     case 'notices': initNotices(); break;
     case 'inbox': initInbox(); break;
+    case 'manual': renderManual(); break;
     case 'mypay': renderMyPay(); break;
   }
 }
@@ -3338,14 +3519,14 @@ function renderDashboard() {
     <div class="stat-card"><div class="stat-value">${total}</div><div class="stat-label">Total Students</div></div>
     <div class="stat-card" style="border-left-color:#2E86C1"><div class="stat-value">${male}</div><div class="stat-label">Male Students</div></div>
     <div class="stat-card" style="border-left-color:#E74C3C"><div class="stat-value">${female}</div><div class="stat-label">Female Students</div></div>
-    <div class="stat-card" style="border-left-color:var(--success)"><div class="stat-value">K${totalPaid.toLocaleString()}</div><div class="stat-label">Fees Collected</div></div>
-    <div class="stat-card" style="border-left-color:var(--warning)"><div class="stat-value">K${balance.toLocaleString()}</div><div class="stat-label">Outstanding Balance</div></div>
-    <div class="stat-card" style="border-left-color:var(--info)"><div class="stat-value">${config.grades.length}</div><div class="stat-label">Grades</div></div>
+    ${_canSeeFees() ? `<div class="stat-card" style="border-left-color:var(--success)"><div class="stat-value">K${totalPaid.toLocaleString()}</div><div class="stat-label">Fees Collected</div></div>
+    <div class="stat-card" style="border-left-color:var(--warning)"><div class="stat-value">K${balance.toLocaleString()}</div><div class="stat-label">Outstanding Balance</div></div>` : ''}
+    <div class="stat-card" style="border-left-color:var(--info)"><div class="stat-value">${_visibleGrades().length}</div><div class="stat-label">Grades</div></div>
   `;
 
   // Quick stats by grade
   let qsHtml = '';
-  config.grades.forEach(g => {
+  _visibleGrades().forEach(g => {
     const gStudents = students.filter(s => s.class.startsWith(g.name) && (!window.classInScope || window.classInScope(s.class)));
     qsHtml += `<div class="stat-card"><div class="stat-value">${gStudents.length}</div><div class="stat-label">${g.name}</div></div>`;
   });
@@ -3370,7 +3551,7 @@ function initDatabaseFilters() {
   const gf = document.getElementById('dbGradeFilter');
   const sf = document.getElementById('dbSubFilter');
   gf.innerHTML = '<option value="">All Grades</option>';
-  config.grades.forEach(g => { gf.innerHTML += `<option value="${esc(g.name)}">${esc(g.name)}</option>`; });
+  _visibleGrades().forEach(g => { gf.innerHTML += `<option value="${esc(g.name)}">${esc(g.name)}</option>`; });
   gf.innerHTML += '<option value="Alumni">Alumni</option>';
   sf.innerHTML = '<option value="">All Sub-grades</option>';
 }
@@ -3432,7 +3613,7 @@ function renderDatabase() {
       </div>
       <div class="grade-group-body">
         <div class="table-wrap"><table>
-          <tr><th>Photo</th><th>Name</th><th>ID</th><th>Sex</th><th>Class</th><th>WhatsApp</th><th>Fee Status</th><th>Subjects</th><th>Actions</th></tr>`;
+          <tr><th>Photo</th><th>Name</th><th>ID</th><th>Sex</th><th>Class</th><th>WhatsApp</th>${_canSeeFees() ? '<th>Fee Status</th>' : ''}<th>Subjects</th><th>Actions</th></tr>`;
 
     gStudents.forEach(s => {
       const sIdx = students.indexOf(s);
@@ -3451,7 +3632,7 @@ function renderDatabase() {
           <td><select id="ie-sex-${sIdx}"><option value="Male" ${s.sex==='Male'?'selected':''}>Male</option><option value="Female" ${s.sex==='Female'?'selected':''}>Female</option></select></td>
           <td><select id="ie-class-${sIdx}">${getAllClasses().map(c=>`<option value="${esc(c)}" ${s.class===c?'selected':''}>${escHtml(c)}</option>`).join('')}</select></td>
           <td><input type="text" value="${esc(getWhatsAppPhone(s))}" id="ie-phone-${sIdx}" style="width:100px"></td>
-          <td>${feeLabel}</td>
+          ${_canSeeFees() ? `<td>${feeLabel}</td>` : ''}
           <td>${s.subjects.length}</td>
           <td><button class="btn btn-success btn-sm" onclick="saveInlineEdit(${sIdx})">✓</button> <button class="btn btn-outline btn-sm" onclick="cancelInlineEdit()">✗</button></td>
         </tr>`;
@@ -3463,7 +3644,7 @@ function renderDatabase() {
           <td><span class="badge ${sexBadge}">${sexLabel}</span></td>
           <td>${escHtml(s.class)}</td>
           <td><span class="badge badge-wa">${escHtml(getWhatsAppPhone(s))}</span></td>
-          <td><span class="badge ${feeBadge}">${feeLabel}</span></td>
+          ${_canSeeFees() ? `<td><span class="badge ${feeBadge}">${feeLabel}</span></td>` : ''}
           <td>${s.subjects.length}</td>
           <td>
             <button class="btn btn-info btn-sm" onclick="viewProfile(${sIdx})">👁</button>
@@ -3546,7 +3727,8 @@ function exportFilteredData() {
   });
   const data = filtered.map(s => ({
     Name: s.name, ID: s.id, Sex: s.sex, Class: s.class,
-    WhatsApp: getWhatsAppPhone(s), TotalFee: s.finance.total, Paid: s.finance.paid,
+    WhatsApp: getWhatsAppPhone(s),
+    ...(_canSeeFees() ? { TotalFee: s.finance.total, Paid: s.finance.paid } : {}),
     Subjects: s.subjects.map(sub => sub.name).join(', ')
   }));
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -3600,7 +3782,7 @@ function renderProfile(idx) {
       <div style="flex:1;min-width:200px">
         <h2 style="color:var(--primary);margin-bottom:4px">${escHtml(s.name)}</h2>
         <div style="color:var(--text-light)">ID: ${escHtml(s.id)} | Class: ${escHtml(s.class)}</div>
-        <div style="margin-top:8px"><strong>Average Score:</strong> ${avgScore}% | <strong>Fee Status:</strong> ${feePct}% paid</div>
+        <div style="margin-top:8px"><strong>Average Score:</strong> ${avgScore}%${_canSeeFees() ? ` | <strong>Fee Status:</strong> ${feePct}% paid` : ''}</div>
       </div>
     </div>
 
@@ -3610,7 +3792,7 @@ function renderProfile(idx) {
       <button class="btn btn-primary btn-sm" onclick="saveProfilePhones(${idx})" style="margin-top:8px">Save Phones</button>
     </div>
 
-    <div class="card">
+    ${!_canSeeFees() ? '' : `<div class="card">
       <div class="card-header"><span class="card-title">💰 Fee Breakdown</span></div>
       ${feeBreakdown}
       <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:16px;border-top:2px solid var(--primary);margin-top:4px">
@@ -3622,7 +3804,7 @@ function renderProfile(idx) {
       <div style="display:flex;justify-content:space-between;padding:4px 0;color:var(--accent)">
         <span>Balance</span><strong>K${(s.finance.total-s.finance.paid).toLocaleString()}</strong>
       </div>
-    </div>
+    </div>`}
 
     <div class="card">
       <div class="card-header"><span class="card-title">📝 Academic Results</span></div>
@@ -3640,13 +3822,13 @@ function renderProfile(idx) {
       </table></div>
     </div>
 
-    <div class="card">
+    ${!_canSeeFees() ? '' : `<div class="card">
       <div class="card-header"><span class="card-title">💳 Payment History</span></div>
       <div class="table-wrap"><table>
         <tr><th>Amount</th><th>Date</th><th>Method</th><th>Recorded</th></tr>
         ${paymentRows || '<tr><td colspan="4" style="text-align:center;color:var(--text-light)">No payments</td></tr>'}
       </table></div>
-    </div>`;
+    </div>`}`;
 }
 
 function addProfilePhone() {
@@ -4257,7 +4439,7 @@ async function _markSubmissionConfirmed(path) {
 
 // ---- Fee transaction history (Accountant, Head Teacher, Deputy, Administrator) ----
 const FEE_HISTORY_ROLES = ['Accountant', 'Bursar', 'Deputy Head Teacher', 'Head Teacher', 'Administrator'];
-function _canSeeFeeHistory() { return !!(currentUser && FEE_HISTORY_ROLES.includes(currentUser.role)); }
+function _canSeeFeeHistory() { return !!(currentUser && hasAnyRole(FEE_HISTORY_ROLES)); }
 function initFeeHistory() {
   const card = document.getElementById('feeHistoryCard'); if (!card) return;
   if (!_canSeeFeeHistory()) { card.style.display = 'none'; return; }
@@ -4594,8 +4776,26 @@ function deleteAnnouncement(idx) {
 }
 
 // ==================== REPORTS ====================
+// Fee figures are only for roles that have the Finance section (Parents see their own children's only).
+function _canSeeFees() { try { return typeof canAccess === 'function' ? canAccess('finance') : true; } catch (e) { return true; } }
+
+// Accountants only ever see the financial side of a report — no academic results, positions or conduct.
+function _isFinanceOnlyReportRole() { return !!(currentUser && currentUser.role === 'Accountant' && !(currentUser.extraRoles || []).length); }
+
 function initReports() {
-  { const pc = document.getElementById('publishRanksCard'); if (pc) pc.style.display = (currentUser && currentUser.role !== 'Parent' && !(students && students._childOnly)) ? '' : 'none'; }
+  if (!_canSeeFees()) {
+    ['reportType', 'bulkReportType'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) Array.from(el.options).forEach(o => { if (o.value === 'finance') o.remove(); });
+    });
+  }
+  if (_isFinanceOnlyReportRole()) {
+    ['reportType', 'bulkReportType'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = '<option value="finance">Financial Statement</option>';
+    });
+  }
+  { const pc = document.getElementById('publishRanksCard'); if (pc) pc.style.display = (currentUser && currentUser.role !== 'Parent' && !_isFinanceOnlyReportRole() && !(students && students._childOnly)) ? '' : 'none'; }
   { const par = currentUser && currentUser.role === 'Parent';
     const pg = document.getElementById('reportPin'); if (pg && pg.closest('.form-group')) pg.closest('.form-group').style.display = par ? 'none' : '';
     const bc = document.getElementById('bulkReportClass'); if (bc && bc.closest('.card')) bc.closest('.card').style.display = par ? 'none' : ''; }
@@ -4614,7 +4814,7 @@ function loadReportPreview() {
   const idx = document.getElementById('reportStudent').value;
   if (idx === '') { document.getElementById('reportPreview').innerHTML = ''; return; }
   const s = students[idx];
-  document.getElementById('reportPreview').innerHTML = `<div style="color:var(--text-light)">Report will be generated for: <strong>${escHtml(s.name)}</strong> (${escHtml(s.class)}) <button class="btn btn-outline btn-sm" onclick="showStudentHistory(${idx})">📚 Past years</button></div>`;
+  document.getElementById('reportPreview').innerHTML = `<div style="color:var(--text-light)">Report will be generated for: <strong>${escHtml(s.name)}</strong> (${escHtml(s.class)}) ${_isFinanceOnlyReportRole() ? '' : `<button class="btn btn-outline btn-sm" onclick="showStudentHistory(${idx})">📚 Past years</button>`}</div>`;
 }
 
 // ---- Report text builders (shared by single-student and bulk generation) ----
@@ -4631,6 +4831,7 @@ function buildAcademicReportText(s) {
 }
 
 function buildFinanceReportText(s) {
+  if (!_canSeeFees()) return 'FINANCIAL STATEMENT\nNot available for your role.';
   let report = `FINANCIAL STATEMENT\n${'='.repeat(40)}\nStudent: ${s.name}\nID: ${s.id}\nClass: ${s.class}\n\n`;
   if (s.finance.categories) {
     s.finance.categories.forEach(c => { report += `${c.name}: K${c.amount.toLocaleString()}\n`; });
@@ -4648,7 +4849,7 @@ function buildWhatsAppReportText(s) {
     const tot = calcWeightedTotal(sub);
     report += `📚 ${sub.name}: ${tot.toFixed(1)}% (${getLetterGrade(tot)})\n`;
   });
-  report += `\n📈 Average: ${avg !== null ? avg.toFixed(1) + '%' : 'N/A'}\n🏆 Position: ${position !== null ? ordinal(position) + ' out of ' + totalInClass + ' in ' + s.class : 'N/A'}\n💰 Fee Balance: K${(s.finance.total-s.finance.paid).toLocaleString()}`;
+  report += `\n📈 Average: ${avg !== null ? avg.toFixed(1) + '%' : 'N/A'}\n🏆 Position: ${position !== null ? ordinal(position) + ' out of ' + totalInClass + ' in ' + s.class : 'N/A'}${_canSeeFees() ? `\n💰 Fee Balance: K${(s.finance.total-s.finance.paid).toLocaleString()}` : ''}`;
   return report;
 }
 
@@ -4679,11 +4880,13 @@ function buildOverallReportText(s) {
     report += `No conduct records.\n`;
   }
 
+  if (_canSeeFees()) {
   report += `\n--- FINANCE ---\n`;
   if (s.finance.categories) {
     s.finance.categories.forEach(c => { report += `${c.name}: K${c.amount.toLocaleString()}\n`; });
   }
   report += `Total Fee: K${(s.finance.total||0).toLocaleString()}\nPaid: K${(s.finance.paid||0).toLocaleString()}\nBalance: K${((s.finance.total||0)-(s.finance.paid||0)).toLocaleString()}\n`;
+  }
 
   return report;
 }
@@ -4822,7 +5025,7 @@ async function _verifyReportPin(pin) {
 
 function generateReport() {
   const idx = document.getElementById('reportStudent').value;
-  const type = document.getElementById('reportType').value;
+  const type = _isFinanceOnlyReportRole() ? 'finance' : document.getElementById('reportType').value;
   const pin = document.getElementById('reportPin').value.trim();
 
   if (idx === '') return showToast('Select a student','error');
@@ -4895,6 +5098,7 @@ function copyReport() {
 // ---- Bulk report generation ----
 // Builds the text for one student according to the chosen bulk report type.
 function _buildBulkReportFor(s, type) {
+  if (_isFinanceOnlyReportRole()) return buildFinanceReportText(s);
   if (type === 'academic') return buildAcademicReportText(s);
   if (type === 'finance') return buildFinanceReportText(s);
   return buildOverallReportText(s); // default / 'overall'
@@ -4921,7 +5125,7 @@ function buildBulkReportPdfBlob(targets, type) {
 }
 
 function generateBulkReports() {
-  const type = document.getElementById('bulkReportType').value;
+  const type = _isFinanceOnlyReportRole() ? 'finance' : document.getElementById('bulkReportType').value;
   const pin = document.getElementById('bulkReportPin').value.trim();
   const statusEl = document.getElementById('bulkReportStatus');
 
@@ -4944,7 +5148,7 @@ function generateBulkReports() {
 }
 
 function shareBulkReports() {
-  const type = document.getElementById('bulkReportType').value;
+  const type = _isFinanceOnlyReportRole() ? 'finance' : document.getElementById('bulkReportType').value;
   const pin = document.getElementById('bulkReportPin').value.trim();
   const statusEl = document.getElementById('bulkReportStatus');
 
@@ -4961,7 +5165,7 @@ function shareBulkReports() {
 }
 
 function printBulkReports() {
-  const type = document.getElementById('bulkReportType').value;
+  const type = _isFinanceOnlyReportRole() ? 'finance' : document.getElementById('bulkReportType').value;
   const pin = document.getElementById('bulkReportPin').value.trim();
   const statusEl = document.getElementById('bulkReportStatus');
 
@@ -5511,7 +5715,7 @@ function payTeacherSalary(ti) {
   if (!t) return;
   if (!_payrollGuard()) return;
   const adminRoles = ['Administrator', 'Head Teacher'];
-  if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
+  if (typeof currentUser !== 'undefined' && !hasAnyRole(adminRoles)) {
     return showToast('⛔ Access denied: only admins can record staff payments.', 'error');
   }
   const month = _payrollMonth();
@@ -5658,7 +5862,7 @@ async function confirmMyPaySign(ti, ri) {
 }
 
 async function _pullPaySigs() {
-  if (typeof currentUser === 'undefined' || !currentUser || !['Administrator', 'Head Teacher'].includes(currentUser.role)) return;
+  if (typeof currentUser === 'undefined' || !currentUser || !hasAnyRole(['Administrator', 'Head Teacher'])) return;
   if (!window._fbAuth || !window._fbAuth.currentUser || !navigator.onLine) return;
   try { window._lastPaySigs = (await _restGet(_fbSchoolPath() + '/paySignatures', 15000)) || {}; _reconcilePaySigs(); } catch (e) {}
 }
@@ -5684,7 +5888,7 @@ function _reconcilePaySigs() {
 function _attachPaySigAdmin() {
   const uid = _myUid();
   if (!uid || _paySigAdminUid === uid) return;
-  if (typeof currentUser === 'undefined' || !currentUser || !['Administrator', 'Head Teacher'].includes(currentUser.role)) return;
+  if (typeof currentUser === 'undefined' || !currentUser || !hasAnyRole(['Administrator', 'Head Teacher'])) return;
   if (!window._fbDb || !window._fbOnValue || !window._fbRef) return;
   _paySigAdminUid = uid;
   try {
@@ -5792,7 +5996,7 @@ function recordTeacherPayment(ti) {
   if (!t) return;
   if (!_payrollGuard()) return;
   const adminRoles = ['Administrator', 'Head Teacher'];
-  if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
+  if (typeof currentUser !== 'undefined' && !hasAnyRole(adminRoles)) {
     return showToast('⛔ Access denied: only admins can record staff payments.', 'error');
   }
   const amount = parseFloat(document.getElementById('tpAmount').value) || 0;
@@ -5931,7 +6135,7 @@ function deleteTeacherPayment(ti, ri) {
   const t = config.teachers[ti];
   if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
   const adminRoles = ['Administrator', 'Head Teacher'];
-  if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
+  if (typeof currentUser !== 'undefined' && !hasAnyRole(adminRoles)) {
     return showToast('⛔ Access denied: only admins can remove staff payment records.', 'error');
   }
   if (!confirm('Remove this payment record?')) return;
@@ -6001,6 +6205,32 @@ function repairStaffUid(email) {
   if (typeof resyncStaffLink === 'function') resyncStaffLink(uid);
 }
 
+
+// Extra roles: a staff member keeps their main role and gains the sections/data of the others (most permissive wins).
+const EXTRA_ROLE_CHOICES = () => getStaffRoles().filter(r => r !== 'Parent' && r !== 'Administrator' && !/[.$#\[\]\/]/.test(r));
+function editExtraRoles(firebaseUid) {
+  if (!currentUser || !hasAnyRole(['Administrator','Head Teacher'])) return showToast('Only the Administrator or Head Teacher can do this', 'error');
+  const users = JSON.parse(localStorage.getItem(USER_KEY) || '[]');
+  const u = users.find(x => x.firebaseUid === firebaseUid); if (!u) return;
+  const have = u.extraRoles || [];
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML = '<div class="card" style="max-width:360px;width:100%;max-height:80vh;overflow:auto"><div class="card-title" style="margin-bottom:8px">Extra roles for ' + esc(u.username) + '</div><div style="font-size:12px;color:var(--text-light);margin-bottom:8px">Main role: ' + esc(u.role) + '. Ticked roles add their access. Applies at next login.</div>' +
+    EXTRA_ROLE_CHOICES().filter(r => r !== u.role).map(r => '<label style="display:block;margin:6px 0"><input type="checkbox" value="' + esc(r) + '" ' + (have.includes(r) ? 'checked' : '') + '> ' + esc(r) + '</label>').join('') +
+    '<div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary btn-sm" id="xrSave">Save</button><button class="btn btn-sm" id="xrCancel">Cancel</button></div></div>';
+  document.body.appendChild(ov);
+  ov.querySelector('#xrCancel').onclick = () => ov.remove();
+  ov.querySelector('#xrSave').onclick = () => {
+    const picked = Array.from(ov.querySelectorAll('input:checked')).map(i => i.value);
+    u.extraRoles = picked; _saveUsers(users);
+    const map = {}; picked.forEach(r => { map[r] = true; });
+    const xp = {}; picked.forEach(r => { const p = (config.customRoles || {})[r]; if (p) Object.keys(p).forEach(k => { const v = parseInt(p[k], 10); if (v >= 1 && v <= 3 && !/[.$#\[\]\/]/.test(k) && (xp[k] || 0) < v) xp[k] = v; }); });
+    _fbWriteMerge(_staffDirectoryPath(firebaseUid), { extraRoles: picked.length ? map : null, extraPerms: Object.keys(xp).length ? xp : null });
+    ov.remove(); showToast('Extra roles saved'); renderStaffLogins();
+  };
+}
+window.editExtraRoles = editExtraRoles;
+
 function renderStaffLogins() {
   const el = document.getElementById('staffLoginsList');
   if (!el) return;
@@ -6024,6 +6254,7 @@ function renderStaffLogins() {
       }
       ${canManage && u.firebaseUid ? `<button class="btn btn-sm" onclick="editStaffChildren('${esc(u.firebaseUid)}')">Children${_childIdsOf(u).length ? ' (' + _childIdsOf(u).length + ')' : ''}</button><button class="btn btn-sm" onclick="resyncStaffLink('${esc(u.firebaseUid)}')">Re-link</button><button class="btn btn-danger btn-sm" onclick="revokeStaffLogin('${esc(u.firebaseUid)}')">Remove</button>` : ''}
       ${canManage && u.firebaseUid ? `<button class="btn btn-sm" onclick="resetStaffPin('${esc(u.firebaseUid)}')">Reset PIN</button>` : ''}
+      ${(canManage || (currentUser && currentUser.role === 'Head Teacher')) && u.firebaseUid && u.role !== 'Parent' ? `<button class="btn btn-sm" onclick="editExtraRoles('${esc(u.firebaseUid)}')">Extra roles${(u.extraRoles||[]).length ? ' (' + u.extraRoles.length + ')' : ''}</button>` : ''}
     </div>`).join('');
 }
 
@@ -6585,6 +6816,7 @@ async function exportFromCloud() {
     for (let i = 0; i < (stuData._count || 0); i++) {
       if (stuData['s' + i]) cloudStudents.push(stuData['s' + i]);
     }
+    try { const fs = (await window._fbGet(window._fbRef(window._fbDb, basePath + '/studentFinance'))).val() || {}; cloudStudents.forEach(st => { const r = st && st.id && fs[_photoKey(st.id)]; if (r) { st.finance = r.finance; st.paymentHistory = r.paymentHistory || []; } }); } catch (e) {}
     // Alerts
     const cloudAlerts = (altSnap.val() || {}).list || [];
     const payload = {
@@ -7417,13 +7649,15 @@ window.ROLE_SECTIONS = {
 };
 
 // Staff self-service pay page: all staff roles except the Administrator (who runs payroll) and Parents.
+Object.keys(window.ROLE_SECTIONS).forEach(r => { if (!window.ROLE_SECTIONS[r].includes('manual')) window.ROLE_SECTIONS[r].push('manual'); });
 Object.keys(window.ROLE_SECTIONS).forEach(r => {
   if (r !== 'Administrator' && r !== 'Parent' && !window.ROLE_SECTIONS[r].includes('mypay')) window.ROLE_SECTIONS[r].push('mypay');
 });
 
 function canAccess(section){
- const role = currentUser && currentUser.role;
- return (window.ROLE_SECTIONS[role] || []).includes(section);
+ const roles = currentUser ? [currentUser.role].concat(currentUser.extraRoles || []) : [];
+ _regCustomRoles(roles);
+ return roles.some(r => (window.ROLE_SECTIONS[r] || []).includes(section));
 }
 
 document.addEventListener('DOMContentLoaded',()=>{
@@ -7445,6 +7679,7 @@ function _saveUsers(users) {
     // Never store passwordHash or salt in Firebase
     users.forEach((u, i) => {
       usersObj['u' + i] = { username: u.username, role: u.role, email: u.email || '' };
+      if (u.extraRoles && u.extraRoles.length) usersObj['u' + i].extraRoles = u.extraRoles;
       if (u.firebaseUid) usersObj['u' + i].firebaseUid = u.firebaseUid;
       if (u.googleAuth) usersObj['u' + i].googleAuth = true;
       if (u.childIds && u.childIds.length) usersObj['u' + i].childIds = u.childIds;
@@ -7609,7 +7844,10 @@ if(!localStorage.getItem('edu_roles_v1')){
 function applyRoleAccess(role){
  // Reads the SAME table canAccess() uses (defined above) — see the comment
  // there for why these two used to disagree.
- let allowed = window.ROLE_SECTIONS[role] || ['dashboard'];
+ const _u = (typeof currentUser !== 'undefined' && currentUser) || JSON.parse(sessionStorage.getItem('eduUser') || 'null') || { role };
+ const _rs = [_u.role || role].concat(_u.extraRoles || []); _regCustomRoles(_rs);
+ let allowed = []; _rs.forEach(r => { (window.ROLE_SECTIONS[r] || []).forEach(x => { if (!allowed.includes(x)) allowed.push(x); }); });
+ if (!allowed.length) allowed = ['dashboard'];
  document.querySelectorAll('[data-section]').forEach(el=>{
    let sec=el.getAttribute('data-section');
    el.style.display=allowed.includes(sec)?'flex':'none';
@@ -8076,18 +8314,21 @@ document.addEventListener('DOMContentLoaded', () => {
     const clean = {};
     CFG.forEach(([k]) => { const v = parseInt(perms && perms[k], 10); if (v >= 1 && v <= 3) clean[k] = v; });
     window.CUSTOM_PERMS[name] = clean;
-    window.ROLE_SECTIONS[name] = ['dashboard','inbox','mypay'].concat(Object.keys(clean));
+    window.ROLE_SECTIONS[name] = ['dashboard','inbox','mypay','manual'].concat(Object.keys(clean));
   };
   function ensureRole(role) {
     const live = typeof config !== 'undefined' && config && config.customRoles && config.customRoles[role];
     if (live) window.registerCustomRole(role, live); // live school config wins over the login-time snapshot
   }
   window.permLevel = function (section) {
-    const role = typeof currentUser !== 'undefined' && currentUser && currentUser.role;
-    if (!role) return 0;
-    ensureRole(role);
-    if (window.CUSTOM_PERMS[role]) return section === 'dashboard' ? 1 : (window.CUSTOM_PERMS[role][section] || 0);
-    return (window.ROLE_SECTIONS[role] || []).includes(section) ? 3 : 0;
+    if (typeof currentUser === 'undefined' || !currentUser || !currentUser.role) return 0;
+    let best = 0;
+    [currentUser.role].concat(currentUser.extraRoles || []).forEach(r => {
+      ensureRole(r);
+      const lv = window.CUSTOM_PERMS[r] ? (section === 'dashboard' ? 1 : (window.CUSTOM_PERMS[r][section] || 0)) : ((window.ROLE_SECTIONS[r] || []).includes(section) ? 3 : 0);
+      if (lv > best) best = lv;
+    });
+    return best;
   };
   window.canDo = (section, need) => window.permLevel(section) >= need;
   window.isCustomRoleUser = function () {
@@ -8101,8 +8342,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const f = [];
     if (window.canDo('database', 2)) f.push('name', 'sex', 'class', 'phones', 'photo');
     if (window.canDo('assessments', 2) || window.canDo('classmarks', 2)) f.push('subjects', 'terms');
-    if (window.canDo('finance', 2)) f.push('finance', 'paymentHistory');
-    if (window.canDo('attendance', 2)) f.push('attendance');
+        if (window.canDo('attendance', 2)) f.push('attendance');
     if (window.canDo('conduct', 2)) f.push('conduct');
     return f;
   };
@@ -8245,6 +8485,8 @@ document.addEventListener('DOMContentLoaded', () => {
 // Writes by restricted staff are enforced in the rules; reads of other classes are hidden in the UI only.
 (function () {
   const ADMINISH = ['Administrator', 'Head Teacher', 'Deputy Head Teacher'];
+  // These roles are always limited to their assigned classes (no per-person switch needed).
+  const AUTO_SCOPED = ['Teacher', 'Grade Teacher', 'Subject Teacher', 'Head of Department', 'Senior Teacher', 'Counsellor'];
   const BAD = /[.$#\[\]\/]/;   // characters Firebase forbids in keys
   const MARK_ROLES = ['Teacher','Senior Teacher','Grade Teacher','Head of Department','Subject Teacher','Deputy Head Teacher'];
   const ATT_ROLES  = ['Teacher','Senior Teacher','Grade Teacher','Head of Department','Deputy Head Teacher','Counsellor'];
@@ -8263,6 +8505,9 @@ document.addEventListener('DOMContentLoaded', () => {
   window.isScopedUser = function () {
     const r = role();
     if (!r || ADMINISH.includes(r) || r === 'Parent') return false;
+    const ex = (typeof currentUser !== 'undefined' && currentUser.extraRoles) || [];
+    if (ex.some(x => !AUTO_SCOPED.includes(x))) return false;
+    if (AUTO_SCOPED.includes(r)) return true;
     const m = mine();
     return !!(m && m.restricted);
   };
@@ -8308,9 +8553,9 @@ document.addEventListener('DOMContentLoaded', () => {
   window._saveStudentsScoped = function (basePath, ts, changedIdx) {
     const r = role();
     const cust = typeof window.isCustomRoleUser === 'function' && window.isCustomRoleUser();
-    const okMarks = cust ? (window.canDo('assessments', 2) || window.canDo('classmarks', 2)) : MARK_ROLES.includes(r);
-    const okAtt = cust ? false : ATT_ROLES.includes(r);
-    const okCon = cust ? false : CON_ROLES.includes(r);
+    const okMarks = cust ? (window.canDo('assessments', 2) || window.canDo('classmarks', 2)) : hasAnyRole(MARK_ROLES);
+    const okAtt = cust ? false : hasAnyRole(ATT_ROLES);
+    const okCon = cust ? false : hasAnyRole(CON_ROLES);
     const subs = window.assignedSubjects();
     const idxs = (changedIdx !== undefined && changedIdx >= 0) ? [changedIdx] : students.map((_, i) => i);
     const upd = {}; let n = 0;
@@ -8355,7 +8600,7 @@ document.addEventListener('DOMContentLoaded', () => {
           if (v && window.classInScope(v.class)) {
             if (v.photo === '__photo__') { const l = students[i]; if (l && l.photo) v.photo = l.photo; else delete v.photo; }
             v.subjects = v.subjects || []; v.phones = v.phones || []; v.attendance = v.attendance || {}; v.conduct = v.conduct || []; v.terms = v.terms || {};
-            v.paymentHistory = v.paymentHistory || [];
+            _finDefaults(v);
             out[i] = v;
           } else out[i] = HIDDEN();
         });
@@ -8364,6 +8609,7 @@ document.addEventListener('DOMContentLoaded', () => {
       students = out; students._lastModified = ts; _fbLastStudentCount = cnt;
       try { localStorage.setItem(_schoolStorageKey(DB_KEY, config.currentSchool || 'default'), JSON.stringify(students)); } catch (e) {}
       if (typeof refreshCurrentSection === 'function') refreshCurrentSection();
+      if (!window.assignedClasses().length) showToast('No classes assigned to you yet - ask the Administrator', 'info');
     } catch (e) { console.warn('[assign] scoped load:', e && e.code); }
   }
 
@@ -8390,7 +8636,7 @@ document.addEventListener('DOMContentLoaded', () => {
         catch (e) { window.ASSIGN.mine = mine() || {}; }
       }
     } catch (e) {}
-    const scoped = !!(window.ASSIGN.mine && window.ASSIGN.mine.restricted);
+    const scoped = window.isScopedUser();
     const origOn = window._fbOnValue;
     if (scoped) window._fbOnValue = function (ref) {
       if (String(ref).endsWith('/students')) return function () {};
@@ -8403,11 +8649,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (v && v !== window._scopedSelfTs && v !== (students && students._lastModified)) scopedLoad();
     }, err => console.warn('[assign] students listener:', err && err.code));
     if (u && window._fbDb) window._fbOnValue(window._fbRef(window._fbDb, base()), snap => {
-      const v = snap.val() || {}, was = !!(window.ASSIGN.mine && window.ASSIGN.mine.restricted);
+      const v = snap.val() || {}, was = window.isScopedUser();
       window.ASSIGN.mine = v;
       try { localStorage.setItem(cKey(), JSON.stringify(v)); } catch (e) {}
-      if (was !== !!v.restricted) { location.reload(); return; }   // access changed: reload cleanly
-      if (v.restricted) scopedLoad(); else if (typeof refreshCurrentSection === 'function') refreshCurrentSection();
+      if (was !== window.isScopedUser()) { location.reload(); return; }   // access changed: reload cleanly
+      if (window.isScopedUser()) scopedLoad(); else if (typeof refreshCurrentSection === 'function') refreshCurrentSection();
     }, err => console.warn('[assign] listener:', err && err.code));
   };
 
@@ -8584,7 +8830,7 @@ document.addEventListener('DOMContentLoaded', () => {
 (function () {
   const ALUMNI = 'Alumni';
   const E = s => escHtml(String(s == null ? '' : s));
-  const isAdmin = () => typeof currentUser !== 'undefined' && currentUser && ['Administrator', 'Head Teacher', 'Deputy Head Teacher'].includes(currentUser.role);
+  const isAdmin = () => typeof currentUser !== 'undefined' && currentUser && hasAnyRole(['Administrator', 'Head Teacher', 'Deputy Head Teacher']);
   const safeKey = k => String(k).replace(/[.$#\[\]\/]/g, '-');
 
   function nextClass(c) {
@@ -8602,7 +8848,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function renderCard() {
-    const admin = document.getElementById(currentUser && currentUser.role === 'Deputy Head Teacher' ? 'sec-dashboard' : 'sec-admin'); if (!admin) return;
+    const admin = document.getElementById(hasRole('Deputy Head Teacher') ? 'sec-dashboard' : 'sec-admin'); if (!admin) return;
     let card = document.getElementById('promoteCard');
     if (!isAdmin()) { if (card) card.remove(); return; }
     if (!card) {
@@ -8723,7 +8969,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const BAD = /[.$#\[\]\/]/;
   const E = s => escHtml(String(s == null ? '' : s));
   const role = () => (typeof currentUser !== 'undefined' && currentUser && currentUser.role) || '';
-  const canManage = () => MGR.includes(role());
+  const canManage = () => hasAnyRole(MGR);
   const blank = arr => arr.map(x => ({ name: x.name, ca1: '', ca2: '', final: '' }));
   const hasMarks = x => x && (x.ca1 !== '' && x.ca1 != null || x.ca2 !== '' && x.ca2 != null || x.final !== '' && x.final != null);
 
@@ -9103,6 +9349,7 @@ async function _loadMyChildrenInner(entry) {
         }
         v.subjects = v.subjects || []; v.phones = v.phones || []; v.attendance = v.attendance || {};
         v.conduct = v.conduct || []; v.terms = v.terms || {}; v.paymentHistory = v.paymentHistory || [];
+        try { const fr = await g('/studentFinance/' + key); if (fr) { v.finance = fr.finance || v.finance; v.paymentHistory = fr.paymentHistory ? Object.values(fr.paymentHistory) : []; } } catch (e) { console.warn('[children] finance:', e && e.code); }
         v.finance = v.finance || { total: 0, paid: 0, categories: [] };
         out.push(v);
       } catch (e) { console.warn('[children] load failed for', id, e && e.code); }
@@ -9205,7 +9452,7 @@ const DOC_MIME = {
 };
 let _docCache = [], _dqBusy = false;
 
-function _docIsViewer() { return typeof currentUser !== 'undefined' && currentUser && DOC_VIEWER_ROLES.includes(currentUser.role); }
+function _docIsViewer() { return typeof currentUser !== 'undefined' && currentUser && hasAnyRole(DOC_VIEWER_ROLES); }
 function _docUid() { return window._fbAuth && window._fbAuth.currentUser ? window._fbAuth.currentUser.uid : null; }
 function _docFmtSize(b) { return b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; }
 function _docExt(n) { const m = /\.(pdf|docx?|xlsx?|csv)$/i.exec(n || ''); return m ? m[1].toLowerCase() : null; }
@@ -9429,7 +9676,7 @@ const NOTICE_POSTERS = ['Administrator', 'Head Teacher', 'Deputy Head Teacher'];
 const NOTICE_MAX_BYTES = 5 * 1024 * 1024, NOTICE_MAX_FILES = 3;
 let _noticeCache = [];
 
-function _noticeIsPoster() { return typeof currentUser !== 'undefined' && currentUser && NOTICE_POSTERS.includes(currentUser.role); }
+function _noticeIsPoster() { return typeof currentUser !== 'undefined' && currentUser && hasAnyRole(NOTICE_POSTERS); }
 function _noticeSeenKey() { try { return 'noticeSeen:' + _fbSchoolPath(); } catch (e) { return 'noticeSeen'; } }
 function _noticeBadge() {
   const b = document.getElementById('noticeBadge'); if (!b) return;
@@ -9852,7 +10099,13 @@ const _inbSeenKey = () => { try { return 'inbSeen:' + _fbSchoolPath(); } catch (
 const _inbFind = id => _inb.inbox.concat(_inb.sent, _inb.all).find(x => x.id === id);
 async function _inbFetch(which) {
   const me = _docUid(), role = currentUser.role;
-  const path = which === 'inbox' ? 'inbox/' + role : which === 'sent' ? 'sent/' + me : 'sent';
+  if (which === 'inbox') {   // a person with extra roles sees every role's inbox
+    const seen = {}; const parts = await Promise.all(_allRoles().map(r => _docTimeout(_dbRead(_fbSchoolPath() + '/inbox/' + r), 30000).catch(() => null)));
+    parts.forEach(v => Object.values(v || {}).forEach(it => { if (it && it.id) seen[it.id] = it; }));
+    _inb.inbox = Object.values(seen).sort((a, b) => (b.updatedAt || b.ts || 0) - (a.updatedAt || a.ts || 0));
+    return;
+  }
+  const path = which === 'sent' ? 'sent/' + me : 'sent';
   const v = (await _docTimeout(_dbRead(_fbSchoolPath() + '/' + path), 30000)) || {};
   _inb[which] = (which === 'all' ? _flat2(v) : Object.values(v)).sort((a, b) => (b.updatedAt || b.ts || 0) - (a.updatedAt || a.ts || 0));
 }
@@ -9953,8 +10206,8 @@ function _inbPatch(upd, it, fields) {
 }
 const _inbApply = upd => _dbUpdate(_fbSchoolPath(), upd);
 async function _inbFresh(id) {
-  const s = await window._fbGet(_iref('inbox/' + currentUser.role + '/' + id));
-  return s.exists() ? s.val() : null;
+  for (const r of _allRoles()) { try { const s = await window._fbGet(_iref('inbox/' + r + '/' + id)); if (s.exists()) return s.val(); } catch (e) {} }
+  return null;
 }
 async function inbReply(uid, id) {
   const it = _inbFind(id); if (!it) return;
