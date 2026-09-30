@@ -1111,7 +1111,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
 
         <!-- Grades & Subjects -->
         <div class="card">
-          <div class="card-header"><span class="card-title">🏫 Grades & Subjects</span><span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-outline btn-sm" onclick="setupLevels()">Set up levels</button><button class="btn btn-primary btn-sm" onclick="addGrade()">+ Add Grade</button></span></div>
+          <div class="card-header"><span class="card-title">🏫 Grades & Subjects</span><span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-outline btn-sm" onclick="setupLevels()">Set up levels</button><button class="btn btn-outline btn-sm" onclick="openStandardiseNames()">Standardise names</button><button class="btn btn-primary btn-sm" onclick="addGrade()">+ Add Grade</button></span></div>
           <div id="gradesManager"></div>
         </div>
 
@@ -4070,7 +4070,7 @@ function loadAssessment() {
     </tr>`;
   });
   html += '</table></div>';
-  html += '<button class="btn btn-outline btn-sm" onclick="addAssessSubject()" style="margin-top:8px">+ Add Custom Subject</button>';
+  html += '<button class="btn btn-outline btn-sm" onclick="addAssessSubject()" style="margin-top:8px">+ Add Subject</button>';
   html += ' <button class="btn btn-danger btn-sm" onclick="removeLastAssessSubject()" style="margin-top:8px">- Remove Last Subject</button>';
   document.getElementById('assessFields').innerHTML = html;
 }
@@ -4093,8 +4093,18 @@ function updateAssessRowTotal(si) {
 function addAssessSubject() {
   const idx = document.getElementById('assessStudent').value;
   if (idx === '') return;
-  assessArr(students[idx]).push({ name: 'New Subject', ca1: '', ca2: '', final: '' });
-  loadAssessment();
+  const s = students[idx];
+  const arr = assessArr(s);
+  const have = arr.map(x => _zmKey(x.name));
+  const grade = getGradeForClass(s.class);
+  const choices = _zmSubjectChoices(grade ? grade.name : '').filter(n => !have.includes(_zmKey(n)));
+  if (!choices.length) return showToast('All subjects for this level are already added', 'error');
+  _zmDialog('+ Add Subject', `<select id="zmAssessPick" style="width:100%;padding:10px;font-size:15px"><option value="">Pick a subject…</option>${choices.map(n => `<option value="${esc(n)}">${escHtml(n)}</option>`).join('')}</select>`, ov => {
+    const v = ov.querySelector('#zmAssessPick').value;
+    if (!v) return { error: 'Pick a subject from the list.' };
+    arr.push({ name: v, ca1: '', ca2: '', final: '' });
+    loadAssessment();
+  }, 'Add');
 }
 
 function removeLastAssessSubject() {
@@ -5338,7 +5348,91 @@ function saveTermYear() {
   showToast('Term & year saved');
 }
 
-// ==================== GRADES & SUBJECTS MANAGER ====================
+// ==================== ZAMBIAN CURRICULUM CATALOGUE ====================
+// Levels and subjects are PICKED from this list, never free-typed, so spelling stays identical
+// across every class, report card and marks sheet. Names that already exist in a school's data
+// are kept exactly as they are (existing marks are matched by name).
+const ZM_STAGES = [
+  { id: 'ece', label: 'Early Childhood (ECE)', levels: ['Baby Class', 'Middle Class', 'Reception'] },
+  { id: 'pri', label: 'Primary', levels: ['Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6','Grade 7'] },
+  { id: 'jun', label: 'Junior Secondary', levels: ['Grade 8', 'Grade 9'] },
+  { id: 'sen', label: 'Senior Secondary', levels: ['Grade 10', 'Grade 11', 'Grade 12'] },
+  { id: 'frm', label: 'Older "Form" naming', levels: ['Form 1','Form 2','Form 3','Form 4','Form 5'] }
+];
+const ZM_SUBJECTS = {
+  ece: ['Language and Literacy','Numeracy','Environmental Science','Creative Arts','Physical Education','Religious Education'],
+  pri: ['Mathematics','English','Science','Integrated Science','Social Studies','Creative Arts','Creative and Technology Studies','ICT','Religious Education','Physical Education','Home Economics','Literacy','Zambian Language','Bemba','Nyanja','Lozi','Tonga','Kaonde','Luvale','Lunda'],
+  jun: ['Mathematics','English','Science','Integrated Science','Social Studies','Civic Education','Geography','History','Religious Education','Physical Education','Creative Arts','ICT','Computer Studies','Home Economics','Agricultural Science','Business Studies','Design and Technology','Musical Arts Education','Art and Design','French','Zambian Language','Bemba','Nyanja','Lozi','Tonga','Kaonde','Luvale','Lunda'],
+  sen: ['English','Literature in English','Mathematics','Additional Mathematics','Biology','Chemistry','Physics','Science','Civic Education','Geography','History','Religious Education','Agricultural Science','Computer Studies','Commerce','Accounting','Principles of Accounts','Business Studies','Design and Technology','Food and Nutrition','Fashion and Fabrics','Home Management','Physical Education','Musical Arts Education','Art and Design','French','Bemba','Nyanja','Lozi','Tonga','Kaonde','Luvale','Lunda']
+};
+const ZM_DEFAULT_SUBJECTS = {
+  ece: ['Language and Literacy','Numeracy','Environmental Science','Creative Arts'],
+  pri: ['Mathematics','English','Science','Social Studies','Creative Arts','ICT'],
+  jun: ['Mathematics','English','Science','Social Studies','Civic Education','Geography','History','ICT'],
+  sen: ['English','Mathematics','Biology','Chemistry','Physics','Civic Education','Geography','History']
+};
+// Common shorthand people type -> the one correct name
+const ZM_ALIASES = { maths:'Mathematics', math:'Mathematics', mathematic:'Mathematics', mathmatics:'Mathematics', mathamatics:'Mathematics',
+  addmaths:'Additional Mathematics', addmath:'Additional Mathematics', eng:'English', englishlanguage:'English', sci:'Science',
+  sst:'Social Studies', socialstudy:'Social Studies', socialstudies:'Social Studies', re:'Religious Education', rs:'Religious Education',
+  pe:'Physical Education', poa:'Principles of Accounts', accounts:'Accounting', bio:'Biology', chem:'Chemistry', phy:'Physics', phys:'Physics',
+  geo:'Geography', hist:'History', civic:'Civic Education', civics:'Civic Education', agric:'Agricultural Science', agriculture:'Agricultural Science',
+  comp:'Computer Studies', computer:'Computer Studies', computerscience:'Computer Studies', it:'ICT', music:'Musical Arts Education',
+  art:'Art and Design', cts:'Creative and Technology Studies', dt:'Design and Technology', homeec:'Home Economics', homeeconomics:'Home Economics' };
+
+function _zmKey(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+function _zmStageOf(levelName) {
+  const st = ZM_STAGES.find(s => s.levels.includes(levelName));
+  if (!st) return null;
+  if (st.id === 'frm') return (levelName === 'Form 1' || levelName === 'Form 2') ? 'jun' : 'sen';
+  return st.id;
+}
+function _zmSubjectChoices(levelName) {
+  const stage = _zmStageOf(levelName);
+  if (stage) return ZM_SUBJECTS[stage];
+  return [...new Set([].concat(ZM_SUBJECTS.pri, ZM_SUBJECTS.jun, ZM_SUBJECTS.sen))];
+}
+function _zmDefaultSubjects(levelName) { return [...(ZM_DEFAULT_SUBJECTS[_zmStageOf(levelName)] || ZM_DEFAULT_SUBJECTS.pri)]; }
+function _zmAllSubjects() { return [...new Set([].concat(ZM_SUBJECTS.ece, ZM_SUBJECTS.pri, ZM_SUBJECTS.jun, ZM_SUBJECTS.sen))]; }
+
+// Clean up a custom subject: fix shorthand/near-matches to the catalogue name, else tidy capitalisation.
+function _zmCleanSubject(raw) {
+  let t = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (!t) return { error: 'Type the subject name.' };
+  if (t.length > 40) return { error: 'Subject name is too long (40 characters max).' };
+  if (!/^[A-Za-z0-9 &'(),-]+$/.test(t)) return { error: 'Use letters, numbers and spaces only.' };
+  const k = _zmKey(t);
+  const cat = _zmAllSubjects().find(s => _zmKey(s) === k);
+  if (cat) return { name: cat, matched: true };
+  if (ZM_ALIASES[k]) return { name: ZM_ALIASES[k], matched: true };
+  t = t.split(' ').map(w => (w.length <= 3 && w === w.toUpperCase()) ? w : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+  return { name: t, matched: false };
+}
+
+// Small picker dialog built on the app's existing modal styles
+function _zmDialog(title, bodyHtml, onOk, okLabel) {
+  const old = document.getElementById('zmDialog'); if (old) old.remove();
+  const ov = document.createElement('div');
+  ov.id = 'zmDialog'; ov.className = 'modal-overlay';
+  ov.innerHTML = `<div class="modal" style="max-width:460px;border-top:4px solid var(--primary)">
+    <h3 style="margin-bottom:10px">${title}</h3>
+    <div id="zmDialogBody">${bodyHtml}</div>
+    <div id="zmDialogErr" style="color:var(--accent);font-size:13px;min-height:18px;margin-top:6px"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" type="button" id="zmCancel">Cancel</button>
+      <button class="btn btn-primary" type="button" id="zmOk">${okLabel || 'Save'}</button>
+    </div></div>`;
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.querySelector('#zmCancel').onclick = close;
+  ov.querySelector('#zmOk').onclick = () => {
+    const r = onOk(ov);
+    if (r && r.error) { ov.querySelector('#zmDialogErr').textContent = r.error; return; }
+    close();
+  };
+  return ov;
+}
+
 function renderGradesManager() {
   let html = '';
   config.grades.forEach((g, gi) => {
@@ -5353,12 +5447,15 @@ function renderGradesManager() {
       </div>
       <div id="gradeExp-${gi}" style="display:none;margin-top:12px">
         <div style="margin-bottom:12px">
-          <label style="font-weight:600;margin-bottom:4px;display:block">Sub-grades</label>
+          <label style="font-weight:600;margin-bottom:4px;display:block">Sub-grades (classes / streams)</label>
           <div id="subGrades-${gi}">
             ${g.subGrades.map((sg, sgi) => `<span style="display:inline-flex;align-items:center;gap:2px;background:var(--primary-light);color:#fff;padding:2px 8px;border-radius:12px;font-size:12px;margin:2px">${escHtml(sg)} <button onclick="removeSubGrade(${gi},${sgi})" style="background:none;color:#fff;font-size:14px;padding:0 2px">✕</button></span>`).join('')}
           </div>
-          <div style="display:flex;gap:4px;margin-top:4px">
-            <input type="text" id="newSubGrade-${gi}" placeholder="e.g. 7D" style="width:80px">
+          <div style="display:flex;gap:4px;margin-top:4px;align-items:center;flex-wrap:wrap">
+            <select id="newSubGrade-${gi}" style="width:140px">
+              <option value="">Pick a stream…</option>
+              ${_zmStreamOptions(g)}
+            </select>
             <button class="btn btn-outline btn-sm" onclick="addSubGrade(${gi})">+ Add</button>
           </div>
         </div>
@@ -5367,21 +5464,14 @@ function renderGradesManager() {
           <div id="gradeSubjects-${gi}">
             ${g.subjects.map((sub, si) => `<span style="display:inline-flex;align-items:center;gap:2px;background:var(--info-light);color:var(--text);padding:2px 8px;border-radius:12px;font-size:12px;margin:2px">${escHtml(sub)} <button onclick="removeGradeSubject(${gi},${si})" style="background:none;color:var(--accent);font-size:14px;padding:0 2px">✕</button></span>`).join('')}
           </div>
-          <div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap;align-items:center">
-            <select id="addSubjectSelect-${gi}" style="width:160px">
-              <option value="">Select or type new</option>
-              ${['Mathematics','English','Science','Social Studies','Creative Arts','ICT','Geography','History','Physics','Chemistry','Biology','Agriculture','Commerce','Accounting','Business Studies','Religious Education','Physical Education','Music','Art','French','Computer Science'].map(s => `<option value="${esc(s)}">${escHtml(s)}</option>`).join('')}
-            </select>
-            <input type="text" id="newSubjectText-${gi}" placeholder="Or type custom subject" style="width:150px">
-            <button class="btn btn-outline btn-sm" onclick="addGradeSubject(${gi})">+ Add Subject</button>
-          </div>
+          <div style="margin-top:6px"><button class="btn btn-outline btn-sm" onclick="addGradeSubject(${gi})">+ Add Subjects</button></div>
         </div>
       </div>
     </div>`;
   });
 
   if (config.grades.length === 0) {
-    html = '<div style="color:var(--text-light);text-align:center;padding:20px">No grades configured. Click "Add Grade" to start.</div>';
+    html = '<div style="color:var(--text-light);text-align:center;padding:20px">No grades configured. Click "Set up levels" to start.</div>';
   }
 
   document.getElementById('gradesManager').innerHTML = html;
@@ -5399,12 +5489,79 @@ function toggleGradeExpand(gi) {
   }
 }
 
-function addGrade() {
-  const name = prompt('Enter grade name (e.g. Grade 10):');
-  if (!name) return;
-  config.grades.push({ name: name.trim(), subGrades: [], subjects: ['Mathematics','English','Science'] });
+// ---- Streams: prefix (the level number, e.g. "7") + a letter, so names are always consistent (7A, 7B ...)
+function _zmStreamPrefix(levelName) {
+  const m = levelName.match(/(\d+)/);
+  if (m) return m[1];
+  return levelName.split(/\s+/).map(w => w[0]).join('').toUpperCase();   // "Baby Class" -> "BC"
+}
+function _zmStreamOptions(g) {
+  const p = _zmStreamPrefix(g.name);
+  return 'ABCDEFGH'.split('').filter(L => !g.subGrades.includes(p + L)).map(L => `<option value="${p + L}">${p + L}</option>`).join('');
+}
+function addSubGrade(gi) {
+  const val = document.getElementById('newSubGrade-' + gi).value;
+  if (!val) return showToast('Pick a stream from the list', 'error');
+  if (config.grades[gi].subGrades.includes(val)) return showToast('Already added', 'error');
+  config.grades[gi].subGrades.push(val);
+  config.grades[gi].subGrades.sort();
   saveConfig();
   renderGradesManager();
+  toggleGradeExpand(gi);
+}
+function removeSubGrade(gi, sgi) {
+  config.grades[gi].subGrades.splice(sgi, 1);
+  saveConfig();
+  renderGradesManager();
+  toggleGradeExpand(gi);
+}
+
+// ---- Levels: tick from the Zambian list instead of typing
+function _zmLevelCheckboxes(selected) {
+  return ZM_STAGES.map(st => `<div style="margin-bottom:10px">
+      <div style="font-weight:600;margin-bottom:4px">${st.label}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px 14px">${st.levels.map(l =>
+        `<label style="display:inline-flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" class="zm-level" value="${esc(l)}" ${selected.includes(l) ? 'checked' : ''}> ${escHtml(l)}</label>`).join('')}</div>
+    </div>`).join('');
+}
+// Tick the levels your school teaches. Order is promotion order (set by the lists above: ECE, Primary, Junior, Senior).
+function setupLevels() {
+  const current = config.grades.map(g => g.name);
+  const extras = current.filter(n => !ZM_STAGES.some(s => s.levels.includes(n)));   // custom levels from older setups stay
+  const body = `<p style="color:var(--text-light);font-size:13px;margin-bottom:10px">Tick the levels your school teaches. Existing streams, subjects and marks are kept.</p>${_zmLevelCheckboxes(current)}` +
+    (extras.length ? `<div style="font-size:12px;color:var(--text-light)">Also kept as they are: ${extras.map(escHtml).join(', ')}</div>` : '');
+  _zmDialog('🏫 Set up levels', body, ov => {
+    const picked = [...ov.querySelectorAll('.zm-level:checked')].map(c => c.value);
+    if (!picked.length && !extras.length) return { error: 'Tick at least one level.' };
+    const order = []; ZM_STAGES.forEach(s => s.levels.forEach(l => { if (picked.includes(l)) order.push(l); }));
+    const existing = {}; config.grades.forEach(g => { existing[g.name] = g; });
+    const out = order.map(n => existing[n] || { name: n, subGrades: [], subjects: _zmDefaultSubjects(n) });
+    config.grades.forEach(g => { if (!order.includes(g.name) && extras.includes(g.name)) out.push(g); });
+    const removed = config.grades.filter(g => !out.includes(g)).map(g => g.name);
+    if (removed.length && !confirm('These levels will be removed from the school setup: ' + removed.join(', ') + '. Continue?')) return { error: 'Not saved.' };
+    const added = out.filter(g => !existing[g.name]).length;
+    config.grades = out; saveConfig(); renderGradesManager();
+    showToast('Levels updated' + (added ? ' (' + added + ' new)' : ''));
+  }, 'Save levels');
+}
+function addGrade() {
+  const have = config.grades.map(g => g.name);
+  const opts = ZM_STAGES.map(st => {
+    const free = st.levels.filter(l => !have.includes(l));
+    return free.length ? `<optgroup label="${st.label}">${free.map(l => `<option value="${esc(l)}">${escHtml(l)}</option>`).join('')}</optgroup>` : '';
+  }).join('');
+  if (!opts) return showToast('All standard levels are already added', 'error');
+  _zmDialog('+ Add Grade', `<select id="zmGradePick" style="width:100%;padding:10px;font-size:15px"><option value="">Pick a level…</option>${opts}</select>`, ov => {
+    const name = ov.querySelector('#zmGradePick').value;
+    if (!name) return { error: 'Pick a level from the list.' };
+    const rec = { name, subGrades: [], subjects: _zmDefaultSubjects(name) };
+    // keep promotion order: slot it by its position in the catalogue
+    const flat = []; ZM_STAGES.forEach(s => s.levels.forEach(l => flat.push(l)));
+    let at = config.grades.length;
+    for (let i = 0; i < config.grades.length; i++) { const a = flat.indexOf(config.grades[i].name); if (a > flat.indexOf(name) && a !== -1) { at = i; break; } }
+    config.grades.splice(at, 0, rec);
+    saveConfig(); renderGradesManager();
+  }, 'Add');
 }
 
 // Order = promotion order (each level is promoted into the next one; the last becomes Alumni)
@@ -5412,22 +5569,6 @@ function moveGrade(gi, dir) {
   const j = gi + dir; if (j < 0 || j >= config.grades.length) return;
   const t = config.grades[gi]; config.grades[gi] = config.grades[j]; config.grades[j] = t;
   saveConfig(); renderGradesManager();
-}
-const _LEVELS_DEFAULT = 'Baby Class, Middle Class, Reception, Grade 1, Grade 2, Grade 3, Grade 4, Grade 5, Grade 6, Grade 7, Form 1, Form 2, Form 3, Form 4';
-// Type the levels in order, earliest first. Existing levels keep their streams/subjects; new ones are created; any existing level not listed stays at the end.
-function setupLevels() {
-  const cur = config.grades.map(g => g.name).join(', ');
-  const raw = prompt('Levels in promotion order, earliest first, separated by commas. Edit as needed:', config.grades.length > 3 ? cur : _LEVELS_DEFAULT);
-  if (raw === null) return;
-  const names = []; raw.split(',').map(x => x.trim()).filter(Boolean).forEach(n => { if (!names.includes(n)) names.push(n); });
-  if (!names.length) return;
-  if (names.some(n => /[.$#\[\]\/]/.test(n) || n.length > 40)) return showToast('Names can\u2019t contain . $ # [ ] / and must be under 40 characters.', 'error');
-  const existing = {}; config.grades.forEach(g => { existing[g.name] = g; });
-  const out = names.map(n => existing[n] || { name: n, subGrades: [], subjects: ['Mathematics', 'English', 'Science'] });
-  config.grades.forEach(g => { if (!names.includes(g.name)) out.push(g); });
-  const added = out.filter(g => !existing[g.name]).length;
-  config.grades = out; saveConfig(); renderGradesManager();
-  showToast('Levels updated' + (added ? ' (' + added + ' new)' : ''));
 }
 
 function removeGrade(gi) {
@@ -5437,36 +5578,224 @@ function removeGrade(gi) {
   renderGradesManager();
 }
 
-function addSubGrade(gi) {
-  const input = document.getElementById('newSubGrade-' + gi);
-  const val = input.value.trim();
-  if (!val) return;
-  config.grades[gi].subGrades.push(val);
-  saveConfig();
-  renderGradesManager();
-}
-
-function removeSubGrade(gi, sgi) {
-  config.grades[gi].subGrades.splice(sgi, 1);
-  saveConfig();
-  renderGradesManager();
-}
-
+// ---- Subjects: tick from the list for that level; "Other" is cleaned and matched against the list
 function addGradeSubject(gi) {
-  const selectVal = document.getElementById('addSubjectSelect-' + gi).value;
-  const textVal = document.getElementById('newSubjectText-' + gi).value.trim();
-  const subject = textVal || selectVal;
-  if (!subject) return showToast('Select or type a subject name','error');
-  if (config.grades[gi].subjects.includes(subject)) return showToast('Subject already exists','error');
-  config.grades[gi].subjects.push(subject);
-  saveConfig();
-  renderGradesManager();
+  const g = config.grades[gi];
+  const have = g.subjects.map(_zmKey);
+  const choices = _zmSubjectChoices(g.name).filter(s => !have.includes(_zmKey(s)));
+  const body = `<p style="color:var(--text-light);font-size:13px;margin-bottom:8px">Tick the subjects taught in ${escHtml(g.name)}.</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;max-height:40vh;overflow-y:auto">
+      ${choices.map(s => `<label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" class="zm-subj" value="${esc(s)}"> ${escHtml(s)}</label>`).join('') || '<em>All listed subjects already added.</em>'}
+    </div>
+    <div style="margin-top:12px"><label style="font-weight:600;display:block;margin-bottom:4px">Not in the list? (optional)</label>
+      <input type="text" id="zmOtherSubj" maxlength="40" placeholder="Type one subject, e.g. Chinese" style="width:100%"></div>`;
+  _zmDialog('+ Add Subjects', body, ov => {
+    const add = [...ov.querySelectorAll('.zm-subj:checked')].map(c => c.value);
+    const other = ov.querySelector('#zmOtherSubj').value.trim();
+    if (other) {
+      const r = _zmCleanSubject(other);
+      if (r.error) return { error: r.error };
+      add.push(r.name);
+    }
+    if (!add.length) return { error: 'Tick at least one subject.' };
+    let n = 0;
+    add.forEach(s => { if (!g.subjects.some(x => _zmKey(x) === _zmKey(s))) { g.subjects.push(s); n++; } });
+    saveConfig(); renderGradesManager(); toggleGradeExpand(gi);
+    showToast(n + ' subject' + (n === 1 ? '' : 's') + ' added');
+  }, 'Add');
 }
 
 function removeGradeSubject(gi, si) {
   config.grades[gi].subjects.splice(si, 1);
   saveConfig();
   renderGradesManager();
+  toggleGradeExpand(gi);
+}
+
+// ==================== STANDARDISE EXISTING NAMES ====================
+// One-off tool: rewrites every existing grade, stream and subject name to the catalogue spelling,
+// everywhere it is stored (setup, learners, marks for every term, teacher classes, fee overrides,
+// teacher assignments in the cloud).
+const _ZM_WORDNUM = { one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12 };
+function _zmCanonLevel(raw) {
+  const t = String(raw || '').trim();
+  if (!t) return null;
+  const k = _zmKey(t);
+  for (const st of ZM_STAGES) for (const l of st.levels) if (_zmKey(l) === k) return l;
+  const m = t.toLowerCase().replace(/[._-]/g, ' ').replace(/\s+/g, ' ').match(/^(grade|gr|g|class|std|standard|form|f)\s*0*(\d{1,2}|[a-z]+)$/);
+  if (m) {
+    const n = /^\d+$/.test(m[2]) ? parseInt(m[2], 10) : _ZM_WORDNUM[m[2]];
+    if (n) {
+      if ((m[1] === 'form' || m[1] === 'f') && n >= 1 && n <= 5) return 'Form ' + n;
+      if (m[1] !== 'form' && m[1] !== 'f' && n >= 1 && n <= 12) return 'Grade ' + n;
+    }
+  }
+  if (k === 'baby' || k === 'babies' || k === 'babyclas') return 'Baby Class';
+  if (k === 'middle' || k === 'middleclas') return 'Middle Class';
+  if (k === 'recep' || k === 'receptionclass') return 'Reception';
+  return null;
+}
+// Stream (e.g. "7a", "7 A", "A") -> prefix + capital letter for the given canonical level; null if it can't be read safely
+function _zmCanonStream(raw, levelName) {
+  const t = String(raw || '').trim();
+  if (!t) return null;
+  const p = _zmStreamPrefix(levelName);
+  if (t === p + t.slice(-1) && /[A-H]$/.test(t)) return t;
+  const m = t.replace(/\s+/g, '').match(/^(?:grade|gr|g|form|f)?(\d{1,2})?([A-Za-z])$/i);
+  if (!m) return null;
+  if (m[1] && /^\d+$/.test(p) && String(parseInt(m[1], 10)) !== p) return null;
+  const L = m[2].toUpperCase();
+  if (!/^[A-H]$/.test(L)) return null;
+  return p + L;
+}
+function _zmSubjectAuto(raw) {
+  const r = _zmCleanSubject(raw);
+  return (r && r.matched) ? r.name : null;
+}
+
+function _zmScan() {
+  const lv = new Map(), st = new Map(), sb = new Map();
+  const bump = (m, k, n) => m.set(k, (m.get(k) || 0) + (n || 0));
+  (config.grades || []).forEach(g => {
+    if (!lv.has(g.name)) lv.set(g.name, 0);
+    (g.subGrades || []).forEach(s => { const k = g.name + '\u0001' + s; if (!st.has(k)) st.set(k, 0); });
+    (g.subjects || []).forEach(s => { if (!sb.has(s)) sb.set(s, 0); });
+  });
+  students.forEach(s => {
+    if (!s) return;
+    if (s.class && s.class !== 'Alumni') { const [l, x] = String(s.class).split(' - '); bump(lv, l, 1); if (x) bump(st, l + '\u0001' + x, 1); }
+    const seen = new Set();
+    const add = arr => (arr || []).forEach(u => { if (u && u.name) seen.add(u.name); });
+    add(s.subjects); Object.values(s.terms || {}).forEach(add);
+    seen.forEach(n => bump(sb, n, 1));
+  });
+  return { lv, st, sb };
+}
+
+function openStandardiseNames() {
+  const role = (typeof currentUser !== 'undefined' && currentUser && currentUser.role) || '';
+  if (!['Administrator', 'Head Teacher'].includes(role)) return showToast('Only the Administrator or Head Teacher can standardise names', 'error');
+  if (students._childOnly || students.some(s => s && s._hidden)) return showToast('Open this on an account that can see every learner, then try again', 'error');
+  const { lv, st, sb } = _zmScan();
+  const levelRows = [], streamRows = [], subjRows = [];
+  let okLv = 0, okSb = 0;
+  lv.forEach((n, old) => { const c = _zmCanonLevel(old); if (c === old) okLv++; else levelRows.push({ old, n, auto: c }); });
+  sb.forEach((n, old) => { const c = _zmSubjectAuto(old); if (c === old) okSb++; else subjRows.push({ old, n, auto: c }); });
+  st.forEach((n, key) => {
+    const [ol, os] = key.split('\u0001'); const nl = _zmCanonLevel(ol) || ol;
+    const c = _zmCanonStream(os, nl);
+    if (c && c !== os) streamRows.push({ ol, os, n, auto: c });
+  });
+  if (!levelRows.length && !streamRows.length && !subjRows.length) return showToast('Every grade, stream and subject already uses the standard names', 'info');
+
+  const lvlOpts = sel => '<option value="">Keep as is</option>' + ZM_STAGES.map(s => `<optgroup label="${s.label}">${s.levels.map(l => `<option value="${esc(l)}" ${sel === l ? 'selected' : ''}>${escHtml(l)}</option>`).join('')}</optgroup>`).join('');
+  const subOpts = sel => '<option value="">Keep as is</option>' + _zmAllSubjects().map(s => `<option value="${esc(s)}" ${sel === s ? 'selected' : ''}>${escHtml(s)}</option>`).join('');
+  const row = (label, n, ctl) => `<tr><td style="padding:4px 6px">${label}</td><td style="padding:4px 6px;color:var(--text-light);white-space:nowrap">${n ? n + ' learner' + (n === 1 ? '' : 's') : ''}</td><td style="padding:4px 6px">${ctl}</td></tr>`;
+  let body = `<p style="color:var(--text-light);font-size:13px;margin-bottom:8px">This renames names that already exist to the standard spelling, everywhere they are used. Marks and fees stay with each learner. A backup file is downloaded first.</p>`;
+  if (levelRows.length) body += `<div style="font-weight:600;margin:8px 0 2px">Grades</div><table style="width:100%">${levelRows.map((r, i) => row(`"${escHtml(r.old)}" →`, r.n, `<select class="zm-map-lv" data-old="${esc(r.old)}" style="width:100%">${lvlOpts(r.auto)}</select>`)).join('')}</table>`;
+  if (streamRows.length) body += `<div style="font-weight:600;margin:8px 0 2px">Streams</div><table style="width:100%">${streamRows.map(r => row(`${escHtml(r.ol)}: "${escHtml(r.os)}" → <strong>${escHtml(r.auto)}</strong>`, r.n, '')).join('')}</table>`;
+  if (subjRows.length) body += `<div style="font-weight:600;margin:8px 0 2px">Subjects</div><table style="width:100%">${subjRows.map(r => row(`"${escHtml(r.old)}" →`, r.n, `<select class="zm-map-sb" data-old="${esc(r.old)}" style="width:100%">${subOpts(r.auto)}</select>`)).join('')}</table>`;
+  body += `<div style="font-size:12px;color:var(--text-light);margin-top:8px">${okLv + okSb} names are already correct. Anything left on "Keep as is" is not changed.</div>`;
+
+  const ov = _zmDialog('🧹 Standardise names', body, ov => {
+    const levelMap = {}, subjectMap = {};
+    ov.querySelectorAll('.zm-map-lv').forEach(s => { if (s.value && s.value !== s.dataset.old) levelMap[s.dataset.old] = s.value; });
+    ov.querySelectorAll('.zm-map-sb').forEach(s => { if (s.value && s.value !== s.dataset.old) subjectMap[s.dataset.old] = s.value; });
+    setTimeout(() => requestApproval('Standardise grade, stream and subject names for the whole school', () => _zmApplyStandardise(levelMap, subjectMap), true), 50);
+  }, 'Review & apply');
+  ov.firstElementChild.style.maxWidth = '600px';
+}
+
+function _zmDownloadBackup() {
+  try {
+    const snap = { exportedAt: new Date().toISOString(), config: JSON.parse(JSON.stringify(config)),
+      students: JSON.parse(JSON.stringify(students)).map(s => { if (s && s.photo && s.photo.length > 500) s.photo = '__photo__'; return s; }) };
+    ['appPin', 'headTeacherPin', 'masterPin'].forEach(k => delete snap.config[k]);
+    delete snap.config.teachers;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(snap)], { type: 'application/json' }));
+    a.download = 'backup-before-standardise-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+  } catch (e) { console.warn('[standardise] backup failed', e); }
+}
+
+async function _zmApplyStandardise(levelMapIn, subjectMapIn) {
+  _zmDownloadBackup();
+  const mapLevel = l => levelMapIn[l] || l;
+  const mapSubject = s => subjectMapIn[s] || _zmSubjectAuto(s) || s;
+  const mapStream = (ol, os) => { const nl = mapLevel(ol); return _zmCanonStream(os, nl) || os; };
+  const mapClass = c => {
+    if (!c || c === 'Alumni') return c;
+    const [l, x] = String(c).split(' - ');
+    const nl = mapLevel(l);
+    return x ? nl + ' - ' + mapStream(l, x) : nl;
+  };
+  const mergeMarks = arr => {           // same subject twice after renaming -> keep the one that has marks
+    const out = [], idx = {};
+    (arr || []).forEach(u => {
+      if (!u) return;
+      const k = _zmKey(u.name);
+      if (!(k in idx)) { idx[k] = out.length; out.push(u); return; }
+      const cur = out[idx[k]], n = x => ['ca1', 'ca2', 'final'].filter(f => x[f] !== '' && x[f] != null).length;
+      if (n(u) > n(cur)) out[idx[k]] = u;
+    });
+    return out;
+  };
+  const fixArr = arr => mergeMarks((arr || []).map(u => (u && u.name) ? Object.assign({}, u, { name: mapSubject(u.name) }) : u));
+
+  pushUndo();
+  let changedLearners = 0;
+  students.forEach(s => {
+    if (!s) return;
+    const before = JSON.stringify([s.class, s.subjects, s.terms]);
+    s.class = mapClass(s.class);
+    s.subjects = fixArr(s.subjects);
+    if (s.terms) Object.keys(s.terms).forEach(t => { s.terms[t] = fixArr(s.terms[t]); });
+    if (JSON.stringify([s.class, s.subjects, s.terms]) !== before) changedLearners++;
+  });
+
+  // Setup: rebuild grades, merging any that now share a name
+  const out = [];
+  (config.grades || []).forEach(g => {
+    const nn = mapLevel(g.name);
+    let t = out.find(x => x.name === nn);
+    if (!t) { t = { name: nn, subGrades: [], subjects: [] }; out.push(t); }
+    (g.subGrades || []).forEach(s => { const v = mapStream(g.name, s); if (!t.subGrades.includes(v)) t.subGrades.push(v); });
+    (g.subjects || []).forEach(s => { const v = mapSubject(s); if (!t.subjects.some(x => _zmKey(x) === _zmKey(v))) t.subjects.push(v); });
+  });
+  out.forEach(g => g.subGrades.sort());
+  config.grades = out;
+
+  (config.teachers || []).forEach(t => { if (t && t.class) t.class = mapClass(t.class); });
+  const pc = config.feeStructure && config.feeStructure.perClass;
+  if (pc) { const np = {}; Object.keys(pc).forEach(k => { const nk = mapClass(k); np[nk] = np[nk] || pc[k]; }); config.feeStructure.perClass = np; }
+
+  saveConfig();
+  saveStudents();
+
+  // Teacher assignments live in the cloud, keyed by class / grade / subject name
+  let asgNote = '';
+  try {
+    if (window._fbDb && window._fbAuth && window._fbAuth.currentUser) {
+      const base = _fbSchoolPath() + '/assignments';
+      const all = (await _dbRead(base)) || {};
+      let n = 0;
+      for (const uid of Object.keys(all)) {
+        const a = all[uid]; if (!a || typeof a !== 'object') continue;
+        const rec = Object.assign({}, a);
+        const re = (obj, fn) => { if (!obj) return obj; const o = {}; Object.keys(obj).forEach(k => { o[fn(k)] = obj[k]; }); return o; };
+        if (a.classes) rec.classes = re(a.classes, mapClass);
+        if (a.grades) rec.grades = re(a.grades, mapLevel);
+        if (a.subjects) rec.subjects = re(a.subjects, mapSubject);
+        if (JSON.stringify(rec) !== JSON.stringify(a)) { await _dbWrite(base + '/' + uid, rec); n++; }
+      }
+      if (n) asgNote = ' Teacher assignments updated (' + n + ').';
+    }
+  } catch (e) { asgNote = ' Could not update teacher assignments (' + String((e && (e.code || e.message)) || 'error') + ') - open each teacher under Class assignments and re-tick.'; console.warn('[standardise] assignments', e); }
+
+  renderGradesManager();
+  if (typeof refreshCurrentSection === 'function') refreshCurrentSection();
+  showToast('Names standardised (' + changedLearners + ' learner records updated).' + asgNote);
 }
 
 // ==================== FEE STRUCTURE ====================
