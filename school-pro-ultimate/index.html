@@ -1132,17 +1132,14 @@ tr:hover td { background:rgba(108,52,131,0.04); }
         <!-- Teachers -->
         <div class="card">
           <div class="card-header"><span class="card-title">👩‍🏫 Teacher &amp; Staff Accounts</span><button class="btn btn-primary btn-sm" onclick="addTeacher()">+ Add Teacher / Staff</button></div>
-          <p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Add teaching and non-teaching staff here (use the "Other" designation for support staff not listed). Use the 💰 button on each row to record and review their payments.</p>
-          <div style="display:flex;justify-content:space-between;padding:6px 0 10px;font-weight:700;border-bottom:1px solid var(--border);margin-bottom:6px">
-            <span>Total Paid to Staff</span><span id="teachersTotalPaid">K0</span>
-          </div>
+          <p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Add teaching and non-teaching staff here (use the "Other" designation for support staff not listed). Salaries and payments are handled in <strong>Monthly Payroll</strong> below. Staff set their own PIN under My PIN.</p>
           <div id="teachersList"></div>
         </div>
 
         <!-- Monthly Payroll -->
         <div class="card" id="payrollCard">
           <div class="card-header" style="flex-wrap:wrap;gap:8px"><span class="card-title">💵 Monthly Payroll</span><input type="month" id="payrollMonth" onchange="setPayrollMonth(this.value)" style="width:auto"></div>
-          <p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Set each person's basic salary, allowances and deductions (Administrator only). Net = basic + allowances − deductions. Use <strong>Pay</strong> to record the month's salary; payments made with the 💰 button above are not counted here unless recorded from this table.</p>
+          <p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Set each person's basic salary, allowances and deductions (Administrator only). Net = basic + allowances − deductions. Use <strong>Pay</strong> to record the month's salary. <strong>History</strong> shows every payment, receipt and pay slip, and lets you record extra payments (bonus, advance) that are not part of the monthly salary.</p>
           <div style="display:flex;gap:16px;flex-wrap:wrap;padding:6px 0 10px;border-bottom:1px solid var(--border);margin-bottom:8px;font-weight:700">
             <span>Net due: <span id="payrollDue">K0</span></span>
             <span style="color:var(--success)">Paid: <span id="payrollPaid">K0</span></span>
@@ -5272,9 +5269,6 @@ function renderTeachers() {
         <option value="">No class</option>
         ${getAllClasses().map(c => `<option value="${esc(c)}" ${t.class===c?'selected':''}>${escHtml(c)}</option>`).join('')}
       </select>
-      <input type="password" value="" onchange="updateTeacherPin(${ti},this.value)" placeholder="${t.pin ? 'PIN set — re-enter to change' : 'Set PIN'}" style="width:150px" maxlength="6" title="Staff PIN (hashed; used to sign for payments)">
-      <span style="font-size:11px;color:var(--text-light);white-space:nowrap">Paid: K${teacherTotalPaid(t).toLocaleString()}</span>
-      <button class="btn btn-success btn-sm" onclick="openTeacherPaymentModal(${ti})" title="Record / view payments">💰 Payments</button>
       <button class="btn btn-danger btn-sm" onclick="config.teachers.splice(${ti},1);saveConfig();renderTeachers()" title="Remove">✕</button>
     </div>`;
   });
@@ -5324,14 +5318,15 @@ function renderPayroll() {
       : paidM > 0 ? `<span style="color:var(--warning);font-weight:600">Part paid · K${left.toLocaleString()} left</span>`
       : '<span style="color:var(--accent);font-weight:600">Unpaid</span>';
     const field = (f, v) => `<input type="number" min="0" value="${v || ''}" placeholder="0" ${canEdit ? '' : 'disabled'} onchange="setPayrollField(${ti},'${f}',this.value)" style="width:84px">`;
+    const other = (t.paymentHistory || []).filter(p => !p.period).reduce((x, p) => x + (p.amount || 0), 0);
     return `<tr>
       <td style="min-width:120px"><strong>${escHtml(t.name || 'Unnamed')}</strong><div style="font-size:11px;color:var(--text-light)">${escHtml(t.designation || '')}</div></td>
       <td>${field('basicSalary', t.basicSalary)}</td>
       <td>${field('allowances', t.allowances)}</td>
       <td>${field('deductions', t.deductions)}</td>
       <td style="white-space:nowrap;font-weight:700">K${net.toLocaleString()}</td>
-      <td style="white-space:nowrap">${status}</td>
-      <td>${net > 0 && left > 0 ? `<button class="btn btn-success btn-sm" onclick="payTeacherSalary(${ti})">Pay K${left.toLocaleString()}</button>` : ''}</td>
+      <td style="white-space:nowrap">${status}${other > 0 ? `<div style="font-size:11px;color:var(--text-light)">+K${other.toLocaleString()} other payments</div>` : ''}</td>
+      <td style="white-space:nowrap">${net > 0 && left > 0 ? `<button class="btn btn-success btn-sm" onclick="payTeacherSalary(${ti})">Pay K${left.toLocaleString()}</button> ` : ''}<button class="btn btn-outline btn-sm" onclick="openTeacherPaymentModal(${ti})" title="All payments, receipts and pay slips">📋 History</button></td>
     </tr>`;
   }).join('');
   list.innerHTML = rows
@@ -5452,11 +5447,12 @@ function renderMyPay() {
       ${rows || '<div style="color:var(--text-light);margin-top:8px">No payments recorded yet.</div>'}
     </div>`;
 }
-function openMyPaySign(ti, ri) {
+async function openMyPaySign(ti, ri) {
   const t = config.teachers[ti];
   const p = t && t.paymentHistory && t.paymentHistory[ri];
   if (!p) return;
-  const hasPin = !!(t.pin && String(t.pin).trim());
+  let hasPin = false;
+  try { hasPin = !!(await _ownPinRecord()); } catch (e) {}
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.id = 'myPaySignModal';
@@ -5471,8 +5467,9 @@ function openMyPaySign(ti, ri) {
           <button class="btn btn-outline" onclick="document.getElementById('myPaySignModal').remove()">Cancel</button>
           <button class="btn btn-success" onclick="confirmMyPaySign(${ti},${ri})">Sign &amp; Confirm</button>
         </div>` : `
-        <p style="font-size:13px;color:var(--accent);margin-bottom:12px">You don't have a staff PIN yet. Ask your Administrator to set one on your row, then come back to sign.</p>
-        <div class="modal-actions"><button class="btn btn-outline" onclick="document.getElementById('myPaySignModal').remove()">Close</button></div>`}
+        <p style="font-size:13px;color:var(--accent);margin-bottom:12px">You haven't set your PIN yet. Set one now, then come back to sign.</p>
+        <div class="modal-actions"><button class="btn btn-outline" onclick="document.getElementById('myPaySignModal').remove()">Close</button> <button class="btn btn-primary" onclick="document.getElementById('myPaySignModal').remove();openPinSetup(()=>openMyPaySign(${ti},${ri}))">Set my PIN</button></div>
+      `}
     </div>`;
   document.body.appendChild(modal);
   const pin = document.getElementById('myPayPin');
@@ -5485,7 +5482,7 @@ async function confirmMyPaySign(ti, ri) {
   const id = p ? _payIdOf(p) : '';
   if (!p || !uid || !id || t.firebaseUid !== uid) return;
   const entered = (document.getElementById('myPayPin').value || '').trim();
-  const ok = entered && await pinMatches(entered, t.pin);
+  const ok = entered && await _verifyOwnPin(entered);
   if (!ok) { document.getElementById('myPayErr').textContent = 'Incorrect PIN. Try again.'; return; }
   const rec = { signedAt: new Date().toISOString(), via: 'pin' };
   window._mySigs[id] = rec;
@@ -5570,7 +5567,7 @@ function openTeacherPaymentModal(ti) {
   modal.id = 'teacherPayModal';
   modal.innerHTML = `
     <div class="modal" style="max-width:460px">
-      <h3>💰 Payments — ${escHtml(t.name || 'Staff Member')}</h3>
+      <h3>📋 Payment History — ${escHtml(t.name || 'Staff Member')}</h3>
       <p style="font-size:12px;color:var(--text-light);margin:0 0 12px">${escHtml(t.designation || '')}</p>
       <div style="display:flex;justify-content:space-between;padding:6px 0;font-weight:700;border-top:1px solid var(--border);border-bottom:1px solid var(--border);margin-bottom:12px">
         <span>Total Paid</span><span id="tpTotal">K${teacherTotalPaid(t).toLocaleString()}</span>
@@ -5579,10 +5576,10 @@ function openTeacherPaymentModal(ti) {
         <div class="form-group"><label>Amount</label><input type="number" id="tpAmount" placeholder="Amount"></div>
         <div class="form-group"><label>Date</label><input type="date" id="tpDate"></div>
       </div>
-      <div class="form-group"><label>Note <span style="font-size:11px;color:var(--text-light)">(e.g. March salary, transport allowance)</span></label>
-        <input type="text" id="tpNote" placeholder="e.g. March salary">
+      <div class="form-group"><label>Extra payment note <span style="font-size:11px;color:var(--text-light)">(bonus, advance, transport…)</span></label>
+        <input type="text" id="tpNote" placeholder="e.g. Transport allowance">
       </div>
-      <button class="btn btn-success btn-sm" onclick="recordTeacherPayment(${ti})">Record Payment</button>
+      <button class="btn btn-success btn-sm" onclick="recordTeacherPayment(${ti})">Record Extra Payment</button>
       <div style="margin-top:16px">
         <strong>Payment History</strong>
         <div class="table-wrap" style="margin-top:8px" id="tpHistoryWrap"></div>
@@ -5658,7 +5655,7 @@ function openReceiptAcknowledgeModal(ti, ri) {
   const t = config.teachers[ti];
   if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
   const p = t.paymentHistory[ri];
-  const hasPin = !!(t.pin && String(t.pin).trim());
+  const hasPin = false; // staff sign on their own device with their own PIN (My Pay); the admin can only confirm manually
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.id = 'ackModal';
@@ -5679,7 +5676,7 @@ function openReceiptAcknowledgeModal(ti, ri) {
           <button class="btn btn-success" onclick="confirmPaymentReceipt(${ti},${ri})">Sign & Confirm</button>
         </div>
       ` : `
-        <p style="font-size:12px;color:var(--accent);margin-bottom:12px">⚠ No Staff PIN is set for ${escHtml(t.name || 'this staff member')} yet, so they can't sign digitally. Set one in Teacher &amp; Staff Accounts for next time, or the admin can confirm manually below (requires admin approval).</p>
+        <p style="font-size:12px;color:var(--accent);margin-bottom:12px">The staff member can sign this themselves in <strong>My Pay</strong> with their own PIN. If they can't, you can confirm manually below (requires approval).</p>
         <div class="modal-actions">
           <button class="btn btn-outline" onclick="document.getElementById('ackModal').remove()">Not now</button>
           <button class="btn btn-warning" onclick="confirmPaymentReceiptManual(${ti},${ri})">Confirm Manually</button>
