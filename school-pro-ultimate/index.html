@@ -695,12 +695,11 @@ tr:hover td { background:rgba(108,52,131,0.04); }
       <label>School Name</label>
       <input type="text" id="wizSchoolName" placeholder="e.g. Lusaka Academy">
     </div>
-    <label>Application PIN <span style="font-size:11px;color:var(--text-light)">(staff use this to unlock the app)</span></label>
-    <input type="password" id="wizAppPin" maxlength="6" placeholder="4–6 digits">
-    <label>Head Teacher PIN</label>
-    <input type="password" id="wizHeadPin" maxlength="6" placeholder="4–6 digits">
-    <label>Master PIN <span style="font-size:11px;color:var(--text-light)">(admin override)</span></label>
-    <input type="password" id="wizMasterPin" maxlength="6" placeholder="4–6 digits">
+    <label>Administrator PIN <span style="font-size:11px;color:var(--text-light)">(for you only)</span></label>
+    <input type="password" id="wizMasterPin" maxlength="6" inputmode="numeric" autocomplete="off" placeholder="4–6 digits">
+    <label>Repeat Administrator PIN</label>
+    <input type="password" id="wizMasterPin2" maxlength="6" inputmode="numeric" autocomplete="off" placeholder="4–6 digits">
+    <p style="font-size:12px;color:var(--text-light);margin:8px 0 0">Teachers, the Head Teacher and other staff set their own PIN from <b>My PIN</b> when they need one.</p>
     <div style="margin-top:20px">
       <button class="btn btn-primary" onclick="completeSetup()" style="width:100%">Complete Setup</button>
     </div>
@@ -713,7 +712,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
     <!-- Sidebar -->
     <nav class="sidebar" id="sidebar">
       <div class="sidebar-logo">🎓 <span>School Pro</span> Pro</div>
-      <div class="nav-item active" onclick="showSection('dashboard')" data-section="dashboard"><span class="icon">📊</span> Dashboard</div>
+      <div class="nav-item active" onclick="showSection('dashboard')" data-section="dashboard"><span class="icon">📊</span> Dashboard <span id="lrBadge" style="display:none;background:#E74C3C;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:6px"></span></div>
       <div class="nav-item" onclick="showSection('database')" data-section="database"><span class="icon">🗃️</span> Database</div>
       <div class="nav-item" onclick="showSection('register')" data-section="register"><span class="icon">➕</span> Register</div>
       <div class="nav-item" onclick="showSection('assessments')" data-section="assessments"><span class="icon">📝</span> Assessments</div>
@@ -726,6 +725,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
       <div class="nav-item" onclick="showSection('reports')" data-section="reports"><span class="icon">📄</span> Reports</div>
       <div class="nav-item" onclick="showSection('notices')" data-section="notices"><span class="icon">📌</span> Staff Notices <span id="noticeBadge" style="display:none;background:#E74C3C;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:6px"></span></div>
       <div class="nav-item" onclick="showSection('inbox')" data-section="inbox"><span class="icon">📥</span> Inbox <span id="inbBadge" style="display:none;background:#E74C3C;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:6px"></span></div>
+      <div class="nav-item" onclick="showSection('mypay')" data-section="mypay" style="display:none"><span class="icon">💵</span> My Pay</div>
       <div class="nav-item" onclick="showSection('staff')" data-section="staff"><span class="icon">👥</span> Staff</div>
       <div class="nav-item" onclick="showSection('admin')" data-section="admin"><span class="icon">⚙️</span> Admin Settings</div>
       <div style="margin-top:auto;padding:16px 20px;border-top:1px solid rgba(255,255,255,0.1)">
@@ -737,6 +737,9 @@ tr:hover td { background:rgba(108,52,131,0.04); }
         <div id="subStatusBadge" style="margin-top:6px;font-size:11px;display:flex;align-items:center;gap:4px">⚪ <span style="color:#7F8C8D">No plan</span></div>
         <div style="margin-top:12px;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="openMyPin()">
           <span>🔑</span> <span>My PIN</span>
+        </div>
+        <div style="margin-top:12px;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="openMySettings()">
+          <span>⚙️</span> <span>My Settings</span>
         </div>
         <div style="margin-top:12px;display:flex;align-items:center;gap:8px;cursor:pointer" onclick="logoutEdu()">
           <span>🚪</span> <span>Logout</span>
@@ -756,6 +759,10 @@ tr:hover td { background:rgba(108,52,131,0.04); }
       <div class="section active" id="sec-dashboard">
         <div class="section-title">📊 Dashboard</div>
         <div class="card" id="dashAccountCard" style="display:none;align-items:center;gap:14px;padding:14px 18px"></div>
+        <div class="card" id="linkRequestsCard" style="display:none">
+          <div class="card-header"><span class="card-title">🔗 Parent Link Requests</span></div>
+          <div id="linkRequestsList"></div>
+        </div>
         <div class="stats-grid" id="dashStats"></div>
         <div class="card" style="cursor:pointer;text-align:center;padding:40px" onclick="showSection('database')">
           <div style="font-size:48px;margin-bottom:8px">🗃️</div>
@@ -763,6 +770,12 @@ tr:hover td { background:rgba(108,52,131,0.04); }
           <div style="color:var(--text-light);margin-top:4px">Click to view, search and manage all students</div>
         </div>
         <div class="stats-grid" id="dashQuickStats"></div>
+      </div>
+
+      <!-- My Pay (staff self-service) -->
+      <div class="section" id="sec-mypay">
+        <div class="section-title">💵 My Pay</div>
+        <div id="myPayBody"></div>
       </div>
 
       <!-- Database Section -->
@@ -1031,20 +1044,18 @@ tr:hover td { background:rgba(108,52,131,0.04); }
         <div class="card">
           <div class="card-header"><span class="card-title">🔐 PIN Management</span></div>
           <div class="form-group" style="margin-bottom:10px">
-            <label>Current Master PIN (required to change PINs)</label>
+            <label>Current Administrator PIN (required to change it)</label>
             <div style="display:flex;gap:8px;align-items:center">
-              <input type="password" id="adminCurrentMasterPin" maxlength="6" placeholder="Enter current Master PIN" style="max-width:200px">
+              <input type="password" id="adminCurrentMasterPin" maxlength="6" placeholder="Enter current Administrator PIN" style="max-width:200px">
               <button class="btn btn-outline btn-sm" onclick="unlockPinForm()">Unlock</button>
             </div>
             <div id="pinUnlockError" style="color:#E74C3C;font-size:12px;margin-top:4px"></div>
           </div>
           <div id="pinChangeForm" style="display:none">
             <div class="form-row">
-              <div class="form-group"><label>New App PIN</label><input type="password" id="adminAppPin" maxlength="6" placeholder="Leave blank to keep"></div>
-              <div class="form-group"><label>New Head Teacher PIN</label><input type="password" id="adminHeadPin" maxlength="6" placeholder="Leave blank to keep"></div>
-              <div class="form-group"><label>New Master PIN</label><input type="password" id="adminMasterPin" maxlength="6" placeholder="Leave blank to keep"></div>
+              <div class="form-group"><label>New Administrator PIN <span style="font-size:11px;color:var(--text-light)">(staff set their own under My PIN)</span></label><input type="password" id="adminMasterPin" maxlength="6" placeholder="Leave blank to keep"></div>
             </div>
-            <button class="btn btn-primary btn-sm" onclick="savePins()">Save PINs</button>
+            <button class="btn btn-primary btn-sm" onclick="savePins()">Save PIN</button>
           </div>
         </div>
 
@@ -1058,7 +1069,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
 
         <!-- Idle Auto-Lock -->
         <div class="card">
-          <div class="card-header"><span class="card-title">⏱️ Idle Auto-Lock</span></div>
+          <div class="card-header"><span class="card-title">⏱️ Idle Auto-Lock — School Default</span></div>
           <div class="form-group">
             <label>Lock screen after inactivity</label>
             <select id="adminIdleTimeout" onchange="saveIdleTimeout()">
@@ -1069,7 +1080,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
               <option value="1800000">30 minutes</option>
             </select>
           </div>
-          <p style="font-size:12px;color:var(--text-light);margin:0">Auto-locks the app when the device is left unattended.</p>
+          <p style="font-size:12px;color:var(--text-light);margin:0">Used for anyone who has not chosen their own time in My Settings.</p>
         </div>
 
         <!-- Grades & Subjects -->
@@ -1126,6 +1137,18 @@ tr:hover td { background:rgba(108,52,131,0.04); }
             <span>Total Paid to Staff</span><span id="teachersTotalPaid">K0</span>
           </div>
           <div id="teachersList"></div>
+        </div>
+
+        <!-- Monthly Payroll -->
+        <div class="card" id="payrollCard">
+          <div class="card-header" style="flex-wrap:wrap;gap:8px"><span class="card-title">💵 Monthly Payroll</span><input type="month" id="payrollMonth" onchange="setPayrollMonth(this.value)" style="width:auto"></div>
+          <p style="font-size:12px;color:var(--text-light);margin:0 0 10px">Set each person's basic salary, allowances and deductions (Administrator only). Net = basic + allowances − deductions. Use <strong>Pay</strong> to record the month's salary; payments made with the 💰 button above are not counted here unless recorded from this table.</p>
+          <div style="display:flex;gap:16px;flex-wrap:wrap;padding:6px 0 10px;border-bottom:1px solid var(--border);margin-bottom:8px;font-weight:700">
+            <span>Net due: <span id="payrollDue">K0</span></span>
+            <span style="color:var(--success)">Paid: <span id="payrollPaid">K0</span></span>
+            <span style="color:var(--accent)">Outstanding: <span id="payrollOut">K0</span></span>
+          </div>
+          <div class="table-wrap" id="payrollList"></div>
         </div>
 
         <!-- Pointer to dedicated Staff page (cloud logins + roles moved out of Settings).
@@ -1187,7 +1210,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
   <!-- Mobile Nav -->
   <div class="mobile-nav">
     <div class="mobile-nav-inner" id="mobileNavInner">
-      <div class="mob-nav-item active" onclick="showSection('dashboard')" data-section="dashboard"><span class="icon">📊</span>Home</div>
+      <div class="mob-nav-item active" onclick="showSection('dashboard')" data-section="dashboard"><span class="icon">📊</span>Home <span id="lrBadgeM" style="display:none;background:#E74C3C;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:6px"></span></div>
       <div class="mob-nav-item" onclick="showSection('database')" data-section="database"><span class="icon">🗃️</span>DB</div>
       <div class="mob-nav-item" onclick="showSection('register')" data-section="register"><span class="icon">➕</span>Add</div>
       <div class="mob-nav-item" onclick="showSection('finance')" data-section="finance"><span class="icon">💰</span>Finance</div>
@@ -1223,6 +1246,17 @@ tr:hover td { background:rgba(108,52,131,0.04); }
     <div class="modal-actions">
       <button class="btn btn-outline" onclick="closePinSetup()">Cancel</button>
       <button class="btn btn-primary" onclick="savePinSetup()">Save PIN</button>
+    </div>
+  </div>
+</div>
+
+<div id="mySettingsDialog" style="display:none" class="modal-overlay">
+  <div class="modal" style="max-width:420px;border-top:4px solid var(--primary)">
+    <h3>⚙️ My Settings</h3>
+    <p style="color:var(--text-light);font-size:13px;margin-bottom:10px">These apply only to you on this device. School-wide settings stay under Admin Settings.</p>
+    <div id="mySettingsBody"></div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="closeMySettings()">Done</button>
     </div>
   </div>
 </div>
@@ -1777,6 +1811,227 @@ function _fbUpdateSyncBadge(state) {
   };
 }
 
+// ==================== PAYROLL PRIVACY SPLIT ====================
+// Salaries, payment histories and staff PINs used to live inside config.teachers,
+// and config is readable by every login in the school (including Parents). They now
+// live in <school>/payroll/<pid>, which only the Administrator, the Head Teacher and
+// the staff member the row belongs to can read (see the database rules).
+// In memory everything still looks like before (config.teachers[i].paymentHistory
+// etc.), so the rest of the app is unchanged: we strip these fields when config is
+// written to the cloud and merge them back in when it is read.
+// Safety: nothing is stripped until payroll has been copied over successfully AND
+// config.payrollSplit is true. If the new rules aren't published yet, the app just
+// keeps working the old way.
+const PAYROLL_FIELDS = ['pin', 'basicSalary', 'allowances', 'deductions', 'paymentHistory'];
+let _payrollCache = {};        // pid -> record, mirror of the cloud node
+let _payrollLoaded = false;    // first snapshot of the payroll node has arrived
+let _payrollAuthority = false; // this login may read/write the whole payroll node
+let _payrollLast = {};         // pid -> last JSON pushed (skip identical writes)
+let _payrollListening = false;
+let _payrollBootBusy = false;
+
+function _newPid() { return 'p' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function _payrollRec(t) {
+  return {
+    uid: t.firebaseUid || '',
+    pin: t.pin || '',
+    basicSalary: t.basicSalary || 0,
+    allowances: t.allowances || 0,
+    deductions: t.deductions || 0,
+    paymentHistory: Array.isArray(t.paymentHistory) ? t.paymentHistory : []
+  };
+}
+function _payrollFields(rec) {
+  return {
+    pin: rec.pin || '',
+    basicSalary: rec.basicSalary || 0,
+    allowances: rec.allowances || 0,
+    deductions: rec.deductions || 0,
+    paymentHistory: Array.isArray(rec.paymentHistory) ? rec.paymentHistory : (rec.paymentHistory ? Object.values(rec.paymentHistory) : [])
+  };
+}
+function _stripTeachers(list) {
+  return (list || []).map(t => { const c = Object.assign({}, t); PAYROLL_FIELDS.forEach(f => delete c[f]); return c; });
+}
+function _applyPayrollToConfig() {
+  if (typeof config === 'undefined' || !config || !Array.isArray(config.teachers)) return;
+  config.teachers.forEach(t => {
+    const r = t && t.pid && _payrollCache[t.pid];
+    if (r) Object.assign(t, _payrollFields(r));
+  });
+}
+// False while a split school's payroll hasn't finished loading on this device — money
+// actions wait for it so nothing recorded in that window can be lost.
+function _payrollGuard() {
+  if (typeof config === 'undefined' || !config || !config.payrollSplit) return true;
+  if (_payrollAuthority && _payrollLoaded) return true;
+  showToast('Payroll is still loading — try again in a moment.', 'error');
+  return false;
+}
+function _syncPayrollToCloud() {
+  if (!config.payrollSplit || !_payrollAuthority || !_payrollLoaded) return;
+  (config.teachers || []).forEach(t => {
+    if (!t || !t.pid) return;
+    const clean = JSON.parse(JSON.stringify(_payrollRec(t)));
+    const j = JSON.stringify(clean);
+    if (_payrollLast[t.pid] === j) return;
+    _payrollLast[t.pid] = j;
+    _payrollCache[t.pid] = clean;
+    _fbWrite(_fbSchoolPath() + '/payroll/' + t.pid, clean);
+  });
+}
+function _payrollMergeRec(cur, inc) {
+  if (!cur) return inc;
+  const seen = new Set((cur.paymentHistory || []).map(p => (p.recordedAt || '') + '|' + p.amount));
+  const extra = (inc.paymentHistory || []).filter(p => !seen.has((p.recordedAt || '') + '|' + p.amount));
+  return Object.assign({}, inc, cur, {
+    uid: cur.uid || inc.uid || '',
+    pin: cur.pin || inc.pin || '',
+    basicSalary: cur.basicSalary || inc.basicSalary || 0,
+    allowances: cur.allowances || inc.allowances || 0,
+    deductions: cur.deductions || inc.deductions || 0,
+    paymentHistory: (cur.paymentHistory || []).concat(extra)
+  });
+}
+function _payrollAfterLoad() {
+  _applyPayrollToConfig();
+  // what is now in memory equals the cloud copy, so don't re-upload it on the next save
+  (config.teachers || []).forEach(t => { if (t && t.pid && _payrollCache[t.pid]) _payrollLast[t.pid] = JSON.stringify(JSON.parse(JSON.stringify(_payrollRec(t)))); });
+  try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch (e) {}
+  if (typeof currentSection !== 'undefined') {
+    if (currentSection === 'admin' && document.getElementById('teachersList')) renderTeachers();
+    if (currentSection === 'mypay' && typeof renderMyPay === 'function') renderMyPay();
+  }
+  if (typeof _reconcilePaySigs === 'function') _reconcilePaySigs();
+}
+function _attachPayrollListener() {
+  if (_payrollListening || !window._fbDb || !window._fbOnValue || !window._fbRef) return;
+  _payrollListening = true;
+  try {
+    window._fbOnValue(window._fbRef(window._fbDb, _fbSchoolPath() + '/payroll'), snap => {
+      _payrollCache = snap.val() || {};
+      _payrollAuthority = true;
+      _payrollLoaded = true;
+      _payrollAfterLoad();
+    }, err => { _payrollListening = false; console.warn('[payroll] listener failed:', err && err.code); });
+  } catch (e) { _payrollListening = false; }
+}
+// Runs on the Administrator's and Head Teacher's devices after login (and again when the
+// split flag first arrives). The Administrator's device does the one-time move.
+async function _payrollBoot() {
+  if (_payrollBootBusy) return;
+  const role = (typeof currentUser !== 'undefined' && currentUser && currentUser.role) || '';
+  if (!['Administrator', 'Head Teacher'].includes(role)) return;
+  if (!window._fbDb || !_fbSyncEnabled) return;
+  _payrollBootBusy = true;
+  try {
+    const base = _fbSchoolPath();
+    let remotePayroll;
+    try { remotePayroll = (await _dbRead(base + '/payroll')) || {}; }
+    catch (e) { console.info('[payroll] payroll node not readable (rules not published yet?) — staying in the old layout'); return; }
+    let rc = null;
+    try { rc = await _dbRead(base + '/config'); } catch (e) { return; }
+    if (!rc) return;
+    if (rc.payrollSplit !== true) {
+      if (role !== 'Administrator') return; // only the Administrator's device does the move
+      const teachers = Array.isArray(rc.teachers) ? rc.teachers.filter(Boolean) : Object.values(rc.teachers || {});
+      teachers.forEach(t => { if (!t.pid) t.pid = _newPid(); });
+      const merged = {};
+      for (const t of teachers) {
+        merged[t.pid] = JSON.parse(JSON.stringify(_payrollMergeRec(remotePayroll[t.pid], _payrollRec(t))));
+        await _dbWrite(base + '/payroll/' + t.pid, merged[t.pid]); // throws (PERMISSION_DENIED etc.) => nothing gets stripped
+      }
+      await _dbUpdate(base + '/config', { teachers: _stripTeachers(teachers), payrollSplit: true, _lastModified: Date.now() });
+      Object.assign(remotePayroll, merged);
+      config.teachers = _stripTeachers(teachers);
+      config.payrollSplit = true;
+      showToast('Payroll moved to private storage');
+    } else {
+      config.payrollSplit = true;
+      // adopt pids already assigned in the cloud copy of the roster
+      const cloudT = Array.isArray(rc.teachers) ? rc.teachers : Object.values(rc.teachers || {});
+      (config.teachers || []).forEach((t, i) => { if (!t.pid && cloudT[i] && cloudT[i].pid) t.pid = cloudT[i].pid; });
+    }
+    _payrollCache = remotePayroll;
+    _payrollAuthority = true;
+    _payrollLoaded = true;
+    _attachPayrollListener();
+    _payrollAfterLoad();
+  } catch (e) {
+    console.warn('[payroll] move failed, nothing was removed from config:', e && (e.code || e.message));
+  } finally { _payrollBootBusy = false; }
+}
+
+// ==================== PIN HASH PRIVACY SPLIT ====================
+// The Head Teacher PIN and Master PIN hashes used to sit in config, which every login
+// in the school (Parents included) can read. They now live in <school>/pins, readable
+// only by non-Parent logins. The App PIN stays in config because the lock screen on
+// every device (Parents too) checks it. Same safety rule as payroll: nothing is removed
+// from config until the copy in /pins has been written successfully.
+let _pinsListening = false;
+let _pinsBootBusy = false;
+function _curRole() { return (typeof currentUser !== 'undefined' && currentUser && currentUser.role) || ''; }
+function _pickPin() { for (const v of arguments) { if (v) return v; } return ''; }
+function _attachPinsListener() {
+  if (_pinsListening || !config.pinsSplit || _curRole() === 'Parent') return;
+  if (!window._fbDb || !window._fbOnValue || !window._fbRef) return;
+  _pinsListening = true;
+  try {
+    window._fbOnValue(window._fbRef(window._fbDb, _fbSchoolPath() + '/pins'), snap => {
+      const v = snap.val() || {};
+      let ch = false;
+      if (v.headTeacherPin !== undefined && config.headTeacherPin !== v.headTeacherPin) { config.headTeacherPin = v.headTeacherPin; ch = true; }
+      if (v.masterPin !== undefined && config.masterPin !== v.masterPin) { config.masterPin = v.masterPin; ch = true; }
+      if (ch) { try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch (e) {} }
+    }, err => { _pinsListening = false; console.warn('[pins] listener failed:', err && err.code); });
+  } catch (e) { _pinsListening = false; }
+}
+// Called after remote config lands: once split, Parent devices forget any hashes they cached earlier.
+function _pinsAfterConfig() {
+  if (!config || !config.pinsSplit) return;
+  if (_curRole() === 'Parent') {
+    if (config.headTeacherPin || config.masterPin) {
+      config.headTeacherPin = ''; config.masterPin = '';
+      try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch (e) {}
+    }
+  } else { _attachPinsListener(); }
+}
+async function _pinsBoot() {
+  if (_pinsBootBusy) return;
+  const role = _curRole();
+  if (!role) return;
+  if (role === 'Parent') { _pinsAfterConfig(); return; }
+  if (!window._fbDb || !_fbSyncEnabled) return;
+  if (role !== 'Administrator') { _pinsAfterConfig(); return; } // only the Administrator's device does the move
+  _pinsBootBusy = true;
+  try {
+    const base = _fbSchoolPath();
+    let remotePins;
+    try { remotePins = (await _dbRead(base + '/pins')) || {}; }
+    catch (e) { console.info('[pins] /pins not readable (rules not published yet?) — staying in the old layout'); return; }
+    let rc;
+    try { rc = await _dbRead(base + '/config'); } catch (e) { return; }
+    if (!rc) return;
+    const inConfig = rc.headTeacherPin !== undefined || rc.masterPin !== undefined;
+    if (rc.pinsSplit !== true || inConfig) {
+      const h = _pickPin(rc.headTeacherPin, remotePins.headTeacherPin, config.headTeacherPin);
+      const m = _pickPin(rc.masterPin, remotePins.masterPin, config.masterPin);
+      if (!h && !m) return; // school not set up yet — nothing to move
+      await _dbUpdate(base + '/pins', { headTeacherPin: h, masterPin: m, updatedAt: Date.now() }); // throws => config untouched
+      await _dbUpdate(base + '/config', { headTeacherPin: null, masterPin: null, pinsSplit: true, _lastModified: Date.now() });
+      config.headTeacherPin = h; config.masterPin = m;
+    } else {
+      config.headTeacherPin = _pickPin(remotePins.headTeacherPin, config.headTeacherPin);
+      config.masterPin = _pickPin(remotePins.masterPin, config.masterPin);
+    }
+    config.pinsSplit = true;
+    try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch (e) {}
+    _attachPinsListener();
+  } catch (e) {
+    console.warn('[pins] move failed, nothing was removed from config:', e && (e.code || e.message));
+  } finally { _pinsBootBusy = false; }
+}
+
 // --- Public save functions (localStorage + Firebase mirror) ---
 function saveConfig() {
   // Only Administrator, Head Teacher and Deputy Head Teacher may persist config changes
@@ -1804,7 +2059,9 @@ function saveConfig() {
     delete safeCfg.headTeacherPin;
     delete safeCfg.masterPin;
     safeCfg._lastModified = Date.now();
+    if (config.payrollSplit) safeCfg.teachers = _stripTeachers(config.teachers);
     _fbWriteMerge(_fbSchoolPath() + '/config', safeCfg);
+    _syncPayrollToCloud();
   } catch(e) { showToast('Storage error','error'); }
 }
 
@@ -1815,6 +2072,11 @@ function saveConfig() {
 // signed up with email/password or Google — both funnel through the same
 // `config`/`_fbSchoolPath()`, so both get the same cross-device PIN sync.
 function _syncPinsToCloud() {
+  if (config.pinsSplit) {
+    _fbWriteMerge(_fbSchoolPath() + '/pins', { headTeacherPin: config.headTeacherPin || '', masterPin: config.masterPin || '', updatedAt: Date.now() });
+    _fbWriteMerge(_fbSchoolPath() + '/config', { appPin: config.appPin, _lastModified: Date.now() });
+    return;
+  }
   _fbWriteMerge(_fbSchoolPath() + '/config', {
     appPin: config.appPin,
     headTeacherPin: config.headTeacherPin,
@@ -2003,9 +2265,13 @@ function attachFirebaseListeners() {
       };
       config = Object.assign(config, remote, pins);
       delete config._lastModified;
+      _applyPayrollToConfig();
       try { localStorage.setItem(CONFIG_KEY, JSON.stringify(config)); } catch(e) {}
+      if (typeof _pinsAfterConfig === 'function') _pinsAfterConfig();
       refreshCurrentSection();
     }
+    // split flag just arrived (another device moved payroll): Head Teacher logins pick it up now
+    if (remote.payrollSplit === true && !_payrollAuthority && typeof _payrollBoot === 'function') setTimeout(_payrollBoot, 300);
   });
 
   // --- Students listener ---
@@ -2144,6 +2410,7 @@ window.addEventListener('firebaseReady', () => {
         const safeCfg = Object.assign({}, config);
         delete safeCfg.appPin; delete safeCfg.headTeacherPin; delete safeCfg.masterPin;
         safeCfg._lastModified = Date.now();
+        if (config.payrollSplit) safeCfg.teachers = _stripTeachers(config.teachers);
         _fbWriteMerge(_fbSchoolPath() + '/config', safeCfg);
         }
         // Keep the operator directory fresh (name changes, last-seen time)
@@ -2512,6 +2779,7 @@ function showSection(section) {
 }
 
 function refreshCurrentSection() {
+  if (typeof _applyPayrollToConfig === 'function') _applyPayrollToConfig();
   switch(currentSection) {
     case 'dashboard': renderDashboard(); break;
     case 'database': initDatabaseFilters(); renderDatabase(); break;
@@ -2529,6 +2797,7 @@ function refreshCurrentSection() {
     case 'documents': initDocuments(); break;
     case 'notices': initNotices(); break;
     case 'inbox': initInbox(); break;
+    case 'mypay': renderMyPay(); break;
   }
 }
 
@@ -2538,18 +2807,121 @@ function toggleSidebar() {
 
 // ==================== DARK MODE ====================
 function toggleDarkMode() {
-  config.darkMode = !config.darkMode;
-  document.documentElement.setAttribute('data-theme', config.darkMode ? 'dark' : '');
-  document.getElementById('darkModeIcon').textContent = config.darkMode ? '☀️' : '🌙';
-  document.getElementById('darkModeLabel').textContent = config.darkMode ? 'Light Mode' : 'Dark Mode';
-  saveConfig();
+  // Personal to this user/device — no longer written to the shared school config
+  _setMyPref('darkMode', _myDark() ? '0' : '1');
+  applyDarkMode();
 }
 
 function applyDarkMode() {
-  document.documentElement.setAttribute('data-theme', config.darkMode ? 'dark' : '');
-  document.getElementById('darkModeIcon').textContent = config.darkMode ? '☀️' : '🌙';
-  document.getElementById('darkModeLabel').textContent = config.darkMode ? 'Light Mode' : 'Dark Mode';
+  const dark = _myDark();
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : '');
+  document.getElementById('darkModeIcon').textContent = dark ? '☀️' : '🌙';
+  document.getElementById('darkModeLabel').textContent = dark ? 'Light Mode' : 'Dark Mode';
 }
+
+// ==================== MY SETTINGS (per user, synced) ====================
+// Kept in localStorage (works offline) and mirrored to <school>/userPrefs/<uid> in
+// Firebase, so a person's choices follow them to any device they sign in on.
+let _prefCache = null, _prefCacheId = null;
+function _myId() { return (typeof _docUid === 'function' && _docUid()) || (currentUser && currentUser.username) || 'local'; }
+function _prefs() {
+  const id = _myId();
+  if (_prefCache && _prefCacheId === id) return _prefCache;
+  _prefCacheId = id;
+  try { _prefCache = JSON.parse(localStorage.getItem('myPrefs:' + id) || '{}') || {}; } catch (e) { _prefCache = {}; }
+  return _prefCache;
+}
+function _persistPrefs() { try { localStorage.setItem('myPrefs:' + _prefCacheId, JSON.stringify(_prefCache)); } catch (e) {} }
+function _getMyPref(name) { const v = _prefs()[name]; return v === undefined || v === '' ? null : v; }
+function _setMyPref(name, v) {
+  const P = _prefs();
+  if (v === null || v === '') delete P[name]; else P[name] = String(v);
+  _persistPrefs();
+  const uid = _docUid();
+  if (uid && window._fbDb && navigator.onLine && typeof _dbUpdate === 'function') {
+    _dbUpdate(_fbSchoolPath() + '/userPrefs/' + uid, { [name]: (v === null || v === '') ? null : String(v) }).catch(() => {});
+  }
+}
+async function _loadMyPrefs() {
+  const uid = _docUid(); if (!uid || !window._fbDb || !navigator.onLine) return;
+  try {
+    const remote = (await _dbRead(_fbSchoolPath() + '/userPrefs/' + uid)) || {};
+    const P = _prefs();
+    Object.keys(P).forEach(k => delete P[k]);
+    Object.assign(P, remote);           // cloud wins so every device agrees
+    _persistPrefs();
+    applyDarkMode(); _resetIdleTimer();
+  } catch (e) { console.info('[prefs] using local copy:', e && (e.code || e.message)); }
+}
+function _myDark() { const v = _getMyPref('darkMode'); return v === null ? !!config.darkMode : v === '1'; }
+function _myIdleMs() {
+  const v = _getMyPref('idleMs');
+  if (v !== null && !isNaN(parseInt(v))) return parseInt(v);
+  return config.idleTimeoutMs ?? 300000; // school default; 0 = never
+}
+function _landing() { const v = _getMyPref('landing'); return v && canAccess(v) ? v : 'dashboard'; }
+function _applyDefSel(id, pref) {
+  const el = document.getElementById(id), v = _getMyPref(pref);
+  if (el && v && [...el.options].some(o => o.value === v)) { el.value = v; return true; }
+  return false;
+}
+
+// Each setting decides for itself whether the signed-in role needs it (show()), based on
+// what that role can actually open — so a Bursar, a Teacher and a Parent each see only
+// their own options, and custom roles are covered automatically.
+const SECTION_LABELS = { dashboard:'Dashboard', database:'Student Database', register:'Register Student', assessments:'Assessments', classmarks:'Class Marks', finance:'Finance', attendance:'Attendance', conduct:'Conduct', analytics:'Analytics', announcements:'Announcements', reports:'Reports', documents:'Documents', notices:'Staff Notices', inbox:'Inbox', mypay:'My Pay', staff:'Staff', admin:'Admin Settings' };
+function _optHtml(list, cur) { return list.map(o => '<option value="' + escHtml(o[0]) + '"' + ((cur || '') === o[0] ? ' selected' : '') + '>' + escHtml(o[1]) + '</option>').join(''); }
+const MY_SETTINGS = [
+  { id: 'autolock', show: () => true, render() {
+      const def = config.idleTimeoutMs ?? 300000;
+      const opts = [['', 'School default (' + (def === 0 ? 'Never' : (def / 60000) + ' min') + ')'], ['60000','1 minute'], ['120000','2 minutes'], ['300000','5 minutes'], ['600000','10 minutes'], ['1800000','30 minutes'], ['0','Never']];
+      return '<div class="form-group"><label>⏱️ Auto-lock after inactivity</label><select id="myIdleSel" onchange="saveMySel(\'idleMs\',this.value,true)">' + _optHtml(opts, _getMyPref('idleMs')) +
+        '</select><p style="font-size:12px;color:var(--text-light);margin:4px 0 0">Locks with your own PIN — set one under My PIN first.</p></div>';
+  } },
+  { id: 'appearance', show: () => true, render() {
+      return '<div class="form-group"><label style="font-weight:400;display:flex;gap:8px;align-items:center"><input type="checkbox" ' + (_myDark() ? 'checked' : '') + ' onchange="saveMyDark(this.checked)"> 🌙 Dark mode</label></div>';
+  } },
+  { id: 'landing', show: () => true, render() {
+      const opts = [['', 'Dashboard']].concat(Object.keys(SECTION_LABELS).filter(k => k !== 'dashboard' && canAccess(k)).map(k => [k, SECTION_LABELS[k]]));
+      return '<div class="form-group"><label>🏠 Open on sign-in</label><select onchange="saveMySel(\'landing\',this.value)">' + _optHtml(opts, _getMyPref('landing')) + '</select></div>';
+  } },
+  { id: 'defClass', show: () => canAccess('attendance') || canAccess('classmarks'), render() {
+      const opts = [['', 'None']].concat(getAllClasses().map(c => [c, c]));
+      return '<div class="form-group"><label>🏫 My usual class</label><select onchange="saveMySel(\'defClass\',this.value)">' + _optHtml(opts, _getMyPref('defClass')) + '</select><p style="font-size:12px;color:var(--text-light);margin:4px 0 0">Pre-selected in Attendance and Class Marks.</p></div>';
+  } },
+  { id: 'finClass', show: () => canAccess('finance') && _curRole() !== 'Parent', render() {
+      const opts = [['', 'All classes']].concat(getAllClasses().map(c => [c, c]));
+      return '<div class="form-group"><label>💰 Finance: class I work with</label><select onchange="saveMySel(\'finClass\',this.value)">' + _optHtml(opts, _getMyPref('finClass')) + '</select><p style="font-size:12px;color:var(--text-light);margin:4px 0 0">Limits the Finance student list to this class and pre-selects it for bulk fees.</p></div>';
+  } },
+  { id: 'payMethod', show: () => canAccess('finance') && _curRole() !== 'Parent', render() {
+      return '<div class="form-group"><label>💳 Usual payment method</label><select onchange="saveMySel(\'payMethod\',this.value)">' + _optHtml(PAY_METHODS.map(m => [m, m]), _getMyPref('payMethod') || 'Cash') + '</select><p style="font-size:12px;color:var(--text-light);margin:4px 0 0">Pre-selected when you record a payment.</p></div>';
+  } },
+  { id: 'linkChild', show: () => _curRole() === 'Parent', render() {
+      setTimeout(loadMyLinkRequests, 0);
+      return '<div class="form-group"><label>🔗 Link a child to my account</label><input id="lrId" placeholder="Student ID (from the school)" style="margin-bottom:6px"><input id="lrName" placeholder="Child\u2019s full name"><button class="btn btn-outline btn-sm" style="margin-top:6px" onclick="sendLinkRequest()">Send request</button><p style="font-size:12px;color:var(--text-light);margin:4px 0 0">The school checks it before your child appears.</p><div id="lrMine"></div></div>';
+  } },
+  { id: 'defChild', show: () => _curRole() === 'Parent' && students && students._childOnly && students.length > 1, render() {
+      const opts = [['', 'First child']].concat(students.map(k => [k.id, k.name + ' — ' + (k.class || '')]));
+      return '<div class="form-group"><label>👧 Child to show first</label><select onchange="saveMyChild(this.value)">' + _optHtml(opts, _getMyPref('defChild')) + '</select></div>';
+  } },
+  { id: 'defTerm', show: () => canAccess('assessments'), render() {
+      const opts = [['', 'Current Term'], ['Term 1','Term 1'], ['Term 2','Term 2'], ['Term 3','Term 3']];
+      return '<div class="form-group"><label>📅 Assessments term</label><select onchange="saveMySel(\'defTerm\',this.value)">' + _optHtml(opts, _getMyPref('defTerm')) + '</select></div>';
+  } }
+];
+function openMySettings() {
+  document.getElementById('mySettingsBody').innerHTML = MY_SETTINGS.filter(x => x.show()).map(x => x.render()).join('');
+  document.getElementById('mySettingsDialog').style.display = 'flex';
+}
+function closeMySettings() { document.getElementById('mySettingsDialog').style.display = 'none'; }
+function saveMySel(name, v, idle) { _setMyPref(name, v); if (idle) _resetIdleTimer(); showToast('Saved'); }
+function saveMyChild(id) {
+  _setMyPref('defChild', id);
+  const i = students.findIndex(k => k.id === id);
+  window._childPicked = false; window._activeChild = i >= 0 ? i : 0;
+  refreshCurrentSection(); showToast('Saved');
+}
+function saveMyDark(on) { _setMyPref('darkMode', on ? '1' : '0'); applyDarkMode(); }
 
 // ==================== HELPERS ====================
 function getAllClasses() {
@@ -2727,9 +3099,10 @@ function attemptUnlock() {
   Promise.all([
     pinMatches(pin, config.appPin),
     pinMatches(pin, config.headTeacherPin),
-    pinMatches(pin, config.masterPin)
-  ]).then(([a, h, m]) => {
-    if (a || h || m) {
+    pinMatches(pin, config.masterPin),
+    _verifyOwnPin(pin).catch(() => false)
+  ]).then(([a, h, m, own]) => {
+    if (a || h || m || own) {
       _lockAttempts = 0;
       _lockUntil = 0;
       sessionStorage.setItem('_pinLockAttempts', '0');
@@ -2760,12 +3133,20 @@ let _idleTimer = null;
 
 function _resetIdleTimer() {
   if (_idleTimer) clearTimeout(_idleTimer);
-  const ms = config.idleTimeoutMs || 300000;
+  const ms = _myIdleMs();
   if (ms === 0) return; // disabled
-  _idleTimer = setTimeout(() => {
+  _idleTimer = setTimeout(async () => {
     // Only lock if the app is visible and not already on the lock screen
     if (document.getElementById('appContainer').style.display !== 'none' &&
         document.getElementById('lockScreen').style.display !== 'flex') {
+      // Staff signed in with their own cloud login who have not set a personal PIN yet
+      // have nothing to unlock with (only the Administrator's PIN is set at setup), so
+      // don't lock them out. Once they set a PIN via My PIN, idle-lock applies to them.
+      try {
+        if (typeof currentUser !== 'undefined' && currentUser && currentUser.role !== 'Administrator' && _docUid()) {
+          if (!(await _ownPinRecord())) { _resetIdleTimer(); return; }
+        }
+      } catch (e) {}
       showLockScreen();
       document.getElementById('appContainer').style.display = 'none';
     }
@@ -2794,7 +3175,7 @@ function showSetupWizard() {
     // School name already set during signup — hide the field, just need PINs
     if (nameRow) nameRow.style.display = 'none';
     document.getElementById('wizTitle').textContent = 'One last step, ' + config.schoolName;
-    document.getElementById('wizSubtitle').textContent = 'Set your three access PINs to secure the app.';
+    document.getElementById('wizSubtitle').textContent = 'Set your Administrator PIN to secure the app.';
   } else {
     if (nameRow) nameRow.style.display = 'block';
     if (nameInput) nameInput.value = '';
@@ -2803,7 +3184,7 @@ function showSetupWizard() {
   }
 
   // Clear PIN fields
-  ['wizAppPin','wizHeadPin','wizMasterPin'].forEach(id => {
+  ['wizMasterPin','wizMasterPin2'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = '';
   });
@@ -2815,22 +3196,23 @@ function completeSetup() {
   const nameRow = document.getElementById('wizSchoolNameRow');
   const nameHidden = nameRow && nameRow.style.display === 'none';
   const name = nameHidden ? config.schoolName : document.getElementById('wizSchoolName').value.trim();
-  const appPin = document.getElementById('wizAppPin').value.trim();
-  const headPin = document.getElementById('wizHeadPin').value.trim();
   const masterPin = document.getElementById('wizMasterPin').value.trim();
+  const masterPin2 = document.getElementById('wizMasterPin2').value.trim();
 
   if (!name) return showToast('Enter school name','error');
-  if (!appPin || appPin.length < 4) return showToast('App PIN must be 4+ digits','error');
-  if (!headPin || headPin.length < 4) return showToast('Head Teacher PIN must be 4+ digits','error');
-  if (!masterPin || masterPin.length < 4) return showToast('Master PIN must be 4+ digits','error');
+  if (!/^\d{4,6}$/.test(masterPin)) return showToast('Administrator PIN must be 4–6 digits','error');
+  if (masterPin !== masterPin2) return showToast('The two PINs do not match','error');
 
   config.isSetup = true;
   config.schoolName = name;
   if (!config.schools || Object.keys(config.schools).length === 0) config.schools = { default: name };
   delete config._pinsNotSet;
-  Promise.all([storePin(appPin), storePin(headPin), storePin(masterPin)]).then(([a, h, m]) => {
-    config.appPin = a;
-    config.headTeacherPin = h;
+  // Only the Administrator's PIN is set here. It serves as the Master (override) PIN and
+  // the lock-screen PIN. The Head Teacher PIN is left empty: every other staff member
+  // sets their own personal PIN (My PIN) when they need one.
+  storePin(masterPin).then(m => {
+    config.appPin = m;
+    config.headTeacherPin = '';
     config.masterPin = m;
     saveConfig();
     _syncPinsToCloud();
@@ -2847,10 +3229,15 @@ function showApp() {
   const msn = document.getElementById('mobileSchoolName');
   if (window.innerWidth <= 768) { mh.style.display = 'flex'; msn.textContent = config.schoolName; }
   applyDarkMode();
-  showSection('dashboard');
+  showSection(_landing());
+  _loadMyPrefs();
   // Check subscription status on every login
   setTimeout(() => { if(typeof checkSubscription === 'function') checkSubscription(); }, 800);
   _startIdleWatcher();
+  setTimeout(() => { if (typeof _payrollBoot === 'function') _payrollBoot(); }, 1200);
+  setTimeout(() => { if (typeof _pinsBoot === 'function') _pinsBoot(); }, 1400);
+  setTimeout(_startLinkPoll, 2500);
+  setTimeout(() => { if (typeof _attachPaySigAdmin === 'function') _attachPaySigAdmin(); }, 1500);
 }
 
 // ==================== DASHBOARD ====================
@@ -2871,6 +3258,7 @@ function renderDashboard() {
         <div style="font-size:13px;color:var(--text-light)">${escHtml(currentUser.role || '')}${showEmail ? ' · ' + escHtml(email) : ''}</div>
       </div>`;
     acc.style.display = 'flex';
+    renderLinkRequests();
   }
   const total = activeStudents().length;
   const male = activeStudents().filter(s => s.sex === 'Male').length;
@@ -3126,7 +3514,7 @@ function renderProfile(idx) {
   }).join('');
 
   let conductRows = s.conduct.map(c => `<tr><td>${escHtml(c.type)}</td><td>${escHtml(c.date)}</td><td>${escHtml(c.description)}</td></tr>`).join('');
-  let paymentRows = s.paymentHistory.map(p => `<tr><td>K${(p.amount||0).toLocaleString()}</td><td>${escHtml(p.date||'')}</td><td>${escHtml(p.recordedAt||'')}</td></tr>`).join('');
+  let paymentRows = s.paymentHistory.map(p => `<tr><td>K${(p.amount||0).toLocaleString()}</td><td>${escHtml(p.date||'')}</td><td>${escHtml(p.method||'—')}</td><td>${escHtml(p.recordedAt||'')}</td></tr>`).join('');
 
   let feeBreakdown = '';
   if (s.finance.categories && s.finance.categories.length > 0) {
@@ -3187,8 +3575,8 @@ function renderProfile(idx) {
     <div class="card">
       <div class="card-header"><span class="card-title">💳 Payment History</span></div>
       <div class="table-wrap"><table>
-        <tr><th>Amount</th><th>Date</th><th>Recorded</th></tr>
-        ${paymentRows || '<tr><td colspan="3" style="text-align:center;color:var(--text-light)">No payments</td></tr>'}
+        <tr><th>Amount</th><th>Date</th><th>Method</th><th>Recorded</th></tr>
+        ${paymentRows || '<tr><td colspan="4" style="text-align:center;color:var(--text-light)">No payments</td></tr>'}
       </table></div>
     </div>`;
 }
@@ -3361,6 +3749,7 @@ function initAssessments() {
 
   const termSel = document.getElementById('assessTerm');
   termSel.innerHTML = '<option value="current">Current Term</option><option value="Term 1">Term 1</option><option value="Term 2">Term 2</option><option value="Term 3">Term 3</option>';
+  _applyDefSel('assessTerm','defTerm');
 }
 
 function loadAssessment() {
@@ -3462,6 +3851,7 @@ function initClassMarks() {
   const cls = document.getElementById('cmClass');
   cls.innerHTML = '<option value="">Select Class</option>';
   getAllClasses().forEach(c => { cls.innerHTML += `<option value="${esc(c)}">${escHtml(c)}</option>`; });
+  _applyDefSel('cmClass','defClass');
   loadCMSubjects();
 }
 
@@ -3542,11 +3932,13 @@ function initFinance() {
 
   const sel = document.getElementById('finStudent');
   sel.innerHTML = '<option value="">Select Student</option>';
-  students.forEach((s, i) => { if (window.classInScope && !window.classInScope(s.class)) return; sel.innerHTML += `<option value="${i}">${escHtml(s.name)} (${escHtml(s.id)})</option>`; });
+  const _fc = _getMyPref('finClass');
+  students.forEach((s, i) => { if (window.classInScope && !window.classInScope(s.class)) return; if (_fc && s.class !== _fc) return; sel.innerHTML += `<option value="${i}">${escHtml(s.name)} (${escHtml(s.id)})</option>`; });
 
   const bcls = document.getElementById('bulkFeeClass');
   bcls.innerHTML = '<option value="">Select Class</option>';
   getAllClasses().forEach(c => { bcls.innerHTML += `<option value="${esc(c)}">${escHtml(c)}</option>`; });
+  _applyDefSel('bulkFeeClass','finClass');
 
   loadFeeSubmissions();
 }
@@ -3783,7 +4175,7 @@ function loadFinance() {
     feeBreakdown += '</div>';
   }
 
-  let paymentRows = s.paymentHistory.map(p => `<tr><td>K${(p.amount||0).toLocaleString()}</td><td>${escHtml(p.date||'')}</td><td>${escHtml(p.recordedAt||'')}</td></tr>`).join('');
+  let paymentRows = s.paymentHistory.map(p => `<tr><td>K${(p.amount||0).toLocaleString()}</td><td>${escHtml(p.date||'')}</td><td>${escHtml(p.method||'—')}</td><td>${escHtml(p.recordedAt||'')}</td></tr>`).join('');
 
   document.getElementById('financeContent').innerHTML = `
     <div style="margin-top:12px">
@@ -3804,6 +4196,7 @@ function loadFinance() {
       <div class="form-row" style="margin-top:8px">
         <div class="form-group"><label>Amount</label><input type="number" id="finPayAmount" placeholder="Amount"></div>
         <div class="form-group"><label>Date</label><input type="date" id="finPayDate"></div>
+        <div class="form-group"><label>Method</label><select id="finPayMethod">${PAY_METHODS.map(m => `<option${m === (_getMyPref('payMethod') || 'Cash') ? ' selected' : ''}>${m}</option>`).join('')}</select></div>
       </div>
       <button class="btn btn-success btn-sm" onclick="recordPayment(${idx})">Record Payment</button>
     </div>
@@ -3811,8 +4204,8 @@ function loadFinance() {
     <div style="margin-top:16px">
       <strong>Payment History</strong>
       <div class="table-wrap" style="margin-top:8px"><table>
-        <tr><th>Amount</th><th>Date</th><th>Recorded</th></tr>
-        ${paymentRows || '<tr><td colspan="3" style="text-align:center;color:var(--text-light)">No payments</td></tr>'}
+        <tr><th>Amount</th><th>Date</th><th>Method</th><th>Recorded</th></tr>
+        ${paymentRows || '<tr><td colspan="4" style="text-align:center;color:var(--text-light)">No payments</td></tr>'}
       </table></div>
     </div>`;
 }
@@ -3829,13 +4222,15 @@ function updateFinTotal(idx) {
   document.getElementById('finTotal').textContent = 'K' + total.toLocaleString();
 }
 
+const PAY_METHODS = ['Cash', 'Airtel Money', 'MTN MoMo', 'Zamtel Kwacha', 'Bank Deposit', 'Bank Transfer', 'Cheque', 'POS / Card', 'Other'];
 function recordPayment(idx) {
   const amount = parseFloat(document.getElementById('finPayAmount').value) || 0;
   const date = document.getElementById('finPayDate').value || new Date().toISOString().split('T')[0];
   if (amount <= 0) return showToast('Enter a valid amount','error');
 
-  const args = { id: students[idx].id, amount, date, by: (currentUser && currentUser.username) || '' };
-  requestApproval('Record payment K' + amount.toLocaleString() + ' for ' + students[idx].name, () => {
+  const method = (document.getElementById('finPayMethod') || {}).value || 'Cash';
+  const args = { id: students[idx].id, amount, date, method, by: (currentUser && currentUser.username) || '' };
+  requestApproval('Record payment K' + amount.toLocaleString() + ' (' + method + ') for ' + students[idx].name, () => {
     try { APPROVAL_HANDLERS.recordPayment(args); } catch (e) { return showToast(e.message, 'error'); }
     loadFinance(); showToast('Payment recorded');
   }, false, { type: 'recordPayment', args, after: () => { const el = document.getElementById('finPayAmount'); if (el) el.value = ''; } });
@@ -3860,6 +4255,7 @@ function initAttendance() {
   cls.innerHTML = '<option value="">Select Class</option>';
   getAllClasses().forEach(c => { cls.innerHTML += `<option value="${esc(c)}">${escHtml(c)}</option>`; });
   document.getElementById('attDate').value = new Date().toISOString().split('T')[0];
+  if (_applyDefSel('attClass','defClass')) loadAttendance();
 }
 
 function loadAttendance() {
@@ -4491,15 +4887,10 @@ function unlockPinForm() {
 function savePins() {
   const masterPinRaw = document.getElementById('adminMasterPin').value.trim();
   if (!masterPinRaw) return showToast('Master PIN required','error');
-  const appPinRaw = document.getElementById('adminAppPin').value.trim();
-  const headPinRaw = document.getElementById('adminHeadPin').value.trim();
-  Promise.all([
-    appPinRaw   ? storePin(appPinRaw)   : Promise.resolve(config.appPin),
-    headPinRaw  ? storePin(headPinRaw)  : Promise.resolve(config.headTeacherPin),
-    storePin(masterPinRaw)
-  ]).then(([a, h, m]) => {
-    config.appPin = a;
-    config.headTeacherPin = h;
+  if (!/^\d{4,6}$/.test(masterPinRaw)) return showToast('PIN must be 4–6 digits','error');
+  // The Administrator sets only their own PIN. No PINs are set for the Head Teacher or anyone else.
+  storePin(masterPinRaw).then(m => {
+    config.appPin = m;
     config.masterPin = m;
     delete config._pinsNotSet;
     saveConfig();
@@ -4507,7 +4898,7 @@ function savePins() {
     // Re-lock the PIN change form after saving
     document.getElementById('pinChangeForm').style.display = 'none';
     document.getElementById('adminCurrentMasterPin').value = '';
-    showToast('PINs saved — synced to all your devices');
+    showToast('Administrator PIN saved — synced to all your devices');
   });
 }
 
@@ -4806,9 +5197,66 @@ function teacherTotalPaid(t) {
   return (t.paymentHistory || []).reduce((sum, p) => sum + (p.amount || 0), 0);
 }
 
+// Staff who already have a cloud login (Staff page) — the source for the picker below.
+// Parents are excluded: they hold their own children's records, not a staff post.
+function _cloudStaffForPicker() {
+  let users = [];
+  try { users = JSON.parse(localStorage.getItem(USER_KEY) || '[]'); } catch (e) {}
+  return users.filter(u => u && u.firebaseUid && u.role !== 'Parent');
+}
+
+// Name cell for one Teacher & Staff row: pick a cloud-login staff member, or
+// choose "Other" to type a name (support staff who have no login).
+function _teacherNameCell(t, ti, cloudStaff) {
+  const taken = new Set((config.teachers || []).filter((x, i) => i !== ti && x.firebaseUid).map(x => x.firebaseUid));
+  const linked = !!t.firebaseUid;
+  const typed = !linked && (t.typedName || !!t.name);
+  let opts = `<option value="">— Pick staff —</option>`;
+  const found = linked && cloudStaff.some(u => u.firebaseUid === t.firebaseUid);
+  if (linked && !found) opts += `<option value="${esc(t.firebaseUid)}" selected>${escHtml(t.name || 'Staff')} (login removed)</option>`;
+  cloudStaff.filter(u => !taken.has(u.firebaseUid)).forEach(u => {
+    opts += `<option value="${esc(u.firebaseUid)}" ${t.firebaseUid === u.firebaseUid ? 'selected' : ''}>${escHtml(u.username)} · ${escHtml(u.role || '')}</option>`;
+  });
+  opts += `<option value="__other" ${typed ? 'selected' : ''}>✏️ Other (type a name)</option>`;
+  const sel = `<select onchange="pickTeacherStaff(${ti},this.value)" style="width:170px" title="Pick from staff with cloud logins">${opts}</select>`;
+  const txt = typed
+    ? `<input type="text" value="${esc(t.name)}" onchange="config.teachers[${ti}].name=this.value;saveConfig()" placeholder="Full Name" style="width:140px">`
+    : '';
+  return sel + txt;
+}
+
+function pickTeacherStaff(ti, val) {
+  const t = config.teachers[ti];
+  if (!t) return;
+  if (val === '__other') {
+    t.firebaseUid = ''; t.email = ''; t.typedName = true;
+  } else if (!val) {
+    t.firebaseUid = ''; t.email = ''; t.name = ''; t.typedName = false;
+  } else {
+    const u = _cloudStaffForPicker().find(x => x.firebaseUid === val);
+    if (!u) return;
+    if (config.teachers.some((x, i) => i !== ti && x.firebaseUid === val)) {
+      showToast('That staff member is already in the list', 'error');
+      renderTeachers();
+      return;
+    }
+    t.firebaseUid = u.firebaseUid; t.email = u.email || ''; t.name = u.username; t.typedName = false;
+    // Pre-fill the designation when the login role maps straight onto one
+    const roleToDesig = { 'Bursar': 'Bursar', 'Counsellor': 'Counsellor', 'Teacher': 'Class Teacher' };
+    if (roleToDesig[u.role]) t.designation = roleToDesig[u.role];
+  }
+  saveConfig();
+  renderTeachers();
+}
+
 function renderTeachers() {
   let html = '';
   let grandTotal = 0;
+  const cloudStaff = _cloudStaffForPicker();
+  // Keep linked names in step with the Staff page (in memory; saved on the next config save)
+  (config.teachers || []).forEach(t => {
+    if (t.firebaseUid) { const u = cloudStaff.find(x => x.firebaseUid === t.firebaseUid); if (u && u.username) t.name = u.username; }
+  });
   (config.teachers || []).forEach((t, ti) => {
     if (!t.paymentHistory) t.paymentHistory = [];
     grandTotal += teacherTotalPaid(t);
@@ -4816,7 +5264,7 @@ function renderTeachers() {
       `<option value="${esc(d)}" ${(t.designation||'Class Teacher')===d?'selected':''}>${escHtml(d)}</option>`
     ).join('');
     html += `<div style="display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px">
-      <input type="text" value="${esc(t.name)}" onchange="config.teachers[${ti}].name=this.value;saveConfig()" placeholder="Full Name" style="width:140px">
+      ${_teacherNameCell(t, ti, cloudStaff)}
       <select onchange="config.teachers[${ti}].designation=this.value;saveConfig()" style="width:155px" title="Role / Designation">
         ${desigOptions}
       </select>
@@ -4833,6 +5281,252 @@ function renderTeachers() {
   document.getElementById('teachersList').innerHTML = html || '<div style="color:var(--text-light)">No teachers or staff added yet.</div>';
   const totalEl = document.getElementById('teachersTotalPaid');
   if (totalEl) totalEl.textContent = 'K' + grandTotal.toLocaleString();
+  if (typeof renderPayroll === 'function') renderPayroll();
+}
+
+// ==================== MONTHLY PAYROLL ====================
+// Salary terms live on each entry in config.teachers (basicSalary, allowances,
+// deductions). A month's payment is a normal paymentHistory record tagged with
+// period "YYYY-MM", so pay slips, receipt signing and totals all keep working.
+function _payrollMonth() {
+  if (!window._payrollMonthSel) window._payrollMonthSel = new Date().toISOString().slice(0, 7);
+  return window._payrollMonthSel;
+}
+function setPayrollMonth(v) {
+  if (!/^\d{4}-\d{2}$/.test(v || '')) return;
+  window._payrollMonthSel = v;
+  renderPayroll();
+}
+function _payrollMonthLabel(m) {
+  try { return new Date(m + '-01T00:00:00').toLocaleString('en-GB', { month: 'long', year: 'numeric' }); } catch (e) { return m; }
+}
+function payrollNet(t) {
+  return Math.max(0, (t.basicSalary || 0) + (t.allowances || 0) - (t.deductions || 0));
+}
+function payrollPaidFor(t, month) {
+  return (t.paymentHistory || []).filter(p => p.period === month).reduce((sum, p) => sum + (p.amount || 0), 0);
+}
+function renderPayroll() {
+  const list = document.getElementById('payrollList');
+  if (!list) return;
+  const month = _payrollMonth();
+  const mEl = document.getElementById('payrollMonth');
+  if (mEl && mEl.value !== month) mEl.value = month;
+  const canEdit = typeof currentUser === 'undefined' || currentUser.role === 'Administrator';
+  let due = 0, paid = 0;
+  const rows = (config.teachers || []).map((t, ti) => {
+    const net = payrollNet(t);
+    const paidM = payrollPaidFor(t, month);
+    due += net; paid += Math.min(paidM, net);
+    const left = Math.max(0, net - paidM);
+    const status = net <= 0 ? '<span style="color:var(--text-light)">No salary set</span>'
+      : left <= 0 ? '<span style="color:var(--success);font-weight:600">✅ Paid</span>'
+      : paidM > 0 ? `<span style="color:var(--warning);font-weight:600">Part paid · K${left.toLocaleString()} left</span>`
+      : '<span style="color:var(--accent);font-weight:600">Unpaid</span>';
+    const field = (f, v) => `<input type="number" min="0" value="${v || ''}" placeholder="0" ${canEdit ? '' : 'disabled'} onchange="setPayrollField(${ti},'${f}',this.value)" style="width:84px">`;
+    return `<tr>
+      <td style="min-width:120px"><strong>${escHtml(t.name || 'Unnamed')}</strong><div style="font-size:11px;color:var(--text-light)">${escHtml(t.designation || '')}</div></td>
+      <td>${field('basicSalary', t.basicSalary)}</td>
+      <td>${field('allowances', t.allowances)}</td>
+      <td>${field('deductions', t.deductions)}</td>
+      <td style="white-space:nowrap;font-weight:700">K${net.toLocaleString()}</td>
+      <td style="white-space:nowrap">${status}</td>
+      <td>${net > 0 && left > 0 ? `<button class="btn btn-success btn-sm" onclick="payTeacherSalary(${ti})">Pay K${left.toLocaleString()}</button>` : ''}</td>
+    </tr>`;
+  }).join('');
+  list.innerHTML = rows
+    ? `<table><tr><th>Staff</th><th>Basic (K)</th><th>Allowances (K)</th><th>Deductions (K)</th><th>Net</th><th>${escHtml(_payrollMonthLabel(month))}</th><th></th></tr>${rows}</table>`
+    : '<div style="color:var(--text-light)">Add teachers or staff above to start payroll.</div>';
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = 'K' + v.toLocaleString(); };
+  set('payrollDue', due); set('payrollPaid', paid); set('payrollOut', Math.max(0, due - paid));
+}
+function setPayrollField(ti, field, val) {
+  if (!_payrollGuard()) return renderPayroll();
+  const t = config.teachers[ti];
+  if (!t || !['basicSalary', 'allowances', 'deductions'].includes(field)) return;
+  if (typeof currentUser !== 'undefined' && currentUser.role !== 'Administrator') {
+    showToast('⛔ Access denied: only an Administrator can change salary details.', 'error');
+    return renderPayroll();
+  }
+  t[field] = Math.max(0, parseFloat(val) || 0);
+  saveConfig();
+  renderPayroll();
+}
+function payTeacherSalary(ti) {
+  const t = config.teachers[ti];
+  if (!t) return;
+  if (!_payrollGuard()) return;
+  const adminRoles = ['Administrator', 'Head Teacher'];
+  if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
+    return showToast('⛔ Access denied: only admins can record staff payments.', 'error');
+  }
+  const month = _payrollMonth();
+  const amount = payrollNet(t) - payrollPaidFor(t, month);
+  if (amount <= 0) return showToast('Nothing left to pay for this month', 'error');
+  const label = _payrollMonthLabel(month);
+  requestApproval('Pay K' + amount.toLocaleString() + ' salary (' + label + ') to ' + (t.name || 'staff member'), () => {
+    if (!t.paymentHistory) t.paymentHistory = [];
+    // Re-check inside the approval so a double tap can't pay the month twice
+    const left = payrollNet(t) - payrollPaidFor(t, month);
+    if (left <= 0) return showToast('This month is already fully paid', 'error');
+    t.paymentHistory.push({ amount: left, date: new Date().toISOString().split('T')[0], note: 'Salary – ' + label, period: month, recordedAt: new Date().toISOString(), acknowledged: false, acknowledgedAt: null, acknowledgedVia: null });
+    const idx = t.paymentHistory.length - 1;
+    saveConfig();
+    renderTeachers();
+    showToast('Salary recorded — now have the staff member confirm receipt');
+    openReceiptAcknowledgeModal(ti, idx);
+  });
+}
+
+// ==================== MY PAY (staff self-service) ====================
+// A staff member sees ONLY their own payroll row (matched by their login uid,
+// which the admin links by picking them in Teacher & Staff Accounts). Signing
+// writes one small record to paySignatures/{uid}/{paymentId}; the admin's
+// device merges it into the payment as "signed" (see _attachPaySigAdmin).
+function _payIdOf(p) { const n = Date.parse(p && p.recordedAt); return n ? String(n) : ''; }
+function _myUid() { return (window._fbAuth && window._fbAuth.currentUser) ? window._fbAuth.currentUser.uid : null; }
+window._mySigs = window._mySigs || {};
+let _mySigsUid = null;
+function _attachMySigs() {
+  const uid = _myUid();
+  if (!uid || _mySigsUid === uid || !window._fbDb || !window._fbOnValue || !window._fbRef) return;
+  _mySigsUid = uid;
+  try {
+    window._fbOnValue(window._fbRef(window._fbDb, _fbSchoolPath() + '/paySignatures/' + uid), snap => {
+      window._mySigs = snap.val() || {};
+      if (currentSection === 'mypay') renderMyPay();
+    }, err => { _mySigsUid = null; console.warn('[myPay] signatures read failed:', err && err.code); });
+  } catch (e) { _mySigsUid = null; }
+}
+let _myPayrollPid = null;
+function _attachMyPayroll(pid) {
+  if (!pid || _myPayrollPid === pid || !window._fbDb || !window._fbOnValue || !window._fbRef) return;
+  if (!config.payrollSplit) return; // old layout: everything is still in config
+  _myPayrollPid = pid;
+  try {
+    window._fbOnValue(window._fbRef(window._fbDb, _fbSchoolPath() + '/payroll/' + pid), snap => {
+      const v = snap.val();
+      if (v) { _payrollCache[pid] = v; _applyPayrollToConfig(); }
+      if (currentSection === 'mypay') renderMyPay();
+    }, err => { _myPayrollPid = null; console.warn('[myPay] payroll read failed:', err && err.code); });
+  } catch (e) { _myPayrollPid = null; }
+}
+function renderMyPay() {
+  const el = document.getElementById('myPayBody');
+  if (!el) return;
+  _attachMySigs();
+  { const _u = _myUid(); const _mine = _u ? (config.teachers || []).find(x => x.firebaseUid === _u) : null; if (_mine && _mine.pid) _attachMyPayroll(_mine.pid); }
+  const uid = _myUid();
+  const ti = uid ? (config.teachers || []).findIndex(t => t.firebaseUid === uid) : -1;
+  if (ti < 0) {
+    el.innerHTML = '<div class="card" style="color:var(--text-light)">Your login is not linked to a payroll record yet. Ask your Administrator to pick your name in <strong>Teacher &amp; Staff Accounts</strong>.</div>';
+    return;
+  }
+  const t = config.teachers[ti];
+  const hist = t.paymentHistory || [];
+  const isSigned = p => !!(p.acknowledged || (window._mySigs && window._mySigs[_payIdOf(p)]));
+  const net = payrollNet(t);
+  const totalPaid = hist.reduce((sum, p) => sum + (p.amount || 0), 0);
+  const line = (label, val, bold) => `<div style="display:flex;justify-content:space-between;padding:4px 0;${bold ? 'font-weight:700;border-top:1px solid var(--border);margin-top:4px;padding-top:8px' : ''}"><span>${label}</span><span>K${(val || 0).toLocaleString()}</span></div>`;
+  const rows = hist.map((p, ri) => ({ p, ri })).reverse().map(({ p, ri }) => {
+    const signed = isSigned(p);
+    const canSign = !signed && !!_payIdOf(p);
+    return `<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin:8px 0">
+      <div style="display:flex;justify-content:space-between;font-weight:700"><span>K${(p.amount || 0).toLocaleString()}</span><span style="font-weight:400;font-size:12px;color:var(--text-light)">${escHtml(p.date || '')}</span></div>
+      <div style="font-size:13px;color:var(--text-light);margin:2px 0 8px">${escHtml(p.note || 'Payment')}</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        ${signed ? '<span style="color:var(--success);font-size:12px">✅ Signed</span>' : '<span style="color:var(--warning);font-size:12px">⏳ Awaiting your signature</span>'}
+        ${canSign ? `<button class="btn btn-success btn-sm" onclick="openMyPaySign(${ti},${ri})">✍️ Sign</button>` : ''}
+        <button class="btn btn-outline btn-sm" onclick="downloadTeacherPaySlip(${ti},${ri})">🧾 Pay slip</button>
+      </div>
+    </div>`;
+  }).join('');
+  el.innerHTML = `
+    <div class="card">
+      <div style="font-weight:700;font-size:16px">${escHtml(t.name || 'Staff')}</div>
+      <div style="font-size:13px;color:var(--text-light);margin-bottom:10px">${escHtml(t.designation || '')}</div>
+      ${net > 0 ? line('Basic salary', t.basicSalary) + line('Allowances', t.allowances) + line('Deductions', t.deductions) + line('Net monthly pay', net, true) : '<div style="color:var(--text-light);font-size:13px">No salary terms have been set yet.</div>'}
+    </div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;font-weight:700"><span>Payments received</span><span>K${totalPaid.toLocaleString()}</span></div>
+      ${rows || '<div style="color:var(--text-light);margin-top:8px">No payments recorded yet.</div>'}
+    </div>`;
+}
+function openMyPaySign(ti, ri) {
+  const t = config.teachers[ti];
+  const p = t && t.paymentHistory && t.paymentHistory[ri];
+  if (!p) return;
+  const hasPin = !!(t.pin && String(t.pin).trim());
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.id = 'myPaySignModal';
+  modal.innerHTML = `
+    <div class="modal" style="max-width:380px">
+      <h3>✍️ Confirm you received this</h3>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:14px"><strong>K${(p.amount || 0).toLocaleString()}</strong> on ${escHtml(p.date || '')} — ${escHtml(p.note || 'Payment')}</p>
+      ${hasPin ? `
+        <div class="form-group"><label>Your PIN</label><input type="password" id="myPayPin" maxlength="6" class="pin-field" placeholder="Enter your PIN to sign"></div>
+        <div id="myPayErr" style="color:var(--danger);font-size:12px;margin-bottom:8px"></div>
+        <div class="modal-actions">
+          <button class="btn btn-outline" onclick="document.getElementById('myPaySignModal').remove()">Cancel</button>
+          <button class="btn btn-success" onclick="confirmMyPaySign(${ti},${ri})">Sign &amp; Confirm</button>
+        </div>` : `
+        <p style="font-size:13px;color:var(--accent);margin-bottom:12px">You don't have a staff PIN yet. Ask your Administrator to set one on your row, then come back to sign.</p>
+        <div class="modal-actions"><button class="btn btn-outline" onclick="document.getElementById('myPaySignModal').remove()">Close</button></div>`}
+    </div>`;
+  document.body.appendChild(modal);
+  const pin = document.getElementById('myPayPin');
+  if (pin) setTimeout(() => pin.focus(), 100);
+}
+async function confirmMyPaySign(ti, ri) {
+  const t = config.teachers[ti];
+  const p = t && t.paymentHistory && t.paymentHistory[ri];
+  const uid = _myUid();
+  const id = p ? _payIdOf(p) : '';
+  if (!p || !uid || !id || t.firebaseUid !== uid) return;
+  const entered = (document.getElementById('myPayPin').value || '').trim();
+  const ok = entered && await pinMatches(entered, t.pin);
+  if (!ok) { document.getElementById('myPayErr').textContent = 'Incorrect PIN. Try again.'; return; }
+  const rec = { signedAt: new Date().toISOString(), via: 'pin' };
+  window._mySigs[id] = rec;
+  _fbWrite(_fbSchoolPath() + '/paySignatures/' + uid + '/' + id, rec);
+  const m = document.getElementById('myPaySignModal');
+  if (m) m.remove();
+  renderMyPay();
+  showToast('Payment signed — thank you');
+}
+
+// Admin side: fold staff signatures back into the payment records so the
+// Payments window and pay slips show them as signed.
+let _paySigAdminUid = null;
+window._lastPaySigs = null;
+function _reconcilePaySigs() {
+  const all = window._lastPaySigs;
+  if (!all) return;
+  if (config.payrollSplit && !(_payrollAuthority && _payrollLoaded)) return; // wait until payroll is loaded
+  let changed = false;
+  (config.teachers || []).forEach(t => {
+    const sigs = t.firebaseUid && all[t.firebaseUid];
+    if (!sigs) return;
+    (t.paymentHistory || []).forEach(p => {
+      const sg = sigs[_payIdOf(p)];
+      if (sg && !p.acknowledged) { p.acknowledged = true; p.acknowledgedAt = sg.signedAt || new Date().toISOString(); p.acknowledgedVia = 'pin-self'; changed = true; }
+    });
+  });
+  if (changed) { saveConfig(); if (document.getElementById('teachersList')) renderTeachers(); }
+}
+function _attachPaySigAdmin() {
+  const uid = _myUid();
+  if (!uid || _paySigAdminUid === uid) return;
+  if (typeof currentUser === 'undefined' || !currentUser || !['Administrator', 'Head Teacher'].includes(currentUser.role)) return;
+  if (!window._fbDb || !window._fbOnValue || !window._fbRef) return;
+  _paySigAdminUid = uid;
+  try {
+    window._fbOnValue(window._fbRef(window._fbDb, _fbSchoolPath() + '/paySignatures'), snap => {
+      window._lastPaySigs = snap.val() || {};
+      _reconcilePaySigs();
+    }, err => { _paySigAdminUid = null; console.warn('[payroll] signatures read failed:', err && err.code); });
+  } catch (e) { _paySigAdminUid = null; }
 }
 
 function addTeacher() {
@@ -4841,7 +5535,7 @@ function addTeacher() {
     return showToast('⛔ Access denied: only an Administrator can manage teacher accounts.', 'error');
   }
   if (!config.teachers) config.teachers = [];
-  config.teachers.push({ name: '', designation: 'Class Teacher', class: '', pin: '', paymentHistory: [] });
+  config.teachers.push({ pid: _newPid(), name: '', designation: 'Class Teacher', class: '', pin: '', paymentHistory: [] });
   saveConfig();
   renderTeachers();
 }
@@ -4852,6 +5546,7 @@ function addTeacher() {
 async function updateTeacherPin(ti, rawPin) {
   const t = config.teachers[ti];
   if (!t) return;
+  if (!_payrollGuard()) { renderTeachers(); return; }
   const val = (rawPin || '').trim();
   if (!val) return; // left blank = no change, keep existing hash
   if (val.length < 4) { showToast('PIN must be 4+ digits', 'error'); renderTeachers(); return; }
@@ -4928,6 +5623,7 @@ function renderTeacherPaymentHistory(ti) {
 function recordTeacherPayment(ti) {
   const t = config.teachers[ti];
   if (!t) return;
+  if (!_payrollGuard()) return;
   const adminRoles = ['Administrator', 'Head Teacher'];
   if (typeof currentUser !== 'undefined' && !adminRoles.includes(currentUser.role)) {
     return showToast('⛔ Access denied: only admins can record staff payments.', 'error');
@@ -4996,6 +5692,7 @@ function openReceiptAcknowledgeModal(ti, ri) {
 }
 
 async function confirmPaymentReceipt(ti, ri) {
+  if (!_payrollGuard()) return;
   const t = config.teachers[ti];
   if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
   const entered = (document.getElementById('ackPin').value || '').trim();
@@ -5016,6 +5713,7 @@ async function confirmPaymentReceipt(ti, ri) {
 }
 
 function confirmPaymentReceiptManual(ti, ri) {
+  if (!_payrollGuard()) return;
   const t = config.teachers[ti];
   if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
   const adminRoles = ['Administrator', 'Head Teacher'];
@@ -5142,6 +5840,7 @@ function downloadTeacherPaySlip(ti, ri) {
 }
 
 function deleteTeacherPayment(ti, ri) {
+  if (!_payrollGuard()) return;
   const t = config.teachers[ti];
   if (!t || !t.paymentHistory || !t.paymentHistory[ri]) return;
   const adminRoles = ['Administrator', 'Head Teacher'];
@@ -5790,6 +6489,9 @@ async function exportFromCloud() {
     if (cloudConfig.appPin === undefined) cloudConfig.appPin = config.appPin;
     if (cloudConfig.headTeacherPin === undefined) cloudConfig.headTeacherPin = config.headTeacherPin;
     if (cloudConfig.masterPin === undefined) cloudConfig.masterPin = config.masterPin;
+    if (cloudConfig.payrollSplit && Array.isArray(cloudConfig.teachers)) {
+      cloudConfig.teachers = cloudConfig.teachers.map(t => (t && t.pid && _payrollCache[t.pid]) ? Object.assign({}, t, _payrollFields(_payrollCache[t.pid])) : t);
+    }
     // Students — rebuild array from RTDB keyed object
     const stuData = stuSnap.val() || {};
     const cloudStudents = [];
@@ -6627,6 +7329,11 @@ window.ROLE_SECTIONS = {
   'Parent':              ['dashboard','reports','finance']
 };
 
+// Staff self-service pay page: all staff roles except the Administrator (who runs payroll) and Parents.
+Object.keys(window.ROLE_SECTIONS).forEach(r => {
+  if (r !== 'Administrator' && r !== 'Parent' && !window.ROLE_SECTIONS[r].includes('mypay')) window.ROLE_SECTIONS[r].push('mypay');
+});
+
 function canAccess(section){
  const role = currentUser && currentUser.role;
  return (window.ROLE_SECTIONS[role] || []).includes(section);
@@ -6743,15 +7450,6 @@ document.addEventListener('DOMContentLoaded',()=>{
    let div=document.createElement('div');
    div.className='card';
    div.innerHTML=`
-   <h3>👥 User Management</h3>
-   <p style="font-size:13px;color:var(--text-light);margin-bottom:10px">
-     To add a new staff member, use <strong>"Give Staff a Cloud Login"</strong>
-     below — it creates a real account they can use to log in on their own
-     device. This list is read-only: it shows everyone with a role at this
-     school, for reference and audit purposes.
-   </p>
-   <div id="userListEdu"></div>
-   <hr>
    <h3>📜 Audit Logs</h3>
    <div id="auditListEdu"></div>`;
    admin.prepend(div);
@@ -7291,7 +7989,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const clean = {};
     CFG.forEach(([k]) => { const v = parseInt(perms && perms[k], 10); if (v >= 1 && v <= 3) clean[k] = v; });
     window.CUSTOM_PERMS[name] = clean;
-    window.ROLE_SECTIONS[name] = ['dashboard','inbox'].concat(Object.keys(clean));
+    window.ROLE_SECTIONS[name] = ['dashboard','inbox','mypay'].concat(Object.keys(clean));
   };
   function ensureRole(role) {
     const live = typeof config !== 'undefined' && config && config.customRoles && config.customRoles[role];
@@ -8114,6 +8812,113 @@ function editStaffChildren(uid) {
     '<button class="btn btn-primary" onclick="setStaffChildren(\'' + escHtml(uid) + '\', _pickedChildren(\'scChildren\')).then(ok=>{ if(ok) document.getElementById(\'staffChildrenModal\').remove(); })">Save</button></div></div>';
   document.body.appendChild(m);
 }
+// ---- Request badge: plain HTTPS polling (no websocket listener) ----
+let _lrPollOn = false;
+function _setLrBadge(n) {
+  ['lrBadge', 'lrBadgeM'].forEach(id => { const b = document.getElementById(id); if (b) { b.textContent = n > 99 ? '99+' : n; b.style.display = n > 0 ? 'inline-block' : 'none'; } });
+}
+async function _pollLinkRequests() {
+  if (!_isApprover() || !window._fbAuth || !window._fbAuth.currentUser || !navigator.onLine || document.hidden) return;
+  if (document.getElementById('appContainer').style.display === 'none') return; // locked
+  try {
+    const all = (await _restGet(_fbSchoolPath() + '/linkRequests', 15000)) || {};
+    let n = 0;
+    Object.keys(all).forEach(uid => Object.values(all[uid] || {}).forEach(r => { if (r && r.status === 'pending') n++; }));
+    const changed = n !== _linkReqs.length;
+    _setLrBadge(n);
+    if (changed && currentSection === 'dashboard') renderLinkRequests();
+  } catch (e) { /* offline or rules not published yet: leave the badge as it is */ }
+}
+function _startLinkPoll() {
+  if (_lrPollOn || !_isApprover()) return;
+  _lrPollOn = true;
+  _pollLinkRequests();
+  setInterval(_pollLinkRequests, 60000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) _pollLinkRequests(); });
+}
+
+// ---- Parent → student link requests (parent asks, Administrator approves) ----
+let _linkReqs = [];
+async function sendLinkRequest() {
+  const uid = _docUid(), idEl = document.getElementById('lrId'), nmEl = document.getElementById('lrName');
+  const sid = idEl.value.trim(), nm = nmEl.value.trim();
+  if (!uid) return showToast('Sign in with your cloud login first.', 'error');
+  if (!sid || !nm) return showToast('Enter the student ID and the child\u2019s full name.', 'error');
+  if (/[\/.#$\[\]]/.test(sid) || sid.length > 40 || nm.length > 80) return showToast('Check the student ID and name.', 'error');
+  if (!navigator.onLine) return showToast('Connect to the internet to send the request.', 'error');
+  try {
+    // Plain HTTPS write (no websocket needed)
+    await _restPut(_fbSchoolPath() + '/linkRequests/' + uid + '/r' + Date.now().toString(36),
+      { studentId: sid, childName: nm, parentName: String((currentUser && currentUser.username) || '').slice(0, 80), ts: Date.now(), status: 'pending' }, 20000);
+    idEl.value = ''; nmEl.value = '';
+    showToast('Request sent. The school will confirm it.');
+    loadMyLinkRequests();
+  } catch (e) { showToast('Could not send: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+}
+async function loadMyLinkRequests() {
+  const box = document.getElementById('lrMine'), uid = _docUid(); if (!box || !uid) return;
+  try {
+    const v = (await _restGet(_fbSchoolPath() + '/linkRequests/' + uid, 15000)) || {};
+    const rows = Object.keys(v).sort().reverse().slice(0, 5).map(k => v[k]);
+    box.innerHTML = rows.map(r => '<div style="font-size:12px;padding:2px 0">' + escHtml(r.childName) + ' (' + escHtml(r.studentId) + ') \u2014 ' +
+      ({ pending: '\u23f3 waiting', approved: '\u2705 linked', rejected: '\u274c not approved' }[r.status] || '') + '</div>').join('');
+  } catch (e) {}
+}
+async function renderLinkRequests() {
+  const card = document.getElementById('linkRequestsCard'), box = document.getElementById('linkRequestsList');
+  if (!card || !_isApprover() || !window._fbDb) return;
+  let all = {};
+  try { all = (await _dbRead(_fbSchoolPath() + '/linkRequests')) || {}; } catch (e) { return; }
+  _linkReqs = [];
+  const _todo = [];
+  Object.keys(all).forEach(uid => Object.keys(all[uid] || {}).forEach(k => {
+    const r = all[uid][k]; if (!r) return;
+    if (r.status === 'pending') _linkReqs.push(Object.assign({ uid, key: k }, r));
+    else if (r.status === 'approved' && !r.applied) _todo.push({ uid, key: k, studentId: r.studentId });
+  }));
+  // Approved by the Head/Deputy: the Administrator's login list is the master copy, so bring it in line
+  if (_todo.length && currentUser.role === 'Administrator') {
+    try {
+      const us = JSON.parse(localStorage.getItem(USER_KEY) || '[]');
+      for (const t of _todo) {
+        const u = us.find(x => x.firebaseUid === t.uid);
+        if (u) { const ids = _childIdsOf(u); if (!ids.includes(t.studentId)) { ids.push(t.studentId); u.childIds = ids; if (u.role === 'Parent') u.studentId = ids[0]; } }
+        await _dbUpdate(_fbSchoolPath() + '/linkRequests/' + t.uid + '/' + t.key, { applied: true });
+      }
+      _saveUsers(us);
+    } catch (e) {}
+  }
+  card.style.display = _linkReqs.length ? '' : 'none';
+  _setLrBadge(_linkReqs.length);
+  const users = JSON.parse(localStorage.getItem(USER_KEY) || '[]');
+  box.innerHTML = _linkReqs.map((r, i) => {
+    const st = (students || []).find(x => x && x.id === r.studentId), u = users.find(x => x.firebaseUid === r.uid);
+    const same = st && String(st.name || '').trim().toLowerCase() === String(r.childName).trim().toLowerCase();
+    return '<div style="border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px"><div><b>' + escHtml((u && u.username) || r.parentName || 'Parent') + '</b> asks to be linked to:</div>' +
+      '<div style="font-size:13px;margin:4px 0">They typed: ' + escHtml(r.childName) + ' \u00b7 ID ' + escHtml(r.studentId) + '</div>' +
+      '<div style="font-size:13px;margin-bottom:8px">' + (st ? (same ? '\u2705' : '\u26a0\ufe0f Name differs \u2014') + ' School record: ' + escHtml(st.name) + ' \u00b7 ' + escHtml(st.class || '') : '\u26a0\ufe0f No student has this ID') + '</div>' +
+      '<button class="btn btn-success btn-sm"' + (st && u ? '' : ' disabled') + ' onclick="decideLinkRequest(' + i + ',true)">Approve</button> ' +
+      '<button class="btn btn-outline btn-sm" onclick="decideLinkRequest(' + i + ',false)">Reject</button></div>';
+  }).join('');
+}
+async function decideLinkRequest(i, approve) {
+  const r = _linkReqs[i]; if (!r) return;
+  const isAdmin = currentUser.role === 'Administrator';
+  if (approve) {
+    const u = JSON.parse(localStorage.getItem(USER_KEY) || '[]').find(x => x.firebaseUid === r.uid);
+    if (!u) return showToast('That login was not found on this device. Try again after the app syncs.', 'error');
+    const ids = _childIdsOf(u); if (!ids.includes(r.studentId)) ids.push(r.studentId);
+    if (isAdmin) { if (!(await setStaffChildren(r.uid, ids))) return; }
+    else {
+      const err = _kidsError(ids, 'Parent'); if (err) return showToast(err, 'error');
+      try { await _dbUpdate(_staffDirectoryPath(r.uid), { children: _childrenMap(ids), studentId: ids[0] }); }
+      catch (e) { return showToast('Could not link: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
+      showToast('Linked. The Administrator\u2019s records will update automatically.');
+    }
+  }
+  try { await _dbUpdate(_fbSchoolPath() + '/linkRequests/' + r.uid + '/' + r.key, Object.assign({ status: approve ? 'approved' : 'rejected', decidedAt: Date.now(), decidedBy: currentUser.role }, isAdmin ? { applied: true } : {})); } catch (e) { showToast('Could not update the request.', 'error'); }
+  renderLinkRequests();
+}
 async function setStaffChildren(uid, ids) {
   const users = JSON.parse(localStorage.getItem(USER_KEY) || '[]');
   const u = users.find(x => x.firebaseUid === uid); if (!u) return false;
@@ -8175,6 +8980,7 @@ async function loadMyChildren(entry) {
     if (role === 'Parent') {
       students = out.slice(); students._childOnly = true;
       if ((window._activeChild || 0) >= students.length) window._activeChild = 0;
+      if (!window._childPicked) { const di = students.findIndex(k => k.id === _getMyPref('defChild')); if (di >= 0) window._activeChild = di; }
     }
     if (typeof refreshCurrentSection === 'function') refreshCurrentSection();
   } catch (e) { console.warn('[children] load error', e); }
@@ -8223,7 +9029,7 @@ function _childSwitcherHtml() {
     '<select onchange="switchChild(this.value)" style="width:100%">' +
     students.map((x, i) => '<option value="' + i + '"' + (i === (window._activeChild || 0) ? ' selected' : '') + '>' + escHtml(x.name) + ' \u2014 ' + escHtml(x.class || '') + '</option>').join('') + '</select></div>';
 }
-window.switchChild = function (i) { window._activeChild = parseInt(i, 10) || 0; refreshCurrentSection(); };
+window.switchChild = function (i) { window._childPicked = true; window._activeChild = parseInt(i, 10) || 0; refreshCurrentSection(); };
 
 function renderMyChildrenCard() {
   const host = document.getElementById('dashStats'); if (!host) return;
@@ -8757,7 +9563,7 @@ const APPROVAL_HANDLERS = {
   recordPayment(a) {
     const i = _findStudentIndexById(a.id); if (i < 0) throw new Error('Student no longer exists');
     pushUndo(); students[i].finance.paid += a.amount;
-    students[i].paymentHistory.push({ amount: a.amount, date: a.date, recordedAt: new Date().toISOString(), recordedBy: a.by || '' });
+    students[i].paymentHistory.push({ amount: a.amount, date: a.date, method: a.method || '', recordedAt: new Date().toISOString(), recordedBy: a.by || '' });
     saveStudents();
   },
   bulkFee(a) {
