@@ -1009,6 +1009,10 @@ tr:hover td { background:rgba(108,52,131,0.04); }
       <!-- Reports Section -->
       <div class="section" id="sec-reports">
         <div class="section-title">📄 Reports</div>
+        <div class="card" id="publishRanksCard" style="display:none">
+          <button class="btn btn-outline btn-sm" onclick="publishRanksNow()">📤 Send class positions to parents</button>
+          <div id="publishRanksMsg" style="font-size:12px;color:var(--text-light);margin-top:6px">Positions are sent automatically after marks change. Use this to send them now.</div>
+        </div>
         <div class="card">
           <div class="form-group"><label>Student</label><select id="reportStudent" onchange="loadReportPreview()"></select></div>
           <div class="form-group"><label>Term / Period</label><select id="reportTerm"></select></div>
@@ -4484,6 +4488,7 @@ function deleteAnnouncement(idx) {
 
 // ==================== REPORTS ====================
 function initReports() {
+  { const pc = document.getElementById('publishRanksCard'); if (pc) pc.style.display = (currentUser && currentUser.role !== 'Parent' && !(students && students._childOnly)) ? '' : 'none'; }
   { const par = currentUser && currentUser.role === 'Parent';
     const pg = document.getElementById('reportPin'); if (pg && pg.closest('.form-group')) pg.closest('.form-group').style.display = par ? 'none' : '';
     const bc = document.getElementById('bulkReportClass'); if (bc && bc.closest('.card')) bc.closest('.card').style.display = par ? 'none' : ''; }
@@ -8790,7 +8795,7 @@ function editStaffChildren(uid) {
 // ---- Class ranks: staff devices publish them, parents read their own child's (HTTPS) ----
 let _ranksTimer = null;
 function _publishRanksSoon() { clearTimeout(_ranksTimer); _ranksTimer = setTimeout(_publishClassRanks, 8000); }
-async function _publishClassRanks() {
+async function _publishClassRanks(force) {
   try {
     if (typeof currentUser === 'undefined' || !currentUser || currentUser.role === 'Parent') return;
     if (!(canAccess('classmarks') || canAccess('assessments') || canAccess('reports'))) return;
@@ -8801,10 +8806,22 @@ async function _publishClassRanks() {
       const r = getClassPosition(st); if (r.position) out[st.id] = { p: r.position, n: r.totalInClass, t };
     });
     const h = JSON.stringify(out), key = 'ranksHash:' + (config.currentSchool || 'default');
-    if (!Object.keys(out).length || localStorage.getItem(key) === h) return;
+    if (!Object.keys(out).length) return { n: 0 };
+    if (!force && localStorage.getItem(key) === h) return { n: Object.keys(out).length, same: true };
     await _dbUpdate(_fbSchoolPath() + '/classRanks', out);
     localStorage.setItem(key, h);
-  } catch (e) { console.info('[ranks] publish skipped:', e && (e.code || e.message)); }
+    return { n: Object.keys(out).length };
+  } catch (e) { console.info('[ranks] publish failed:', e && (e.code || e.message)); if (force) throw e; }
+}
+async function publishRanksNow() {
+  const m = document.getElementById('publishRanksMsg'); if (m) m.textContent = 'Sending…';
+  try {
+    const r = await _publishClassRanks(true);
+    if (m) m.textContent = (r && r.n) ? '✅ Sent positions for ' + r.n + ' students. Parents see them the next time they open a report.' : 'No student has a position yet (check that marks are entered).';
+  } catch (e) {
+    const c = String((e && (e.code || e.message)) || 'error');
+    if (m) m.textContent = /permission/i.test(c) ? '❌ Not allowed: publish the latest database rules first (classRanks).' : '❌ Could not send (' + c + '). Check your connection.';
+  }
 }
 async function _loadParentRanks(ids) {
   window._parentRanks = window._parentRanks || {};
