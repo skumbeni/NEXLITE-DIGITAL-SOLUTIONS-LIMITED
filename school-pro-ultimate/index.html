@@ -2360,7 +2360,7 @@ window.addEventListener('firebaseReady', () => {
       const staffEntry = await _resolveStaffSchool(user.uid);
       if (staffEntry && staffEntry.role) {
         currentUser = { username: user.email || user.uid, role: staffEntry.role, studentId: staffEntry.studentId || null };
-        if (staffEntry.role === 'Parent') { students = []; students._childOnly = true; } // never show cached school-wide data to a parent
+        if (staffEntry.role === 'Parent') { students = []; students._childOnly = true; window._childrenReady = false; } // never show cached school-wide data to a parent
         sessionStorage.setItem('eduUser', JSON.stringify(currentUser));
       }
       _fbDetachListeners();
@@ -3236,6 +3236,7 @@ function showApp() {
   const mh = document.getElementById('mobileHeader');
   const msn = document.getElementById('mobileSchoolName');
   if (window.innerWidth <= 768) { mh.style.display = 'flex'; msn.textContent = config.schoolName; }
+  if (currentUser && currentUser.role === 'Parent' && !(students && students._childOnly)) { students = []; students._childOnly = true; }
   applyDarkMode();
   showSection(_landing());
   _loadMyPrefs();
@@ -3300,14 +3301,15 @@ function renderDashboard() {
 
   const _isParentDash = typeof currentUser !== 'undefined' && currentUser && currentUser.role === 'Parent';
   if (_isParentDash) {
-    document.getElementById('dashStats').innerHTML = `
+    const _loading = !window._childrenReady;
+    document.getElementById('dashStats').innerHTML = _loading ? '' : `
       <div class="stat-card"><div class="stat-value">${students.length}</div><div class="stat-label">My Children</div></div>
       <div class="stat-card" style="border-left-color:var(--success)"><div class="stat-value">K${totalPaid.toLocaleString()}</div><div class="stat-label">Total Paid</div></div>
       <div class="stat-card" style="border-left-color:var(--warning)"><div class="stat-value">K${balance.toLocaleString()}</div><div class="stat-label">Outstanding Balance</div></div>`;
     document.getElementById('dashQuickStats').innerHTML = '';
     document.getElementById('dashDbCard').style.display = 'none';
     const kids = document.getElementById('dashChildren'); kids.style.display = '';
-    kids.innerHTML = '<div class="card-header" style="padding:0 4px 8px"><span class="card-title">👨‍👩‍👧 My Children</span></div>' + (students.length ? students.map((k, i) => {
+    kids.innerHTML = '<div class="card-header" style="padding:0 4px 8px"><span class="card-title">👨‍👩‍👧 My Children</span></div>' + (_loading ? '<div class="card" style="color:var(--text-light)">Loading your children…</div>' : students.length ? students.map((k, i) => {
       const owe = (k.finance?.total || 0) - (k.finance?.paid || 0);
       return `<div class="card" style="cursor:pointer;padding:14px" onclick="openChildActions(${i})"><div style="display:flex;align-items:center;gap:12px">
         <div style="width:42px;height:42px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">${escHtml((k.name || '?').trim().charAt(0).toUpperCase())}</div>
@@ -8968,13 +8970,20 @@ function _fbSyncStudentIndex() {
 
 // ---- Load my children (read-only) ----
 async function loadMyChildren(entry) {
+  try { await _loadMyChildrenInner(entry); }
+  finally {
+    window._childrenReady = true;
+    if (entry && entry.role === 'Parent' && typeof refreshCurrentSection === 'function') refreshCurrentSection();
+  }
+}
+async function _loadMyChildrenInner(entry) {
   try {
     const role = (entry && entry.role) || '';
     const ids = _childIdsOf(entry);
     if (role === 'Parent') { students = []; students._childOnly = true; }
     if (!ids.length) { window.MY_CHILDREN = []; if (typeof refreshCurrentSection === 'function') refreshCurrentSection(); return; }
     const base = _fbSchoolPath();
-    const g = p => window._fbGet(window._fbRef(window._fbDb, base + p)).then(x => x.val());
+    const g = p => _dbRead(base + p); // HTTPS first, live connection only as a fallback
     const out = [];
     for (const id of ids) {
       try {
