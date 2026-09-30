@@ -809,8 +809,8 @@ tr:hover td { background:rgba(108,52,131,0.04); }
               <select id="regSex"><option value="">Select</option><option value="Male">Male</option><option value="Female">Female</option></select>
             </div>
             <div class="form-group">
-              <label>Student ID *</label>
-              <input type="text" id="regId" placeholder="e.g. STU001">
+              <label>Student ID (leave blank to auto-generate)</label>
+              <input type="text" id="regId" placeholder="Auto" inputmode="numeric">
             </div>
           </div>
           <div class="form-group">
@@ -1111,7 +1111,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
 
         <!-- Grades & Subjects -->
         <div class="card">
-          <div class="card-header"><span class="card-title">🏫 Grades & Subjects</span><button class="btn btn-primary btn-sm" onclick="addGrade()">+ Add Grade</button></div>
+          <div class="card-header"><span class="card-title">🏫 Grades & Subjects</span><span style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-outline btn-sm" onclick="setupLevels()">Set up levels</button><button class="btn btn-primary btn-sm" onclick="addGrade()">+ Add Grade</button></span></div>
           <div id="gradesManager"></div>
         </div>
 
@@ -3234,6 +3234,35 @@ function getFeeCategoriesForClass(className) {
   return config.feeStructure.categories || [];
 }
 
+// Exam-number style student ID: <school/centre no.><yy><4-digit sequence>, digits only. e.g. 1234 26 0042 -> 123426 0042
+function _ensureSchoolCode() {
+  if (/^\d{3,8}$/.test(String(config.schoolCode || ''))) return true;
+  const v = prompt('Enter your school / centre number (3 to 8 digits). It starts every new student ID, like an exam number. You only do this once.');
+  if (v === null) return false;
+  const c = v.replace(/\s/g, '');
+  if (!/^\d{3,8}$/.test(c)) { showToast('Use 3 to 8 digits only.', 'error'); return false; }
+  config.schoolCode = c; saveConfig(); return true;
+}
+function _levelCode(cls) {   // 2-digit position of the class's level in the Grades list (Baby Class = 01 ...), fixed at intake
+  const gname = String(cls || '').split(' - ')[0];
+  const i = (config.grades || []).findIndex(g => g.name === gname);
+  return String(i < 0 ? 99 : Math.min(i + 1, 99)).padStart(2, '0');
+}
+function _studentIdPrefix(cls) {
+  const code = String(config.schoolCode || '').replace(/\D/g, '');
+  const yr = String(config.academicYear || new Date().getFullYear()).replace(/\D/g, '').slice(-2).padStart(2, '0');
+  return code + yr + _levelCode(cls);
+}
+// <school no.><yy><level 2 digits><3-digit sequence within that level>, e.g. 1234 26 11 001 = Form 1 intake, first student
+function _nextStudentId(cls) {
+  const pre = _studentIdPrefix(cls); let max = 0;
+  (students || []).forEach(st => {
+    const id = String((st && st.id) || '');
+    if (id.indexOf(pre) === 0 && id.length === pre.length + 3 && /^\d{3}$/.test(id.slice(pre.length))) max = Math.max(max, parseInt(id.slice(pre.length), 10));
+  });
+  if (max >= 999) return null;
+  return pre + String(max + 1).padStart(3, '0');
+}
 function genId() { return 'STU' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substr(2,3).toUpperCase(); }
 
 function compressPhoto(file, cb) {
@@ -3605,7 +3634,8 @@ function renderDatabase() {
   });
 
   let html = '';
-  const sortedGradeNames = Object.keys(groups).sort();
+  const _gi = n => { const i = (config.grades || []).findIndex(g => g.name === n); return i < 0 ? 9999 : i; };
+  const sortedGradeNames = Object.keys(groups).sort((a, b) => (_gi(a) - _gi(b)) || a.localeCompare(b));
 
   sortedGradeNames.forEach(gName => {
     const gStudents = groups[gName];
@@ -3875,6 +3905,8 @@ function saveProfilePhones(idx) {
 // ==================== REGISTRATION ====================
 function initRegister() {
   const classSelect = document.getElementById('regClass');
+  const _idHint = () => { const ri = document.getElementById('regId'); if (!ri) return; const c = classSelect.value; ri.placeholder = (c && /^\d{3,8}$/.test(String(config.schoolCode || ''))) ? 'Auto: ' + (_nextStudentId(c) || 'full') : 'Auto (pick a class)'; };
+  classSelect.onchange = _idHint; _idHint();
   classSelect.innerHTML = '<option value="">Select Class</option>';
   getAllClasses().forEach(c => { classSelect.innerHTML += `<option value="${esc(c)}">${escHtml(c)}</option>`; });
 
@@ -3929,12 +3961,13 @@ async function registerStudent() {
   }
   const name = document.getElementById('regName').value.trim();
   const sex = document.getElementById('regSex').value;
-  const id = document.getElementById('regId').value.trim() || genId();
+  let id = document.getElementById('regId').value.trim(), autoId = false;
   const cls = document.getElementById('regClass').value;
 
   if (!name) return showToast('Enter student name','error');
   if (!sex) return showToast('Select sex','error');
   if (!cls) return showToast('Select class','error');
+  if (!id) { if (!_ensureSchoolCode()) return; id = _nextStudentId(cls); if (!id) return showToast('This level already has 999 students this year. Type an ID manually.', 'error'); autoId = true; }
 
   // Check subscription student limit
   await getSubscription();
@@ -3974,10 +4007,10 @@ async function registerStudent() {
   };
 
   requestApproval('Register new student: ' + name, () => {
-    try { APPROVAL_HANDLERS.registerStudent({ student }); } catch (e) { return showToast(e.message, 'error'); }
+    try { APPROVAL_HANDLERS.registerStudent({ student, autoId }); } catch (e) { return showToast(e.message, 'error'); }
     showToast('Student registered successfully');
     _regClearForm();
-  }, false, { type: 'registerStudent', args: { student }, after: _regClearForm });
+  }, false, { type: 'registerStudent', args: { student, autoId }, after: _regClearForm });
 }
 
 function _regClearForm() {
@@ -5313,6 +5346,7 @@ function renderGradesManager() {
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
         <div style="display:flex;align-items:center;gap:8px">
           <strong style="font-size:16px;color:var(--primary)">${escHtml(g.name)}</strong>
+          <button class="btn btn-outline btn-sm" ${gi === 0 ? 'disabled' : ''} onclick="moveGrade(${gi},-1)" title="Move up (earlier level)">▲</button><button class="btn btn-outline btn-sm" ${gi === config.grades.length - 1 ? 'disabled' : ''} onclick="moveGrade(${gi},1)" title="Move down (later level)">▼</button>
           <button class="btn btn-outline btn-sm" onclick="toggleGradeExpand(${gi})" id="gradeExpBtn-${gi}">▼ Expand</button>
         </div>
         <button class="btn btn-danger btn-sm" onclick="removeGrade(${gi})">Remove Grade</button>
@@ -5371,6 +5405,29 @@ function addGrade() {
   config.grades.push({ name: name.trim(), subGrades: [], subjects: ['Mathematics','English','Science'] });
   saveConfig();
   renderGradesManager();
+}
+
+// Order = promotion order (each level is promoted into the next one; the last becomes Alumni)
+function moveGrade(gi, dir) {
+  const j = gi + dir; if (j < 0 || j >= config.grades.length) return;
+  const t = config.grades[gi]; config.grades[gi] = config.grades[j]; config.grades[j] = t;
+  saveConfig(); renderGradesManager();
+}
+const _LEVELS_DEFAULT = 'Baby Class, Middle Class, Reception, Grade 1, Grade 2, Grade 3, Grade 4, Grade 5, Grade 6, Grade 7, Form 1, Form 2, Form 3, Form 4';
+// Type the levels in order, earliest first. Existing levels keep their streams/subjects; new ones are created; any existing level not listed stays at the end.
+function setupLevels() {
+  const cur = config.grades.map(g => g.name).join(', ');
+  const raw = prompt('Levels in promotion order, earliest first, separated by commas. Edit as needed:', config.grades.length > 3 ? cur : _LEVELS_DEFAULT);
+  if (raw === null) return;
+  const names = []; raw.split(',').map(x => x.trim()).filter(Boolean).forEach(n => { if (!names.includes(n)) names.push(n); });
+  if (!names.length) return;
+  if (names.some(n => /[.$#\[\]\/]/.test(n) || n.length > 40)) return showToast('Names can\u2019t contain . $ # [ ] / and must be under 40 characters.', 'error');
+  const existing = {}; config.grades.forEach(g => { existing[g.name] = g; });
+  const out = names.map(n => existing[n] || { name: n, subGrades: [], subjects: ['Mathematics', 'English', 'Science'] });
+  config.grades.forEach(g => { if (!names.includes(g.name)) out.push(g); });
+  const added = out.filter(g => !existing[g.name]).length;
+  config.grades = out; saveConfig(); renderGradesManager();
+  showToast('Levels updated' + (added ? ' (' + added + ' new)' : ''));
 }
 
 function removeGrade(gi) {
@@ -9926,6 +9983,7 @@ async function resetStaffPin(uid) {
 // ---- actions that can be submitted for approval; each runs on the approver's device ----
 const APPROVAL_HANDLERS = {
   registerStudent(a) {
+    if (a.autoId && _findStudentIndexById(a.student.id) >= 0) { const n = _nextStudentId(a.student.class); if (!n) throw new Error('No free ID numbers left for this level'); a.student.id = n; }
     if (_findStudentIndexById(a.student.id) >= 0) throw new Error('A student with ID ' + a.student.id + ' already exists');
     { const _why = _tierBlockReason(_studentTotal() + 1); if (_why) throw new Error(_why); }
     pushUndo(); students.push(a.student); saveStudents();
