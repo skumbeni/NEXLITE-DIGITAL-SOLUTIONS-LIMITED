@@ -415,6 +415,9 @@ tr:hover td { background:rgba(108,52,131,0.04); }
   .form-row { flex-direction:column; }
 }
 
+/* Mobile header (☰ + school name) stays pinned at the top while scrolling */
+#mobileHeader { position:sticky; top:0; z-index:90; align-items:center; background:var(--bg); margin:-12px -12px 12px !important; padding:10px 12px; box-shadow:0 1px 4px rgba(0,0,0,0.12); }
+
 /* Scrollbar */
 ::-webkit-scrollbar { width:6px; }
 ::-webkit-scrollbar-track { background:transparent; }
@@ -10104,6 +10107,7 @@ async function _inbFetch(which) {
     const seen = {}; const parts = await Promise.all(_allRoles().map(r => _docTimeout(_dbRead(_fbSchoolPath() + '/inbox/' + r), 30000).catch(() => null)));
     parts.forEach(v => Object.values(v || {}).forEach(it => { if (it && it.id) seen[it.id] = it; }));
     _inb.inbox = Object.values(seen).sort((a, b) => (b.updatedAt || b.ts || 0) - (a.updatedAt || a.ts || 0));
+    _inbMarkReceived();
     return;
   }
   const path = which === 'sent' ? 'sent/' + me : 'sent';
@@ -10113,7 +10117,7 @@ async function _inbFetch(which) {
 function _inbBadge() {
   const b = document.getElementById('inbBadge'); if (!b) return;
   const me = _docUid(), seen = +localStorage.getItem(_inbSeenKey()) || 0;
-  const n = _inb.inbox.filter(x => x.status === 'pending' && x.fromUid !== me).length + _inb.sent.filter(x => (x.updatedAt || 0) > seen && x.lastBy !== me).length;
+  const n = _inb.inbox.filter(x => x.status === 'pending' && x.fromUid !== me && !(x.kind !== 'action' && x.readAt)).length + _inb.sent.filter(x => (x.updatedAt || 0) > seen && x.lastBy !== me).length;
   b.style.display = n ? 'inline-block' : 'none'; b.textContent = n;
 }
 async function _inbCheck() {
@@ -10137,11 +10141,14 @@ function inbToggleCompose() { const c = document.getElementById('inbComposeCard'
 function inbTab(t) { _inb.tab = t; renderInbox(); }
 
 function _inbCard(it, ctx) {
-  const st = { pending: '⏳ Pending', approved: '✅ Approved', rejected: '❌ Rejected', returned: '↩️ Returned', done: '✔ Done' }[it.status] || esc(it.status);
+  let st;
+  if (it.status === 'pending' && it.kind !== 'action') st = it.readAt ? '👁 Read' : it.receivedAt ? '📬 Received' : '📤 Sent';   // messages: show delivery progress, not "Pending"
+  else st = { pending: '⏳ Pending', approved: '✅ Approved', rejected: '❌ Rejected', returned: '↩️ Returned', done: '✔ Done' }[it.status] || esc(it.status);
+  if (it.status === 'pending' && it.kind === 'action' && it.readAt) st += ' · 👁 Seen';
   const overdue = it.due && it.status === 'pending' && it.due < new Date().toISOString().slice(0, 10);
   return `<div style="padding:12px 0;border-bottom:1px solid var(--border,#eee)">
     <div style="font-weight:600">${it.kind === 'action' ? '🔒 ' : ''}${esc((it.kind === 'action' ? it.description : it.subject) || '(no subject)')} <span class="badge">${st}</span>${it.category && it.category !== 'Message' ? ' <span class="badge">' + esc(it.category) + '</span>' : ''}</div>
-    <div style="font-size:12px;color:var(--text-light)">${esc(it.fromName)} (${esc(it.fromRole)}) → ${esc(it.to)} · ${new Date(it.ts).toLocaleString()}${it.due ? ' · reply by ' + esc(it.due) : ''}${overdue ? ' <span style="color:#E74C3C">overdue</span>' : ''}${it.forwardedFrom ? ' · forwarded from ' + esc(it.forwardedFrom) : ''}${it.decidedBy ? ' · by ' + esc(it.decidedBy) : ''}</div>
+    <div style="font-size:12px;color:var(--text-light)">${esc(it.fromName)} (${esc(it.fromRole)}) → ${esc(it.to)} · ${new Date(it.ts).toLocaleString()}${it.due ? ' · reply by ' + esc(it.due) : ''}${overdue ? ' <span style="color:#E74C3C">overdue</span>' : ''}${it.forwardedFrom ? ' · forwarded from ' + esc(it.forwardedFrom) : ''}${it.decidedBy ? ' · by ' + esc(it.decidedBy) : ''}${it.readAt ? ' · read ' + new Date(it.readAt).toLocaleString() : ''}</div>
     ${it.body ? `<div style="font-size:14px;margin-top:6px;white-space:pre-wrap">${esc(it.body)}</div>` : ''}
     ${it.decidedNote ? `<div style="font-size:13px;margin-top:4px">💬 ${esc(it.decidedNote)}</div>` : ''}
     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
@@ -10173,6 +10180,7 @@ async function inbOpen(uid, id, ctx) {
   try { msgs = Object.values((await _docTimeout(window._fbGet(_iref('threads/' + uid + '/' + id)), 15000)).val() || {}).sort((a, b) => a.ts - b.ts); } catch (e) {}
   _inb.thread[id] = msgs;
   const me = _docUid(), pending = it.status === 'pending';
+  if (ctx === 'inbox' && it.fromUid !== me && !it.readAt) _inbMarkRead(it);
   let acts = '';
   if (ctx === 'inbox' && pending) {
     acts += it.kind === 'action'
@@ -10206,6 +10214,27 @@ function _inbPatch(upd, it, fields) {
   for (const k in fields) { upd['inbox/' + it.to + '/' + it.id + '/' + k] = fields[k]; upd['sent/' + it.fromUid + '/' + it.id + '/' + k] = fields[k]; }
 }
 const _inbApply = upd => _dbUpdate(_fbSchoolPath(), upd);
+// Delivery tracking: receivedAt = recipient's app loaded it; readAt = recipient opened it
+async function _inbMark(list, fields) {
+  const upd = {}; list.forEach(it => _inbPatch(upd, it, fields));
+  try { await _inbApply(upd); return true; } catch (e) {}
+  const only = {}; list.forEach(it => { for (const k in fields) only['inbox/' + it.to + '/' + it.id + '/' + k] = fields[k]; });   // fallback: recipient's copy only
+  try { await _inbApply(only); return true; } catch (e) { return false; }
+}
+async function _inbMarkReceived() {
+  const me = _docUid(), now = Date.now();
+  const list = _inb.inbox.filter(it => it && !it.receivedAt && it.fromUid !== me && it.status === 'pending');
+  if (!list.length) return;
+  list.forEach(it => { it.receivedAt = now; });
+  if (!(await _inbMark(list, { receivedAt: now }))) list.forEach(it => { delete it.receivedAt; });
+}
+async function _inbMarkRead(it) {
+  const me = _docUid(), now = Date.now();
+  const f = { readAt: now, readBy: me, readByName: (currentUser && currentUser.username) || '', updatedAt: now, lastBy: me };
+  if (!it.receivedAt) f.receivedAt = now;
+  Object.assign(it, f);
+  await _inbMark([it], f);
+}
 async function _inbFresh(id) {
   for (const r of _allRoles()) { try { const s = await window._fbGet(_iref('inbox/' + r + '/' + id)); if (s.exists()) return s.val(); } catch (e) {} }
   return null;
@@ -10226,7 +10255,7 @@ async function inbReply(uid, id) {
     }
     const msg = { id: mid, by: me, byName: currentUser.username || '', byRole: currentUser.role || '', ts: now }; if (text) msg.text = text; if (files.length) msg.files = files;
     const upd = {}; upd['threads/' + uid + '/' + id + '/' + mid] = msg;
-    _inbPatch(upd, it, Object.assign({ updatedAt: now, lastBy: me }, it.status === 'returned' && it.fromUid === me ? { status: 'pending' } : {}));
+    _inbPatch(upd, it, Object.assign({ updatedAt: now, lastBy: me }, it.status === 'returned' && it.fromUid === me ? { status: 'pending', readAt: null, readBy: null, readByName: null, receivedAt: null } : {}));
     await _docTimeout(_inbApply(upd), 30000);
     showToast('Reply sent'); renderInbox();
   } catch (e) { showToast('Could not reply: ' + ((e && (e.code || e.message)) || 'error'), 'error'); }
@@ -10270,7 +10299,8 @@ async function inbForward(id) {
   if (!it || it.status !== 'pending') { showToast('This item is no longer pending.', 'error'); return renderInbox(); }
   const me = _docUid(), now = Date.now(), mid = _inboxId(), upd = {};
   upd['inbox/' + it.to + '/' + id] = null;
-  upd['inbox/' + newTo + '/' + id] = Object.assign({}, it, { to: newTo, forwardedBy: me, forwardedFrom: it.to, status: 'pending', updatedAt: now, lastBy: me });
+  upd['inbox/' + newTo + '/' + id] = Object.assign({}, it, { to: newTo, forwardedBy: me, forwardedFrom: it.to, status: 'pending', updatedAt: now, lastBy: me, readAt: null, readBy: null, readByName: null, receivedAt: null });
+  ['readAt', 'readBy', 'readByName', 'receivedAt'].forEach(k => { upd['sent/' + it.fromUid + '/' + id + '/' + k] = null; });
   ['to', 'forwardedFrom'].forEach(k => { upd['sent/' + it.fromUid + '/' + id + '/' + k] = k === 'to' ? newTo : it.to; });
   upd['sent/' + it.fromUid + '/' + id + '/updatedAt'] = now; upd['sent/' + it.fromUid + '/' + id + '/lastBy'] = me;
   upd['threads/' + it.fromUid + '/' + id + '/' + mid] = { id: mid, by: me, byName: currentUser.username || '', byRole: currentUser.role || '', ts: now, text: 'Forwarded from ' + it.to + ' to ' + newTo };
@@ -10298,24 +10328,37 @@ function inbMatrixSet(t, r, on) {
 
 
 
-<!-- Back button: close open dialogs first, otherwise exit the app (never step to a previous page) -->
+<!-- Back button: closes open dialogs first, then steps back through the sections you visited.
+     Only at the very first screen does it ask to press Back again before leaving. -->
 <script>
 (function () {
-  var guarded = false, exiting = false;
+  var armed = false, fromPop = false, exiting = false, lastBack = 0;
 
-  function pushGuard() {
-    try { history.pushState({ eduGuard: true }, '', location.href); guarded = true; } catch (e) {}
+  function here() { return { sec: (typeof currentSection !== 'undefined' ? currentSection : 'dashboard') }; }
+  function pushHere() { try { history.pushState(here(), '', location.href); } catch (e) {} }
+
+  // Browsers ignore history entries added without a user gesture, so set up on the first tap/key.
+  function arm() {
+    if (armed) return; armed = true;
+    try { history.replaceState({ base: true }, '', location.href); } catch (e) {}
+    pushHere();
   }
-  // Browsers/WebViews ignore history entries added without a user gesture,
-  // so arm the guard on the first tap/key rather than at page load.
-  function arm() { if (!guarded) pushGuard(); }
   ['pointerdown', 'touchstart', 'keydown'].forEach(function (ev) {
     window.addEventListener(ev, arm, { once: true, passive: true, capture: true });
   });
 
-  function visible(el) { return !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)); }
+  // Record each section change as a history entry
+  var origShow = window.showSection;
+  window.showSection = function (s) {
+    var prev = currentSection;
+    var r = origShow.apply(this, arguments);
+    if (armed && !fromPop && currentSection === s && s !== prev) {
+      try { history.pushState({ sec: s }, '', location.href); } catch (e) {}
+    }
+    return r;
+  };
 
-  // Returns true if it closed something (so Back is "used up")
+  function visible(el) { return !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length)); }
   function closeTopLayer() {
     var overlays = Array.prototype.filter.call(document.querySelectorAll('.modal-overlay'), visible);
     if (overlays.length) {
@@ -10331,24 +10374,33 @@ function inbMatrixSet(t, r, on) {
     return false;
   }
 
-  function exitApp() {
-    exiting = true;
-    try {
-      var m = window.median || window.gonative;
-      if (m && m.app && typeof m.app.exit === 'function') { m.app.exit(); return; }
-    } catch (e) {}
-    try { window.close(); } catch (e) {}
-    // Fallback: step out of the guard entry we added; with no earlier page
-    // in the stack the Android wrapper closes the app natively.
-    try { history.back(); } catch (e) {}
-  }
-
-  window.addEventListener('popstate', function () {
-    if (exiting) return;
-    if (closeTopLayer()) { pushGuard(); return; }
-    exitApp();
+  window.addEventListener('popstate', function (e) {
+    if (exiting || !armed) return;
+    if (closeTopLayer()) { pushHere(); return; }          // Back only closed a dialog; stay put
+    var st = e.state;
+    if (st && st.sec) {                                   // step back to the previous section
+      fromPop = true;
+      try { window.showSection(st.sec); } finally { fromPop = false; }
+      return;
+    }
+    // Back at the first screen: confirm before leaving
+    var now = Date.now();
+    if (now - lastBack < 2000) { exiting = true; try { history.back(); } catch (x) {} return; }
+    lastBack = now;
+    pushHere();
+    try { if (typeof showToast === 'function') showToast('Press Back again to exit'); } catch (x) {}
   });
 })();
+</script>
+<!-- Tap outside the open side menu to close it -->
+<script>
+document.addEventListener('click', function (e) {
+  var sb = document.getElementById('sidebar');
+  if (!sb || !sb.classList.contains('open')) return;
+  if (sb.contains(e.target)) return;                                   // tap inside the menu
+  if (e.target.closest && e.target.closest('[onclick*="toggleSidebar"]')) return; // the ☰ button handles itself
+  sb.classList.remove('open');
+}, true);
 </script>
 </body>
 </html>
