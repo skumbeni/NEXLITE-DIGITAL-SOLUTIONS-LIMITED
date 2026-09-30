@@ -764,7 +764,8 @@ tr:hover td { background:rgba(108,52,131,0.04); }
           <div id="linkRequestsList"></div>
         </div>
         <div class="stats-grid" id="dashStats"></div>
-        <div class="card" style="cursor:pointer;text-align:center;padding:40px" onclick="showSection('database')">
+        <div id="dashChildren" style="display:none"></div>
+        <div class="card" id="dashDbCard" style="cursor:pointer;text-align:center;padding:40px" onclick="showSection('database')">
           <div style="font-size:48px;margin-bottom:8px">🗃️</div>
           <div style="font-size:20px;font-weight:700;color:var(--primary)">Student Database</div>
           <div style="color:var(--text-light);margin-top:4px">Click to view, search and manage all students</div>
@@ -2173,6 +2174,7 @@ async function _fbHydratePhotos() {
 
 function saveStudents(changedIdx) {
   if (students && students._childOnly) return; // parent view holds only their own children: never persist/push
+  _publishRanksSoon();
   if (typeof _isReadOnly === 'function' && _isReadOnly()) { _roNotice(); return; } // expired / trial ended: read-only
   // changedIdx (optional): index of the single student that changed.
   // When provided, only that student's node is patched — much leaner than
@@ -2977,7 +2979,12 @@ function getStudentAverage(s) {
 function getClassPosition(s) {
   // Parent-style views only hold the child's own record, so class rank can't be computed from them.
   // A staff member's Parent view supplies the full school list via _positionPool (null = unknown).
-  if (students && students._childOnly && !window._positionPool) return { position: null, totalInClass: 0 };
+  if (students && students._childOnly && !window._positionPool) {
+    // A parent can't read classmates' marks; use the ranking a staff device published for this child
+    const r = window._parentRanks && window._parentRanks[s.id];
+    if (r && r.t === config.currentTerm + ' ' + config.academicYear) return { position: r.p, totalInClass: r.n };
+    return { position: null, totalInClass: 0 };
+  }
   const pool = (students && students._childOnly && window._positionPool) ? window._positionPool : students;
   const classmates = pool.filter(st => st && !st._hidden && st.class === s.class);
   const ranked = classmates
@@ -3234,11 +3241,34 @@ function showApp() {
   setTimeout(() => { if (typeof _payrollBoot === 'function') _payrollBoot(); }, 1200);
   setTimeout(() => { if (typeof _pinsBoot === 'function') _pinsBoot(); }, 1400);
   setTimeout(_startLinkPoll, 2500);
+  setTimeout(_publishRanksSoon, 4000);
   setTimeout(() => { if (typeof _attachPaySigAdmin === 'function') _attachPaySigAdmin(); }, 1500);
 }
 
 // ==================== DASHBOARD ====================
 function activeStudents() { return students.filter(s => s && s.class !== 'Alumni' && !s._hidden); }
+function openChildActions(i) {
+  const k = students[i]; if (!k) return;
+  const owe = (k.finance?.total || 0) - (k.finance?.paid || 0);
+  const acts = [['reports', '📄 Report', 'Marks, position and comments'], ['finance', '💰 Fees & payments', 'Balance, history, pay'], ['attendance', '🗓️ Attendance', 'Days present and absent'], ['conduct', '📝 Conduct', 'Behaviour records']].filter(a => canAccess(a[0]));
+  const m = document.createElement('div'); m.className = 'modal-overlay'; m.id = 'childActionsModal'; m.style.display = 'flex';
+  m.innerHTML = `<div class="modal" style="max-width:380px"><h3>${escHtml(k.name || '')}</h3>
+    <p style="color:var(--text-light);font-size:13px;margin:0 0 6px">${escHtml(k.class || '')} · ID ${escHtml(k.id || '')}</p>
+    <p style="font-size:13px;margin:0 0 12px">Paid <b>K${(k.finance?.paid || 0).toLocaleString()}</b> of K${(k.finance?.total || 0).toLocaleString()}${owe > 0 ? ' · <span style="color:var(--warning)">Owes K' + owe.toLocaleString() + '</span>' : ''}</p>
+    ${acts.map(a => `<button class="btn btn-outline" style="width:100%;text-align:left;margin-bottom:8px" onclick="goChildSection(${i},'${a[0]}')"><b>${a[1]}</b><div style="font-size:12px;color:var(--text-light);font-weight:400">${a[2]}</div></button>`).join('')}
+    <div class="modal-actions"><button class="btn btn-outline" onclick="document.getElementById('childActionsModal').remove()">Close</button></div></div>`;
+  document.body.appendChild(m);
+}
+function goChildSection(i, sec) {
+  const m = document.getElementById('childActionsModal'); if (m) m.remove();
+  window._childPicked = true; window._activeChild = i;
+  showSection(sec);
+  setTimeout(() => {
+    const r = document.getElementById('reportStudent'); if (sec === 'reports' && r) { r.value = String(i); if (typeof loadReportPreview === 'function') loadReportPreview(); }
+    const f = document.getElementById('finStudent'); if (sec === 'finance' && f) { f.value = String(i); if (typeof loadFinance === 'function') loadFinance(); }
+  }, 50);
+}
+
 function renderDashboard() {
   // Who is signed in: name + role of the account owner
   const acc = document.getElementById('dashAccountCard');
@@ -3264,6 +3294,23 @@ function renderDashboard() {
   const totalPaid = students.reduce((s,st) => s + (st.finance?.paid || 0), 0);
   const balance = totalFees - totalPaid;
 
+  const _isParentDash = typeof currentUser !== 'undefined' && currentUser && currentUser.role === 'Parent';
+  if (_isParentDash) {
+    document.getElementById('dashStats').innerHTML = `
+      <div class="stat-card"><div class="stat-value">${students.length}</div><div class="stat-label">My Children</div></div>
+      <div class="stat-card" style="border-left-color:var(--success)"><div class="stat-value">K${totalPaid.toLocaleString()}</div><div class="stat-label">Total Paid</div></div>
+      <div class="stat-card" style="border-left-color:var(--warning)"><div class="stat-value">K${balance.toLocaleString()}</div><div class="stat-label">Outstanding Balance</div></div>`;
+    document.getElementById('dashQuickStats').innerHTML = '';
+    document.getElementById('dashDbCard').style.display = 'none';
+    const kids = document.getElementById('dashChildren'); kids.style.display = '';
+    kids.innerHTML = '<div class="card-header" style="padding:0 4px 8px"><span class="card-title">👨‍👩‍👧 My Children</span></div>' + (students.length ? students.map((k, i) => {
+      const owe = (k.finance?.total || 0) - (k.finance?.paid || 0);
+      return `<div class="card" style="cursor:pointer;padding:14px" onclick="openChildActions(${i})"><div style="display:flex;align-items:center;gap:12px">
+        <div style="width:42px;height:42px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">${escHtml((k.name || '?').trim().charAt(0).toUpperCase())}</div>
+        <div style="min-width:0;flex:1"><div style="font-weight:700">${escHtml(k.name || '')}</div><div style="font-size:13px;color:var(--text-light)">${escHtml(k.class || '')} · ID ${escHtml(k.id || '')}</div></div>
+        <div style="text-align:right;font-size:13px;font-weight:700;color:${owe > 0 ? 'var(--warning)' : 'var(--success)'}">${owe > 0 ? 'Owes K' + owe.toLocaleString() : '✔ Paid up'}</div><div style="color:var(--text-light)">›</div></div></div>`;
+    }).join('') : '<div class="card" style="color:var(--text-light)">No child is linked to your account yet. Open My Settings → “Link a child to my account”.</div>');
+  } else { const k = document.getElementById('dashChildren'); if (k) k.style.display = 'none'; const d = document.getElementById('dashDbCard'); if (d) d.style.display = '';
   document.getElementById('dashStats').innerHTML = `
     <div class="stat-card"><div class="stat-value">${total}</div><div class="stat-label">Total Students</div></div>
     <div class="stat-card" style="border-left-color:#2E86C1"><div class="stat-value">${male}</div><div class="stat-label">Male Students</div></div>
@@ -3280,6 +3327,7 @@ function renderDashboard() {
     qsHtml += `<div class="stat-card"><div class="stat-value">${gStudents.length}</div><div class="stat-label">${g.name}</div></div>`;
   });
   document.getElementById('dashQuickStats').innerHTML = qsHtml;
+  }
 
   // Show active announcement
   if (config.activeAnnouncement) {
@@ -8739,6 +8787,31 @@ function editStaffChildren(uid) {
     '<button class="btn btn-primary" onclick="setStaffChildren(\'' + escHtml(uid) + '\', _pickedChildren(\'scChildren\')).then(ok=>{ if(ok) document.getElementById(\'staffChildrenModal\').remove(); })">Save</button></div></div>';
   document.body.appendChild(m);
 }
+// ---- Class ranks: staff devices publish them, parents read their own child's (HTTPS) ----
+let _ranksTimer = null;
+function _publishRanksSoon() { clearTimeout(_ranksTimer); _ranksTimer = setTimeout(_publishClassRanks, 8000); }
+async function _publishClassRanks() {
+  try {
+    if (typeof currentUser === 'undefined' || !currentUser || currentUser.role === 'Parent') return;
+    if (!(canAccess('classmarks') || canAccess('assessments') || canAccess('reports'))) return;
+    if (!window._fbAuth || !window._fbAuth.currentUser || !navigator.onLine || (students && students._childOnly)) return;
+    const t = config.currentTerm + ' ' + config.academicYear, out = {};
+    activeStudents().forEach(st => {
+      if (!st || !st.id || (window.classInScope && !window.classInScope(st.class))) return;
+      const r = getClassPosition(st); if (r.position) out[st.id] = { p: r.position, n: r.totalInClass, t };
+    });
+    const h = JSON.stringify(out), key = 'ranksHash:' + (config.currentSchool || 'default');
+    if (!Object.keys(out).length || localStorage.getItem(key) === h) return;
+    await _dbUpdate(_fbSchoolPath() + '/classRanks', out);
+    localStorage.setItem(key, h);
+  } catch (e) { console.info('[ranks] publish skipped:', e && (e.code || e.message)); }
+}
+async function _loadParentRanks(ids) {
+  window._parentRanks = window._parentRanks || {};
+  await Promise.all(ids.map(async id => { try { const r = await _restGet(_fbSchoolPath() + '/classRanks/' + id, 15000); if (r) window._parentRanks[id] = r; } catch (e) {} }));
+  if (typeof refreshCurrentSection === 'function') refreshCurrentSection();
+}
+
 // ---- Request badge: plain HTTPS polling (no websocket listener) ----
 let _lrPollOn = false;
 function _setLrBadge(n) {
@@ -8908,6 +8981,7 @@ async function loadMyChildren(entry) {
     if (role === 'Parent') {
       students = out.slice(); students._childOnly = true;
       if ((window._activeChild || 0) >= students.length) window._activeChild = 0;
+      _loadParentRanks(students.map(k => k.id));
       if (!window._childPicked) { const di = students.findIndex(k => k.id === _getMyPref('defChild')); if (di >= 0) window._activeChild = di; }
     }
     if (typeof refreshCurrentSection === 'function') refreshCurrentSection();
