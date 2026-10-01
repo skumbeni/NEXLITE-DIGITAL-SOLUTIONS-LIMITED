@@ -3,7 +3,7 @@
 // Bump CACHE_VERSION on every deploy so users get the new app shell instead
 // of a stale cached copy forever.
 // ─────────────────────────────────────────────────────────────────────────
-const CACHE_VERSION   = 'v51';
+const CACHE_VERSION   = 'v52';
 const APP_SHELL_CACHE = `school-pro-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE   = `school-pro-runtime-${CACHE_VERSION}`;
 
@@ -99,6 +99,19 @@ self.addEventListener('fetch', (event) => {
 
   // 2) Navigations (loading/refreshing the app itself): network-first,
   //    falling back to the cached shell when offline.
+  if (request.mode === 'navigate' && /\/owners\.html$/.test(url.pathname)) {
+    // Separate owners/pricing page: cached under its own key, never over the app shell.
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(APP_SHELL_CACHE).then((cache) => cache.put(request, copy));
+          return response;
+        })
+        .catch(() => caches.match(request).then((c) => c || caches.match('./index.html')))
+    );
+    return;
+  }
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
