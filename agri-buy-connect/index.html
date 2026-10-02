@@ -231,10 +231,28 @@ tr:last-child td{border-bottom:none;}
 .chat-input-row input{flex:1;padding:11px 13px;border:1px solid var(--line);border-radius:20px;font-size:13.5px;background:var(--paper);color:var(--soil);}
 .chat-input-row input:focus{outline:2px solid var(--soil-40);outline-offset:1px;}
 .chat-send-btn{border:none;border-radius:20px;padding:0 20px;font-size:13px;font-weight:600;color:#fff;background:var(--soil);}
+.chat-contacts{display:flex;flex-direction:column;overflow:hidden;}
+.chat-tools{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--paper-2);position:sticky;top:0;z-index:2;}
+.chat-tools .ct-title{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--soil-70);}
+.chat-tool-btn{border:1px solid var(--line);background:var(--card);color:var(--soil);border-radius:16px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;}
+.chat-contact-list{flex:1;min-height:0;overflow-y:auto;}
+.chat-check{width:20px;height:20px;border:2px solid var(--soil-40);border-radius:6px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;background:transparent;}
+.chat-contact.sel .chat-check{background:var(--soil);border-color:var(--soil);}
+.chat-contact.sel{background:var(--card);}
+.chat-selbar{padding:10px 12px;border-top:1px solid var(--line);background:var(--paper-2);position:sticky;bottom:0;}
+.chat-selbar .chat-send-btn{width:100%;height:42px;}
+.chat-selbar .chat-send-btn[disabled]{opacity:.45;}
+.chat-chips{display:flex;flex-wrap:wrap;gap:6px;padding:12px 14px;border-bottom:1px solid var(--line);max-height:120px;overflow-y:auto;}
+.chat-chip{display:inline-flex;align-items:center;gap:6px;background:var(--paper-2);border:1px solid var(--line);border-radius:16px;padding:4px 6px 4px 10px;font-size:12px;color:var(--soil);}
+.chat-chip button{border:none;background:var(--line);border-radius:50%;width:18px;height:18px;line-height:16px;font-size:12px;color:var(--soil);padding:0;cursor:pointer;}
+.chat-back{display:none;border:none;background:var(--paper-2);border-radius:50%;width:34px;height:34px;font-size:18px;color:var(--soil);flex-shrink:0;cursor:pointer;}
 @media(max-width:720px){
-  .chat-shell{flex-direction:column;height:auto;}
-  .chat-contacts{width:100%;max-height:180px;border-right:none;border-bottom:1px solid var(--line);}
-  .chat-thread{min-height:420px;}
+  .chat-shell{flex-direction:column;height:calc(100dvh - 190px);min-height:420px;}
+  .chat-contacts{width:100%;max-height:none;flex:1;min-height:0;border-right:none;border-bottom:none;}
+  .chat-thread{flex:1;min-height:0;}
+  .chat-shell.m-list .chat-thread{display:none;}
+  .chat-shell.m-detail .chat-contacts{display:none;}
+  .chat-back{display:flex;align-items:center;justify-content:center;}
 }
 
 /* ---------- Notifications ---------- */
@@ -1395,7 +1413,15 @@ const DB = {
       const results = await Promise.all(items.map(async it => {
         if(now - it.t > 30*86400000) return null;                  // give up after 30 days
         const sUid = this.uidFor(it.sRole, it.sId);
-        if(!sUid || sUid !== cu.uid) return it;                    // another user's item on this device, or not signed in yet
+        if(!sUid || sUid !== cu.uid){                              // another user's item on this device, or not signed in yet
+          if(sUid && it.sRole && session && session.role===it.sRole && session.id===it.sId){
+            if(!it.authBlocked) this._blockedNew = true;
+            it.authBlocked = true;                              // MY message, but Firebase user != my record uid
+            console.warn('Outbox blocked: record uid', sUid, 'auth uid', cu.uid, 'anonymous', cu.isAnonymous);
+          }
+          return it;
+        }
+        delete it.authBlocked;
         const r = it.rec; let targets, recipientKnown;
         if(it.k === 'messages'){
           r.fromUid = sUid;
@@ -1417,7 +1443,7 @@ const DB = {
             it.done[u] = true;
           }catch(err){
             const denied = err && /permission/i.test(String(err.code || err.message));
-            if(denied) it.fails++;
+            if(denied || (err && err.message === 'timeout')) it.fails++;
             console.warn('Inbox delivery will retry:', it.k, r.id, err && err.message);
           }
         }));
@@ -1430,9 +1456,9 @@ const DB = {
       const finished = new Set(items.filter((it, i) => results[i] === null).map(it => it.rec.id));
       const progress = new Map(results.filter(Boolean).map(it => [it.rec.id, it]));
       this._saveOutbox(current.filter(it => !finished.has(it.rec.id)).map(it => progress.get(it.rec.id) || it));
-      if(finished.size && typeof document !== 'undefined' && document.getElementById('chat-messages-scroll')) refreshCurrentView(); // sending -> delivered tick
+      if((finished.size || this._blockedNew) && typeof document !== 'undefined' && document.getElementById('chat-messages-scroll')) refreshCurrentView(); // sending -> delivered tick
     }finally{
-      this._flushing = false;
+      this._flushing = false; this._blockedNew = false;
       if(this._flushAgain){ this._flushAgain = false; setTimeout(() => this.flushOutbox(), 500); }
     }
   },
@@ -1975,6 +2001,7 @@ const DB = {
   messageStatus(m){
     const it = this._outbox().find(x => x.rec && x.rec.id === m.id);
     if(!it) return 'delivered';
+    if(it.authBlocked) return 'authblocked';
     if(!this.uidFor(m.to.role, m.to.id)) return 'waiting';
     return it.fails > 0 ? 'failed' : 'sending';
   },
@@ -3091,28 +3118,71 @@ function shareReceipt(appKey, purchaseId){
 }
 
 const chatDrafts = {}; // threadKey -> unsent text, so a live refresh never wipes what's being typed
+let chatSelecting = false;      // multi-select mode on the recipient list
+let chatSelected = new Set();   // 'role:id' keys of ticked recipients
+let chatCompose = false;        // composing one message to several recipients
+const CHAT_COMPOSE_KEY = '__compose';
+function chatKey(c){ return c.role+':'+c.id; }
+function chatDraftKey(appKey, roleId){
+  if(chatCompose) return CHAT_COMPOSE_KEY;
+  return activeChatWith ? DB.threadKey({role:appKey,id:roleId}, activeChatWith) : null;
+}
 function renderMessagesView(appKey, roleId){
   const role = appKey;
   const oldInput = document.getElementById('chat-input');
-  if(oldInput && activeChatWith){ chatDrafts[DB.threadKey({role:appKey,id:roleId}, activeChatWith)] = oldInput.value; }
+  const oldKey = chatDraftKey(appKey, roleId);
+  if(oldInput && oldKey){ chatDrafts[oldKey] = oldInput.value; }
   const hadFocus = !!oldInput && document.activeElement === oldInput;
+  const oldList = document.querySelector('.chat-contact-list');
+  const listScroll = oldList ? oldList.scrollTop : 0;
   const main = document.getElementById(appKey+'-main');
   const contacts = chatContactsFor(role, roleId);
-  if(activeChatWith && !contacts.some(c=>c.role===activeChatWith.role && c.id===activeChatWith.id)) activeChatWith = null;
-  if(!activeChatWith && contacts.length) activeChatWith = {role:contacts[0].role, id:contacts[0].id};
+  const valid = new Set(contacts.map(chatKey));
+  if(activeChatWith && !valid.has(chatKey(activeChatWith))) activeChatWith = null;
+  chatSelected = new Set([...chatSelected].filter(k => valid.has(k)));
+  if(chatCompose && !chatSelected.size){ chatCompose = false; }
 
+  const mode = chatCompose ? 'compose' : (activeChatWith ? 'thread' : 'list');
+
+  // ---- recipient list (its own panel) ----
   const contactsHTML = contacts.length ? contacts.map(c=>{
     const unread = DB.unreadCountFromParty({role,id:roleId}, {role:c.role,id:c.id});
-    const active = activeChatWith && activeChatWith.role===c.role && activeChatWith.id===c.id;
-    return `<div class="chat-contact ${active?'active':''}" onclick="openChatWith('${appKey}','${c.role}','${c.id}')">
+    const k = chatKey(c);
+    const active = !chatSelecting && mode==='thread' && chatKey(activeChatWith)===k;
+    const sel = chatSelected.has(k);
+    return `<div class="chat-contact ${active?'active':''} ${sel?'sel':''}" data-k="${escapeHTML(k)}" onclick="chatContactClick('${appKey}','${c.role}','${c.id}')">
+      ${chatSelecting?`<div class="chat-check">${sel?'✓':''}</div>`:''}
       <div class="chat-avatar">${escapeHTML(initialsFor(c.name))}</div>
       <div class="chat-contact-info"><div class="nm">${escapeHTML(c.name)}</div><div class="rl">${ROLE_LABEL[c.role]}</div></div>
       ${unread>0?`<span class="unread-dot">${unread}</span>`:''}
     </div>`;
   }).join('') : `<div class="chat-empty">No contacts yet — they'll appear here once you're linked with an agent, staff member, or farmer.</div>`;
+  const toolsHTML = contacts.length ? (chatSelecting
+    ? `<button class="chat-tool-btn" onclick="chatCancelSelect('${appKey}')">Cancel</button>
+       <span class="ct-title">${chatSelected.size} selected</span>
+       <button class="chat-tool-btn" onclick="chatSelectAll('${appKey}')">${chatSelected.size===contacts.length?'Clear':'Select all'}</button>`
+    : `<span class="ct-title">Contacts</span>
+       <button class="chat-tool-btn" onclick="chatStartSelect('${appKey}')">Select multiple</button>`) : '';
+  const selbarHTML = chatSelecting
+    ? `<div class="chat-selbar"><button class="chat-send-btn" ${chatSelected.size?'':'disabled'} onclick="chatOpenCompose('${appKey}')">${chatSelected.size?('Message '+chatSelected.size+' '+(chatSelected.size===1?'person':'people')):'Tick people to message'}</button></div>`
+    : '';
 
+  // ---- message panel ----
   let threadHTML;
-  if(activeChatWith){
+  if(mode==='compose'){
+    const chips = contacts.filter(c=>chatSelected.has(chatKey(c))).map(c=>
+      `<span class="chat-chip">${escapeHTML(c.name)} <button title="Remove" onclick="chatRemoveRecipient('${appKey}','${c.role}','${c.id}')">×</button></span>`).join('');
+    threadHTML = `
+      <div class="chat-thread">
+        <div class="chat-thread-head"><button class="chat-back" onclick="chatBackToList('${appKey}')">‹</button><div><div class="nm">New message to ${chatSelected.size} ${chatSelected.size===1?'person':'people'}</div><div class="rl">Each person gets their own copy in their chat history</div></div></div>
+        <div class="chat-chips">${chips}</div>
+        <div class="chat-messages" id="chat-messages-scroll"><div class="chat-empty">Type your message below, then send it to everyone selected.</div></div>
+        <div class="chat-input-row">
+          <input id="chat-input" placeholder="Type a message…" onkeydown="if(event.key==='Enter'){ event.preventDefault(); sendBroadcast('${appKey}'); }">
+          <button class="chat-send-btn" onclick="sendBroadcast('${appKey}')">Send to ${chatSelected.size}</button>
+        </div>
+      </div>`;
+  } else if(mode==='thread'){
     DB.markThreadRead({role,id:roleId}, activeChatWith);
     const msgs = DB.messagesForThread({role,id:roleId}, activeChatWith);
     const bubbles = msgs.length ? msgs.map(m=>{
@@ -3124,7 +3194,7 @@ function renderMessagesView(appKey, roleId){
     }).join('') : `<div class="chat-empty">Say hello to ${escapeHTML(partyName(activeChatWith))}.</div>`;
     threadHTML = `
       <div class="chat-thread">
-        <div class="chat-thread-head"><div class="chat-avatar">${escapeHTML(initialsFor(partyName(activeChatWith)))}</div><div><div class="nm">${escapeHTML(partyName(activeChatWith))}</div><div class="rl">${ROLE_LABEL[activeChatWith.role]}</div></div></div>
+        <div class="chat-thread-head"><button class="chat-back" onclick="chatBackToList('${appKey}')">‹</button><div class="chat-avatar">${escapeHTML(initialsFor(partyName(activeChatWith)))}</div><div><div class="nm">${escapeHTML(partyName(activeChatWith))}</div><div class="rl">${ROLE_LABEL[activeChatWith.role]}</div></div></div>
         <div class="chat-messages" id="chat-messages-scroll">${bubbles}</div>
         <div class="chat-input-row">
           <button class="receipt-btn" title="Share a payment receipt" onclick="openShareReceiptModal('${appKey}')">🧾</button>
@@ -3133,32 +3203,86 @@ function renderMessagesView(appKey, roleId){
         </div>
       </div>`;
   } else {
-    threadHTML = `<div class="chat-empty">Pick a contact to start chatting.</div>`;
+    threadHTML = `<div class="chat-thread"><div class="chat-empty">Pick a contact to start chatting, or tap “Select multiple” to message several people at once.</div></div>`;
   }
 
   main.innerHTML = `
     <div class="main-head"><div><h1>Messages</h1><p class="desc">Chat directly with the people you work with on AgriBuy Connect.</p></div></div>
-    <div class="chat-shell">
-      <div class="chat-contacts">${contactsHTML}</div>
+    <div class="chat-shell ${mode==='list'?'m-list':'m-detail'}">
+      <div class="chat-contacts">${contacts.length?`<div class="chat-tools">${toolsHTML}</div>`:''}<div class="chat-contact-list">${contactsHTML}</div>${selbarHTML}</div>
       ${threadHTML}
     </div>`;
+  const nl = document.querySelector('.chat-contact-list'); if(nl) nl.scrollTop = listScroll;
   const scroller = document.getElementById('chat-messages-scroll');
   if(scroller) scroller.scrollTop = scroller.scrollHeight;
   const newInput = document.getElementById('chat-input');
-  if(newInput && activeChatWith){
-    const dk = DB.threadKey({role:appKey,id:roleId}, activeChatWith);
+  const dk = chatDraftKey(appKey, roleId);
+  if(newInput && dk){
     if(chatDrafts[dk]) newInput.value = chatDrafts[dk];
     if(hadFocus) newInput.focus();
   }
   updateNavBadges();
 }
+function chatRefresh(appKey){ setView(appKey, messagesViewFor(appKey), true); }
+function chatContactClick(appKey, role, id){
+  if(chatSelecting){
+    const k = role+':'+id;
+    if(chatSelected.has(k)) chatSelected.delete(k); else chatSelected.add(k);
+    chatRefresh(appKey);
+  } else {
+    openChatWith(appKey, role, id);
+  }
+}
+function chatStartSelect(appKey){ chatSelecting = true; chatSelected = new Set(); chatCompose = false; activeChatWith = null; chatRefresh(appKey); }
+function chatCancelSelect(appKey){ chatSelecting = false; chatSelected = new Set(); chatCompose = false; chatRefresh(appKey); }
+function chatSelectAll(appKey){
+  const all = chatContactsFor(appKey, session.id).map(chatKey);
+  chatSelected = chatSelected.size===all.length ? new Set() : new Set(all);
+  chatRefresh(appKey);
+}
+function chatOpenCompose(appKey){ if(!chatSelected.size) return; chatCompose = true; activeChatWith = null; chatRefresh(appKey); setTimeout(()=>{ const i=document.getElementById('chat-input'); if(i) i.focus(); }, 0); }
+function chatRemoveRecipient(appKey, role, id){
+  chatSelected.delete(role+':'+id);
+  if(!chatSelected.size) chatCompose = false;
+  chatRefresh(appKey);
+}
+function chatBackToList(appKey){
+  const inp = document.getElementById('chat-input');
+  const k = chatDraftKey(appKey, session.id);
+  if(inp && k) chatDrafts[k] = inp.value;
+  if(chatCompose){ chatCompose = false; } // keep ticks so the person can adjust and return
+  else { activeChatWith = null; }
+  chatRefresh(appKey);
+}
+function sendBroadcast(appKey){
+  const input = document.getElementById('chat-input');
+  if(!input) return;
+  const text = input.value.trim();
+  if(!text) return;
+  if(location.protocol !== 'https:' && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname)){
+    toast('Not a secure (HTTPS) connection — message not sent.');
+    return;
+  }
+  const valid = new Set(chatContactsFor(appKey, session.id).map(chatKey));
+  const targets = [...chatSelected].filter(k => valid.has(k)).map(k => { const i = k.indexOf(':'); return {role:k.slice(0,i), id:k.slice(i+1)}; });
+  if(!targets.length){ toast('Select at least one recipient.'); return; }
+  const me = {role:appKey, id:session.id};
+  // One separate record per recipient: each lands in that person's own inbox
+  // (and in mine, under their thread), so it shows in every chat history.
+  targets.forEach(t => DB.sendMessage(me, t, text));
+  delete chatDrafts[CHAT_COMPOSE_KEY];
+  chatSelecting = false; chatSelected = new Set(); chatCompose = false; activeChatWith = null;
+  toast('Message sent to ' + targets.length + (targets.length===1?' person':' people') + '.');
+  chatRefresh(appKey);
+}
 
 function msgTick(m){
   const st = DB.messageStatus(m);
-  const label = { delivered:' · ✓ Sent', sending:' · ⏳ Sending…', waiting:' · ⏳ Waiting — '+escapeHTML(partyName(m.to))+' must sign in once', failed:' · ⚠ Not delivered, retrying' }[st];
+  const label = { delivered:' · ✓ Sent', sending:' · ⏳ Sending…', waiting:' · ⏳ Waiting — '+escapeHTML(partyName(m.to))+' must sign in once', failed:' · ⚠ Not delivered, retrying', authblocked:' · ⚠ Sign-in problem — log out and back in' }[st];
   return label;
 }
 function openChatWith(appKey, role, id){
+  chatSelecting = false; chatCompose = false; chatSelected = new Set();
   activeChatWith = { role, id };
   setView(appKey, messagesViewFor(appKey));
 }
@@ -3209,6 +3333,7 @@ function openNotification(appKey, notifId){
   if(!n) return;
   DB.markNotifRead(notifId);
   if(n.meta && n.meta.chat && n.meta.party){
+    chatSelecting = false; chatCompose = false; chatSelected = new Set();
     activeChatWith = n.meta.party;
     setView(appKey, messagesViewFor(appKey));
   } else {
