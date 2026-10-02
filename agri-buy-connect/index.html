@@ -1,6 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
+<script>
+/* HTTPS only: send any plain-http page load to https (except local testing). */
+(function(){
+  var h = location.hostname;
+  if(location.protocol === 'http:' && h !== 'localhost' && h !== '127.0.0.1'){
+    location.replace('https:' + location.href.substring(5));
+  }
+})();
+</script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#FAF7F1">
@@ -620,7 +630,7 @@ window.__firebaseReadyPromise = new Promise((resolve) => { window.__firebaseRead
    ========================================================================= */
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-app.js";
 import {
-  getDatabase, ref, get, set, update, onValue, goOffline, goOnline
+  getDatabase, ref, get, set, update, onValue, goOffline, goOnline, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-database.js";
 import {
   getAuth, signInAnonymously, onAuthStateChanged,
@@ -674,7 +684,7 @@ function startAnonymousAuth(){
 // __firebaseReadyPromise (created synchronously in <head>, before this
 // deferred module script runs) rather than just setting a plain global
 // avoids any race with the classic script that reads it.
-window.__firebase = { rtdb, ref, get, set, update, onValue, goOffline, goOnline, dataRef, authReady, auth, startAnonymousAuth, secondaryAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut };
+window.__firebase = { rtdb, ref, get, set, update, onValue, goOffline, goOnline, serverTimestamp, dataRef, authReady, auth, startAnonymousAuth, secondaryAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut };
 window.__firebaseReadyResolve(window.__firebase);
 </script>
 
@@ -1112,6 +1122,8 @@ const DB = {
       if(!Array.isArray(c.commodities)) c.commodities = [];
       if(!c.operatingMode) c.operatingMode = this.data.agentLinks.some(l=>l.companyId===c.id) ? 'agent' : 'direct';
     });
+    this.applyBilling();
+    setTimeout(() => { if(this.flushOutbox) this.flushOutbox(); }, 0);
   },
 
   // Cloud-backed load: waits for anonymous sign-in, then reads the current
@@ -1191,6 +1203,7 @@ const DB = {
     // Live updates from other devices/sessions. Skip the echo of our own
     // writes (flagged via _suppressNextRemoteApply) so mid-typing state
     // on this device is never clobbered by its own save reflected back.
+    this.attachBilling(fb);
     fb.onValue(fb.dataRef, (snap) => {
       if(this._suppressNextRemoteApply){ this._suppressNextRemoteApply = false; return; }
       if(!snap.exists()) return;
@@ -1260,7 +1273,7 @@ const DB = {
       if(!cloudKeys.length) return; // e.g. a messages-only save — nothing left to push to dataRef
       this._suppressNextRemoteApply = true;
       this._remoteWriteInFlight = true;
-      fb.update(fb.dataRef, Object.fromEntries(cloudKeys.map(k => [k, this.data[k]])))
+      fb.update(fb.dataRef, Object.fromEntries(cloudKeys.map(k => [k, this._blobValue(k)])))
         .catch(err => console.error('Firebase write failed (queued for retry when back online):', err))
         .finally(() => { this._remoteWriteInFlight = false; });
       return;
@@ -1268,7 +1281,7 @@ const DB = {
     const { messages, notifications, partnershipTerms, partnershipRequest, ...blobData } = this.data;
     this._suppressNextRemoteApply = true;
     this._remoteWriteInFlight = true;
-    fb.set(fb.dataRef, blobData)
+    fb.set(fb.dataRef, this._stripBilling(blobData))
       .catch(err => console.error('Firebase write failed (queued for retry when back online):', err))
       .finally(() => { this._remoteWriteInFlight = false; });
   },
@@ -1309,7 +1322,8 @@ const DB = {
     // No uid yet (record predates phase 1/2, or the login-time backfill
     // hasn't finished) — firebaseSignInAndBackfillUid() calls this again
     // once it lands a uid, so this just quietly does nothing for now.
-    if(role==='company' && uid) this.attachPartnershipListener(uid);
+    if(role==='company' && uid){ this.attachPartnershipListener(uid); this.attachBillingLog(uid); }
+    this.ensureTrialNode();
   },
   attachInboxListener(uid){
     if(!uid || this._inboxUid === uid) return;
@@ -1317,16 +1331,20 @@ const DB = {
     const fb = window.__firebase;
     if(!fb || !fb.ref || !fb.onValue) return;
     this._inboxUid = uid;
+    this._startOutboxTimer();
+    this.flushOutbox();
     const unsubMsgs = fb.onValue(fb.ref(fb.rtdb, 'inbox/'+uid+'/messages'), (snap) => {
       this.data.messages = snap.exists() ? Object.values(snap.val()) : [];
+      this._mergeOutboxIntoData(uid);
       localStorage.setItem(DB_KEY, JSON.stringify(this.data));
       refreshCurrentView();
-    });
+    }, err => { console.error('Inbox (messages) listener failed:', err); });
     const unsubNotifs = fb.onValue(fb.ref(fb.rtdb, 'inbox/'+uid+'/notifications'), (snap) => {
       this.data.notifications = snap.exists() ? Object.values(snap.val()) : [];
+      this._mergeOutboxIntoData(uid);
       localStorage.setItem(DB_KEY, JSON.stringify(this.data));
       refreshCurrentView();
-    });
+    }, err => { console.error('Inbox (notifications) listener failed:', err); });
     this._inboxUnsubs = [unsubMsgs, unsubNotifs];
   },
   // Called on logout so a second person signing in on the same device
@@ -1337,6 +1355,96 @@ const DB = {
     this._inboxUid = null;
     if(this.data){ this.data.messages = []; this.data.notifications = []; }
     this.detachPartnershipListener();
+    this.detachBillingLog();
+  },
+  // ---- reliable delivery (outbox) ----
+  // Every message/notification is queued in localStorage first and only
+  // removed once the server has acknowledged the write into EACH inbox it
+  // belongs to (sender's own + recipient's). That survives: app closed or
+  // killed mid-send, no signal, and a recipient who has no login ID yet
+  // (the item simply waits until they get one). Writes are keyed by record
+  // id, so a retry can never create a duplicate.
+  _OUTBOX_KEY: 'agribuy_outbox_v1',
+  _outbox(){ try{ return JSON.parse(localStorage.getItem(this._OUTBOX_KEY) || '[]'); }catch(e){ return []; } },
+  _saveOutbox(a){ try{ localStorage.setItem(this._OUTBOX_KEY, JSON.stringify(a)); }catch(e){} },
+  enqueueInbox(kind, rec, sRole, sId){
+    const a = this._outbox();
+    a.push({ k:kind, rec, sRole, sId, t:Date.now(), done:{}, fails:0 });
+    this._saveOutbox(a);
+    this._startOutboxTimer();
+    this.flushOutbox();
+  },
+  _startOutboxTimer(){
+    if(this._outboxTimer) return;
+    this._outboxTimer = setInterval(() => this.flushOutbox(), 30000);
+    window.addEventListener('online', () => this.flushOutbox());
+    document.addEventListener('visibilitychange', () => { if(!document.hidden) this.flushOutbox(); });
+  },
+  _withTimeout(p, ms){ return Promise.race([ p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)) ]); },
+  async flushOutbox(){
+    const fb = window.__firebase;
+    if(!fb || !fb.ref || !fb.set || !this.data) return;
+    const cu = fb.auth && fb.auth.currentUser;
+    if(!cu) return;
+    if(this._flushing){ this._flushAgain = true; return; }
+    this._flushing = true;
+    try{
+      const items = this._outbox();
+      if(!items.length) return;
+      const now = Date.now();
+      const results = await Promise.all(items.map(async it => {
+        if(now - it.t > 30*86400000) return null;                  // give up after 30 days
+        const sUid = this.uidFor(it.sRole, it.sId);
+        if(!sUid || sUid !== cu.uid) return it;                    // another user's item on this device, or not signed in yet
+        const r = it.rec; let targets, recipientKnown;
+        if(it.k === 'messages'){
+          r.fromUid = sUid;
+          const tu = this.uidFor(r.to.role, r.to.id);
+          if(tu) r.toUid = tu;
+          recipientKnown = !!tu;
+          targets = tu && tu !== sUid ? [sUid, tu] : [sUid];
+        } else {
+          r.byUid = sUid;
+          const tu = this.uidFor(r.role, r.userId);
+          if(tu) r.uid = tu;
+          recipientKnown = !!tu;
+          targets = tu ? [tu] : [];
+        }
+        const todo = targets.filter(u => !it.done[u]);
+        await Promise.all(todo.map(async u => {
+          try{
+            await this._withTimeout(fb.set(fb.ref(fb.rtdb, 'inbox/'+u+'/'+it.k+'/'+r.id), r), 20000);
+            it.done[u] = true;
+          }catch(err){
+            const denied = err && /permission/i.test(String(err.code || err.message));
+            if(denied) it.fails++;
+            console.warn('Inbox delivery will retry:', it.k, r.id, err && err.message);
+          }
+        }));
+        const complete = recipientKnown && targets.every(u => it.done[u]);
+        if(complete || it.fails >= 5) return null;
+        return it;
+      }));
+      // Items added or changed while we were awaiting must not be lost: merge by key.
+      const current = this._outbox();
+      const finished = new Set(items.filter((it, i) => results[i] === null).map(it => it.rec.id));
+      const progress = new Map(results.filter(Boolean).map(it => [it.rec.id, it]));
+      this._saveOutbox(current.filter(it => !finished.has(it.rec.id)).map(it => progress.get(it.rec.id) || it));
+    }finally{
+      this._flushing = false;
+      if(this._flushAgain){ this._flushAgain = false; setTimeout(() => this.flushOutbox(), 500); }
+    }
+  },
+  // The inbox listener replaces data.messages/notifications with the server
+  // copy; anything still waiting in the outbox for THIS user is added back
+  // so a just-sent message never vanishes from the screen before it syncs.
+  _mergeOutboxIntoData(uid){
+    if(!this.data) return;
+    this._outbox().forEach(it => {
+      const r = it.rec;
+      if(it.k === 'messages' && this.uidFor(it.sRole, it.sId) === uid && !this.data.messages.some(m => m.id === r.id)) this.data.messages.push(r);
+      if(it.k === 'notifications' && this.uidFor(r.role, r.userId) === uid && !this.data.notifications.some(n => n.id === r.id)) this.data.notifications.push(r);
+    });
   },
   // Best-effort fan-out write of one message/notification record into a
   // single participant's inbox node. Failures are non-blocking — the
@@ -1392,6 +1500,125 @@ const DB = {
     const fb = window.__firebase;
     if(!fb || !fb.ref || !fb.set) return Promise.reject(new Error('Firebase not ready'));
     return fb.set(fb.ref(fb.rtdb, 'partnership_requests/'+uid), requestOrNull);
+  },
+  // ---- billing + platform-fee data (phase 5) ----
+  // Subscription status, billing audit log and the NEXLITE fee terms used to
+  // live inside the shared agribuy_data_v1 blob, which any signed-in device
+  // can rewrite. They now live in their own nodes, admin-write-only:
+  //   /billing/{uid}/subscription   admin writes; anyone signed in can read (staff gates need it)
+  //   /billing/{uid}/trialStartedAt owner writes ONCE, server timestamp (starts the trial)
+  //   /billing_log/{uid}/{eventId}  owner may append, only admin can edit/delete; owner+admin read
+  //   /fee_links/{linkId}           admin writes; signed-in can read (staff purchase gate needs it)
+  // The in-memory records still carry .subscription/.billingLog/.nexlite* so
+  // the rest of the app is unchanged — applyBilling() overlays them from the
+  // caches below after every blob load, and _stripBilling() keeps them out
+  // of anything written back to the blob.
+  billingCache: { sub:{}, fee:{}, log:{} },
+  _billingLive: false,   // true once /billing has data (i.e. migration ran); until then the old blob values are used as-is
+  _billingSeen: false,
+  _billingAttached: false,
+  _BILLING_KEY: 'agribuy_billing_v1',
+  _FEE_FIELDS: ['nexliteFeeModel','nexliteCutPct','nexliteFlatMonthlyZMW','nexliteFlatPerMT','nexlitePayments','nexliteGraceEndsAt'],
+  _feeDefaults(){ return { nexliteFeeModel:'pct_commission', nexliteCutPct:15, nexliteFlatMonthlyZMW:200, nexliteFlatPerMT:10, nexlitePayments:[], nexliteGraceEndsAt:null }; },
+  _ensureBrp(){ if(!this._brp) this._brp = new Promise(r => { this._billingReadyResolve = r; }); return this._brp; },
+  // Resolves once the first /billing + /fee_links snapshots are in (or after
+  // 3s, so an offline start never hangs) — await before running a gate.
+  billingReady(){
+    return Promise.race([ this._ensureBrp(), new Promise(r => setTimeout(r, 3000)) ]);
+  },
+  _effectiveSub(node){
+    if(!node) return null;
+    if(node.subscription) return node.subscription;
+    if(node.trialStartedAt){
+      const end = new Date(Number(node.trialStartedAt) + TRIAL_DAYS*24*60*60*1000).toISOString().slice(0,10);
+      return { status:'trial', plan:'trial', trialEndsAt:end, expiresAt:null, graceEndsAt:null, notes:'' };
+    }
+    return null;
+  },
+  applyBilling(){
+    if(!this.data) return;
+    if(!this._billingLive){
+      try{
+        const raw = localStorage.getItem(this._BILLING_KEY);
+        if(raw){ const c = JSON.parse(raw); if(c && c.sub && Object.keys(c.sub).length){ this.billingCache = Object.assign({sub:{},fee:{},log:{}}, c); this._billingLive = true; } }
+      }catch(e){}
+      if(!this._billingLive) return;
+    }
+    const cache = this.billingCache;
+    ['companies','agents'].forEach(k => (this.data[k]||[]).forEach(a => {
+      const sub = a.uid ? this._effectiveSub(cache.sub[a.uid]) : null;
+      if(sub) a.subscription = sub; else delete a.subscription;
+      if(k==='companies'){
+        const lg = a.uid ? cache.log[a.uid] : null;
+        a.billingLog = lg ? Object.values(lg).sort((x,y)=>String(x.date).localeCompare(String(y.date))) : [];
+      }
+    }));
+    (this.data.agentLinks||[]).forEach(l => {
+      const node = cache.fee[l.id] || {};
+      const d = this._feeDefaults();
+      this._FEE_FIELDS.forEach(f => { l[f] = (typeof node[f] !== 'undefined' && node[f] !== null) ? node[f] : d[f]; });
+      if(!Array.isArray(l.nexlitePayments)) l.nexlitePayments = [];
+    });
+  },
+  _stripBilling(d){
+    if(!this._billingLive) return d; // migration not done yet — don't drop the only copy
+    const out = Object.assign({}, d);
+    const dropAcct = ({ subscription, billingLog, ...r }) => r;
+    if(Array.isArray(out.companies)) out.companies = out.companies.map(dropAcct);
+    if(Array.isArray(out.agents)) out.agents = out.agents.map(dropAcct);
+    if(Array.isArray(out.agentLinks)) out.agentLinks = out.agentLinks.map(l => { const r = Object.assign({}, l); this._FEE_FIELDS.forEach(f => delete r[f]); return r; });
+    return out;
+  },
+  _blobValue(k){ return this._stripBilling({ [k]: this.data[k] })[k]; },
+  attachBilling(fb){
+    if(this._billingAttached || !fb || !fb.ref || !fb.onValue) return;
+    this._billingAttached = true;
+    this._ensureBrp();
+    const seen = { sub:false, fee:false };
+    const finish = k => { seen[k] = true; if(seen.sub && seen.fee && this._billingReadyResolve) this._billingReadyResolve(); };
+    const persist = () => { try{ localStorage.setItem(this._BILLING_KEY, JSON.stringify(this.billingCache)); }catch(e){} };
+    fb.onValue(fb.ref(fb.rtdb, 'billing'), snap => {
+      this.billingCache.sub = snap.exists() ? snap.val() : {};
+      this._billingLive = Object.keys(this.billingCache.sub).length > 0 || this._billingLive;
+      this._billingSeen = true;
+      persist(); this.applyBilling(); this.ensureTrialNode(); finish('sub'); refreshCurrentView();
+    }, err => { console.error('billing listener failed:', err); finish('sub'); });
+    fb.onValue(fb.ref(fb.rtdb, 'fee_links'), snap => {
+      this.billingCache.fee = snap.exists() ? snap.val() : {};
+      persist(); this.applyBilling(); finish('fee'); refreshCurrentView();
+    }, err => { console.error('fee_links listener failed:', err); finish('fee'); });
+  },
+  _logUid: null, _logUnsub: null,
+  attachBillingLog(uid){
+    const fb = window.__firebase;
+    if(!uid || this._logUid === uid || !fb || !fb.ref || !fb.onValue) return;
+    this.detachBillingLog();
+    this._logUid = uid;
+    this._logUnsub = fb.onValue(fb.ref(fb.rtdb, 'billing_log/'+uid), snap => {
+      this.billingCache.log[uid] = snap.exists() ? snap.val() : {};
+      this.applyBilling();
+    }, err => console.error('billing_log listener failed:', err));
+  },
+  detachBillingLog(){
+    if(this._logUnsub){ try{ this._logUnsub(); }catch(e){} }
+    this._logUnsub = null; this._logUid = null;
+  },
+  // A brand-new company/agent has no /billing node. Once we know it's really
+  // signed in as its own uid, it may create trialStartedAt exactly once
+  // (server timestamp — the rules reject any other value).
+  ensureTrialNode(){
+    try{
+      const fb = window.__firebase;
+      if(!this._billingLive || !this._billingSeen || !fb || !fb.serverTimestamp || !session) return;
+      if(session.role!=='company' && session.role!=='agent') return;
+      const rec = this.recordFor(session.role, session.id);
+      const cu = fb.auth && fb.auth.currentUser;
+      if(!rec || !rec.uid || !cu || cu.uid !== rec.uid) return;
+      if(this.billingCache.sub[rec.uid] || this._trialRequested === rec.uid) return;
+      this._trialRequested = rec.uid;
+      fb.set(fb.ref(fb.rtdb, 'billing/'+rec.uid+'/trialStartedAt'), fb.serverTimestamp())
+        .catch(err => { this._trialRequested = null; console.error('Trial start write failed:', err); });
+    }catch(e){ console.error(e); }
   },
   link(agentId, companyId){ return this.data.agentLinks.find(l=>l.agentId===agentId && l.companyId===companyId); },
   linksForAgent(agentId){ return this.data.agentLinks.filter(l=>l.agentId===agentId); },
@@ -1713,13 +1940,7 @@ const DB = {
     const m = { id:this.uid('msg'), thread:this.threadKey(from,to), from, to, text, attachment: attachment||null, createdAt:Date.now(), read:false, fromUid: fromUid||null, toUid: toUid||null };
     this.data.messages.push(m); // instant local echo — `from` here is always the current session
     localStorage.setItem(DB_KEY, JSON.stringify(this.data));
-    if(fromUid){
-      this._writeInboxRecord(fromUid, 'messages', m);
-      if(toUid) this._writeInboxRecord(toUid, 'messages', m);
-      else console.warn('Message not yet deliverable to ' + to.role + ':' + to.id + ' — no Firebase Auth uid on file yet (will start syncing once they next log in).');
-    } else {
-      console.warn('Message saved on this device only — no Firebase Auth uid yet for ' + from.role + ':' + from.id + '.');
-    }
+    this.enqueueInbox('messages', m, from.role, from.id); // delivered + retried until acknowledged — see flushOutbox()
     const notifBody = attachment ? `Sent a payment receipt — ${attachment.commodity}, ${attachment.amountLabel}` : (text.length>90?text.slice(0,90)+'…':text);
     this.addNotification(to.role, to.id, 'message', 'New message from ' + partyName(from), notifBody, {chat:true, party:from});
     return m;
@@ -1759,8 +1980,7 @@ const DB = {
       this.data.notifications.push(n);
       localStorage.setItem(DB_KEY, JSON.stringify(this.data));
     }
-    if(targetUid) this._writeInboxRecord(targetUid, 'notifications', n);
-    else console.warn('Notification not yet deliverable to ' + role + ':' + userId + ' — no Firebase Auth uid on file yet (will start syncing once they next log in).');
+    if(typeof session!=='undefined' && session) this.enqueueInbox('notifications', n, session.role, session.id);
     return n;
   },
   notificationsFor(role, userId){
@@ -1870,8 +2090,16 @@ function defaultSubscription(){
    shows up wherever the company record is viewed/exported.
    ------------------------------------------------------------------------- */
 function logBillingEvent(company, event, detail){
+  if(!company) return;
+  const entry = { date: new Date().toISOString(), event, detail };
+  const fb = window.__firebase;
+  if(company.uid && fb && fb.ref && fb.set){
+    const key = Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+    fb.set(fb.ref(fb.rtdb, 'billing_log/'+company.uid+'/'+key), entry)
+      .catch(err => console.error('Billing log write failed:', err));
+  }
   if(!Array.isArray(company.billingLog)) company.billingLog = [];
-  company.billingLog.push({ date: new Date().toISOString(), event, detail });
+  company.billingLog.push(entry); // local mirror until the listener echoes it back
 }
 /* -------------------------------------------------------------------------
    PAID PLAN TIERS — only relevant to companies buying DIRECT (no agent).
@@ -2429,14 +2657,13 @@ async function attemptSignup(){
     if(phone) existing.phone = phone;
     existing.authSalt = authSalt; existing.authHash = authHash;
     if(uid) existing.uid = uid;
-    if(!existing.subscription) existing.subscription = defaultSubscription();
     record = existing; claimed = true;
   } else if(role==='company'){
     const location = document.getElementById('su-location').value.trim();
-    record = { id: DB.uid('co'), name, location, phone, tpin:'', code, commodities:[], operatingMode:'direct', authSalt, authHash, uid: uid||null, subscription: defaultSubscription() };
+    record = { id: DB.uid('co'), name, location, phone, tpin:'', code, commodities:[], operatingMode:'direct', authSalt, authHash, uid: uid||null };
     DB.data.companies.push(record);
   } else {
-    record = { id: DB.uid('ag'), name, phone, code, authSalt, authHash, uid: uid||null, subscription: defaultSubscription() };
+    record = { id: DB.uid('ag'), name, phone, code, authSalt, authHash, uid: uid||null };
     DB.data.agents.push(record);
   }
   DB.save();
@@ -2505,6 +2732,7 @@ async function attemptLogin(){
   // Subscription check — blocks sign-in if this account (or, for staff/
   // farmers, the company/agent they belong to) is suspended, expired, or
   // past its trial. Managed from the separate agribuy-admin.html panel.
+  await DB.ensureLoaded(); await DB.billingReady();
   const gate = subscriptionGate(resolveOwnerAccount(pendingRole, found));
   if(!gate.ok){ err.textContent = gate.reason; err.style.display='block'; return; }
 
@@ -3276,10 +3504,7 @@ function selectBillingPlan(companyId, planId){
   const c = DB.company(companyId);
   const plan = PLAN_TIERS.find(p=>p.id===planId);
   if(!c || !plan) return;
-  if(!c.subscription) c.subscription = defaultSubscription();
-  c.subscription.plan = planId;
-  c.subscription.notes = (c.subscription.notes||'') + `\nRequested ${plan.name} plan on ${new Date().toISOString().slice(0,10)} — pending NEXLITE activation.`;
-  DB.save();
+  logBillingEvent(c, 'plan_requested', `Requested ${plan.name} plan — pending NEXLITE activation.`);
   toast('Plan selected — contact NEXLITE support to activate it');
   setView('company','c-billing');
 }
@@ -4877,7 +5102,7 @@ function renderFarmer(view){
   if(stored){
     try{
       const saved = JSON.parse(stored);
-      await DB.ensureLoaded();
+      await DB.ensureLoaded(); await DB.billingReady();
       const record = DB.recordFor(saved.role, saved.id);
       if(record){
         const gate = subscriptionGate(resolveOwnerAccount(saved.role, record));
