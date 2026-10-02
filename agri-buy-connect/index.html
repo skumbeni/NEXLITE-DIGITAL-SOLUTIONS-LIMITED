@@ -1422,7 +1422,7 @@ const DB = {
           }
         }));
         const complete = recipientKnown && targets.every(u => it.done[u]);
-        if(complete || it.fails >= 5) return null;
+        if(complete || (it.fails >= 5 && it.k !== 'messages')) return null; // messages keep retrying (status tick shows it) instead of vanishing
         return it;
       }));
       // Items added or changed while we were awaiting must not be lost: merge by key.
@@ -1430,6 +1430,7 @@ const DB = {
       const finished = new Set(items.filter((it, i) => results[i] === null).map(it => it.rec.id));
       const progress = new Map(results.filter(Boolean).map(it => [it.rec.id, it]));
       this._saveOutbox(current.filter(it => !finished.has(it.rec.id)).map(it => progress.get(it.rec.id) || it));
+      if(finished.size && typeof document !== 'undefined' && document.getElementById('chat-messages-scroll')) refreshCurrentView(); // sending -> delivered tick
     }finally{
       this._flushing = false;
       if(this._flushAgain){ this._flushAgain = false; setTimeout(() => this.flushOutbox(), 500); }
@@ -1969,6 +1970,14 @@ const DB = {
     this.addNotification(to.role, to.id, 'message', 'New message from ' + partyName(from), notifBody, {chat:true, party:from});
     return m;
   },
+  // Delivery state of a message I sent: 'delivered' (stored in both inboxes),
+  // 'waiting' (recipient has no sign-in ID yet), 'failed' (server refused, retrying), 'sending'.
+  messageStatus(m){
+    const it = this._outbox().find(x => x.rec && x.rec.id === m.id);
+    if(!it) return 'delivered';
+    if(!this.uidFor(m.to.role, m.to.id)) return 'waiting';
+    return it.fails > 0 ? 'failed' : 'sending';
+  },
   unreadMessageCount(role, id){
     return this.data.messages.filter(m=>m.to.role===role && m.to.id===id && !m.read).length;
   },
@@ -2370,6 +2379,27 @@ async function createAuxAuthAccount(email, password){
    ADMIN_UID in agribuy-admin.html) — if that account is ever rotated,
    update it in both places.
    ========================================================================= */
+// A restored session (app reopened, no fresh login) never runs the sign-in
+// backfill above, so a record that predates the inbox change would stay
+// uid-less forever and nobody could message it. Firebase keeps the
+// signed-in user across restarts, so if that user's email is the one this
+// record maps to, adopt its uid.
+async function backfillUidFromCurrentAuth(role, id){
+  try{
+    const rec = DB.recordFor(role, id);
+    const fb = window.__firebase;
+    if(!rec || rec.uid || !fb || !fb.auth) return;
+    await Promise.race([fb.authReady, new Promise(r=>setTimeout(r,8000))]);
+    const cu = fb.auth.currentUser;
+    if(!cu || cu.isAnonymous || !cu.email) return;
+    const kind = {company:'co', agent:'ag', staff:'fs', wstaff:'ws', farmer:'fm'}[role];
+    const key = (role==='company' || role==='agent') ? rec.code : rec.id;
+    if(!kind || !key || cu.email !== authEmailFor(kind, key)) return;
+    rec.uid = cu.uid;
+    DB.save();
+    if(session && session.role===role && session.id===id) DB.attachInboxIfReady(role, id);
+  }catch(e){ console.warn('uid backfill skipped:', e); }
+}
 async function firebaseSignInAndBackfillUid(record, role, email, password){
   try{
     const fb = window.__firebase;
@@ -2834,6 +2864,7 @@ function enterApp(){
   // record — firebaseSignInAndBackfillUid() retries this once it lands
   // one (signup/staff-add already have it by the time enterApp() runs).
   DB.attachInboxIfReady(role, id);
+  backfillUidFromCurrentAuth(role, id);
   if(role==='company'){
     document.getElementById('company-who-name').textContent = DB.company(id).name;
     document.getElementById('app-company').classList.add('active');
@@ -3059,8 +3090,12 @@ function shareReceipt(appKey, purchaseId){
   setView(appKey, messagesViewFor(appKey));
 }
 
+const chatDrafts = {}; // threadKey -> unsent text, so a live refresh never wipes what's being typed
 function renderMessagesView(appKey, roleId){
   const role = appKey;
+  const oldInput = document.getElementById('chat-input');
+  if(oldInput && activeChatWith){ chatDrafts[DB.threadKey({role:appKey,id:roleId}, activeChatWith)] = oldInput.value; }
+  const hadFocus = !!oldInput && document.activeElement === oldInput;
   const main = document.getElementById(appKey+'-main');
   const contacts = chatContactsFor(role, roleId);
   if(activeChatWith && !contacts.some(c=>c.role===activeChatWith.role && c.id===activeChatWith.id)) activeChatWith = null;
@@ -3070,8 +3105,8 @@ function renderMessagesView(appKey, roleId){
     const unread = DB.unreadCountFromParty({role,id:roleId}, {role:c.role,id:c.id});
     const active = activeChatWith && activeChatWith.role===c.role && activeChatWith.id===c.id;
     return `<div class="chat-contact ${active?'active':''}" onclick="openChatWith('${appKey}','${c.role}','${c.id}')">
-      <div class="chat-avatar">${initialsFor(c.name)}</div>
-      <div class="chat-contact-info"><div class="nm">${c.name}</div><div class="rl">${ROLE_LABEL[c.role]}</div></div>
+      <div class="chat-avatar">${escapeHTML(initialsFor(c.name))}</div>
+      <div class="chat-contact-info"><div class="nm">${escapeHTML(c.name)}</div><div class="rl">${ROLE_LABEL[c.role]}</div></div>
       ${unread>0?`<span class="unread-dot">${unread}</span>`:''}
     </div>`;
   }).join('') : `<div class="chat-empty">No contacts yet — they'll appear here once you're linked with an agent, staff member, or farmer.</div>`;
@@ -3083,13 +3118,13 @@ function renderMessagesView(appKey, roleId){
     const bubbles = msgs.length ? msgs.map(m=>{
       const mine = m.from.role===role && m.from.id===roleId;
       if(m.attachment && m.attachment.purchaseId){
-        return `<div class="chat-bubble receipt ${mine?'mine':'theirs'}">${receiptCardHTML(m.attachment)}<span class="tm" style="padding:2px 4px;">${timeAgo(m.createdAt)}</span></div>`;
+        return `<div class="chat-bubble receipt ${mine?'mine':'theirs'}">${receiptCardHTML(m.attachment)}<span class="tm" style="padding:2px 4px;">${timeAgo(m.createdAt)}${mine?msgTick(m):''}</span></div>`;
       }
-      return `<div class="chat-bubble ${mine?'mine':'theirs'}">${escapeHTML(m.text)}<span class="tm">${timeAgo(m.createdAt)}</span></div>`;
-    }).join('') : `<div class="chat-empty">Say hello to ${partyName(activeChatWith)}.</div>`;
+      return `<div class="chat-bubble ${mine?'mine':'theirs'}">${escapeHTML(m.text)}<span class="tm">${timeAgo(m.createdAt)}${mine?msgTick(m):''}</span></div>`;
+    }).join('') : `<div class="chat-empty">Say hello to ${escapeHTML(partyName(activeChatWith))}.</div>`;
     threadHTML = `
       <div class="chat-thread">
-        <div class="chat-thread-head"><div class="chat-avatar">${initialsFor(partyName(activeChatWith))}</div><div><div class="nm">${partyName(activeChatWith)}</div><div class="rl">${ROLE_LABEL[activeChatWith.role]}</div></div></div>
+        <div class="chat-thread-head"><div class="chat-avatar">${escapeHTML(initialsFor(partyName(activeChatWith)))}</div><div><div class="nm">${escapeHTML(partyName(activeChatWith))}</div><div class="rl">${ROLE_LABEL[activeChatWith.role]}</div></div></div>
         <div class="chat-messages" id="chat-messages-scroll">${bubbles}</div>
         <div class="chat-input-row">
           <button class="receipt-btn" title="Share a payment receipt" onclick="openShareReceiptModal('${appKey}')">🧾</button>
@@ -3109,9 +3144,20 @@ function renderMessagesView(appKey, roleId){
     </div>`;
   const scroller = document.getElementById('chat-messages-scroll');
   if(scroller) scroller.scrollTop = scroller.scrollHeight;
+  const newInput = document.getElementById('chat-input');
+  if(newInput && activeChatWith){
+    const dk = DB.threadKey({role:appKey,id:roleId}, activeChatWith);
+    if(chatDrafts[dk]) newInput.value = chatDrafts[dk];
+    if(hadFocus) newInput.focus();
+  }
   updateNavBadges();
 }
 
+function msgTick(m){
+  const st = DB.messageStatus(m);
+  const label = { delivered:' · ✓ Sent', sending:' · ⏳ Sending…', waiting:' · ⏳ Waiting — '+escapeHTML(partyName(m.to))+' must sign in once', failed:' · ⚠ Not delivered, retrying' }[st];
+  return label;
+}
 function openChatWith(appKey, role, id){
   activeChatWith = { role, id };
   setView(appKey, messagesViewFor(appKey));
@@ -3122,6 +3168,13 @@ function sendChatMessage(appKey){
   if(!input || !activeChatWith) return;
   const text = input.value;
   if(!text.trim()) return;
+  // HTTPS only: never send a message over a plain-http page (localhost allowed for testing).
+  if(location.protocol !== 'https:' && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname)){
+    toast('Not a secure (HTTPS) connection — message not sent.');
+    return;
+  }
+  delete chatDrafts[DB.threadKey({role:appKey,id:session.id}, activeChatWith)];
+  input.value = '';
   DB.sendMessage({role:appKey, id:session.id}, activeChatWith, text);
   setView(appKey, messagesViewFor(appKey));
   setTimeout(()=>{ const i=document.getElementById('chat-input'); if(i) i.focus(); }, 0);
@@ -3135,7 +3188,7 @@ function renderNotificationsView(appKey, roleId){
   const listHTML = notifs.length ? notifs.map(n=>`
     <div class="notif-item ${n.read?'':'unread'}" onclick="openNotification('${appKey}','${n.id}')">
       <div class="notif-icon">${NOTIF_ICONS[n.type]||'🔔'}</div>
-      <div class="notif-body"><div class="ttl">${n.title}</div><div class="msg">${escapeHTML(n.body||'')}</div><div class="tm">${timeAgo(n.createdAt)}</div></div>
+      <div class="notif-body"><div class="ttl">${escapeHTML(n.title||'')}</div><div class="msg">${escapeHTML(n.body||'')}</div><div class="tm">${timeAgo(n.createdAt)}</div></div>
     </div>`).join('') : `<div class="notif-empty">No notifications yet.</div>`;
   main.innerHTML = `
     <div class="main-head">
