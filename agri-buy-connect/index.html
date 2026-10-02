@@ -652,7 +652,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-database.js";
 import {
   getAuth, signInAnonymously, onAuthStateChanged,
-  createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut
+  createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updatePassword
 } from "https://www.gstatic.com/firebasejs/12.17.1/firebase-auth.js";
 
 const firebaseConfig = {
@@ -693,16 +693,27 @@ onAuthStateChanged(auth, (user) => { if(user) resolveAuthReady(user); });
 function startAnonymousAuth(){
   if(authStarted) return;
   authStarted = true;
-  signInAnonymously(auth).catch(err => {
-    console.error('Firebase anonymous sign-in failed:', err);
-  });
+  // signInAnonymously() REPLACES a restored email/password user with a brand
+  // new anonymous one, which broke messaging after every reload (the inbox
+  // rules need the real uid). Wait for Firebase to restore any saved user
+  // first and only go anonymous when there genuinely is none.
+  (async () => {
+    try{
+      if(typeof auth.authStateReady === 'function') await auth.authStateReady();
+      else await new Promise(res => { const un = onAuthStateChanged(auth, () => { un(); res(); }); });
+    }catch(e){ console.warn('auth restore wait failed:', e); }
+    if(auth.currentUser){ resolveAuthReady(auth.currentUser); return; }
+    signInAnonymously(auth).catch(err => {
+      console.error('Firebase anonymous sign-in failed:', err);
+    });
+  })();
 }
 
 // Expose the bits the classic (non-module) script below needs. Resolving
 // __firebaseReadyPromise (created synchronously in <head>, before this
 // deferred module script runs) rather than just setting a plain global
 // avoids any race with the classic script that reads it.
-window.__firebase = { rtdb, ref, get, set, update, onValue, goOffline, goOnline, serverTimestamp, dataRef, authReady, auth, startAnonymousAuth, secondaryAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut };
+window.__firebase = { rtdb, ref, get, set, update, onValue, goOffline, goOnline, serverTimestamp, dataRef, authReady, auth, startAnonymousAuth, secondaryAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, updatePassword };
 window.__firebaseReadyResolve(window.__firebase);
 </script>
 
@@ -1348,6 +1359,13 @@ const DB = {
     this.detachInboxListener();
     const fb = window.__firebase;
     if(!fb || !fb.ref || !fb.onValue) return;
+    // Only attach as the real signed-in owner of this inbox. Attaching while
+    // still anonymous gets permission-denied and the listener never retries.
+    const _cu = fb.auth && fb.auth.currentUser;
+    if(!_cu || _cu.isAnonymous || _cu.uid !== uid){
+      console.warn('Inbox listener deferred: auth uid', _cu && _cu.uid, 'anonymous', _cu && _cu.isAnonymous, 'inbox uid', uid);
+      return;
+    }
     this._inboxUid = uid;
     this._startOutboxTimer();
     this.flushOutbox();
@@ -1356,13 +1374,13 @@ const DB = {
       this._mergeOutboxIntoData(uid);
       localStorage.setItem(DB_KEY, JSON.stringify(this.data));
       refreshCurrentView();
-    }, err => { console.error('Inbox (messages) listener failed:', err); });
+    }, err => { console.error('Inbox (messages) listener failed:', err); if(this._inboxUid===uid) this._inboxUid = null; });
     const unsubNotifs = fb.onValue(fb.ref(fb.rtdb, 'inbox/'+uid+'/notifications'), (snap) => {
       this.data.notifications = snap.exists() ? Object.values(snap.val()) : [];
       this._mergeOutboxIntoData(uid);
       localStorage.setItem(DB_KEY, JSON.stringify(this.data));
       refreshCurrentView();
-    }, err => { console.error('Inbox (notifications) listener failed:', err); });
+    }, err => { console.error('Inbox (notifications) listener failed:', err); if(this._inboxUid===uid) this._inboxUid = null; });
     this._inboxUnsubs = [unsubMsgs, unsubNotifs];
   },
   // Called on logout so a second person signing in on the same device
@@ -2288,6 +2306,7 @@ async function createSelfAuthAccount(email, password){
     const cred = await fb.createUserWithEmailAndPassword(fb.auth, email, password);
     return cred.user.uid;
   }catch(err){
+    createSelfAuthAccount.lastCode = err && err.code;
     console.error('Firebase Auth self-signup failed (non-blocking — classic login still works):', err);
     return null;
   }
@@ -2415,51 +2434,83 @@ async function backfillUidFromCurrentAuth(role, id){
   try{
     const rec = DB.recordFor(role, id);
     const fb = window.__firebase;
-    if(!rec || rec.uid || !fb || !fb.auth) return;
+    if(!rec || !fb || !fb.auth) return;
     await Promise.race([fb.authReady, new Promise(r=>setTimeout(r,8000))]);
     const cu = fb.auth.currentUser;
     if(!cu || cu.isAnonymous || !cu.email) return;
     const kind = {company:'co', agent:'ag', staff:'fs', wstaff:'ws', farmer:'fm'}[role];
     const key = (role==='company' || role==='agent') ? rec.code : rec.id;
     if(!kind || !key || cu.email !== authEmailFor(kind, key)) return;
-    rec.uid = cu.uid;
-    DB.save();
+    if(rec.uid !== cu.uid){ rec.uid = cu.uid; DB.save(); }   // also heals a stale/mismatched uid
     if(session && session.role===role && session.id===id) DB.attachInboxIfReady(role, id);
   }catch(e){ console.warn('uid backfill skipped:', e); }
 }
-async function firebaseSignInAndBackfillUid(record, role, email, password){
+async function firebaseSignInAndBackfillUid(record, role, email, password, altPasswords){
+  let uid = null, failReason = null;
   try{
     const fb = window.__firebase;
-    if(!fb || !fb.signInWithEmailAndPassword) return;
-    let uid = null;
-    try{
-      const cred = await fb.signInWithEmailAndPassword(fb.auth, email, password);
-      uid = cred.user.uid;
-    }catch(signInErr){
-      const code = signInErr && signInErr.code;
-      if(code==='auth/user-not-found' || code==='auth/invalid-credential' || code==='auth/invalid-login-credentials' || code==='auth/wrong-password'){
-        // No Firebase Auth account for this record yet (legacy, created
-        // before phase 1, or its password was set outside this flow) —
-        // create one now so it has a uid going forward.
-        uid = await createSelfAuthAccount(email, password);
-      } else {
-        console.error('Firebase Auth sign-in failed (non-blocking — classic login still works):', signInErr);
+    if(!fb || !fb.signInWithEmailAndPassword) return null;
+    const candidates = [password].concat(altPasswords || []).filter(Boolean);
+    let needCreate = false;
+    for(const pw of candidates){
+      try{
+        const cred = await fb.signInWithEmailAndPassword(fb.auth, email, pw);
+        uid = cred.user.uid; needCreate = false; break;
+      }catch(signInErr){
+        const code = signInErr && signInErr.code;
+        if(code==='auth/user-not-found' || code==='auth/invalid-credential' || code==='auth/invalid-login-credentials' || code==='auth/wrong-password'){
+          needCreate = true;
+        } else {
+          console.error('Firebase Auth sign-in failed (non-blocking — classic login still works):', signInErr);
+          failReason = (code==='auth/network-request-failed') ? 'no connection' : (code || 'sign-in error');
+          needCreate = false; break;
+        }
+      }
+    }
+    if(!uid && needCreate){
+      // No Firebase Auth account yet (legacy record) — create one with the
+      // preferred password (the last candidate for staff = stable one).
+      uid = await createSelfAuthAccount(email, candidates[candidates.length-1] || password);
+      if(!uid){
+        failReason = (createSelfAuthAccount.lastCode==='auth/email-already-in-use')
+          ? 'its messaging password is out of sync (ask the admin to reset it)'
+          : (createSelfAuthAccount.lastCode || 'could not create account');
       }
     }
     if(uid && record.uid !== uid){
       record.uid = uid;
       DB.save();
     }
-    // Now that we have (or already had) a uid for this record, start
-    // pulling in its own messages/notifications — but only if this is
-    // still the currently signed-in session (a slow backfill shouldn't
-    // attach a listener for someone who's since logged out or been
-    // replaced by a different login on this device).
     if(uid && typeof session!=='undefined' && session && session.role===role && session.id===record.id){
       DB.attachInboxIfReady(role, record.id);
     }
   }catch(err){
     console.error('Firebase Auth sign-in/backfill failed (non-blocking — classic login still works):', err);
+    failReason = failReason || 'sign-in error';
+  }
+  if(!uid) toast('Messaging is off: ' + (failReason || 'sign-in failed') + '.');
+  return uid;
+}
+// Keep the Firebase password in step with a password the person just chose,
+// otherwise their next login can no longer sign in to Firebase (→ anonymous →
+// messaging silently dead).
+async function syncFirebasePassword(record, role, newPass){
+  try{
+    const fb = window.__firebase;
+    if(!fb) return;
+    const kind = role==='company' ? 'co' : 'ag';
+    const email = authEmailFor(kind, record.code);
+    const cu = fb.auth.currentUser;
+    if(cu && !cu.isAnonymous && cu.email === email && fb.updatePassword){
+      await fb.updatePassword(cu, newPass);
+      if(record.uid !== cu.uid){ record.uid = cu.uid; DB.save(); }
+      return;
+    }
+    // Not signed in as this account (e.g. first password, or sign-in had failed): link now.
+    await firebaseSignInAndBackfillUid(record, role, email, newPass);
+  }catch(err){
+    console.error('Firebase password sync failed:', err);
+    toast('Password saved, but messaging could not be re-linked — log out and in again.');
   }
 }
 
@@ -2850,14 +2901,15 @@ async function attemptLogin(){
     }
     // _needsPasswordSetup records have no real secret to pair with a
     // Firebase Auth account yet — that happens once they set a password.
+    else { setTimeout(()=>toast('Messaging is off until you set a password in Settings.'), 2500); }
   } else if(pendingRole==='staff'){
     const pinEl = document.getElementById('login-pin');
     const pin = pinEl ? pinEl.value.trim() : '';
-    firebaseSignInAndBackfillUid(found, 'staff', authEmailFor('fs', found.id), pin);
+    firebaseSignInAndBackfillUid(found, 'staff', authEmailFor('fs', found.id), pin, ['st-' + found.id]);
   } else if(pendingRole==='wstaff'){
     const pinEl = document.getElementById('login-pin');
     const pin = pinEl ? pinEl.value.trim() : '';
-    firebaseSignInAndBackfillUid(found, 'wstaff', authEmailFor('ws', found.id), pin);
+    firebaseSignInAndBackfillUid(found, 'wstaff', authEmailFor('ws', found.id), pin, ['st-' + found.id]);
   } else if(pendingRole==='farmer'){
     // Farmers have no interactive password — same deterministic secret
     // used when their Firebase Auth account was (or will be) created.
@@ -3670,6 +3722,7 @@ async function changeCompanyPassword(companyId){
   const { authSalt, authHash } = await makeAuthRecord(p1);
   c.authSalt = authSalt; c.authHash = authHash;
   DB.save();
+  await syncFirebasePassword(c, 'company', p1);
   toast('Password updated');
   setView('company','c-settings');
 }
@@ -4243,6 +4296,7 @@ async function changeAgentPassword(agentId){
   const { authSalt, authHash } = await makeAuthRecord(p1);
   agent.authSalt = authSalt; agent.authHash = authHash;
   DB.save();
+  await syncFirebasePassword(agent, 'agent', p1);
   toast('Password updated');
   setView('agent','a-settings');
 }
@@ -4423,7 +4477,7 @@ async function addCompanyStaffAsync(companyId, name, phone, salary){
   const pin=genStaffPin();
   const { pinSalt, pinHash } = await makePinRecord(pin);
   const id = DB.uid('fs');
-  const uid = await createAuxAuthAccount(authEmailFor('fs', id), pin);
+  const uid = await createAuxAuthAccount(authEmailFor('fs', id), 'st-' + id);
   DB.data.fieldStaff.push({id, companyId, agentId:null, name, phone, code, pinSalt, pinHash, monthlySalary:salary, uid: uid||null});
   const c=DB.company(companyId); c.operatingMode = c.operatingMode==='agent' ? 'hybrid' : 'direct';
   DB.save(); closeModal(); toast('Direct field staff created — ID: '+code+'  PIN: '+pin+' (write it down, it won\'t be shown again)'); setView('company','c-staff');
@@ -4473,7 +4527,7 @@ async function addStaffAsync(name, phone, salary){
   const pin = genStaffPin();
   const { pinSalt, pinHash } = await makePinRecord(pin);
   const id = DB.uid('fs');
-  const uid = await createAuxAuthAccount(authEmailFor('fs', id), pin);
+  const uid = await createAuxAuthAccount(authEmailFor('fs', id), 'st-' + id);
   DB.data.fieldStaff.push({ id, agentId: session.id, name, phone, code, pinSalt, pinHash, monthlySalary: salary, uid: uid||null });
   DB.save(); closeModal();
   toast('Field staff added — ID: ' + code + '  PIN: ' + pin + ' (write it down, it won\'t be shown again)');
@@ -4743,7 +4797,7 @@ async function addWarehouseStaffAsync(companyId, name){
   const pin = genStaffPin();
   const { pinSalt, pinHash } = await makePinRecord(pin);
   const id = DB.uid('ws');
-  const uid = await createAuxAuthAccount(authEmailFor('ws', id), pin);
+  const uid = await createAuxAuthAccount(authEmailFor('ws', id), 'st-' + id);
   DB.data.warehouseStaff.push({ id, companyId, name, code, pinSalt, pinHash, active:true, uid: uid||null, createdAt:new Date().toISOString() });
   DB.save();
   closeModal();
@@ -5339,6 +5393,15 @@ function renderFarmer(view){
           session = saved;
           enterApp();
           restored = true;
+          // Accounts whose saved sign-in was already replaced by an anonymous one
+          // (old bug) need one fresh login to re-link messaging.
+          setTimeout(() => {
+            try{
+              const cu = window.__firebase && window.__firebase.auth.currentUser;
+              const ruid = DB.uidFor(session.role, session.id);
+              if(session && (!cu || cu.isAnonymous || (ruid && cu.uid !== ruid))) toast('Messaging needs a fresh sign-in — please log out and log in once.');
+            }catch(e){}
+          }, 5000);
         } else {
           toast(gate.reason);
         }
