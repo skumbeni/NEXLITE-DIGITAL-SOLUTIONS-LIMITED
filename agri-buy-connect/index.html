@@ -1548,6 +1548,10 @@ const DB = {
     ['companies','agents'].forEach(k => (this.data[k]||[]).forEach(a => {
       const sub = a.uid ? this._effectiveSub(cache.sub[a.uid]) : null;
       if(sub) a.subscription = sub; else delete a.subscription;
+      // Admin-written flag at /billing/{uid}/partnershipApproved (readable by every signed-in
+      // device, unlike /partnership_terms) — lets staff/farmer gates see it too.
+      const pn = a.uid ? cache.sub[a.uid] : null;
+      if(k==='companies' && pn && pn.partnershipApproved && pn.partnershipApproved.at) a.partnershipApproved = pn.partnershipApproved; else delete a.partnershipApproved;
       if(k==='companies'){
         const lg = a.uid ? cache.log[a.uid] : null;
         a.billingLog = lg ? Object.values(lg).sort((x,y)=>String(x.date).localeCompare(String(y.date))) : [];
@@ -1563,7 +1567,7 @@ const DB = {
   _stripBilling(d){
     if(!this._billingLive) return d; // migration not done yet — don't drop the only copy
     const out = Object.assign({}, d);
-    const dropAcct = ({ subscription, billingLog, ...r }) => r;
+    const dropAcct = ({ subscription, billingLog, partnershipApproved, ...r }) => r;
     if(Array.isArray(out.companies)) out.companies = out.companies.map(dropAcct);
     if(Array.isArray(out.agents)) out.agents = out.agents.map(dropAcct);
     if(Array.isArray(out.agentLinks)) out.agentLinks = out.agentLinks.map(l => { const r = Object.assign({}, l); this._FEE_FIELDS.forEach(f => delete r[f]); return r; });
@@ -1836,7 +1840,8 @@ const DB = {
   // by construction: rejected or pending lots never count.
   agribuyRevenue(companyId, period){
     const pt = this.data.partnershipTerms || defaultPartnership();
-    let purchases = this.purchasesFor({companyId}).filter(p=>this.isCommissionable(p));
+    const allCommissionable = this.purchasesFor({companyId}).filter(p=>this.isCommissionable(p));
+    let purchases = allCommissionable;
     if(period) purchases = purchases.filter(p=>p.date >= period.start && p.date <= period.end);
     const totalMT = purchases.reduce((s,p)=>s+purchaseMT(p),0);
     const totalValue = purchases.reduce((s,p)=>s+this.purchaseValue(p),0);
@@ -1848,14 +1853,33 @@ const DB = {
         ? `${pt.originationRatePct}% of accepted value (ZMW ${fmtNum(totalValue)})`
         : `ZMW ${pt.originationRateFlatPerMT}/MT × ${totalMT.toFixed(1)} MT`;
     } else if(pt.model === 'managed_origination'){
-      revenue = (pt.retainerZMW||0) + totalMT * (pt.managedRatePerMT||0);
-      breakdown = `Retainer ZMW ${fmtNum(pt.retainerZMW)} + ZMW ${pt.managedRatePerMT}/MT × ${totalMT.toFixed(1)} MT`;
+      // The retainer is monthly: charge it once per calendar month covered
+      // (inclusive of the current month), not once per call. With a period,
+      // that's the months it spans; with none, it's the months since the
+      // first approved/paid purchase. No approved volume yet = no retainer.
+      let months = 0;
+      if(period){
+        const a = new Date(period.start+'T00:00:00'), b = new Date(period.end+'T00:00:00');
+        months = Math.max(1, (b.getFullYear()-a.getFullYear())*12 + (b.getMonth()-a.getMonth()) + 1);
+      } else if(allCommissionable.length){
+        const first = allCommissionable.map(p=>p.date).sort()[0];
+        months = monthsElapsedSince(first);
+      }
+      revenue = (pt.retainerZMW||0) * months + totalMT * (pt.managedRatePerMT||0);
+      breakdown = `Retainer ZMW ${fmtNum(pt.retainerZMW)} × ${months} mo + ZMW ${pt.managedRatePerMT}/MT × ${totalMT.toFixed(1)} MT`;
     } else if(pt.model === 'trading_margin'){
       revenue = totalValue * (pt.tradingMarginPct/100);
       // Financing cost eats into the spread: capital tied up for avgCycleDays
       // at an annualised borrowing rate, charged against value carried.
       financingCost = totalValue * (pt.financingCostPctPerAnnum/100) * (pt.avgCycleDays/365);
       breakdown = `${pt.tradingMarginPct}% spread on ZMW ${fmtNum(totalValue)} − financing (${pt.financingCostPctPerAnnum}%/yr × ${pt.avgCycleDays}d)`;
+    }
+    // Whichever was applied later wins: a paid plan applied after the terms (or with no approved
+    // terms at all) replaces them, so no partnership/default commission accrues on top.
+    const co = this.company(companyId);
+    const ptApproved = this.data.partnershipTerms && this.data.partnershipTerms.approvedAt;
+    if(co && planSupersedesTerms(co.subscription, ptApproved)){
+      revenue = 0; financingCost = 0; breakdown = 'Paid plan — no default commission';
     }
     const netRevenue = revenue - financingCost;
     return { model: pt.model, totalMT, totalValue, revenue, financingCost, netRevenue, breakdown };
@@ -2145,6 +2169,20 @@ function resolveOwnerAccount(role, record){
   }
   return null;
 }
+// A company is "on a paid plan" once an admin has set an active, non-trial plan. Such a company
+// pays through the plan; the DEFAULT commission (no approved terms) is not charged on top.
+// Approved partnership terms are unaffected — those always accrue.
+function onPaidPlan(sub){
+  return !!(sub && sub.status==='active' && sub.plan && sub.plan!=='trial');
+}
+// Plan vs approved partnership terms: whichever was applied LATER replaces the other.
+// sub.updatedAt is stamped by the admin when the plan/status changes; approvedAt is the terms'
+// approval time. A plan with no stamp (older data) never overrides terms that exist.
+function planSupersedesTerms(sub, approvedAt){
+  if(!onPaidPlan(sub)) return false;
+  if(!approvedAt) return true;
+  return !!sub.updatedAt && String(sub.updatedAt) > String(approvedAt);
+}
 function subscriptionGate(ownerAccount){
   if(Array.isArray(ownerAccount)){
     if(!ownerAccount.length) return { ok:true }; // no linked owner accounts at all — nothing to gate on
@@ -2162,6 +2200,11 @@ function subscriptionGate(ownerAccount){
   const sub = ownerAccount.subscription;
   const now = Date.now();
   if(sub.status==='suspended') return { ok:false, reason:'This account has been suspended. Please contact NEXLITE support to resolve this.' };
+  // A company on AgriBuy-approved partnership terms pays through those terms, so an ended trial
+  // must not lock it out — unless a paid plan was applied AFTER the terms, which then replaces
+  // them. (Suspension above still applies.)
+  const pa = ownerAccount.partnershipApproved;
+  if(pa && !planSupersedesTerms(sub, pa.at)) return { ok:true };
   // A recently-unlinked-from-agent company gets a grace window before
   // billing bites, even if its trial/plan had already lapsed while it
   // was shielded by the agent link — see requestUnlinkAgent/admin approval.
