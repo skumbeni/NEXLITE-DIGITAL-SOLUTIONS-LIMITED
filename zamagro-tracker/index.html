@@ -407,6 +407,7 @@
                 <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
                     <button id="install-btn-landing" class="btn btn-sm install-app-btn hidden" onclick="installApp()" style="background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.35);">⬇️ Install App</button>
                     <a href="./app.apk" download class="btn btn-sm apk-download-link" style="background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.35);">📱 Download APK</a>
+                    <button type="button" class="btn btn-sm" onclick="shareApp(event)" style="background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.35);">📤 Share App</button>
                     <button onclick="showLogin()" class="btn btn-secondary">Log In / Sign Up →</button>
                 </div>
             </header>
@@ -653,6 +654,20 @@
         </div>
     </div>
 
+    <!-- --- SHARE APP (fallback when the device has no native share sheet) --- -->
+    <div id="modal-share-app" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width:420px;">
+            <h3>📤 Share ZamAgro Track</h3>
+            <p style="color:var(--text-muted);font-size:.88rem;margin:.75rem 0;">Send this link to a friend, shop owner or cooperative. They can open it in their phone browser and install it.</p>
+            <div style="display:flex;gap:.5rem;align-items:center;background:var(--surface-2);border-radius:6px;padding:.6rem .8rem;margin-bottom:1rem;">
+                <code id="share-app-link" style="flex:1;word-break:break-all;font-size:.85rem;"></code>
+                <button type="button" class="btn btn-sm" onclick="copyShareLink()">📋 Copy</button>
+            </div>
+            <button type="button" class="btn btn-primary" style="width:100%;margin-bottom:.5rem;" onclick="shareAppWhatsApp()">💬 Share on WhatsApp</button>
+            <button type="button" class="btn" style="width:100%;" onclick="closeModal('modal-share-app')">Close</button>
+        </div>
+    </div>
+
     <!-- --- LICENSE EXPIRED OVERLAY --- -->
     <div id="license-expired-overlay" class="hidden">
         <div class="license-expired-box">
@@ -762,6 +777,7 @@
                 <li class="admin-only"><a href="#" onclick="nav('settings')" id="nav-settings" style="color: var(--secondary)">⚙️ Settings</a></li>
                 <li class="admin-only"><a href="#" onclick="nav('activitylog')" id="nav-activitylog" style="color:var(--accent);">📋 Activity Log</a></li>
                 <li><a href="./app.apk" download class="apk-download-link">📱 Download APK</a></li>
+                <li><a href="#" onclick="shareApp(event)" id="nav-share">📤 Share App</a></li>
             </ul>
             <div class="user-profile" style="display: flex; justify-content: space-between; align-items: center; padding-top: 1rem; border-top: 1px solid #fff3;">
                 <span id="user-display-name">User</span>
@@ -2855,8 +2871,43 @@
                 if (rs) mergeRemoteSettings(rs);
             }
         }
-        // Login-time check of the two flags the platform admin writes WITHOUT bumping updatedAt.
+        // ---- Platform licence (admin-controlled) ----
+        // The owner panel writes licenses/{uid}/pub (admin-only). It is kept in its own local key so a
+        // later settings pull can never overwrite it with the old settings.licenseData copy.
+        const LIC_PUB_KEY = 'za_lic_pub';
+        function licUidOfSrc(src) {
+            try { return decodeURIComponent(String(src.base).split('/').pop()); } catch (e) { return null; }
+        }
+        async function fetchLicensePub(uid, idToken, signal) {
+            if (!uid || !idToken) return null;
+            try {
+                const r = await fetch(`${FIREBASE_CONFIG.databaseURL}/licenses/${encodeURIComponent(uid)}/pub.json?auth=${idToken}`, signal ? { signal } : undefined);
+                if (!r.ok) return null;                       // not published yet / no access: caller falls back to the old fields
+                const p = await r.json();
+                return (p && typeof p === 'object' && p.tier) ? p : null;
+            } catch (e) { return null; }
+        }
+        function storeLicensePub(uid, pub) {
+            try { localStorage.setItem(LIC_PUB_KEY, JSON.stringify({ uid: uid, pub: pub })); } catch (e) {}
+        }
+        function readLicensePub() {
+            try {
+                const c = JSON.parse(localStorage.getItem(LIC_PUB_KEY));
+                const uid = (typeof currentLicenseUid === 'function') ? currentLicenseUid() : null;
+                if (c && c.pub && c.pub.tier && uid && c.uid === uid) return c.pub;
+            } catch (e) {}
+            return null;
+        }
+        // Login-time check of the platform flags the admin writes WITHOUT bumping updatedAt.
+        // Preferred source: licenses/{uid}/pub. Fallback (until the admin panel has migrated this
+        // business): the old settings/licenseData and settings/suspended fields.
         async function pullPlatformFlags(src, signal) {
+            const pub = await fetchLicensePub(licUidOfSrc(src), await getFreshIdToken(), signal);
+            if (pub) {
+                storeLicensePub(licUidOfSrc(src), pub);
+                try { if (typeof applyLicenseUI === 'function') applyLicenseUI(); } catch (e) {}
+                return { suspended: pub.suspended === true };
+            }
             const [sus, lic] = await Promise.all([
                 srcFetch(src, 'settings/suspended', '', signal),
                 srcFetch(src, 'settings/licenseData', '', signal)
@@ -2926,9 +2977,12 @@
                 await pullIncremental(src, { wide: true });
                 return { ok: true };
             }
+            const pub = src.authed ? await fetchLicensePub(licUidOfSrc(src), await getFreshIdToken()) : null;
             const snapshot = (await srcFetch(src, '', '')) || {};
-            if (snapshot.settings && snapshot.settings.suspended) return { suspended: true };
+            if (pub) { if (pub.suspended === true) return { suspended: true }; }
+            else if (snapshot.settings && snapshot.settings.suspended) return { suspended: true };
             rebuildLocalDataFromSnapshot(snapshot);
+            if (pub) { storeLicensePub(licUidOfSrc(src), pub); try { if (typeof applyLicenseUI === 'function') applyLicenseUI(); } catch (e) {} }
             wmSave(wmFromSnapshot(src.id, snapshot));
             return { ok: true };
         }
@@ -3564,6 +3618,9 @@
         };
 
         function getLicense() {
+            // Admin-controlled licence (licenses/{uid}/pub) wins over anything stored in settings.
+            const _pub = readLicensePub();
+            if (_pub) { const o = {}; Object.keys(_pub).forEach(k => { if (k !== 'suspended') o[k] = _pub[k]; }); return o; }
             // Primary source: cloud-synced db.settings (survives device changes and clears).
             try {
                 const s = dbLoad('settings');
@@ -4608,6 +4665,52 @@
                 () => showToast('ID copied'),
                 () => showToast('Could not copy — select and copy manually', 'danger')
             );
+        }
+
+        // ── SHARE APP ────────────────────────────────────────────────────
+        // Shares the public web address of the app (not the signed-in session or any data).
+        const SHARE_APP_TEXT = 'ZamAgro Track: manage your agro-shop stock, sales, credit, FISP and reports from your phone, even offline.';
+        function getShareUrl() {
+            try {
+                const u = new URL(location.href);
+                if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
+                u.hash = ''; u.search = '';
+                u.pathname = u.pathname.replace(/index\.html$/i, '');
+                return u.toString();
+            } catch (e) { return null; }
+        }
+        async function shareApp(ev) {
+            if (ev && ev.preventDefault) ev.preventDefault();
+            const url = getShareUrl();
+            if (!url) { showToast('Open the app from its web address to share it', 'danger'); return; }
+            if (navigator.share) {
+                try { await navigator.share({ title: 'ZamAgro Track', text: SHARE_APP_TEXT, url: url }); return; }
+                catch (e) { if (e && e.name === 'AbortError') return; /* no share sheet here: use the box below */ }
+            }
+            document.getElementById('share-app-link').textContent = url;
+            openModal('modal-share-app');
+        }
+        function shareAppWhatsApp() {
+            const url = getShareUrl();
+            if (!url) return;
+            window.open('https://wa.me/?text=' + encodeURIComponent(SHARE_APP_TEXT + '\n' + url), '_blank');
+        }
+        function copyShareLink() {
+            const val = document.getElementById('share-app-link').textContent;
+            if (!val) return;
+            const fallback = () => {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = val; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+                    document.body.appendChild(ta); ta.select();
+                    const ok = document.execCommand('copy');
+                    ta.remove();
+                    showToast(ok ? 'Link copied' : 'Could not copy: select and copy manually', ok ? 'success' : 'danger');
+                } catch (e) { showToast('Could not copy: select and copy manually', 'danger'); }
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(val).then(() => showToast('Link copied'), fallback);
+            } else { fallback(); }
         }
 
         // ── CO-ADMINISTRATORS ────────────────────────────────────────────
@@ -9000,7 +9103,10 @@
             if (session.role === 'admin') {
                 businessUid = await resolveBusinessUid(cloudAuth.uid, idToken);
                 try {
-                    const settings = await fetch(`${FIREBASE_CONFIG.databaseURL}/businesses/${businessUid}/settings.json?auth=${idToken}`).then(r => r.json());
+                    const pubNow = await fetchLicensePub(businessUid, idToken);
+                    if (pubNow) storeLicensePub(businessUid, pubNow);
+                    const settings = pubNow ? { suspended: pubNow.suspended === true }
+                        : await fetch(`${FIREBASE_CONFIG.databaseURL}/businesses/${businessUid}/settings.json?auth=${idToken}`).then(r => r.json());
                     if (settings && settings.suspended) {
                         localStorage.removeItem(LOCAL_SESSION_KEY);
                         clearCloudAuth();
