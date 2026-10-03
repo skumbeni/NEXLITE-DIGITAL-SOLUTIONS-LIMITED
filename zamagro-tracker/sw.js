@@ -5,7 +5,7 @@
 
 // Bump this on every deploy so returning users pick up the new index.html
 // instead of being stuck on a stale cached copy.
-const CACHE_VERSION = 'zamagro-shell-v9';
+const CACHE_VERSION = 'zamagro-shell-v10';
 
 const APP_SHELL = [
   './',
@@ -21,12 +21,18 @@ const APP_SHELL = [
   './icons/icon-512x512.png'
 ];
 
+// A new version installs quietly and WAITS. index.html shows "A new version is ready"
+// and, when the user taps "Update now", sends SKIP_WAITING — so an update never
+// reloads the app in the middle of a sale. (A first-ever install has nothing to wait
+// for and activates on its own.)
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_VERSION)
-      .then((cache) => cache.addAll(APP_SHELL))
-      .then(() => self.skipWaiting())
+    caches.open(CACHE_VERSION).then((cache) => cache.addAll(APP_SHELL))
   );
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
@@ -55,8 +61,11 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE_VERSION).then((cache) => cache.put('./index.html', copy));
+          // Only keep good responses, so a 404/500 can never replace the offline copy.
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE_VERSION).then((cache) => cache.put('./index.html', copy));
+          }
           return res;
         })
         .catch(() => caches.match('./index.html'))
