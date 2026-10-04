@@ -134,6 +134,7 @@
         .fb-grid::-webkit-scrollbar { display: none; }
         .fb-grid .fb-card { flex: 0 0 calc((100% - 1.1rem) / 2); min-width: 0; scroll-snap-align: start; cursor: pointer; opacity: .55; transform: scale(.94); transition: transform .35s ease, opacity .35s ease; }
         .fb-grid .fb-card.act { opacity: 1; transform: scale(1); }
+        .fb-grid.nojump, .fb-grid.nojump .fb-card { scroll-behavior: auto; transition: none !important; }
         .fb-grid.few { justify-content: center; }
         .fb-grid.few .fb-card { opacity: 1; transform: none; }
         .fb-head > div:last-child { min-width: 0; }
@@ -4990,50 +4991,86 @@
                     '</div>';
             }).join('');
             grid.classList.toggle('few', list.length <= 2);
+            if (list.length > 2) {   // clones of the first 2 cards let the loop continue forward forever
+                Array.from(grid.querySelectorAll('.fb-card')).slice(0, 2).forEach(c => {
+                    const k = c.cloneNode(true); k.classList.add('fb-clone'); k.setAttribute('aria-hidden', 'true'); grid.appendChild(k);
+                });
+            }
             grid.scrollTo({ left: 0, behavior: 'auto' });
             document.getElementById('fb-dots').innerHTML = list.map((_, i) =>
                 '<button type="button" aria-label="Go to experience ' + (i + 1) + '" onclick="fbGoTo(' + i + ')"></button>').join('');
-            grid.onscroll = fbUpdateDots;
+            grid.onscroll = () => { fbUpdateDots(); fbQueueWrap(); };
+            grid.ontouchstart = () => { fbTouching = true; };
+            grid.ontouchend = grid.ontouchcancel = () => { fbTouching = false; fbQueueWrap(300); };
             requestAnimationFrame(() => { fbUpdateDots(); fbStartAuto(); });
         }
 
-        function fbCards() { return Array.from(document.querySelectorAll('#fb-grid .fb-card')); }
+        let fbTouching = false, fbWrapT = null;
+        function fbCards() { return Array.from(document.querySelectorAll('#fb-grid .fb-card:not(.fb-clone)')); }
+        function fbAllCards() { return Array.from(document.querySelectorAll('#fb-grid .fb-card')); }
+        function fbLeft(c) { return c.offsetLeft - document.getElementById('fb-grid').offsetLeft; }
 
+        // raw index among ALL cards (clones included) nearest the left edge
         function fbCurrentIndex() {
             const grid = document.getElementById('fb-grid');
             let best = 0, bestD = Infinity;
-            fbCards().forEach((c, i) => { const d = Math.abs(c.offsetLeft - grid.offsetLeft - grid.scrollLeft); if (d < bestD) { bestD = d; best = i; } });
+            fbAllCards().forEach((c, i) => { const d = Math.abs(fbLeft(c) - grid.scrollLeft); if (d < bestD) { bestD = d; best = i; } });
             return best;
         }
+
+        // silently jump (no animation, no fade) to a card's position
+        function fbJumpTo(rawIdx) {
+            const grid = document.getElementById('fb-grid');
+            const c = fbAllCards()[rawIdx];
+            if (!grid || !c) return;
+            grid.classList.add('nojump');
+            grid.scrollLeft = fbLeft(c);
+            fbUpdateDots();
+            requestAnimationFrame(() => requestAnimationFrame(() => grid.classList.remove('nojump')));
+        }
+
+        // once the clones of cards 1-2 are showing, swap to the real cards 1-2: looks identical, so the circle never rewinds
+        function fbWrapIfNeeded() {
+            if (fbTouching) return;
+            const n = fbCards().length;
+            if (n <= 2) return;
+            const raw = fbCurrentIndex();
+            if (raw >= n) fbJumpTo(raw - n);
+        }
+        function fbQueueWrap(delay) { clearTimeout(fbWrapT); fbWrapT = setTimeout(fbWrapIfNeeded, delay || 150); }
 
         function fbUpdateDots() {
             const grid = document.getElementById('fb-grid');
             if (!grid) return;
-            const cards = fbCards();
+            const n = fbCards().length;
             const overflow = grid.scrollWidth > grid.clientWidth + 4;
-            const atEnd = grid.scrollLeft + grid.clientWidth >= grid.scrollWidth - 4;
-            const idx = atEnd ? cards.length - 1 : fbCurrentIndex();
+            const raw = fbCurrentIndex();
+            const idx = n ? raw % n : 0;
             document.querySelectorAll('#fb-dots button').forEach((b, i) => b.classList.toggle('on', i === idx));
-            const first = Math.max(0, Math.min(idx, cards.length - 2));
-            cards.forEach((c, i) => c.classList.toggle('act', i === first || i === first + 1));
+            fbAllCards().forEach((c, i) => c.classList.toggle('act', i === raw || i === raw + 1));
             document.getElementById('fb-dots').style.display = overflow ? 'flex' : 'none';
             ['fb-prev', 'fb-next'].forEach(id => document.getElementById(id).classList.toggle('hidden', !overflow));
         }
 
-        function fbGoTo(i) {
+        function fbGoToRaw(i) {
             const grid = document.getElementById('fb-grid');
-            const c = fbCards()[i];
-            if (grid && c) grid.scrollTo({ left: c.offsetLeft - grid.offsetLeft, behavior: 'smooth' });
+            const c = fbAllCards()[i];
+            if (grid && c) grid.scrollTo({ left: fbLeft(c), behavior: 'smooth' });
         }
+        function fbGoTo(i) { fbGoToRaw(i); }
 
         function fbStep(dir) {
             const grid = document.getElementById('fb-grid');
-            const cards = fbCards();
-            if (!grid || !cards.length) return;
-            const atEnd = grid.scrollLeft + grid.clientWidth >= grid.scrollWidth - 4;
-            if (dir > 0 && atEnd) return fbGoTo(0);                       // loop back to the start
-            if (dir < 0 && grid.scrollLeft <= 4) return fbGoTo(cards.length - 1);
-            fbGoTo(Math.max(0, Math.min(cards.length - 1, fbCurrentIndex() + dir)));
+            const n = fbCards().length;
+            if (!grid || !n) return;
+            fbWrapIfNeeded();
+            const cur = fbCurrentIndex();
+            if (dir > 0) return fbGoToRaw(Math.min(cur + 1, fbAllCards().length - 1));   // always forward, around the circle
+            if (cur <= 0 && fbAllCards()[n]) {   // manual "previous" from the start: jump to the clone, then step back one
+                fbJumpTo(n);
+                return requestAnimationFrame(() => fbGoToRaw(n - 1));
+            }
+            fbGoToRaw(Math.max(0, cur - 1));
         }
 
         function fbStartAuto() {
