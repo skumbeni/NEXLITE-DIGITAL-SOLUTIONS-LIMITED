@@ -672,6 +672,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
       <div class="nav-item" onclick="showSection('reports')" data-section="reports"><span class="icon">📄</span> Reports</div>
       <div class="nav-item" onclick="showSection('notices')" data-section="notices"><span class="icon">📌</span> Staff Notices <span id="noticeBadge" style="display:none;background:#E74C3C;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:6px"></span></div>
       <div class="nav-item" onclick="showSection('inbox')" data-section="inbox"><span class="icon">📥</span> Inbox <span id="inbBadge" style="display:none;background:#E74C3C;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:6px"></span></div>
+      <div class="nav-item" onclick="showSection('messages')" data-section="messages"><span class="icon">💬</span> Messages <span id="pmBadge" style="display:none;background:#E74C3C;color:#fff;border-radius:10px;padding:0 6px;font-size:11px;margin-left:6px"></span></div>
       <div class="nav-item" onclick="showSection('mypay')" data-section="mypay" style="display:none"><span class="icon">💵</span> My Pay</div>
       <div class="nav-item" onclick="showSection('staff')" data-section="staff"><span class="icon">👥</span> Staff</div>
       <div class="nav-item" onclick="showSection('admin')" data-section="admin"><span class="icon">⚙️</span> Admin Settings</div>
@@ -841,6 +842,12 @@ tr:hover td { background:rgba(108,52,131,0.04); }
             <tbody id="feeSubmissionsTableBody"><tr><td colspan="6" style="text-align:center;color:var(--text-light)">Loading…</td></tr></tbody>
           </table></div>
         </div>
+      </div>
+
+      <!-- Parent Messages Section -->
+      <div class="section" id="sec-messages">
+        <div class="section-title">💬 Messages</div>
+        <div id="pmHost"></div>
       </div>
 
       <!-- Inbox Section -->
@@ -1186,6 +1193,7 @@ tr:hover td { background:rgba(108,52,131,0.04); }
       <div class="mob-nav-item" onclick="showSection('database')" data-section="database"><span class="icon">🗃️</span>DB</div>
       <div class="mob-nav-item" onclick="showSection('register')" data-section="register"><span class="icon">➕</span>Add</div>
       <div class="mob-nav-item" onclick="showSection('finance')" data-section="finance"><span class="icon">💰</span>Finance</div>
+      <div class="mob-nav-item" onclick="showSection('messages')" data-section="messages"><span class="icon">💬</span>Chat <span id="pmBadgeM" style="display:none;background:#E74C3C;color:#fff;border-radius:10px;padding:0 5px;font-size:10px"></span></div>
       <div class="mob-nav-item" onclick="showSection('admin')" data-section="admin"><span class="icon">⚙️</span>Admin</div>
     </div>
   </div>
@@ -2844,6 +2852,10 @@ const MANUAL_TOPICS = [
  { t:'Staff Notices, Documents and Inbox', i:'📥', need:'inbox', staff:true, html:`<ul><li><strong>Staff Notices:</strong> messages from leadership to staff. Read them regularly.</li>
   <li><strong>Documents:</strong> shared school files. Upload only what the school needs and avoid files with private information you do not need to share.</li>
   <li><strong>Inbox:</strong> send a request or submission to a role (for example the Head Teacher). Items show a status, can receive replies, and can be forwarded. Anyone holding that role can see items sent to it.</li></ul>` },
+ { t:'Messages: parents and the school', i:'💬', need:'messages', html:`<ul><li><strong>Parents:</strong> open <em>Messages</em>, pick your child, choose who to write to (Class Teacher, Deputy Head Teacher or Head Teacher) and tap Send. Replies appear on the same page and a red number on the menu shows new ones.</li>
+  <li><strong>Staff:</strong> class teachers see messages for the classes assigned to them. The Deputy Head Teacher and the Head Teacher see the messages sent to them. The Administrator sees all of them. Open a message to reply, or tap <em>New</em> to write to a learner's parents.</li>
+  <li>Messages are for school matters. Never send passwords, PINs or mobile money PINs in a message.</li>
+  <li>Messages travel over a normal internet connection. The page refreshes by itself every few seconds while it is open, so a reply may take a moment to show.</li></ul>` },
  { t:'My Pay', i:'💵', need:'mypay', staff:true, html:`<p>View your own pay records and payslips and acknowledge them. Only you and the people responsible for payroll can see your pay. If something looks wrong, tell the Administrator promptly.</p>` },
  { t:'Staff page: logins, roles and extra roles', i:'👥', need:'staff', html:`<ul><li><strong>Create a login</strong> with the staff member's name, email, a strong password and the lowest role that does their job.</li>
   <li><strong>Change a role</strong> from the role list. Only an Administrator can do this.</li>
@@ -2944,6 +2956,7 @@ function refreshCurrentSection() {
     case 'documents': initDocuments(); break;
     case 'notices': initNotices(); break;
     case 'inbox': initInbox(); break;
+    case 'messages': initMessages(); break;
     case 'manual': renderManual(); break;
     case 'mypay': renderMyPay(); break;
   }
@@ -3017,7 +3030,7 @@ function _applyDefSel(id, pref) {
 // Each setting decides for itself whether the signed-in role needs it (show()), based on
 // what that role can actually open — so a Bursar, a Teacher and a Parent each see only
 // their own options, and custom roles are covered automatically.
-const SECTION_LABELS = { dashboard:'Dashboard', database:'Student Database', register:'Register Student', assessments:'Assessments', classmarks:'Class Marks', finance:'Finance', attendance:'Attendance', conduct:'Conduct', analytics:'Analytics', announcements:'Announcements', reports:'Reports', documents:'Documents', notices:'Staff Notices', inbox:'Inbox', mypay:'My Pay', staff:'Staff', admin:'Admin Settings' };
+const SECTION_LABELS = { dashboard:'Dashboard', database:'Student Database', register:'Register Student', assessments:'Assessments', classmarks:'Class Marks', finance:'Finance', attendance:'Attendance', conduct:'Conduct', analytics:'Analytics', announcements:'Announcements', reports:'Reports', documents:'Documents', notices:'Staff Notices', inbox:'Inbox', messages:'Messages', mypay:'My Pay', staff:'Staff', admin:'Admin Settings' };
 function _optHtml(list, cur) { return list.map(o => '<option value="' + escHtml(o[0]) + '"' + ((cur || '') === o[0] ? ' selected' : '') + '>' + escHtml(o[1]) + '</option>').join(''); }
 const MY_SETTINGS = [
   { id: 'autolock', show: () => true, render() {
@@ -4225,7 +4238,8 @@ function renderParentFinance(idx) {
       <span>Balance</span><span>K${balance.toLocaleString()}</span>
     </div>
     <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border)">
-      <button class="btn btn-success btn-sm" onclick="openParentPaymentModal('${escHtml(s.id)}','${escHtml(s.name)}')">💳 Submit Payment for Review</button>
+      <button class="btn btn-success btn-sm" data-sid="${escHtml(s.id)}" onclick="openParentPaymentModal(this.dataset.sid)">💳 Submit Payment for Review</button>
+      <button class="btn btn-sm" data-sid="${escHtml(s.id)}" onclick="pmKidsView(this.dataset.sid)" title="Message the school">💬 Message the school</button>
     </div>
     <div style="margin-top:16px">
       <strong>Your Submitted Payments</strong>
@@ -4234,7 +4248,19 @@ function renderParentFinance(idx) {
   loadParentSubmissions(s.id);
 }
 
+// The child's name is looked up by ID instead of being pushed through an inline onclick. A name such as Ng'andu or D'Souza
+// contains an apostrophe that ended the onclick string early, so the Pay button silently did nothing for that child.
+function _payChild(studentId) {
+  const pools = [window.MY_CHILDREN || [], (typeof students !== 'undefined' && students) || []];
+  for (const p of pools) { const s = (p || []).find(x => x && x.id === studentId); if (s) return s; }
+  return null;
+}
+
 function openParentPaymentModal(studentId, studentName) {
+  const kid = _payChild(studentId);
+  studentName = studentName || (kid && kid.name) || studentId;
+  window._payModal = { id: studentId, name: studentName };
+  const prev = document.getElementById('parentPayModal'); if (prev) prev.remove();
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.id = 'parentPayModal';
@@ -4259,7 +4285,7 @@ function openParentPaymentModal(studentId, studentName) {
       <div id="ppErr" style="display:none;color:var(--accent);font-size:12.5px;margin-bottom:8px"></div>
       <div class="modal-actions">
         <button class="btn btn-outline" id="ppCancelBtn" onclick="document.getElementById('parentPayModal').remove()">Cancel</button>
-        <button class="btn btn-success" id="ppSubmitBtn" onclick="submitParentPayment('${escHtml(studentId)}','${escHtml(studentName)}')">Submit</button>
+        <button class="btn btn-success" id="ppSubmitBtn" onclick="submitParentPayment()">Submit</button>
       </div>
     </div>`;
   document.body.appendChild(modal);
@@ -4268,7 +4294,22 @@ function openParentPaymentModal(studentId, studentName) {
   setTimeout(() => { const el = document.getElementById('ppAmount'); if (el) el.focus(); }, 50);
 }
 
+// Why was a submission refused? Looks at this login's own directory record and says what to fix.
+async function _payDeniedHint(studentId) {
+  const generic = 'Submission was refused by the server. Please contact the school office.';
+  try {
+    const u = window._fbAuth && window._fbAuth.currentUser; if (!u) return generic;
+    const e = await _staffDirectoryRest(u.uid);
+    if (!e || !e.adminUid) return 'Your login is not linked to a school record yet. Please contact the school office.';
+    const linked = e.studentId === studentId || !!(e.children && e.children[studentId]);
+    if (!linked) return 'Your login is not linked to this child on the server yet. Ask the school Administrator to open Staff \u2192 Children, tick this child and press Save, then try again.';
+    return 'Not authorized. If the school subscription has expired, payments cannot be submitted until it is renewed. Otherwise please contact the school office.';
+  } catch (err) { return generic; }
+}
+
 async function submitParentPayment(studentId, studentName) {
+  const pm = window._payModal || {};
+  studentId = studentId || pm.id; studentName = studentName || pm.name || studentId;
   const amount = parseFloat(document.getElementById('ppAmount').value) || 0;
   const network = document.getElementById('ppNetwork').value;
   const txn = document.getElementById('ppTxn').value.trim();
@@ -4276,18 +4317,15 @@ async function submitParentPayment(studentId, studentName) {
   const errEl = document.getElementById('ppErr');
   const submitBtn = document.getElementById('ppSubmitBtn');
   const cancelBtn = document.getElementById('ppCancelBtn');
+  const fail = m => { errEl.textContent = m; errEl.style.display = 'block'; };
 
   errEl.style.display = 'none';
-  if (amount <= 0 || !txn) {
-    errEl.textContent = 'Please enter a valid amount and transaction ID.';
-    errEl.style.display = 'block';
-    return;
-  }
-  if (!window._fbDb) {
-    errEl.textContent = 'Not connected — check your internet connection and try again.';
-    errEl.style.display = 'block';
-    return;
-  }
+  if (!studentId) return fail('No student selected. Close this window and try again.');
+  if (amount <= 0 || !txn) return fail('Please enter a valid amount and transaction ID.');
+  // Plain HTTPS only needs a signed-in user. It must NOT depend on the live (websocket) database object.
+  if (!(window._fbAuth && window._fbAuth.currentUser)) return fail('You are signed out. Please sign in again and retry.');
+  if (!navigator.onLine) return fail('Not connected \u2014 check your internet connection and try again.');
+  if (/[.$#\[\]\/]/.test(String(studentId))) return fail('This student\u2019s ID contains characters ( / . # $ [ ] ) that the cloud cannot store, so payments cannot be submitted online for this child. Please ask the school office to change the ID, or to record the payment for you.');
 
   const key = 'p' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
   const submission = {
@@ -4298,22 +4336,25 @@ async function submitParentPayment(studentId, studentName) {
   };
 
   submitBtn.disabled = true; cancelBtn.disabled = true; submitBtn.textContent = 'Submitting…';
-  try {
-    const path = _fbSchoolPath() + '/feePaymentSubmissions/' + studentId + '/' + key;
-    await _restPut(path, submission, 20000);
+  const path = _fbSchoolPath() + '/feePaymentSubmissions/' + encodeURIComponent(studentId) + '/' + key;
+  let lastErr = null;
+  for (let n = 0; n < 3; n++) {          // same key every time, so a retry can never create a duplicate
+    try { await _restPut(path, submission, 20000); lastErr = null; break; }
+    catch (e) { lastErr = e; if (e && e.code === 'PERMISSION_DENIED') break; await new Promise(r => setTimeout(r, 900 * (n + 1))); }
+  }
+  if (!lastErr) {
     const modal = document.getElementById('parentPayModal');
     if (modal) modal.remove();
     showToast('Payment submitted. The school office will review and confirm it.');
     loadParentSubmissions(studentId);
-  } catch (err) {
-    console.warn('Fee payment submission failed:', err.code || err.message || err);
-    submitBtn.disabled = false; cancelBtn.disabled = false; submitBtn.textContent = 'Submit';
-    const isPermission = (err.code || '').includes('PERMISSION_DENIED') || /permission/i.test(err.message || '');
-    errEl.textContent = isPermission
-      ? 'Submission failed: not authorized. Please contact the school office — this is a configuration issue.'
-      : 'Submission failed: ' + (err.message || 'unknown error') + '. Please check your connection and try again.';
-    errEl.style.display = 'block';
+    return;
   }
+  console.warn('Fee payment submission failed:', lastErr.code || lastErr.message || lastErr);
+  submitBtn.disabled = false; cancelBtn.disabled = false; submitBtn.textContent = 'Submit';
+  const code = lastErr.code || '';
+  if (code === 'PERMISSION_DENIED' || /permission/i.test(lastErr.message || '')) fail(await _payDeniedHint(studentId));
+  else if (code === 'HTTP_400') fail('The cloud rejected this student\u2019s ID. Please ask the school office to check it.');
+  else fail('Submission failed: ' + (lastErr.message || 'unknown error') + '. Please check your connection and try again.');
 }
 
 async function loadParentSubmissions(studentId) {
@@ -7997,6 +8038,8 @@ window.ROLE_SECTIONS = {
 
 // Staff self-service pay page: all staff roles except the Administrator (who runs payroll) and Parents.
 Object.keys(window.ROLE_SECTIONS).forEach(r => { if (!window.ROLE_SECTIONS[r].includes('manual')) window.ROLE_SECTIONS[r].push('manual'); });
+// Parent <-> school messages: parents, school leaders and every role that can be a class teacher (not Bursar / Accountant).
+['Administrator','Head Teacher','Deputy Head Teacher','Senior Teacher','Head of Department','Teacher','Grade Teacher','Subject Teacher','Counsellor','Parent'].forEach(r => { if (window.ROLE_SECTIONS[r] && !window.ROLE_SECTIONS[r].includes('messages')) window.ROLE_SECTIONS[r].push('messages'); });
 Object.keys(window.ROLE_SECTIONS).forEach(r => {
   if (r !== 'Administrator' && r !== 'Parent' && !window.ROLE_SECTIONS[r].includes('mypay')) window.ROLE_SECTIONS[r].push('mypay');
 });
@@ -8662,7 +8705,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const clean = {};
     CFG.forEach(([k]) => { const v = parseInt(perms && perms[k], 10); if (v >= 1 && v <= 3) clean[k] = v; });
     window.CUSTOM_PERMS[name] = clean;
-    window.ROLE_SECTIONS[name] = ['dashboard','inbox','mypay','manual'].concat(Object.keys(clean));
+    window.ROLE_SECTIONS[name] = ['dashboard','inbox','messages','mypay','manual'].concat(Object.keys(clean));
   };
   function ensureRole(role) {
     const live = typeof config !== 'undefined' && config && config.customRoles && config.customRoles[role];
@@ -9643,11 +9686,15 @@ async function setStaffChildren(uid, ids) {
   const u = users.find(x => x.firebaseUid === uid); if (!u) return false;
   if (u.role === 'Parent' && !ids.length) { showToast('A Parent login needs at least one child', 'error'); return false; }
   const err = _kidsError(ids, u.role); if (err) { showToast(err, 'error'); return false; }
+  // Save to the cloud FIRST (plain HTTPS) and only say "saved" once the server has accepted it. This used to be a background
+  // write that announced success even when it failed. The child then stayed unlinked on the server and every payment or
+  // message from that login was refused.
+  try { await _dbUpdate(_staffDirectoryPath(uid), { children: _childrenMap(ids), studentId: (u.role === 'Parent' && ids.length) ? ids[0] : null }); }
+  catch (e) { showToast('NOT saved \u2014 could not reach the cloud (' + ((e && (e.code || e.message)) || 'error') + '). Check the connection and press Save again.', 'error'); return false; }
   u.childIds = ids;
   if (u.role === 'Parent') u.studentId = ids[0]; else delete u.studentId;
   _saveUsers(users);
-  _fbWriteMerge(_staffDirectoryPath(uid), { children: _childrenMap(ids), studentId: (u.role === 'Parent' && ids.length) ? ids[0] : null });
-  showToast('Children updated for ' + (u.username || 'login') + '. They see the change next time they open the app.');
+  showToast('Children saved to the cloud for ' + (u.username || 'login') + '. They see the change next time they open the app.');
   renderStaffLogins();
   return true;
 }
@@ -9773,7 +9820,8 @@ function renderMyChildrenCard() {
     return '<div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)">' + av +
       '<div style="flex:1;min-width:0"><strong>' + escHtml(k.name) + '</strong><div style="font-size:12px;color:var(--text-light)">' + escHtml(k.class || '') +
       (avg !== null && avg !== undefined ? ' \u00b7 Avg ' + Number(avg).toFixed(1) + '%' : '') + ' \u00b7 Balance K' + bal.toLocaleString() + '</div></div>' +
-      '<button class="btn btn-success btn-sm" onclick="openParentPaymentModal(\'' + escHtml(k.id) + '\',\'' + escHtml(k.name) + '\')">\ud83d\udcb3 Pay</button></div>';
+      '<button class="btn btn-success btn-sm" data-sid="' + escHtml(k.id) + '" onclick="openParentPaymentModal(this.dataset.sid)">\ud83d\udcb3 Pay</button>' +
+      '<button class="btn btn-sm" data-sid="' + escHtml(k.id) + '" onclick="pmKidsView(this.dataset.sid)" title="Message the school">\ud83d\udcac</button></div>';
   }).join('');
 }
 (function () {
@@ -10746,6 +10794,437 @@ document.addEventListener('click', function (e) {
   if (e.target.closest && e.target.closest('[onclick*="toggleSidebar"]')) return; // the ☰ button handles itself
   sb.classList.remove('open');
 }, true);
+</script>
+<!-- Parent <-> school messages (plain HTTPS) -->
+<script>
+// ==================== PARENT <-> SCHOOL MESSAGES ====================
+// A parent writes to the Class Teacher, the Deputy Head Teacher or the Head Teacher about one child, and they reply.
+//   <school>/parentChat/head/<studentId>/<msgId>
+//   <school>/parentChat/deputy/<studentId>/<msgId>
+//   <school>/parentChat/class/<class>/<studentId>/<msgId>
+// message = { id, sid, sname, cls, dir:'in' (parent -> school) | 'out' (school -> parent), fromUid, fromName, fromRole, text, ts }
+// PLAIN HTTPS ONLY: every read is a REST GET and every send is a REST PUT (the same helpers the fee submissions use).
+// There are no websocket listeners; lists refresh by polling while the page is open and every few minutes in the background.
+// Who may read or write what is decided by the database rules (parentChat); this page only asks for the boxes the login may open.
+(function () {
+  'use strict';
+  const ORDER = ['class', 'deputy', 'head'];
+  const BOXES = { class: 'Class Teacher', deputy: 'Deputy Head Teacher', head: 'Head Teacher' };
+  const MAX_LEN = 2000, POLL_MS = 25000, BG_MS = 180000, MIN_GAP = 8000;
+  const BAD_KEY = /[.$#\[\]\/]/;
+  const st = { box: 'class', kid: 0, parent: {}, threads: [], mode: '', last: 0, err: '', draft: {}, timer: null, name: '', open: null, loading: false, pool: [], pick: null };
+
+  const $ = id => document.getElementById(id);
+  const E = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const toast = (m, t) => { try { if (typeof showToast === 'function') showToast(m, t); } catch (e) {} };
+  const myUid = () => (window._fbAuth && window._fbAuth.currentUser) ? window._fbAuth.currentUser.uid : null;
+  const cu = () => (typeof currentUser !== 'undefined' && currentUser) || null;
+  const myRole = () => (cu() && cu().role) || '';
+  // NOTE: deliberately not hasRole()/hasAnyRole(): those read _allRoles(), which is defined twice in this app.
+  const myRoles = () => cu() ? [cu().role].concat(cu().extraRoles || []).filter(Boolean) : [];
+  const isParentUi = () => myRole() === 'Parent';
+  const seg = s => encodeURIComponent(String(s));
+  const ckey = c => String(c == null ? '' : c).replace(/[.$#\[\]\/]/g, '_');
+  const base = () => _fbSchoolPath() + '/parentChat';
+  const newId = () => 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const byTs = (a, b) => (a.ts || 0) - (b.ts || 0) || String(a.id).localeCompare(String(b.id));
+  const vals = v => (v && typeof v === 'object') ? Object.keys(v).map(k => v[k]).filter(m => m && typeof m === 'object' && m.text && m.ts) : [];
+  const onScreen = () => !document.hidden && typeof currentSection !== 'undefined' && currentSection === 'messages';
+
+  function boxPath(box, cls) { return base() + '/' + (box === 'class' ? 'class/' + seg(ckey(cls)) : box); }
+  function threadPath(box, cls, sid) { return boxPath(box, cls) + '/' + seg(sid); }
+
+  function fmt(ts) {
+    const d = new Date(ts), hm = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toDateString() === new Date().toDateString() ? hm : d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + hm;
+  }
+  function errText(e) {
+    const c = (e && (e.code || e.message)) || 'error';
+    if (c === 'PERMISSION_DENIED') return 'The school database refused this. Either messaging has not been switched on yet (the school must publish the latest database rules) or this login is not linked to the child.';
+    if (c === 'BAD_ID') return 'This child\u2019s ID contains characters ( / . # $ [ ] ) that the cloud cannot store, so messaging is not available for this child. Please ask the school office to change the ID.';
+    if (c === 'timeout') return 'The connection timed out. Your text is still here \u2014 tap Send to try again.';
+    return 'Could not send (' + c + '). Your text is still here \u2014 tap Send to try again.';
+  }
+
+  // ---------- device-local "seen" markers (what counts as a new message on this phone) ----------
+  const seenKey = () => 'pmSeen:' + (myUid() || '') + ':' + _fbSchoolPath();
+  function seenMap() { try { return JSON.parse(localStorage.getItem(seenKey()) || '{}') || {}; } catch (e) { return {}; } }
+  function markSeen(k, ts) {
+    const m = seenMap(); if ((m[k] || 0) >= ts) return; m[k] = ts;
+    try { localStorage.setItem(seenKey(), JSON.stringify(m)); } catch (e) {}
+  }
+
+  // ---------- who am I (shown to the other side) ----------
+  async function myName() {
+    if (st.name) return st.name;
+    let n = '';
+    try { const u = myUid(); if (u && typeof _staffDirectoryRest === 'function') { const e = await _staffDirectoryRest(u); if (e && e.name) n = String(e.name); } } catch (e) {}
+    if (!n && cu()) n = String(cu().name || cu().username || '');
+    if (n.indexOf('@') > 0) n = n.split('@')[0];
+    n = n.trim().slice(0, 80) || (isParentUi() ? 'Parent' : 'Staff');
+    st.name = n; return n;
+  }
+
+  // ---------- sending: one REST PUT, retried; safe to retry because the message id is fixed ----------
+  async function sendMsg(box, cls, kid, text, dir) {
+    const me = myUid(); if (!me) throw Object.assign(new Error('not signed in'), { code: 'not-signed-in' });
+    if (BAD_KEY.test(String(kid.id))) throw Object.assign(new Error('bad id'), { code: 'BAD_ID' });
+    const id = newId();
+    const fromRole = dir === 'in' ? 'Parent' : (myRole() === 'Administrator' ? 'Administrator' : (box === 'class' ? (myRole() || BOXES.class) : BOXES[box]));
+    const msg = { id, sid: String(kid.id), sname: String(kid.name || '').slice(0, 80), cls: String(kid.class || '').slice(0, 60), dir, fromUid: me, fromName: await myName(), fromRole: String(fromRole).slice(0, 40), text, ts: Date.now() };
+    const path = threadPath(box, cls, kid.id) + '/' + id;
+    let lastErr;
+    for (let n = 0; n < 3; n++) {
+      try { await _restPut(path, msg, 20000); return msg; }
+      catch (e) {
+        lastErr = e;
+        if (e && e.code === 'PERMISSION_DENIED') {
+          // A retry can be "denied" only because the first attempt actually arrived (messages cannot be overwritten): check.
+          if (n > 0) { try { const back = await _restGet(path, 15000); if (back && back.id === id) return msg; } catch (_) {} }
+          throw e;
+        }
+        await sleep(900 * (n + 1));
+      }
+    }
+    throw lastErr;
+  }
+
+  // ---------- parent side ----------
+  function myKids() {
+    const k = window.MY_CHILDREN;
+    if (k && k.length) return k;
+    if (typeof students !== 'undefined' && students && students._childOnly) return students;
+    return [];
+  }
+  function kidOf() { const k = myKids(); if (st.kid >= k.length) st.kid = 0; return k[st.kid] || null; }
+  const listOf = (kid, box) => (kid && st.parent[kid.id + '|' + box]) || [];
+  function parentUnread(kid, box, seen) {
+    const l = listOf(kid, box), last = l[l.length - 1];
+    return !!(last && last.dir === 'out' && last.ts > ((seen || seenMap())['p|' + kid.id + '|' + box] || 0));
+  }
+  async function fetchParent() {
+    const kids = myKids().filter(k => k && k.id && !BAD_KEY.test(String(k.id))), out = {}, jobs = [];
+    let denied = 0, total = 0, other = null;
+    kids.forEach(k => ORDER.forEach(b => {
+      total++;
+      jobs.push(_restGet(threadPath(b, k.class, k.id), 20000).then(
+        v => { out[k.id + '|' + b] = vals(v).sort(byTs); },
+        e => { if (e && e.code === 'PERMISSION_DENIED') denied++; else other = e; }));
+    }));
+    await Promise.all(jobs);
+    if (total && denied === total) throw Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED' });
+    if (other && !Object.keys(out).length) throw other;
+    Object.assign(st.parent, out);
+  }
+  function classTeacherNames(kid) {
+    try {
+      let t = (typeof config !== 'undefined' && config && config.teachers) || [];
+      if (!Array.isArray(t)) t = Object.keys(t).map(k => t[k]);
+      return t.filter(x => x && x.designation === 'Class Teacher' && x.name && x.class === kid.class).map(x => x.name).slice(0, 3).join(', ');
+    } catch (e) { return ''; }
+  }
+
+  function shell() {
+    const host = $('pmHost'); if (!host) return null;
+    const mode = isParentUi() ? 'parent' : 'staff';
+    if (host.dataset.mode === mode) return host;
+    host.dataset.mode = mode; st.mode = mode; st.open = null;
+    if (mode === 'parent') {
+      host.innerHTML =
+        '<div class="card"><div class="card-header"><span class="card-title">\ud83d\udcac Messages to the school</span><button class="btn btn-sm" onclick="pmRefresh()">\u21bb Refresh</button></div>' +
+        '<div id="pmKidRow" style="margin-bottom:8px"></div>' +
+        '<div id="pmTabs" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px"></div>' +
+        '<div id="pmWho" style="font-size:12px;color:var(--text-light);margin-bottom:6px"></div>' +
+        '<div id="pmThread" style="max-height:48vh;overflow-y:auto;padding:4px 2px"></div>' +
+        '<div style="margin-top:10px"><textarea id="pmText" rows="3" maxlength="' + MAX_LEN + '" style="width:100%" placeholder="Type your message\u2026" oninput="pmDraft(this.value)"></textarea>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px"><span id="pmStatus" style="font-size:12px;color:var(--text-light);flex:1"></span>' +
+        '<button class="btn btn-primary" id="pmSendBtn" onclick="pmSend()">Send</button></div></div>' +
+        '<div id="pmInfo" style="font-size:11px;color:var(--text-light);margin-top:8px"></div></div>';
+    } else {
+      host.innerHTML =
+        '<div id="pmKidsCard"></div>' +
+        '<div class="card" id="pmListCard"><div class="card-header"><span class="card-title">\ud83d\udcac Messages from parents</span><span><button class="btn btn-sm btn-primary" onclick="pmNew()">\uff0b New</button> <button class="btn btn-sm" onclick="pmRefresh()">\u21bb</button></span></div>' +
+        '<div id="pmInfo" style="font-size:12px;color:var(--text-light);margin-bottom:6px"></div><div id="pmList"></div></div>' +
+        '<div class="card" id="pmThreadCard" style="display:none"><div class="card-header"><button class="btn btn-sm" onclick="pmBack()">\u2190 Back</button><span class="card-title" id="pmTHead" style="flex:1;text-align:right"></span></div>' +
+        '<div id="pmTMsgs" style="max-height:50vh;overflow-y:auto;padding:4px 2px"></div>' +
+        '<div style="margin-top:10px"><textarea id="pmReplyText" rows="3" maxlength="' + MAX_LEN + '" style="width:100%" placeholder="Write a reply\u2026" oninput="pmReplyDraft(this.value)"></textarea>' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:6px"><span id="pmReplyStatus" style="font-size:12px;color:var(--text-light);flex:1"></span>' +
+        '<button class="btn btn-primary" id="pmReplyBtn" onclick="pmReply()">Send reply</button></div></div></div>';
+    }
+    return host;
+  }
+
+  function bubble(m, mineSide, idx, canDelete) {
+    const mine = m.fromUid === myUid();
+    const who = mine ? 'You' : E(m.fromName || '') + (m.fromRole ? ' \u00b7 ' + E(m.fromRole) : '');
+    return '<div style="display:flex;justify-content:' + (mineSide ? 'flex-end' : 'flex-start') + ';margin:6px 0"><div style="max-width:88%;padding:8px 12px;border-radius:12px;' +
+      (mineSide ? 'background:var(--primary);color:#fff' : 'background:var(--bg);border:1px solid var(--border)') + '">' +
+      '<div style="font-size:11px;opacity:.8;margin-bottom:2px">' + who + ' \u00b7 ' + fmt(m.ts) + '</div>' +
+      '<div style="white-space:pre-wrap;word-break:break-word;font-size:14px">' + E(m.text) + '</div>' +
+      (canDelete ? '<div style="text-align:right;font-size:11px;margin-top:2px"><a href="#" style="color:inherit;opacity:.8" onclick="pmDel(' + idx + ');return false">delete</a></div>' : '') + '</div></div>';
+  }
+
+  function drawParent() {
+    const kids = myKids(), host = $('pmHost'); if (!host) return;
+    if (!kids.length) {
+      host.dataset.mode = ''; host.innerHTML = '<div class="card"><div style="color:var(--text-light)">No child is linked to your account yet, so there is nobody to message. Please contact the school office.</div></div>';
+      return;
+    }
+    shell();
+    const kid = kidOf(), seen = seenMap();
+    const row = $('pmKidRow'), sig = kids.map(k => k.id).join(',') + '#' + st.kid;
+    if (row && row.dataset.sig !== sig) {
+      row.dataset.sig = sig;
+      row.innerHTML = kids.length > 1
+        ? '<label style="font-size:12px;color:var(--text-light)">Child</label><select id="pmKid" onchange="pmPickKid(this.value)" style="width:100%">' + kids.map((k, i) => '<option value="' + i + '"' + (i === st.kid ? ' selected' : '') + '>' + E(k.name) + ' \u2014 ' + E(k.class || '') + '</option>').join('') + '</select>'
+        : '<div style="font-weight:600">' + E(kid.name) + ' <span class="badge">' + E(kid.class || '') + '</span></div>';
+    }
+    $('pmTabs').innerHTML = ORDER.map(b => '<button class="btn btn-sm' + (st.box === b ? ' btn-primary' : '') + '" onclick="pmPickBox(\'' + b + '\')">' + BOXES[b] + (parentUnread(kid, b, seen) ? ' <span style="color:#E74C3C">\u25cf</span>' : '') + '</button>').join('');
+    const names = st.box === 'class' ? classTeacherNames(kid) : '';
+    $('pmWho').textContent = 'About ' + (kid.name || '') + ' \u2014 to the ' + BOXES[st.box] + (names ? ' (' + names + ')' : '') + '. Only you and the school staff who handle this can see it.';
+    const list = listOf(kid, st.box), th = $('pmThread'), atEnd = th.scrollHeight - th.scrollTop - th.clientHeight < 60, count = th.dataset.n;
+    th.innerHTML = list.length ? list.map((m, i) => bubble(m, m.dir === 'in', i, false)).join('') : '<div style="color:var(--text-light);padding:10px 0">No messages yet. Write the first one below.</div>';
+    if (String(list.length) !== count || atEnd) th.scrollTop = th.scrollHeight;
+    th.dataset.n = String(list.length);
+    const ta = $('pmText'), dk = kid.id + '|' + st.box;
+    if (ta && ta.dataset.dk !== dk) { ta.dataset.dk = dk; ta.value = st.draft[dk] || ''; }
+    const info = $('pmInfo'); if (info) info.textContent = st.err ? (st.err === 'offline' ? 'You are offline \u2014 showing the last messages loaded.' : st.err === 'PERMISSION_DENIED' ? 'Messaging is not switched on for this school yet.' : 'Could not refresh (' + st.err + ').') : (st.last ? 'Updated ' + fmt(st.last) + ' \u00b7 refreshes automatically' : '');
+    if (onScreen()) { const last = list[list.length - 1]; if (last && last.dir === 'out') markSeen('p|' + kid.id + '|' + st.box, last.ts); }
+  }
+
+  // ---------- staff side ----------
+  function staffBoxes() {
+    const r = myRoles(), admin = r.indexOf('Administrator') >= 0;
+    let cls = [];
+    if (!admin) { try { cls = (typeof window.assignedClasses === 'function' ? window.assignedClasses() : []).slice(); } catch (e) {} }
+    return { head: admin || r.indexOf('Head Teacher') >= 0, deputy: admin || r.indexOf('Deputy Head Teacher') >= 0, classAll: admin, classes: cls };
+  }
+  const staffUnread = (t, seen) => !!(t.last && t.last.dir === 'in' && t.last.ts > ((seen || seenMap())['s|' + t.key] || 0));
+  async function fetchStaff() {
+    const b = staffBoxes(), threads = {}, jobs = [];
+    let ok = 0, denied = 0, other = null;
+    const add = (box, ck, map) => Object.keys(map || {}).forEach(sid => {
+      const list = vals(map[sid]).sort(byTs); if (!list.length) return;
+      const key = box + '|' + ck + '|' + sid, first = list.find(m => m.sname) || list[0];
+      threads[key] = { key, box, ck, sid, name: first.sname || sid, cls: (list.find(m => m.cls) || {}).cls || ck, msgs: list, last: list[list.length - 1] };
+    });
+    const job = (p, fn) => jobs.push(p.then(v => { ok++; fn(v); }, e => { if (e && e.code === 'PERMISSION_DENIED') denied++; else other = e; }));
+    if (b.head) job(_restGet(boxPath('head'), 25000), v => add('head', '', v));
+    if (b.deputy) job(_restGet(boxPath('deputy'), 25000), v => add('deputy', '', v));
+    if (b.classAll) job(_restGet(base() + '/class', 25000), v => Object.keys(v || {}).forEach(c => add('class', c, v[c])));
+    b.classes.forEach(c => job(_restGet(boxPath('class', c), 25000), v => add('class', ckey(c), v)));
+    await Promise.all(jobs);
+    if (!jobs.length) { st.threads = []; return; }
+    if (!ok && denied) throw Object.assign(new Error('denied'), { code: 'PERMISSION_DENIED' });
+    if (!ok && other) throw other;
+    st.threads = Object.keys(threads).map(k => threads[k]).sort((a, c) => c.last.ts - a.last.ts);
+  }
+  function boxLabel(t) { return t.box === 'class' ? 'Class Teacher' : BOXES[t.box]; }
+  function curThread() { return st.threads.find(t => t.key === st.open) || null; }
+
+  function drawStaff() {
+    const host = $('pmHost'); if (!host) return;
+    shell();
+    const seen = seenMap(), list = $('pmList'), b = staffBoxes();
+    const kc = $('pmKidsCard');
+    if (kc) {
+      const kids = (window.MY_CHILDREN || []);
+      const n = kids.reduce((a, k) => a + ORDER.filter(x => parentUnread(k, x, seen)).length, 0);
+      kc.innerHTML = (kids.length && !window._parentView)
+        ? '<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span>\ud83d\udc68\u200d\ud83d\udc67 Messages about my own children' + (n ? ' <span style="background:#E74C3C;color:#fff;border-radius:10px;padding:0 6px;font-size:11px">' + n + ' new</span>' : '') + '</span><button class="btn btn-sm btn-primary" onclick="pmKidsView()">Open</button></div></div>' : '';
+    }
+    const info = $('pmInfo');
+    if (!(b.head || b.deputy || b.classAll || b.classes.length)) {
+      list.innerHTML = '<div style="color:var(--text-light);padding:8px 0">You have no parent message boxes. Class teachers see the classes assigned to them; the Deputy Head Teacher and Head Teacher see messages sent to them.</div>';
+      if (info) info.textContent = ''; return;
+    }
+    if (info) info.textContent = st.err ? (st.err === 'offline' ? 'You are offline \u2014 showing the last messages loaded.' : st.err === 'PERMISSION_DENIED' ? 'Messaging is not switched on for this school yet \u2014 publish the latest database rules.' : 'Could not refresh (' + st.err + ').') : (st.last ? 'Updated ' + fmt(st.last) + ' \u00b7 refreshes automatically' : '');
+    list.innerHTML = st.threads.length ? st.threads.map((t, i) => {
+      const un = staffUnread(t, seen), snip = String(t.last.text).replace(/\s+/g, ' ').slice(0, 90);
+      return '<div style="display:flex;gap:8px;padding:10px 0;border-bottom:1px solid var(--border);cursor:pointer" onclick="pmOpenThread(' + i + ')"><div style="flex:1;min-width:0">' +
+        '<div style="font-weight:600">' + E(t.name) + ' <span class="badge">' + E(t.cls) + '</span> <span class="badge">' + E(boxLabel(t)) + '</span>' + (un ? ' <span style="color:#E74C3C">\u25cf</span>' : '') + '</div>' +
+        '<div style="font-size:12px;color:var(--text-light);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (t.last.fromUid === myUid() ? 'You' : E(t.last.fromName)) + ': ' + E(snip) + '</div></div>' +
+        '<div style="font-size:11px;color:var(--text-light);white-space:nowrap">' + fmt(t.last.ts) + '</div></div>';
+    }).join('') : '<div style="color:var(--text-light);padding:10px 0">' + (st.last ? 'No messages from parents yet. Tap \uff0b New to write to a learner\u2019s parents.' : 'Loading\u2026') + '</div>';
+    const open = curThread();
+    $('pmListCard').style.display = open ? 'none' : '';
+    $('pmThreadCard').style.display = open ? '' : 'none';
+    if (open) drawThread(open);
+  }
+  function drawThread(t) {
+    $('pmTHead').textContent = t.name + ' \u00b7 ' + t.cls + ' \u00b7 ' + boxLabel(t);
+    const th = $('pmTMsgs'), admin = myRoles().indexOf('Administrator') >= 0, atEnd = th.scrollHeight - th.scrollTop - th.clientHeight < 60;
+    th.innerHTML = t.msgs.map((m, i) => bubble(m, m.dir === 'out', i, admin)).join('');
+    if (String(t.msgs.length) !== th.dataset.n || atEnd) th.scrollTop = th.scrollHeight;
+    th.dataset.n = String(t.msgs.length);
+    const ta = $('pmReplyText'); if (ta && ta.dataset.dk !== t.key) { ta.dataset.dk = t.key; ta.value = st.draft['s|' + t.key] || ''; }
+    if (onScreen() && t.last) markSeen('s|' + t.key, t.last.ts);
+  }
+
+  // ---------- shared plumbing ----------
+  function draw() { if (!$('pmHost')) return; if (isParentUi()) drawParent(); else drawStaff(); }
+  function unreadTotal() {
+    const seen = seenMap(); let n = 0;
+    myKids().forEach(k => ORDER.forEach(b => { if (parentUnread(k, b, seen)) n++; }));
+    if (!isParentUi()) st.threads.forEach(t => { if (staffUnread(t, seen)) n++; });
+    return n;
+  }
+  function badge() {
+    const n = unreadTotal();
+    ['pmBadge', 'pmBadgeM'].forEach(id => { const el = $(id); if (!el) return; el.style.display = n ? 'inline-block' : 'none'; el.textContent = n > 99 ? '99+' : String(n); });
+  }
+  async function load() {
+    if (isParentUi()) { await fetchParent(); return; }
+    await fetchStaff();
+    if ((window.MY_CHILDREN || []).length) { try { await fetchParent(); } catch (e) {} }   // a staff member's own children
+  }
+  async function refresh(force) {
+    if (st.loading) return;
+    if (!force && Date.now() - st.last < MIN_GAP) { draw(); badge(); return; }
+    if (!myUid()) { draw(); return; }
+    if (!navigator.onLine) { st.err = 'offline'; draw(); return; }
+    st.loading = true;
+    try { await load(); st.err = ''; st.last = Date.now(); }
+    catch (e) { st.err = (e && (e.code || e.message)) || 'error'; }
+    finally { st.loading = false; }
+    draw(); badge();
+  }
+  function initMessages() {
+    if (!$('pmHost')) return;
+    shell(); draw();
+    if (!st.timer) st.timer = setInterval(() => { if (onScreen()) refresh(false); }, POLL_MS);
+    refresh(false);
+  }
+  async function check() {   // background: keeps the red number on the menu up to date
+    try {
+      if (!myUid() || !navigator.onLine || document.hidden || !cu()) return;
+      if (typeof canAccess === 'function' && !canAccess('messages')) return;
+      if (st.loading) return;
+      st.loading = true;
+      try { await load(); st.err = ''; st.last = Date.now(); } finally { st.loading = false; }
+      badge(); if (onScreen()) draw();
+    } catch (e) {}
+  }
+  window.addEventListener('online', () => setTimeout(check, 2500));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+  document.addEventListener('DOMContentLoaded', () => { setTimeout(check, 10000); setTimeout(check, 45000); setInterval(check, BG_MS); });
+
+  // ---------- parent actions ----------
+  function pmPickKid(i) { const k = kidOf(); if (k && $('pmText')) st.draft[k.id + '|' + st.box] = $('pmText').value; st.kid = parseInt(i, 10) || 0; draw(); badge(); }
+  function pmPickBox(b) { const k = kidOf(); if (k && $('pmText')) st.draft[k.id + '|' + st.box] = $('pmText').value; st.box = b; draw(); badge(); }
+  function pmDraft(v) { const k = kidOf(); if (k) st.draft[k.id + '|' + st.box] = v; }
+  async function pmSend() {
+    const kid = kidOf(), ta = $('pmText'), btn = $('pmSendBtn'), stat = $('pmStatus'); if (!kid || !ta) return;
+    const text = ta.value.trim(), box = st.box;
+    if (!text) { stat.textContent = 'Type a message first.'; return; }
+    if (text.length > MAX_LEN) { stat.textContent = 'Too long \u2014 keep it under ' + MAX_LEN + ' characters.'; return; }
+    if (!navigator.onLine) { stat.textContent = 'You are offline. Connect to the internet and tap Send again.'; return; }
+    btn.disabled = true; stat.textContent = 'Sending\u2026';
+    try {
+      const m = await sendMsg(box, kid.class, kid, text, 'in');
+      const key = kid.id + '|' + box; (st.parent[key] = st.parent[key] || []).push(m);
+      ta.value = ''; st.draft[key] = ''; stat.textContent = 'Sent \u2713';
+      draw(); badge(); setTimeout(() => { if (stat.textContent === 'Sent \u2713') stat.textContent = ''; }, 4000);
+    } catch (e) { stat.textContent = errText(e); }
+    finally { btn.disabled = false; }
+  }
+  function pmKidsView(sid) {   // a staff member who is also a parent: jump into the parent view, on the Messages page
+    try {
+      if (!window._parentView && typeof enterParentView === 'function') enterParentView();
+      const ks = window.MY_CHILDREN || [], i = sid ? ks.findIndex(k => k.id === sid) : 0;
+      st.kid = i >= 0 ? i : 0; st.mode = ''; const h = $('pmHost'); if (h) h.dataset.mode = '';
+      if (typeof showSection === 'function') showSection('messages');
+    } catch (e) { toast('Could not open the parent view', 'error'); }
+  }
+
+  // ---------- staff actions ----------
+  function pmOpenThread(i) { const t = st.threads[i]; if (!t) return; st.open = t.key; draw(); window.scrollTo && window.scrollTo(0, 0); badge(); }
+  function pmBack() { st.open = null; draw(); badge(); }
+  function pmReplyDraft(v) { if (st.open) st.draft['s|' + st.open] = v; }
+  async function pmReply() {
+    const t = curThread(), ta = $('pmReplyText'), btn = $('pmReplyBtn'), stat = $('pmReplyStatus'); if (!t || !ta) return;
+    const text = ta.value.trim();
+    if (!text) { stat.textContent = 'Type a reply first.'; return; }
+    if (typeof _isReadOnly === 'function') { try { if (_isReadOnly()) { stat.textContent = 'Read-only: the school subscription is inactive.'; return; } } catch (e) {} }
+    if (!navigator.onLine) { stat.textContent = 'You are offline. Connect to the internet and tap Send again.'; return; }
+    btn.disabled = true; stat.textContent = 'Sending\u2026';
+    try {
+      const m = await sendMsg(t.box, t.ck, { id: t.sid, name: t.name, class: t.cls }, text, 'out');
+      t.msgs.push(m); t.last = m; ta.value = ''; st.draft['s|' + t.key] = ''; stat.textContent = 'Sent \u2713';
+      draw(); badge(); setTimeout(() => { if (stat.textContent === 'Sent \u2713') stat.textContent = ''; }, 4000);
+    } catch (e) { stat.textContent = errText(e); }
+    finally { btn.disabled = false; }
+  }
+  async function pmDel(i) {
+    const t = curThread(), m = t && t.msgs[i]; if (!m) return;
+    if (!confirm('Delete this message for everyone? This cannot be undone.')) return;
+    try {
+      await _restPut(threadPath(t.box, t.ck, t.sid) + '/' + seg(m.id), null, 15000);
+      t.msgs.splice(i, 1);
+      if (!t.msgs.length) { st.threads = st.threads.filter(x => x !== t); st.open = null; } else t.last = t.msgs[t.msgs.length - 1];
+      draw(); badge(); toast('Message deleted');
+    } catch (e) { toast('Could not delete (' + ((e && (e.code || e.message)) || 'error') + ')', 'error'); }
+  }
+
+  // ---------- staff: start a conversation with a learner's parents ----------
+  function studentPool() {
+    const arr = (typeof students !== 'undefined' && Array.isArray(students)) ? students : [];
+    return arr.filter(s => s && s.id && !s._hidden && !BAD_KEY.test(String(s.id)) && (typeof window.classInScope !== 'function' || window.classInScope(s.class)));
+  }
+  function boxesFor(s) {
+    const b = staffBoxes(), out = [];
+    if (b.classAll || b.classes.indexOf(s.class) >= 0) out.push('class');
+    if (b.deputy) out.push('deputy');
+    if (b.head) out.push('head');
+    return out;
+  }
+  function pmNew() {
+    const b = staffBoxes();
+    if (!(b.head || b.deputy || b.classAll || b.classes.length)) { toast('Your role has no parent message box.', 'error'); return; }
+    const old = $('pmNewModal'); if (old) old.remove();
+    const m = document.createElement('div'); m.className = 'modal-overlay'; m.id = 'pmNewModal'; st.pick = null;
+    m.innerHTML = '<div class="modal" style="max-width:460px"><h3>New message to a parent</h3>' +
+      '<div class="form-group"><label>Learner</label><input type="search" id="pmNewQ" placeholder="Search name or ID\u2026" oninput="pmNewFilter()" autocomplete="off"><select id="pmNewStu" size="5" style="width:100%;margin-top:6px" onchange="pmNewPick()"></select></div>' +
+      '<div class="form-group"><label>Send as</label><select id="pmNewBox"></select></div>' +
+      '<div class="form-group"><label>Message</label><textarea id="pmNewText" rows="4" maxlength="' + MAX_LEN + '"></textarea></div>' +
+      '<div id="pmNewErr" style="display:none;color:var(--accent);font-size:12.5px;margin-bottom:8px"></div>' +
+      '<div class="modal-actions"><button class="btn btn-outline" onclick="document.getElementById(\'pmNewModal\').remove()">Cancel</button><button class="btn btn-primary" id="pmNewBtn" onclick="pmNewSend()">Send</button></div></div>';
+    document.body.appendChild(m); pmNewFilter();
+  }
+  function pmNewFilter() {
+    const q = (($('pmNewQ') || {}).value || '').toLowerCase().trim(), sel = $('pmNewStu'); if (!sel) return;
+    st.pool = studentPool().filter(s => !q || (String(s.name || '') + ' ' + s.id).toLowerCase().indexOf(q) >= 0).slice(0, 60);
+    sel.innerHTML = st.pool.map((s, i) => '<option value="' + i + '">' + E(s.name || '') + ' \u2014 ' + E(s.class || '') + ' (' + E(s.id) + ')</option>').join('') || '<option disabled>No learner found</option>';
+    st.pick = null; const bx = $('pmNewBox'); if (bx) bx.innerHTML = '<option value="">Pick a learner first</option>';
+  }
+  function pmNewPick() {
+    const sel = $('pmNewStu'), s = st.pool[parseInt(sel.value, 10)]; st.pick = s || null;
+    const opts = s ? boxesFor(s) : [];
+    $('pmNewBox').innerHTML = opts.length ? opts.map(o => '<option value="' + o + '">' + (o === 'class' ? 'Class Teacher (' + E(s.class) + ')' : BOXES[o]) + '</option>').join('') : '<option value="">You cannot message this learner\u2019s parents</option>';
+  }
+  async function pmNewSend() {
+    const s = st.pick, box = ($('pmNewBox') || {}).value, text = (($('pmNewText') || {}).value || '').trim(), err = $('pmNewErr'), btn = $('pmNewBtn');
+    const fail = m => { err.textContent = m; err.style.display = 'block'; };
+    err.style.display = 'none';
+    if (!s) return fail('Pick a learner.');
+    if (!box) return fail('You cannot message this learner\u2019s parents.');
+    if (!text) return fail('Type a message.');
+    if (typeof _isReadOnly === 'function') { try { if (_isReadOnly()) return fail('Read-only: the school subscription is inactive.'); } catch (e) {} }
+    if (!navigator.onLine) return fail('You are offline.');
+    btn.disabled = true;
+    try {
+      const m = await sendMsg(box, s.class, { id: s.id, name: s.name, class: s.class }, text, 'out');
+      const ck = box === 'class' ? ckey(s.class) : '', key = box + '|' + ck + '|' + s.id;
+      let t = st.threads.find(x => x.key === key);
+      if (t) { t.msgs.push(m); t.last = m; } else { t = { key, box, ck, sid: String(s.id), name: s.name || s.id, cls: s.class || ck, msgs: [m], last: m }; st.threads.unshift(t); }
+      st.open = key; const modal = $('pmNewModal'); if (modal) modal.remove();
+      toast('Message sent'); draw(); badge();
+    } catch (e) { fail(errText(e)); btn.disabled = false; }
+  }
+
+  Object.assign(window, { initMessages, pmRefresh: () => refresh(true), pmPickKid, pmPickBox, pmDraft, pmSend, pmKidsView, pmOpenThread, pmBack, pmReplyDraft, pmReply, pmDel, pmNew, pmNewFilter, pmNewPick, pmNewSend });
+})();
 </script>
 </body>
 </html>
