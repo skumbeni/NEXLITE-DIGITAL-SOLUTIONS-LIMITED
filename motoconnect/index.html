@@ -551,6 +551,9 @@
   /* ── OFFLINE BANNER ── */
   #offlineBanner{display:none;align-items:center;gap:.7rem;margin:0 1.5rem .75rem;padding:.65rem 1rem;background:rgba(251,191,36,.13);border:1.5px solid rgba(251,191,36,.45);border-radius:10px;color:#fef3c7;font-size:.82rem;line-height:1.4}
   #offlineBanner.show{display:flex}
+  #syncPendingBanner{display:none;align-items:center;gap:.7rem;margin:0 1.5rem .75rem;padding:.65rem 1rem;background:rgba(251,191,36,.13);border:1.5px solid rgba(251,191,36,.45);border-radius:10px;color:#fef3c7;font-size:.82rem;line-height:1.4}
+  #syncPendingBanner span{flex:1}
+  #syncPendingBanner button{background:rgba(251,191,36,.25);border:1px solid rgba(251,191,36,.5);color:#fbbf24;border-radius:6px;padding:.25rem .65rem;font-size:.78rem;font-weight:600;cursor:pointer}
   #offlineBanner .ob-icon{font-size:1.25rem;flex-shrink:0}
   #offlineBanner .ob-text{flex:1}
   #offlineBanner strong{color:#fbbf24}
@@ -797,6 +800,7 @@
       <button class="btn-pub-apply" onclick="shareApp()" style="background:rgba(255,255,255,.12);color:#fff">📤 Share</button>
       <button class="btn-pub-apply" id="navDealsBtn" onclick="showDealsTab()" style="background:rgba(255,255,255,.12);color:#fff">🏷️ Nearby Deals</button>
       <button class="btn-pub-apply" id="navRidersBtn" onclick="showRidersTab()" style="display:none">🏍️ Find a Rider</button>
+      <button class="btn-pub-apply" onclick="openAcct()" style="background:rgba(255,255,255,.12);color:#fff">👤 My Account</button>
       <button class="btn-pub-apply" onclick="showApplyPage()">🚀 Apply as Rider</button>
     </div>
   </header>
@@ -861,6 +865,7 @@
     <span class="ob-text"><strong>You're offline.</strong> Showing last known riders. Connect to the internet to see live updates.</span>
     <button class="ob-refresh" onclick="fbRestLoad()">↻ Refresh</button>
   </div>
+  <div id="syncPendingBanner"><span></span><button type="button" onclick="dismissSyncDenied()">OK</button></div>
   <div class="pub-stats-row" id="pubStatsRow"></div>
   <div class="pub-grid" id="pubGrid"></div>
 
@@ -1062,6 +1067,7 @@
             <h3>Application Submitted!</h3>
             <p>Thank you for applying to MotoConnect Zambia. Keep your reference number safe — admin will contact you on your phone once reviewed.</p>
             <div class="ref-chip" id="appRefDisplay">MCM-XXXX</div>
+            <button class="btn btn-ghost btn-sm" onclick="openAcct()" style="margin-top:.6rem">👤 Create a login to track this application</button>
             <p id="fbSubmitStatus" style="font-size:.8rem;margin-top:.6rem;font-weight:600">📡 Sending to admin…</p>
             <p style="font-size:.78rem;margin-top:.3rem;color:var(--muted)">Processing usually takes 1–2 business days.</p>
             <button class="btn btn-primary btn-sm mt1" onclick="showPublicPage()" style="margin-top:1rem">← Back to Directory</button>
@@ -1293,6 +1299,13 @@
             <option value="">— Select your business —</option>
           </select>
         </div>
+        <div class="form-row" id="verifyPinRow" style="display:none">
+          <label>Staff PIN * <span style="font-weight:400;color:var(--muted);font-size:.75rem">(your own PIN from the owner; entered once on this phone)</span></label>
+          <input type="text" id="verifyPinInput" autocapitalize="characters" autocomplete="off" spellcheck="false" maxlength="14" placeholder="e.g. M3-K7M2-9QXA"/>
+          <button class="btn btn-primary btn-sm" style="width:100%;margin-top:.5rem" onclick="unlockStaff()">🔓 Unlock</button>
+          <div id="verifyPinMsg" style="font-size:.8rem;margin-top:.4rem"></div>
+        </div>
+        <div id="verifyUnlockedNote" style="display:none;font-size:.78rem;color:var(--muted);margin:-.3rem 0 .7rem">🔓 Unlocked on this phone · <a href="#" onclick="lockStaff();return false">Lock</a></div>
         <div class="form-row">
           <label>Rider's Phone Number *</label>
           <input type="tel" id="verifyPhoneInput" placeholder="e.g. 0977 123456"/>
@@ -1301,7 +1314,7 @@
         <div id="verifyResultBox" style="margin-top:1rem"></div>
 
         <div style="margin-top:1.5rem;border-top:1px solid var(--border);padding-top:1rem">
-          <p style="font-weight:700;font-size:.85rem;color:var(--sidebar-bg);margin-bottom:.5rem">📜 Recent Visits (this business)</p>
+          <p style="font-weight:700;font-size:.85rem;color:var(--sidebar-bg);margin-bottom:.5rem">📜 Recent Visits (logged on this device)</p>
           <div id="verifyHistoryList" style="font-size:.78rem;color:var(--muted);line-height:1.7"></div>
         </div>
       </div>
@@ -1310,6 +1323,13 @@
 </div>
 
 <!-- ══ TERMS OF SERVICE MODAL ════════════════════════════ -->
+<div class="overlay" id="acctModal">
+  <div class="modal">
+    <div class="modal-header"><h3>👤 My Account</h3><button class="close-btn" onclick="closeModal('acctModal')">✕</button></div>
+    <div class="modal-body" id="acctBody"></div>
+  </div>
+</div>
+
 <div class="overlay" id="tosModal">
   <div class="modal legal-modal">
     <div class="modal-header">
@@ -1575,11 +1595,16 @@ function dismissInstall(){
   try{localStorage.setItem('mc_install_dismissed','1');}catch(e){}
 }
 
-// Service Worker — registered from sw.js (must be deployed alongside index.html)
-// Service Worker — must use absolute scope matching the GitHub Pages repo path
+// Service Worker — sw.js sits next to index.html. The folder is read from the page's own URL, so the
+// same file registers correctly on /motoconnect/ (custom domain) and /Motoconnect/ (GitHub Pages).
 if('serviceWorker' in navigator){
   window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('/Motoconnect/sw.js',{scope:'/Motoconnect/'})
+    let base=location.pathname;
+    if(!base.endsWith('/')){
+      const last=base.split('/').pop();
+      base=last.indexOf('.')>-1?base.slice(0,base.lastIndexOf('/')+1):base+'/';   // "/motoconnect" -> "/motoconnect/"
+    }
+    navigator.serviceWorker.register(base+'sw.js',{scope:base})
       .then(reg=>{
         reg.update().catch(()=>{});
       })
@@ -1590,7 +1615,7 @@ if('serviceWorker' in navigator){
 // ══════════════════════════════════════════════════════
 //  STATE & PERSISTENCE
 // ══════════════════════════════════════════════════════
-const KEYS={subs:'mc_subscriptions',fares:'mc_fares',zones:'mc_zones_v2',settings:'mc_settings',pendingSync:'mc_pending_sync',pendingZoneSync:'mc_pending_zone_sync',advertisers:'mc_advertisers',pendingAdvSync:'mc_pending_adv_sync',redemptions:'mc_voucher_redemptions',pendingRedemptionSync:'mc_pending_redemption_sync'};
+const KEYS={subs:'mc_subscriptions',fares:'mc_fares',zones:'mc_zones_v2',settings:'mc_settings',pendingSync:'mc_pending_sync',pendingZoneSync:'mc_pending_zone_sync',advertisers:'mc_advertisers',pendingAdvSync:'mc_pending_adv_sync',redemptions:'mc_voucher_redemptions',pendingRedemptionSync:'mc_pending_redemption_sync',myRedemptions:'mc_my_redemption_ids'};
 const RATES={ZMW:1,USD:0.049,EUR:0.046,GBP:0.040,ZAR:0.90};
 let state={currency:'ZMW',warnDays:7,adminName:'Admin User'};
 
@@ -2236,11 +2261,14 @@ function logVisit(riderPhone, advertiserId, amountSpent, note){
     rewardFired,
     visitNumberAtLog:newVisitCount,
     cumulativeSpendAtLog:Math.round(newSpend*100)/100,
-    note:note||''
+    note:note||'',
+    riderId:check.rider.id||'',
+    staffId:(_staffSess()[advertiserId]||{}).id||''
   };
   const all=getRedemptions();
   all.push(entry);
   save(KEYS.redemptions,all);
+  const mine=load(KEYS.myRedemptions,[]);mine.push(entry.id);save(KEYS.myRedemptions,mine.slice(-300));
   fbRedemptionWrite(entry);
   return{success:true,entry,rewardFired,progress:{visits:rewardFired?0:newVisitCount,spend:rewardFired?0:newSpend}};
 }
@@ -2361,9 +2389,7 @@ function deleteSub(id){
   const s=subs.find(x=>x.id===id);
   document.getElementById('confirmMsg').textContent=`Delete subscription for "${s?.name||id}"? This cannot be undone.`;
   document.getElementById('confirmOkBtn').onclick=()=>{
-    save(KEYS.subs,subs.filter(x=>x.id!==id));
-    // Delete from Firebase
-    fbRestDelete(id);
+    save(KEYS.subs,subs.filter(x=>x.id!==id));   // local only: deleting from the cloud is admin-only (admin app)
     closeModal('confirmModal');
     renderPublicDirectory();  };
   openModal('confirmModal');
@@ -2427,19 +2453,19 @@ function renderSubs(){
       <td><span class="pill">${esc(s.plan)}</span></td>
       <td>${fmt(s.price)}</td>
       <td><div class="avail-toggle">
-        <button class="avail-btn ${(s.availability||'available')==='available'?'sel-available':''}" onclick="setAvailability('${s.id}','available')" title="Available">✅</button>
-        <button class="avail-btn ${s.availability==='busy'?'sel-busy':''}" onclick="setAvailability('${s.id}','busy')" title="Busy">⏳</button>
-        <button class="avail-btn ${s.availability==='offline'?'sel-offline':''}" onclick="setAvailability('${s.id}','offline')" title="Offline">⚫</button>
+        <button class="avail-btn ${(s.availability||'available')==='available'?'sel-available':''}" onclick="setAvailability('${sid(s.id)}','available')" title="Available">✅</button>
+        <button class="avail-btn ${s.availability==='busy'?'sel-busy':''}" onclick="setAvailability('${sid(s.id)}','busy')" title="Busy">⏳</button>
+        <button class="avail-btn ${s.availability==='offline'?'sel-offline':''}" onclick="setAvailability('${sid(s.id)}','offline')" title="Offline">⚫</button>
       </div></td>
       <td>${s.expiry||'—'}${dl!==null&&dl>=0&&dl<=state.warnDays?`<br><small style="color:var(--warn);font-size:.7rem">${dl}d left</small>`:''}</td>
       <td>${subStatusBadge(s.status,s.expiry)}</td>
       <td><div class="row-actions">
-        <button class="btn btn-ghost btn-sm" onclick="editSub('${s.id}')" title="Edit">✏️</button>
-        ${isExp?`<button class="btn btn-success btn-sm" onclick="renewSub('${s.id}')" title="Renew">🔄 Renew</button>`:''}
-        <button class="btn btn-ghost btn-sm" onclick="showRiderCard('${s.id}')" title="ID Card">🆔</button>
-        <button class="btn btn-ghost btn-sm" onclick="remindRider('${s.id}')" title="WhatsApp Reminder">💬</button>
-        <button class="btn btn-ghost btn-sm" onclick="showInvoice('${s.id}')" title="Invoice">🧾</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteSub('${s.id}')" title="Delete">🗑</button>
+        <button class="btn btn-ghost btn-sm" onclick="editSub('${sid(s.id)}')" title="Edit">✏️</button>
+        ${isExp?`<button class="btn btn-success btn-sm" onclick="renewSub('${sid(s.id)}')" title="Renew">🔄 Renew</button>`:''}
+        <button class="btn btn-ghost btn-sm" onclick="showRiderCard('${sid(s.id)}')" title="ID Card">🆔</button>
+        <button class="btn btn-ghost btn-sm" onclick="remindRider('${sid(s.id)}')" title="WhatsApp Reminder">💬</button>
+        <button class="btn btn-ghost btn-sm" onclick="showInvoice('${sid(s.id)}')" title="Invoice">🧾</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteSub('${sid(s.id)}')" title="Delete">🗑</button>
       </div></td>
     </tr>`;
   }).join('');
@@ -2492,8 +2518,8 @@ function renderFares(){
       <td>${fmt(f.perKm)}</td>
       <td>${f.svc}%</td>
       <td><div class="row-actions">
-        <button class="btn btn-ghost btn-sm" onclick="editFare('${f.id}')">✏️</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteFare('${f.id}')">🗑</button>
+        <button class="btn btn-ghost btn-sm" onclick="editFare('${sid(f.id)}')">✏️</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteFare('${sid(f.id)}')">🗑</button>
       </div></td>
     </tr>`).join('');
 }
@@ -2564,8 +2590,8 @@ function renderZones(){
       <td>${esc(z.desc||'—')}</td>
       <td><span class="pill">${z.mult}×</span></td>
       <td><div class="row-actions">
-        <button class="btn btn-ghost btn-sm" onclick="editZone('${z.id}')">✏️</button>
-        <button class="btn btn-danger btn-sm" onclick="deleteZone('${z.id}')">🗑</button>
+        <button class="btn btn-ghost btn-sm" onclick="editZone('${sid(z.id)}')">✏️</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteZone('${sid(z.id)}')">🗑</button>
       </div></td>
     </tr>`).join('');
 }
@@ -2732,7 +2758,7 @@ function dl(name,content,type){
 // ══════════════════════════════════════════════════════
 //  HELPERS
 // ══════════════════════════════════════════════════════
-function esc(s){const d=document.createElement('div');d.textContent=String(s||'');return d.innerHTML;}
+function esc(s){const d=document.createElement('div');d.textContent=String(s||'');return d.innerHTML.replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 // Only allow genuine base64 image data URIs through to src="" attributes.
 // Blocks stored-XSS payloads that could otherwise be injected in place of
 // a photo/logo (e.g. via a direct Firebase REST write bypassing the UI).
@@ -2740,6 +2766,10 @@ function safeImgSrc(s){
   if(typeof s!=='string')return '';
   return /^data:image\/(png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(s)?s:'';
 }
+// Record ids only ever contain [A-Za-z0-9_-]; anything else must never reach an inline handler.
+function sid(id){const s=String(id==null?'':id);return /^[A-Za-z0-9_-]{1,64}$/.test(s)?s:'';}
+// Links from stored data must be http(s) — never javascript: or data:
+function safeHref(u){return (typeof u==='string'&&/^https?:\/\//i.test(u))?u:'';}
 function togglePw(inputId,btn){
   const el=document.getElementById(inputId);
   if(el.type==='password'){el.type='text';btn.textContent='🙈';}
@@ -3074,7 +3104,7 @@ async function fbRestLoad(){
   }
   try{
     const token=await _getAnonToken();
-    const url=_FB_DB_URL+'/motoconnect_zambia/subscriptions.json'+(token?'?auth='+token:'');
+    const url=_FB_DB_URL+'/motoconnect_zambia/riders_public.json'+(token?'?auth='+token:'');
     const res=await fetch(url);
     if(!res.ok){_showOfflineBanner(true);_pubLoadFirstAttemptDone=true;return;}
     const data=await res.json();
@@ -3093,7 +3123,7 @@ async function fbRestLoad(){
     const pending=new Set(getPendingSync());
     const localMap={};
     getSubs().forEach(s=>{
-      if(s&&s.id&&(fbIds.has(s.id)||pending.has(s.id)))localMap[s.id]=s;
+      if(s&&s.id&&(fbIds.has(s.id)||pending.has(s.id)||s.syncDenied===true))localMap[s.id]=s;
     });
     fbSubs.forEach(s=>{if(s&&s.id)localMap[s.id]=s;});
     save(KEYS.subs,Object.values(localMap));
@@ -3124,7 +3154,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   setInterval(fbAdvLoad,30000);
   setInterval(flushPendingRedemptionSync,30000);
   window.addEventListener('offline',()=>_showOfflineBanner(true));
-  window.addEventListener('online',()=>{fbRestLoad();fbAdvLoad();fbRedemptionLoad();flushPendingRedemptionSync();});
+  window.addEventListener('online',()=>{fbRestLoad();fbAdvLoad();flushPendingRedemptionSync();});
 });
 
 // ══════════════════════════════════════════════════════
@@ -3140,7 +3170,7 @@ async function fbAdvLoad(){
   if(!navigator.onLine)return;
   try{
     const token=await _getAnonToken();
-    const url=_FB_DB_URL+'/motoconnect_zambia/advertisers.json'+(token?'?auth='+token:'');
+    const url=_FB_DB_URL+'/motoconnect_zambia/advertisers_public.json'+(token?'?auth='+token:'');
     const res=await fetch(url);
     if(!res.ok)return;
     const data=await res.json();
@@ -3154,7 +3184,7 @@ async function fbAdvLoad(){
     const pendingAdv=new Set(getPendingAdvSync());
     const localMap={};
     getAdvertisers().forEach(a=>{
-      if(a&&a.id&&(fbAdIds.has(a.id)||pendingAdv.has(a.id)))localMap[a.id]=a;
+      if(a&&a.id&&(fbAdIds.has(a.id)||pendingAdv.has(a.id)||a.syncDenied===true))localMap[a.id]=a;
     });
     fbAds.forEach(a=>{if(a&&a.id)localMap[a.id]=a;});
     save(KEYS.advertisers,Object.values(localMap));
@@ -3177,16 +3207,27 @@ function clearPendingAdvSync(id){
 }
 
 async function fbAdvWrite(item){
-  if(!item||!item.id)return;
+  if(!item||!item.id)return 'skip';
   markPendingAdvSync(item.id);
+  let result='retry';
   try{
     const token=await _getAnonToken();
-    const url=_FB_DB_URL+'/motoconnect_zambia/advertisers/'+item.id+'.json'+(token?'?auth='+token:'');
-    const res=await fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(item)});
-    if(res&&res.ok)clearPendingAdvSync(item.id);
+    if(token){   // no login yet = not a real attempt; never mistake it for a refusal
+      const owner=_uidFromToken(token);   // tie the listing to this identity so My Account can show it
+      if(owner){
+        result=await _fbCreateThrottled('adv','advertisers',item.id,{...item,ownerUid:owner},owner,token);
+        let mine=false;
+        if(result==='denied'){const d=await _resolveDenied('advertisers','advertisers_public',KEYS.advertisers,item.id,token);result=d.result;mine=d.mine;}
+        if((result==='ok'||(result==='settled'&&mine)))fetch(_FB_DB_URL+'/motoconnect_zambia/owner_index_adv/'+owner+'/'+item.id+'.json?auth='+token,{method:'PUT',headers:{'Content-Type':'application/json'},body:'true'}).catch(()=>{});
+      }
+    }
   }catch(e){
     console.warn('Advertiser sync to cloud failed, will retry:',e);
   }
+  if(result==='ok'||result==='settled'||result==='denied')clearPendingAdvSync(item.id);   // settled or refused: retrying forever helps nobody
+  if(result==='denied')console.warn('Advertiser listing refused by the database, no longer retrying:',item.id);
+  if(typeof renderSyncBanner==='function')renderSyncBanner();
+  return result;
 }
 
 // Retries any advertiser listings that failed to sync earlier.
@@ -3219,16 +3260,50 @@ function clearPendingRedemptionSync(id){
 }
 
 async function fbRedemptionWrite(item){
-  if(!item||!item.id)return;
+  if(!item||!item.id)return 'skip';
+  if(!item.staffId){const sx0=_staffSess()[item.advertiserId];if(sx0&&sx0.id){item.staffId=sx0.id;_patchLocal(KEYS.redemptions,item.id,{staffId:sx0.id});}}
+  if(!item.riderId){const r0=findActiveRiderByPhone(item.riderPhone);if(r0){item.riderId=r0.id;_patchLocal(KEYS.redemptions,item.id,{riderId:r0.id});}}
   markPendingRedemptionSync(item.id);
+  let result='retry';
   try{
     const token=await _getAnonToken();
-    const url=_FB_DB_URL+'/motoconnect_zambia/redemptions/'+item.id+'.json'+(token?'?auth='+token:'');
-    const res=await fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(item)});
-    if(res&&res.ok)clearPendingRedemptionSync(item.id);
+    if(token){
+      // The visit goes in as ONE atomic update: the full record (admins only) and a small copy under the rider's
+      // subscription and this business (visits/<rider>/<business>/<id>), which is what riders and staff read back.
+      const url=_FB_DB_URL+'/motoconnect_zambia.json?auth='+token;
+      const row={id:item.id,loggedAt:item.loggedAt,model:item.model,amount:Number(item.amount)||0,rewardFired:!!item.rewardFired,
+        visitNumberAtLog:Number(item.visitNumberAtLog)||0,cumulativeSpendAtLog:Number(item.cumulativeSpendAtLog)||0};
+      if(item.staffId)row.staffId=item.staffId;
+      const body={['redemptions/'+item.id]:item,['visits/'+item.riderId+'/'+item.advertiserId+'/'+item.id]:row};
+      const send=()=>_fbPutOnce(url,body,'PATCH');
+      result=await send();
+      if(result==='denied'){
+        // Create-only in the database: 'denied' on a retry normally means the first attempt DID land and only its
+        // reply was lost. Check, instead of assuming.
+        const stored=await _fbRedemptionStored(item,token);
+        if(stored===true)result='settled';
+        else if(stored===false){
+          // Refused and not stored: either the staff unlock lapsed / the PIN changed, or the record itself is bad.
+          // Re-prove the PIN once and try again; only a refusal with a valid unlock marks the record as bad.
+          const sx=_staffSess()[item.advertiserId];
+          const pr=sx&&sx.pin&&sx.id?await _staffProve(item.advertiserId,sx.id,sx.pin,token):'denied';
+          if(pr==='ok'){
+            result=await send();
+            if(result==='denied')_patchLocal(KEYS.redemptions,item.id,{syncDenied:true});
+          }else{
+            if(pr==='denied'){_staffLock(item.advertiserId);if(document.getElementById('verifyPage').style.display==='block')refreshStaffRow();}
+            result='retry';   // keep it queued: it is sent once the PIN is entered again
+          }
+        }
+        else result='retry';
+      }
+    }
   }catch(e){
     console.warn('Redemption sync to cloud failed, will retry:',e);
   }
+  if(result==='ok'||result==='settled'||result==='denied')clearPendingRedemptionSync(item.id);
+  if(result==='denied')console.warn('Redemption refused by the database, no longer retrying:',item.id);
+  return result;
 }
 
 async function flushPendingRedemptionSync(){
@@ -3237,38 +3312,47 @@ async function flushPendingRedemptionSync(){
   const all=getRedemptions();
   for(const id of pending){
     const item=all.find(r=>r.id===id);
-    if(item)await fbRedemptionWrite(item);
-    else clearPendingRedemptionSync(id);
+    if(!item){clearPendingRedemptionSync(id);continue;}
+    if(!_staffSess()[item.advertiserId])continue;   // locked: waits for the PIN instead of retrying every 30 s
+    await fbRedemptionWrite(item);
   }
 }
 
-// Pulls the latest redemptions from the cloud and merges into local
-// cache. Returns true on success (fresh data), false if it had to fall
-// back to local-only (offline / fetch failed).
-async function fbRedemptionLoad(){
-  if(!navigator.onLine)return false;
+// Pulls one rider's visits at ONE business (visits/<rider>/<business>) and merges them into the local cache.
+// The database only allows this to the rider's own login/device or to staff unlocked for that business, so a
+// phone number alone no longer opens anyone's history. Returns true (fresh), false (offline / failed / unknown
+// rider: local cache is used) or 'denied' (this device is not allowed to read it).
+async function fbVisitsLoad(phone,advId){
+  const p=normPhone(phone),rider=findActiveRiderByPhone(phone);
+  if(!navigator.onLine||p.length!==9||!rider||!advId)return false;
   try{
-    const token=await _getAnonToken();
-    const url=_FB_DB_URL+'/motoconnect_zambia/redemptions.json'+(token?'?auth='+token:'');
-    const res=await fetch(url);
+    const token=await _getAnonToken();if(!token)return false;
+    const res=await fetch(_FB_DB_URL+'/motoconnect_zambia/visits/'+encodeURIComponent(rider.id)+'/'+encodeURIComponent(advId)+'.json?auth='+token);
+    if(res.status===401||res.status===403)return 'denied';
     if(!res.ok)return false;
     const data=await res.json();
-    if(!data||typeof data!=='object')return true; // empty is still "fresh"
-    const fbR=Object.values(data).filter(Boolean);
-    const fbRIds=new Set(fbR.map(r=>r&&r.id).filter(Boolean));
-    const pendingR=new Set(getPendingRedemptionSync());
-    const localMap={};
-    getRedemptions().forEach(r=>{
-      if(r&&r.id&&(fbRIds.has(r.id)||pendingR.has(r.id)))localMap[r.id]=r;
-    });
-    fbR.forEach(r=>{if(r&&r.id)localMap[r.id]=r;});
-    save(KEYS.redemptions,Object.values(localMap));
+    const fbR=(data&&typeof data==='object'?Object.values(data):[]).filter(r=>r&&r.id).map(r=>({...r,riderPhone:p,riderId:rider.id,advertiserId:advId}));
+    const fbIds=new Set(fbR.map(r=>r.id)),pend=new Set(getPendingRedemptionSync()),map={};
+    getRedemptions().forEach(r=>{if(r&&r.id&&(r.riderPhone!==p||r.advertiserId!==advId||fbIds.has(r.id)||pend.has(r.id)||r.syncDenied===true))map[r.id]=r;});
+    fbR.forEach(r=>{map[r.id]={...r,...(map[r.id]||{})};});   // the full local record wins where both exist
+    save(KEYS.redemptions,Object.values(map));
     return true;
   }catch(e){
-    console.warn('Redemption load failed, using local cache:',e);
+    console.warn('Visit lookup failed, using local cache:',e);
     return false;
   }
 }
+
+// One-time clean-up: earlier versions downloaded EVERY rider's visits onto every device that opened the
+// rewards screens. Keep only rows still waiting to upload; everything else is re-fetched per rider on demand.
+(function(){
+  try{
+    if(load('mc_redemptions_scoped_v1',false))return;
+    const pend=new Set(getPendingRedemptionSync());
+    save(KEYS.redemptions,getRedemptions().filter(r=>r&&pend.has(r.id)));
+    save('mc_redemptions_scoped_v1',true);
+  }catch(e){}
+})();
 
 // ══════════════════════════════════════════════════════
 //  PUBLIC DIRECTORY
@@ -3922,8 +4006,8 @@ function renderPubZoneTabs(){
   if(!container)return;
   container.innerHTML=`<div class="zone-tab ${_pubZoneFilter===''?'active':''}" onclick="setPubZone('')">All Zones</div>`
     +zones.map(z=>{
-      const waLink=z.waGroup?`<a href="${esc(z.waGroup)}" target="_blank" title="Join ${esc(z.name)} WhatsApp group" style="display:inline-flex;align-items:center;gap:.2rem;margin-left:.3rem;background:#25d366;color:#fff;font-size:.65rem;font-weight:700;padding:.1rem .45rem;border-radius:20px;text-decoration:none;vertical-align:middle" onclick="event.stopPropagation()">💬 Group</a>`:'';
-      return `<div class="zone-tab ${_pubZoneFilter===z.name?'active':''}" onclick="setPubZone('${esc(z.name)}')">${esc(z.name)}${waLink}</div>`;
+      const waLink=z.waGroup?`<a href="${esc(safeHref(z.waGroup))}" target="_blank" title="Join ${esc(z.name)} WhatsApp group" style="display:inline-flex;align-items:center;gap:.2rem;margin-left:.3rem;background:#25d366;color:#fff;font-size:.65rem;font-weight:700;padding:.1rem .45rem;border-radius:20px;text-decoration:none;vertical-align:middle" onclick="event.stopPropagation()">💬 Group</a>`:'';
+      return `<div class="zone-tab ${_pubZoneFilter===z.name?'active':''}" data-zone="${esc(z.name)}" onclick="setPubZone(this.dataset.zone)">${esc(z.name)}${waLink}</div>`;
     }).join('');
   // Show active zone WA group in a banner below tabs if set
   if(_pubZoneFilter){
@@ -3932,7 +4016,7 @@ function renderPubZoneTabs(){
     if(banner){
       if(az&&az.waGroup){
         banner.style.display='flex';
-        banner.innerHTML=`<span style="flex:1;font-size:.8rem">💬 Join the <strong>${esc(az.name)}</strong> riders WhatsApp group to post ride requests</span><a href="${esc(az.waGroup)}" target="_blank" style="background:#25d366;color:#fff;font-weight:700;font-size:.8rem;padding:.4rem .9rem;border-radius:20px;text-decoration:none;white-space:nowrap">Join Group →</a>`;
+        banner.innerHTML=`<span style="flex:1;font-size:.8rem">💬 Join the <strong>${esc(az.name)}</strong> riders WhatsApp group to post ride requests</span><a href="${esc(safeHref(az.waGroup))}" target="_blank" style="background:#25d366;color:#fff;font-weight:700;font-size:.8rem;padding:.4rem .9rem;border-radius:20px;text-decoration:none;white-space:nowrap">Join Group →</a>`;
       } else {
         banner.style.display='none';
       }
@@ -4202,7 +4286,7 @@ function renderDealsGrid(){
         ${phone?`<a class="btn-call" href="tel:+${phone}">📞 Call</a>`:'<span class="btn-call" style="opacity:.4;cursor:default">📞 No Phone</span>'}
         ${phone?`<a class="btn-wa" href="https://wa.me/${phone}?text=${waMsg}" target="_blank">💬 WhatsApp</a>`:'<span class="btn-wa" style="opacity:.4;cursor:default">💬 WhatsApp</span>'}
       </div>
-      ${a.voucherEnabled?`<button class="btn btn-success btn-sm" style="width:100%;margin-top:.5rem" onclick="openVoucherCheck('${a.id}')">🎁 Check My Progress</button>`:''}
+      ${a.voucherEnabled?`<button class="btn btn-success btn-sm" style="width:100%;margin-top:.5rem" onclick="openVoucherCheck('${sid(a.id)}')">🎁 Check My Progress</button>`:''}
     </div>`;
   }).join('');
 }
@@ -4229,22 +4313,26 @@ function openVoucherCheck(advertiserId){
   document.getElementById('voucherPhoneInput').value='';
   document.getElementById('voucherResultBox').innerHTML='';
   openModal('voucherModal');
-  // Pull the freshest redemption + advertiser data before the rider checks,
-  // so a visit logged at a different station/device a minute ago is
-  // already reflected.
-  fbRedemptionLoad();
+  // Freshest advertiser data now; the rider's own visit history is fetched
+  // when they enter their phone number (see submitVoucherCheck).
   fbAdvLoad();
 }
 
-function submitVoucherCheck(){
+async function submitVoucherCheck(){
   const phone=document.getElementById('voucherPhoneInput').value.trim();
   const box=document.getElementById('voucherResultBox');
   if(!phone){box.innerHTML='<div style="color:var(--danger);font-size:.85rem">Please enter your phone number.</div>';return;}
+  box.innerHTML='<div style="font-size:.85rem;color:var(--muted)">Checking…</div>';
+  const vr=await fbVisitsLoad(phone,_voucherCheckAdvId);   // this rider's latest visits, even from another station
 
   const adv=getAdvertisers().find(a=>a.id===_voucherCheckAdvId);
   const rider=findActiveRiderByPhone(phone);
   if(!rider){
     box.innerHTML=`<div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:.75rem;font-size:.85rem;color:#991b1b">⚠️ No active MotoConnect subscription found for this number. Only active subscribers can earn rewards.</div>`;
+    return;
+  }
+  if(vr==='denied'){
+    box.innerHTML='<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:.75rem;font-size:.85rem;color:#92400e">🔒 For your privacy, progress shows only on the phone you applied with, or when you are signed in to your MotoConnect account (My Account). Staff can also check it for you at the counter.</div>';
     return;
   }
   const progress=getProgressSinceLastReward(phone,_voucherCheckAdvId);
@@ -4276,6 +4364,58 @@ function submitVoucherCheck(){
 //  gets permanently logged. Checking eligibility alone (the rider-side
 //  modal above) never logs anything — only "Log This Visit" here does.
 // ══════════════════════════════════════════════════════
+// ── Staff unlock ──
+// The database accepts a visit log only from a phone that has unlocked that business with its staff PIN
+// (staff_sessions/<uid>/<advId>, checked against staff_pins/<advId> in the rules). The admin panel hands out the PIN.
+// The PIN is kept on the staff phone so an expired unlock renews itself; changing the PIN locks every phone out.
+const STAFF_DAYS=25;
+function _staffSess(){return load('mc_staff_sess',{});}
+function staffUnlocked(advId){const x=_staffSess()[advId];return !!(x&&x.id&&x.until>Date.now());}
+function _staffLock(advId){const x=_staffSess();delete x[advId];save('mc_staff_sess',x);}
+async function _staffProve(advId,id,pin,token){   // 'ok' | 'denied' | 'retry'
+  const uid=_uidFromToken(token);if(!uid)return 'retry';
+  const until=Date.now()+STAFF_DAYS*864e5;
+  const r=await _fbPutOnce(_FB_DB_URL+'/motoconnect_zambia/staff_sessions/'+uid+'/'+advId+'.json?auth='+token,{id,pin,until});
+  if(r==='ok'){const x=_staffSess();x[advId]={id,pin,until};save('mc_staff_sess',x);}
+  return r;
+}
+async function lockStaff(){
+  const advId=document.getElementById('verifyAdvSelect').value;if(!advId)return;
+  try{const token=await _getAnonToken(),uid=token&&_uidFromToken(token);
+    if(uid)await _fbPutOnce(_FB_DB_URL+'/motoconnect_zambia/staff_sessions/'+uid+'/'+advId+'.json?auth='+token,null,'DELETE');}catch(e){}
+  _staffLock(advId);refreshStaffRow();
+}
+async function unlockStaff(){
+  const advId=document.getElementById('verifyAdvSelect').value,msg=document.getElementById('verifyPinMsg');
+  const say=(t,bad)=>{msg.style.color=bad?'var(--danger)':'var(--muted)';msg.textContent=t;};
+  if(!advId){say('Select your business first.',true);return;}
+  const code=document.getElementById('verifyPinInput').value.toUpperCase().replace(/[^A-Z0-9]/g,'');
+  if(code.length!==10){say('Your PIN has 10 letters and numbers, like M3-K7M2-9QXA.',true);return;}
+  say('Checking…');
+  const token=await _getAnonToken();
+  if(!token){say('No connection. Try again when you are online.',true);return;}
+  const r=await _staffProve(advId,code.slice(0,2),code.slice(2),token);
+  if(r==='ok'){document.getElementById('verifyPinInput').value='';say('');refreshStaffRow();flushPendingRedemptionSync();}
+  else if(r==='denied')say('That PIN is not right for this business (or this phone\'s date is wrong). Ask the owner.',true);
+  else say('No connection. Try again.',true);
+}
+function refreshStaffRow(){
+  const advId=document.getElementById('verifyAdvSelect').value;
+  const row=document.getElementById('verifyPinRow'),note=document.getElementById('verifyUnlockedNote'),msg=document.getElementById('verifyPinMsg');
+  if(!row)return;
+  const x=advId&&_staffSess()[advId];
+  if(x&&!staffUnlocked(advId)&&x.pin&&x.id){   // expired but the PIN is on file: renew quietly
+    _getAnonToken().then(t=>t&&_staffProve(advId,x.id,x.pin,t)).then(r=>{if(r==='denied')_staffLock(advId);refreshStaffRow();});
+  }
+  const unlocked=!!advId&&staffUnlocked(advId);
+  row.style.display=advId&&!unlocked?'block':'none';
+  note.style.display=unlocked?'block':'none';
+  if(advId&&!unlocked){
+    const waiting=getPendingRedemptionSync().filter(id=>{const r=getRedemptions().find(z=>z.id===id);return r&&r.advertiserId===advId;}).length;
+    if(waiting&&!msg.textContent){msg.style.color='var(--muted)';msg.textContent=waiting+' visit'+(waiting>1?'s are':' is')+' waiting to sync. Enter the PIN to send '+(waiting>1?'them':'it')+'.';}
+  }
+}
+
 function showVerifyPage(){
   hideAllPages();
   document.getElementById('verifyPage').style.display='block';
@@ -4285,7 +4425,8 @@ function showVerifyPage(){
   // Always try a fresh pull before staff start checking — this is the
   // moment cross-device accuracy matters most.
   fbAdvLoad();
-  fbRedemptionLoad().then(()=>renderVerifyHistory());
+  renderVerifyHistory();
+  refreshStaffRow();
 }
 
 function populateVerifyAdvSelect(){
@@ -4299,18 +4440,23 @@ function populateVerifyAdvSelect(){
 
 function onVerifyAdvChange(){
   document.getElementById('verifyResultBox').innerHTML='';
+  document.getElementById('verifyPinMsg').textContent='';
   renderVerifyHistory();
+  refreshStaffRow();
 }
 
 let _lastVerifyCheck=null;
 
-function runVerifyCheck(){
+async function runVerifyCheck(){
   const advId=document.getElementById('verifyAdvSelect').value;
   const phone=document.getElementById('verifyPhoneInput').value.trim();
   const box=document.getElementById('verifyResultBox');
   if(!advId){box.innerHTML='<div style="color:var(--danger);font-size:.85rem">Please select your business first.</div>';return;}
   if(!phone){box.innerHTML='<div style="color:var(--danger);font-size:.85rem">Please enter the rider\'s phone number.</div>';return;}
+  if(!staffUnlocked(advId)){box.innerHTML='<div style="color:var(--danger);font-size:.85rem">Enter your staff PIN above first.</div>';refreshStaffRow();return;}
 
+  box.innerHTML='<div style="font-size:.85rem;color:var(--muted)">Checking…</div>';
+  await fbVisitsLoad(phone,advId);   // this rider's latest visits here, even from another station
   const adv=getAdvertisers().find(a=>a.id===advId);
   const check=checkVisitEligibility(phone,advId);
   _lastVerifyCheck={phone,advId};
@@ -4343,8 +4489,10 @@ function runVerifyCheck(){
   `;
 }
 
-function confirmVerifyLogVisit(){
-  if(!_lastVerifyCheck)return;
+let _verifyBusy=false;
+async function confirmVerifyLogVisit(){
+  if(!_lastVerifyCheck||_verifyBusy)return;
+  if(!staffUnlocked(_lastVerifyCheck.advId)){refreshStaffRow();return;}
   const adv=getAdvertisers().find(a=>a.id===_lastVerifyCheck.advId);
   const isSpend=adv&&adv.voucherModel==='spend';
   let amount=0;
@@ -4355,6 +4503,8 @@ function confirmVerifyLogVisit(){
       return;
     }
   }
+  _verifyBusy=true;
+  try{await fbVisitsLoad(_lastVerifyCheck.phone,_lastVerifyCheck.advId);}finally{_verifyBusy=false;}   // last-moment check for a visit logged elsewhere
   const result=logVisit(_lastVerifyCheck.phone,_lastVerifyCheck.advId,amount,'');
   const box=document.getElementById('verifyResultBox');
   if(!result.success){
@@ -4384,9 +4534,10 @@ function renderVerifyHistory(){
   const list=document.getElementById('verifyHistoryList');
   if(!list)return;
   if(!advId){list.innerHTML='Select a business to see its recent visit log.';return;}
-  const entries=getRedemptions().filter(r=>r.advertiserId===advId)
+  const mine=new Set(load(KEYS.myRedemptions,[]));
+  const entries=getRedemptions().filter(r=>r.advertiserId===advId&&mine.has(r.id))
     .sort((a,b)=>new Date(b.loggedAt)-new Date(a.loggedAt)).slice(0,15);
-  if(!entries.length){list.innerHTML='No visits logged yet.';return;}
+  if(!entries.length){list.innerHTML='No visits logged on this device yet.';return;}
   list.innerHTML=entries.map(e=>{
     const when=new Date(e.loggedAt).toLocaleString('en-ZM',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});
     const who=esc(e.riderName||e.riderPhone);
@@ -4403,13 +4554,45 @@ let _appPhoto2Base64='';
 // Compliance documents — Road Service Licence & Police Clearance Certificate
 let _appDocBase64={appRSLDoc:'',appPoliceDoc:''};
 
+// Downscales and re-encodes a picked image as a JPEG data URL of at most maxChars characters, so an application
+// stays small enough to upload on a weak mobile connection and fits the database's per-image limit. Phone photos
+// of 3-8 MB are fine to pick: they are shrunk here. Rejects if the file is not a readable image.
+function _shrinkImage(file,maxEdge,maxChars){
+  return new Promise((resolve,reject)=>{
+    const url=URL.createObjectURL(file);
+    const img=new Image();
+    img.onload=()=>{
+      URL.revokeObjectURL(url);
+      try{
+        const w=img.naturalWidth,h=img.naturalHeight;
+        if(!w||!h){reject(new Error('unreadable'));return;}
+        let edge=maxEdge,q=0.8;
+        for(let n=0;n<12;n++){
+          const sc=Math.min(1,edge/Math.max(w,h));
+          const c=document.createElement('canvas');
+          c.width=Math.max(1,Math.round(w*sc));c.height=Math.max(1,Math.round(h*sc));
+          const x=c.getContext('2d');
+          x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);   // transparent PNGs would turn black as a JPEG
+          x.drawImage(img,0,0,c.width,c.height);
+          const out=c.toDataURL('image/jpeg',q);
+          if(out.length<=maxChars){resolve(out);return;}
+          if(q>0.5)q=Math.round((q-0.1)*10)/10;else edge=Math.round(edge*0.8);
+        }
+        reject(new Error('too big'));
+      }catch(e){reject(e);}
+    };
+    img.onerror=()=>{URL.revokeObjectURL(url);reject(new Error('unreadable'));};
+    img.src=url;
+  });
+}
+// Per-image ceilings (characters of data URL). The database rules enforce the same numbers.
+const IMG_MAX_PHOTO=400000, IMG_MAX_DOC=600000, IMG_MAX_LOGO=120000;
+
 function previewPhoto(num,input){
   const file=input.files&&input.files[0];
   if(!file)return;
-  if(file.size>2*1024*1024){alert('Photo '+num+' is too large. Please choose an image under 2 MB.');input.value='';return;}
-  const reader=new FileReader();
-  reader.onload=function(e){
-    const b64=e.target.result;
+  if(file.size>25*1024*1024){alert('Photo '+num+' is too large. Please choose a smaller photo.');input.value='';return;}
+  _shrinkImage(file,1280,IMG_MAX_PHOTO).then(function(b64){
     if(num===1)_appPhoto1Base64=b64;
     else _appPhoto2Base64=b64;
     const icon=document.getElementById('appPhoto'+num+'Icon');
@@ -4418,8 +4601,7 @@ function previewPhoto(num,input){
     if(icon)icon.innerHTML=`<img src="${b64}" style="width:64px;height:48px;object-fit:cover;border-radius:6px">`;
     if(text)text.textContent='✓ Photo '+num;
     if(label)label.style.borderColor='var(--accent2)';
-  };
-  reader.readAsDataURL(file);
+  }).catch(function(){alert('Photo '+num+' could not be used. Please choose a JPG or PNG photo.');input.value='';});
 }
 
 // Generic uploader for compliance documents (RSL, Police Clearance).
@@ -4428,10 +4610,8 @@ function previewDoc(inputId){
   const input=document.getElementById(inputId);
   const file=input.files&&input.files[0];
   if(!file)return;
-  if(file.size>2*1024*1024){alert('That file is too large. Please choose an image under 2 MB.');input.value='';return;}
-  const reader=new FileReader();
-  reader.onload=function(e){
-    const b64=e.target.result;
+  if(file.size>25*1024*1024){alert('That file is too large. Please choose a smaller photo.');input.value='';return;}
+  _shrinkImage(file,1600,IMG_MAX_DOC).then(function(b64){   // documents keep more pixels so the text stays readable
     _appDocBase64[inputId]=b64;
     const icon=document.getElementById(inputId+'Icon');
     const text=document.getElementById(inputId+'Text');
@@ -4439,8 +4619,7 @@ function previewDoc(inputId){
     if(icon)icon.innerHTML=`<img src="${b64}" style="width:64px;height:48px;object-fit:cover;border-radius:6px">`;
     if(text)text.textContent='✓ Uploaded';
     if(label)label.style.borderColor='var(--accent2)';
-  };
-  reader.readAsDataURL(file);
+  }).catch(function(){alert('That file could not be used. Please choose a JPG or PNG photo of the document.');input.value='';});
 }
 
 // ══════════════════════════════════════════════════════
@@ -4635,13 +4814,15 @@ function submitApplication(){
   // Uses fbRestWrite so a failed attempt (weak signal at submit time)
   // gets queued and retried automatically — not lost after one try.
   (async()=>{
-    await fbRestWrite(app);
+    const syncResult=await fbRestWrite(app);
     const fbStatusEl=document.getElementById('fbSubmitStatus');
     if(fbStatusEl){
-      const stillPending=getPendingSync().includes(app.id);
-      if(!stillPending){
+      if(syncResult==='ok'||syncResult==='settled'){
         fbStatusEl.innerHTML='✅ Application received by admin.';
         fbStatusEl.style.color='#065f46';
+      } else if(syncResult==='denied'){
+        fbStatusEl.innerHTML='⚠️ The cloud did not accept this application. Please contact the admin to confirm it was received.';
+        fbStatusEl.style.color='#b91c1c';
       } else {
         fbStatusEl.innerHTML='⚠️ Saved on this phone. Will keep retrying in the background until it reaches the admin.';
         fbStatusEl.style.color='#92400e';
@@ -4660,18 +4841,16 @@ let _advLogoBase64='';
 function previewAdvLogo(input){
   const file=input.files&&input.files[0];
   if(!file)return;
-  if(file.size>2*1024*1024){alert('Logo is too large. Please choose an image under 2 MB.');input.value='';return;}
-  const reader=new FileReader();
-  reader.onload=function(e){
-    _advLogoBase64=e.target.result;
+  if(file.size>25*1024*1024){alert('Logo is too large. Please choose a smaller image.');input.value='';return;}
+  _shrinkImage(file,400,IMG_MAX_LOGO).then(function(b64){
+    _advLogoBase64=b64;
     const icon=document.getElementById('advLogoIcon');
     const text=document.getElementById('advLogoText');
     const label=document.getElementById('advLogoLabel');
     if(icon)icon.innerHTML=`<img src="${_advLogoBase64}" style="width:64px;height:64px;object-fit:cover;border-radius:8px">`;
     if(text)text.textContent='✓ Logo uploaded';
     if(label)label.classList.add('has-file');
-  };
-  reader.readAsDataURL(file);
+  }).catch(function(){alert('That logo could not be used. Please choose a JPG or PNG image.');input.value='';});
 }
 
 function selectAdvTier(tier,price){
@@ -4846,13 +5025,15 @@ function submitAdvertiser(){
   // Push to Firebase so Admin panel receives it in real-time, with the
   // same retry-queue pattern used for rider applications.
   (async()=>{
-    await fbAdvWrite(ad);
+    const syncResult=await fbAdvWrite(ad);
     const statusEl=document.getElementById('advFbSubmitStatus');
     if(statusEl){
-      const stillPending=getPendingAdvSync().includes(ad.id);
-      if(!stillPending){
+      if(syncResult==='ok'||syncResult==='settled'){
         statusEl.innerHTML='✅ Listing received by admin.';
         statusEl.style.color='#065f46';
+      } else if(syncResult==='denied'){
+        statusEl.innerHTML='⚠️ The cloud did not accept this listing. Please contact the admin to confirm it was received.';
+        statusEl.style.color='#b91c1c';
       } else {
         statusEl.innerHTML='⚠️ Saved on this phone. Will keep retrying in the background until it reaches the admin.';
         statusEl.style.color='#92400e';
@@ -4895,11 +5076,11 @@ function renderApplications(){
       </div>
       <div class="app-queue-actions">
         ${a.status==='pending'?`
-          <button class="btn btn-success btn-sm" onclick="openApproveModal('${a.id}')">✅ Approve</button>
-          <button class="btn btn-danger btn-sm" onclick="rejectApp('${a.id}')">✗ Reject</button>
+          <button class="btn btn-success btn-sm" onclick="openApproveModal('${sid(a.id)}')">✅ Approve</button>
+          <button class="btn btn-danger btn-sm" onclick="rejectApp('${sid(a.id)}')">✗ Reject</button>
         `:''}
         ${a.status==='active'?`
-          <button class="btn btn-ghost btn-sm" onclick="showRiderCard('${a.id}')">🆔 ID Card</button>
+          <button class="btn btn-ghost btn-sm" onclick="showRiderCard('${sid(a.id)}')">🆔 ID Card</button>
           <span class="badge badge-active">Approved</span>
         `:''}
         ${a.status==='rejected'?`<span class="badge badge-expired">Rejected</span>`:''}
@@ -4957,9 +5138,8 @@ function confirmApprove(){
 }
 
 // Promotes any zone an applicant typed in (rather than picked from the
-// list) into the official zones list, once their application is
-// approved — then pushes it to Firebase and refreshes every zone-aware
-// UI (zone tabs, zone search dropdown, admin zones table).
+// list) into the local zones list, once their application is approved,
+// and refreshes every zone-aware UI (zone tabs, zone search dropdown).
 function addApprovedCustomZones(sub){
   const names=[sub.zoneCustom,sub.zone2Custom].filter(Boolean);
   if(!names.length)return;
@@ -4969,8 +5149,7 @@ function addApprovedCustomZones(sub){
     const exists=zones.some(z=>z.name.toLowerCase()===name.toLowerCase());
     if(!exists){
       const z={id:uid(),name,desc:'',mult:1.0};
-      zones.push(z);
-      fbZoneWrite(z);
+      zones.push(z);   // local only: official zones are created by admins
       changed=true;
     }
   });
@@ -5008,6 +5187,63 @@ let _fbAnonToken=null;
 let _fbTokenExpiry=0;
 let _fbTokenPromise=null;
 
+// ── App Check (reCAPTCHA) — proves a sign-up comes from this real site, not a script hammering the Firebase API.
+// STAYS OFF until you paste your reCAPTCHA SITE key below (public, safe to put in the page). While empty the app
+// behaves exactly as before. The token is attached to every sign-up / token-refresh call. Turn on "Enforce" for
+// Authentication in the Firebase console only after App Check's metrics show these calls arriving as "Verified".
+// APPCHECK_PROVIDER: 'enterprise' = a Google Cloud (Fraud Defense) Web key, no secret key needed (current Firebase default);
+//                    'v3' = an older classic reCAPTCHA v3 key whose secret key you gave to Firebase.
+// The token is kept on the device until it expires, so one app open does not cost one reCAPTCHA check (free allowance: 10,000/month).
+const APPCHECK_SITE_KEY='';
+const APPCHECK_PROVIDER='enterprise';
+const _FB_PROJECT_ID='motoconnect-a0e64', _FB_APP_ID='1:838224185875:web:631005b2ed350a6b84cde6';
+let _acTok=null,_acExp=0,_acPromise=null;
+function _loadRecaptcha(){
+  const ent=APPCHECK_PROVIDER!=='v3';
+  return new Promise((res,rej)=>{
+    if(ent?(window.grecaptcha&&window.grecaptcha.enterprise&&window.grecaptcha.enterprise.ready):(window.grecaptcha&&window.grecaptcha.ready)){res();return;}
+    const el=document.createElement('script');
+    el.src='https://www.google.com/recaptcha/'+(ent?'enterprise':'api')+'.js?render='+encodeURIComponent(APPCHECK_SITE_KEY);
+    el.async=true;el.onload=()=>res();el.onerror=()=>rej(new Error('recaptcha script'));
+    document.head.appendChild(el);
+  });
+}
+// Returns {'X-Firebase-AppCheck':token} or {} (App Check off, offline, or the check failed — callers just go ahead
+// without it: with enforcement off that still works, with it on the server refuses and the write simply stays queued).
+async function _appCheckHeaders(){
+  if(!APPCHECK_SITE_KEY)return {};
+  if(!_acTok){   // reuse a still-valid token saved by an earlier visit: saves a reCAPTCHA check on every app open
+    const sv=load('mc_appcheck',null);
+    if(sv&&sv.t&&sv.e>Date.now()+300000){_acTok=sv.t;_acExp=sv.e;}
+  }
+  if(_acTok&&Date.now()<_acExp-300000)return {'X-Firebase-AppCheck':_acTok};
+  if(!_acPromise){
+    _acPromise=(async()=>{
+      try{
+        if(typeof navigator!=='undefined'&&navigator.onLine===false)return null;
+        await _loadRecaptcha();
+        const ent=APPCHECK_PROVIDER!=='v3';
+        const gr=ent?grecaptcha.enterprise:grecaptcha;
+        const rt=await new Promise((res,rej)=>gr.ready(()=>gr.execute(APPCHECK_SITE_KEY,{action:'fire_app_check'}).then(res,rej)));
+        const body=JSON.stringify(ent?{recaptchaEnterpriseToken:rt}:{recaptchaV3Token:rt});
+        const method=ent?':exchangeRecaptchaEnterpriseToken':':exchangeRecaptchaV3Token';
+        for(const host of ['https://content-firebaseappcheck.googleapis.com','https://firebaseappcheck.googleapis.com']){
+          try{
+            const r=await fetch(host+'/v1/projects/'+_FB_PROJECT_ID+'/apps/'+_FB_APP_ID+method+'?key='+_FB_API_KEY,{method:'POST',headers:{'Content-Type':'application/json'},body});
+            if(!r.ok)continue;
+            const d=await r.json();
+            if(d&&d.token){_acTok=d.token;_acExp=Date.now()+((parseInt(String(d.ttl||'3600s'),10)||3600)*1000);save('mc_appcheck',{t:_acTok,e:_acExp});return _acTok;}
+          }catch(e){}
+        }
+      }catch(e){console.warn('App Check unavailable:',e);}
+      return null;
+    })();
+    _acPromise.then(()=>{_acPromise=null;},()=>{_acPromise=null;});
+  }
+  const t=await _acPromise;
+  return t?{'X-Firebase-AppCheck':t}:{};
+}
+
 async function _getAnonToken(){
   const now=Date.now();
   // Return cached token if still valid (with 5-min buffer)
@@ -5016,12 +5252,30 @@ async function _getAnonToken(){
   if(_fbTokenPromise) return _fbTokenPromise;
   _fbTokenPromise=(async()=>{
     try{
+      if(_acct&&_acct.refreshToken){
+        const rr=await fetch('https://securetoken.googleapis.com/v1/token?key='+_FB_API_KEY,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',...(await _appCheckHeaders())},body:'grant_type=refresh_token&refresh_token='+encodeURIComponent(_acct.refreshToken)});
+        const rd=await rr.json();
+        if(rd.id_token){_fbAnonToken=rd.id_token;_fbTokenExpiry=now+(parseInt(rd.expires_in||3600)*1000);_acct.refreshToken=rd.refresh_token||_acct.refreshToken;save('mc_acct',_acct);return _fbAnonToken;}
+        if(/TOKEN_EXPIRED|USER_NOT_FOUND|INVALID_REFRESH_TOKEN|USER_DISABLED/.test((rd.error&&rd.error.message)||'')){_acct=null;save('mc_acct',null);}   // login revoked: fall back to anonymous
+        else return null;   // network problem: stay signed in, never silently become a different anonymous user
+      }
+      // One anonymous identity per device, reused on every visit. Creating a fresh anonymous user on every page
+      // load piles up throwaway accounts, and makes a rider's own earlier submission look like someone else's.
+      const anon=load('mc_anon',null);
+      if(anon&&anon.refreshToken){
+        const ar=await fetch('https://securetoken.googleapis.com/v1/token?key='+_FB_API_KEY,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded',...(await _appCheckHeaders())},body:'grant_type=refresh_token&refresh_token='+encodeURIComponent(anon.refreshToken)});
+        const ad=await ar.json();
+        if(ad.id_token){_fbAnonToken=ad.id_token;_fbTokenExpiry=now+(parseInt(ad.expires_in||3600)*1000);anon.refreshToken=ad.refresh_token||anon.refreshToken;save('mc_anon',anon);return _fbAnonToken;}
+        if(/TOKEN_EXPIRED|USER_NOT_FOUND|INVALID_REFRESH_TOKEN|USER_DISABLED/.test((ad.error&&ad.error.message)||''))save('mc_anon',null);   // that anonymous user is gone: make a new one below
+        else return null;   // network/server problem: never create a second anonymous user because of it
+      }
       const res=await fetch(
         'https://identitytoolkit.googleapis.com/v1/accounts:signUp?key='+_FB_API_KEY,
-        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({returnSecureToken:true})}
+        {method:'POST',headers:{'Content-Type':'application/json',...(await _appCheckHeaders())},body:JSON.stringify({returnSecureToken:true})}
       );
       const data=await res.json();
       if(data.idToken){
+        if(data.refreshToken)save('mc_anon',{uid:data.localId||null,refreshToken:data.refreshToken});
         _fbAnonToken=data.idToken;
         // expiresIn is in seconds
         _fbTokenExpiry=now+(parseInt(data.expiresIn||3600)*1000);
@@ -5035,6 +5289,246 @@ async function _getAnonToken(){
   return token;
 }
 
+// ══════════════════════════════════════════════════════
+//  RIDER ACCOUNT — phone number + password (Firebase Email/Password behind the scenes)
+// ══════════════════════════════════════════════════════
+const ACCT_DOMAIN='@riders.motoconnect.app';
+const RECOVERY_URL='https://motoconnecrecovery.nexlitedigitalsolutions.workers.dev';   // your deployed recovery Worker (see recovery-worker.js)
+let _acct=load('mc_acct',null);   // {uid, phone, refreshToken}
+let _acctMode='in',_acctPhone='';   // sign-in vs create-login view; phone kept when switching
+function acctEmail(phone){
+  let d=String(phone||'').replace(/\D/g,'');
+  if(d.indexOf('260')===0)d=d.slice(3);else if(d[0]==='0')d=d.slice(1);
+  return d.length===9?'260'+d+ACCT_DOMAIN:'';
+}
+function _uidFromToken(t){try{return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))).user_id||null;}catch(e){return null;}}
+// One create attempt against the database. Returns:
+//   'ok'     - stored (or an identical pending copy was already there from an earlier attempt whose reply got lost)
+//   'retry'  - offline, timeout, server hiccup: keep it queued and try again later
+//   'denied' - the database said "Permission denied" to a valid login: the record is already settled
+//              (approved/rejected by the admin, or already stored) or invalid. Retrying can never succeed, so stop.
+async function _fbPutOnce(url,body,method){
+  let res;
+  try{res=await fetch(url,{method:method||'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}
+  catch(e){return 'retry';}
+  if(res.ok)return 'ok';
+  if(res.status===401||res.status===403){
+    let msg='';
+    try{const j=await res.json();msg=(j&&j.error)||'';}catch(e){}
+    if(/permission denied/i.test(msg))return 'denied';
+  }
+  return 'retry';
+}
+// Rate limit: the database accepts a new application / listing only together with a fresh server-time stamp on this
+// identity's own clock (rate_limit/<uid>/<kind>), and only if the previous stamp is at least 2 minutes old. Record and
+// stamp go in ONE atomic write, so one identity cannot flood the database with applications or listings.
+async function _fbCreateThrottled(kind,node,id,body,uid,token){
+  const url=_FB_DB_URL+'/motoconnect_zambia.json?auth='+token;
+  return _fbPutOnce(url,{[node+'/'+id]:body,['rate_limit/'+uid+'/'+kind]:{'.sv':'timestamp'}},'PATCH');
+}
+// After a 'denied': find out WHY, so a settled record is not mistaken for a failed one.
+// The owner can read their own record; approved riders/listings are also in the public mirror.
+// Returns {state:'found',status} | {state:'none'} | {state:'error'} (error = could not tell, so keep retrying).
+async function _fbLookupStatus(node,publicNode,id,token){
+  const base=_FB_DB_URL+'/motoconnect_zambia/',eid=encodeURIComponent(id);
+  try{
+    const r1=await fetch(base+node+'/'+eid+'/status.json?auth='+token);
+    if(r1.ok){const v=await r1.json();if(typeof v==='string')return{state:'found',status:v,mine:true};}
+    else if(r1.status!==401&&r1.status!==403)return{state:'error'};
+    const r2=await fetch(base+publicNode+'/'+eid+'.json?auth='+token);
+    if(!r2.ok)return{state:'error'};
+    const v2=await r2.json();
+    if(v2&&typeof v2==='object')return{state:'found',status:v2.status||'active'};
+    return{state:'none'};
+  }catch(e){return{state:'error'};}
+}
+// Is this redemption already in the cloud? true / false / null (could not tell).
+async function _fbRedemptionStored(item,token){
+  if(!item.riderId||!item.advertiserId)return false;
+  try{
+    const res=await fetch(_FB_DB_URL+'/motoconnect_zambia/visits/'+encodeURIComponent(item.riderId)+'/'+encodeURIComponent(item.advertiserId)+'/'+encodeURIComponent(item.id)+'.json?auth='+token);
+    if(!res.ok)return null;
+    const data=await res.json();
+    return !!(data&&typeof data==='object'&&data.id===item.id);
+  }catch(e){return null;}
+}
+function _patchLocal(key,id,fields){
+  try{
+    const list=load(key,[]),i=list.findIndex(x=>x&&x.id===id);
+    if(i>-1){Object.assign(list[i],fields);save(key,list);}
+  }catch(e){}
+}
+// 'denied' -> 'settled' (the cloud already has it; local status brought in line) | 'denied' (refused for real; kept
+// on this phone, flagged so it is never silently wiped) | 'retry' (could not tell yet).
+// A refusal can also just mean "too soon after your last submission" (the rate limit above), so a record that is not
+// in the cloud is retried a few times (7 x 30 s, longer than the 2-minute limit) before it is called refused.
+const DENY_TRIES=7;
+function _denyTry(id,reset){
+  const m=load('mc_deny_tries',{})||{};
+  if(reset)delete m[id];else m[id]=(m[id]||0)+1;
+  save('mc_deny_tries',m);
+  return m[id]||0;
+}
+// Returns {result:'settled'|'denied'|'retry', mine:true when the record is verifiably this identity's own}.
+async function _resolveDenied(node,publicNode,key,id,token){
+  const r=await _fbLookupStatus(node,publicNode,id,token);
+  if(r.state==='error')return{result:'retry',mine:false};
+  if(r.state==='found'){_denyTry(id,true);_patchLocal(key,id,{status:r.status});return{result:'settled',mine:!!r.mine};}
+  if(_denyTry(id)<DENY_TRIES)return{result:'retry',mine:false};
+  _denyTry(id,true);
+  _patchLocal(key,id,{syncDenied:true});
+  return{result:'denied',mine:false};
+}
+async function _acctCall(path,body){
+  const r=await fetch('https://identitytoolkit.googleapis.com/v1/accounts:'+path+'?key='+_FB_API_KEY,{method:'POST',headers:{'Content-Type':'application/json',...(await _appCheckHeaders())},body:JSON.stringify(body)});
+  const d=await r.json();if(!r.ok)throw new Error((d.error&&d.error.message)||'ERROR');return d;
+}
+const ACCT_ERR={EMAIL_EXISTS:'This number already has a login. Tap "I already have a login" to sign in. Forgot the password? Tap Forgot password.',INVALID_LOGIN_CREDENTIALS:'Wrong phone number or password.',EMAIL_NOT_FOUND:'No login for this number yet. Tap Create login.',INVALID_PASSWORD:'Wrong phone number or password.',WEAK_PASSWORD:'Password must be at least 6 characters.',TOO_MANY_ATTEMPTS_TRY_LATER:'Too many attempts. Please wait a few minutes.',OPERATION_NOT_ALLOWED:'Logins are not switched on yet. Please tell the admin.'};
+function acctMsg(t,ok){const e=document.getElementById('acctMsg');if(e){e.textContent=t;e.style.display=t?'block':'none';e.style.color=ok?'#065f46':'#b91c1c';}}
+function openAcct(){openModal('acctModal');renderAcct();}
+function acctMode(m){const p=document.getElementById('acctPhone');if(p)_acctPhone=p.value;_acctMode=m;renderAcct();}
+async function acctAuth(mode){
+  const email=acctEmail(document.getElementById('acctPhone').value),pw=document.getElementById('acctPw').value;
+  if(!email){acctMsg('Enter a valid Zambian number, e.g. 0977 123456.');return;}
+  if(pw.length<6){acctMsg('Password must be at least 6 characters.');return;}
+  if(mode==='up'){const p2=document.getElementById('acctPw2');if(!p2||p2.value!==pw){acctMsg('The two passwords do not match. Type the same password twice.');return;}}
+  acctMsg('Please wait…',true);
+  try{
+    let d;
+    if(mode==='up'){
+      const cur=await _getAnonToken();   // upgrades this visit's anonymous session, so an application sent in it stays linked
+      d=await _acctCall('signUp',cur?{idToken:cur,email,password:pw,returnSecureToken:true}:{email,password:pw,returnSecureToken:true});
+    }else d=await _acctCall('signInWithPassword',{email,password:pw,returnSecureToken:true});
+    _acct={uid:d.localId,phone:email.slice(0,12),refreshToken:d.refreshToken};save('mc_acct',_acct);
+    if(mode==='up')save('mc_anon',null);   // that anonymous identity is now this account: after sign-out the device must not fall back to it
+    _fbAnonToken=d.idToken;_fbTokenExpiry=Date.now()+parseInt(d.expiresIn||3600)*1000;
+    if(mode==='up'){const re=((document.getElementById('acctRecEmail')||{}).value||'').trim().toLowerCase();if(re&&_validEmail(re))await _putRecovery(d.idToken,re);}
+    await renderAcct();
+  }catch(e){acctMsg(ACCT_ERR[String(e.message).split(' ')[0]]||'Could not reach the server. Check your connection and try again.');}
+}
+function acctSignOut(){_acctMode='in';_acct=null;save('mc_acct',null);_fbAnonToken=null;_fbTokenExpiry=0;renderAcct();}
+const _validEmail=e=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)&&e.length<=100;
+async function _putRecovery(t,em){   // write-only for the rider: no client can read recovery emails back
+  try{const r=await fetch(_FB_DB_URL+'/motoconnect_zambia/account_recovery/'+_acct.uid+'.json?auth='+t,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em})});return r.ok;}catch(e){return false;}
+}
+async function acctSaveRecovery(){
+  const em=((document.getElementById('acctRecEmail')||{}).value||'').trim().toLowerCase(),t=await _getAnonToken();
+  if(!_acct||!t)return;
+  if(!_validEmail(em)){acctMsg('Enter a valid email address.');return;}
+  const ok=await _putRecovery(t,em);acctMsg(ok?'Recovery email saved.':'Could not save. Check your connection and try again.',ok);
+}
+async function recCall(path,body){
+  if(!RECOVERY_URL||RECOVERY_URL.indexOf('REPLACE-ME')>-1)throw new Error('NOT_SET');
+  return (await fetch(RECOVERY_URL+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+}
+const REC_ERR=e=>e&&e.message==='NOT_SET'?'Password recovery is not set up yet. Please contact the admin.':'Could not reach the server. Check your connection and try again.';
+async function acctRecSend(){
+  const ph=document.getElementById('acctPhone').value;
+  if(!acctEmail(ph)){acctMsg('Enter a valid Zambian number, e.g. 0977 123456.');return;}
+  acctMsg('Please wait…',true);
+  try{
+    const d=await recCall('/recovery/request',{phone:ph});
+    if(!d||!d.ok)throw new Error('FAIL');
+    _acctPhone=ph;_acctMode='rec2';renderAcct();
+    acctMsg('If this number has a recovery email, a 6-digit code was sent to it. It expires in 15 minutes.',true);
+  }catch(e){acctMsg(REC_ERR(e));}
+}
+async function acctRecConfirm(){
+  const g=id=>(document.getElementById(id)||{}).value||'',code=g('acctRecCode').trim(),p1=g('acctRecPw'),p2=g('acctRecPw2');
+  if(!/^\d{6}$/.test(code)){acctMsg('Enter the 6-digit code from the email.');return;}
+  if(p1.length<6){acctMsg('Password must be at least 6 characters.');return;}
+  if(p1!==p2){acctMsg('The two passwords do not match. Type the same password twice.');return;}
+  acctMsg('Please wait…',true);
+  try{
+    const d=await recCall('/recovery/confirm',{phone:_acctPhone,code,newPassword:p1});
+    if(!d||!d.ok){acctMsg((d&&d.error)||'Something went wrong. Try again.');return;}
+    _acctMode='in';renderAcct();acctMsg('Password changed. Please sign in with your new password.',true);
+  }catch(e){acctMsg(REC_ERR(e));}
+}
+async function acctLoad(){
+  const t=await _getAnonToken();if(!t||!_acct)return null;
+  const base=_FB_DB_URL+'/motoconnect_zambia/',uid=_acct.uid;
+  // 401/403 on a record means "not yours": skip it. Any other failure throws. strict=true also throws on 401 (used for the indexes).
+  const rd=(p,strict)=>fetch(base+p+'.json?auth='+t).then(r=>{if(!strict&&(r.status===401||r.status===403))return null;if(!r.ok)throw new Error('X');return r.json();});
+  const keys=o=>Object.keys(o&&typeof o==='object'?o:{});
+  // Reads ONLY the small fields of each record, never the whole record, so the photos, logo and documents
+  // (up to ~2 MB each) are not downloaded just to show a status card. ownerUid confirms the record is really this login's.
+  const light=async(node,id,fields)=>{
+    const at=f=>rd(node+'/'+encodeURIComponent(id)+'/'+f);
+    if(await at('ownerUid')!==uid)return null;   // not this login's (or deleted): don't read anything else
+    const rest=fields.filter(f=>f!=='ownerUid'),v=await Promise.all(rest.map(at));
+    const o={id,ownerUid:uid};rest.forEach((f,i)=>{if(v[i]!=null)o[f]=v[i];});
+    return o;
+  };
+  try{
+    const ix=await rd('owner_index/'+uid,true);
+    const subs=await Promise.all(keys(ix).map(id=>light('subscriptions',id,['ownerUid','name','ref','status','plan','expiry','rslExpiry'])));
+    let advs=[],advErr=false;
+    try{
+      const ax=await rd('owner_index_adv/'+uid,true);
+      advs=(await Promise.all(keys(ax).map(id=>light('advertisers',id,['ownerUid','name','ref','status','tier','expiry'])))).map(a=>a&&{...a,_adv:true});
+    }catch(e){advErr=true;}   // advertiser list is optional: never block the rider list
+    const out=subs.concat(advs).filter(Boolean);out.advErr=advErr;return out;
+  }catch(e){return null;}
+}
+async function acctSendLink(){
+  const t=await _getAnonToken(),el=document.getElementById('acctLinkRef');
+  const ref=el.value.toUpperCase().replace(/[^A-Z0-9_-]/g,'').slice(0,40),pe=document.getElementById('acctLinkPhone'),ph=pe.value.replace(/\D/g,'').slice(0,15);
+  if(!_acct||!t)return;
+  if(ref.length<4||ph.length<9){acctMsg('Enter the reference number and the phone number on the application.');return;}
+  try{
+    // One request per reference (link_requests/<login>/<REF>): a login can ask to link a rider record AND an advertiser listing.
+    const r=await fetch(_FB_DB_URL+'/motoconnect_zambia/link_requests/'+_acct.uid+'/'+ref+'.json?auth='+t,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({ref,phone:ph,at:new Date().toISOString()})});
+    acctMsg(r.ok?'Request sent. The admin will check it and link it to your login. You can send another reference.':'Could not send. Try again.',r.ok);
+    if(r.ok){el.value='';pe.value='';}
+  }catch(e){acctMsg('Could not send. Check your connection.');}
+}
+const ACCT_STATUS={pending:'⏳ Under review',active:'✅ Active',expired:'⚠️ Subscription expired',rsl_expired:'⚠️ Suspended: RSL expired',rejected:'❌ Not approved. Please apply again.'};
+function _acctDate(s){if(!s)return'—';const x=new Date(s+'T00:00:00');return isNaN(x)?esc(s):x.toLocaleDateString('en-ZM',{day:'numeric',month:'short',year:'numeric'});}
+async function renderAcct(){
+  const out=document.getElementById('acctBody');if(!out)return;
+  const inp='style="width:100%;background:var(--surface2);border:1.5px solid var(--border);border-radius:8px;padding:.55rem .8rem;font-size:.9rem;margin:.25rem 0 .7rem"';
+  const msg='<div id="acctMsg" style="display:none;font-size:.82rem;font-weight:600;margin:.4rem 0"></div>';
+  if(!_acct){
+    const m=_acctMode,up=m==='up',lab='<label style="font-size:.8rem;font-weight:600">',
+      note=t=>'<p style="font-size:.85rem;color:var(--muted);margin-bottom:.8rem">'+t+'</p>',
+      btn=(fn,txt,pri)=>'<button class="btn '+(pri?'btn-primary':'btn-ghost')+' btn-sm" onclick="'+fn+'">'+txt+'</button>',
+      row=x=>'<div style="display:flex;gap:.5rem;flex-wrap:wrap">'+x+'</div>',
+      ph=lab+'Phone number</label><input type="tel" id="acctPhone" placeholder="0977 123456" autocomplete="username" value="'+esc(String(_acctPhone).replace(/[^0-9+ ]/g,''))+'" '+inp+'/>';
+    if(m==='rec1')out.innerHTML=note('Enter your phone number. If you saved a recovery email, we will send a 6-digit code to it.')+ph+msg+row(btn('acctRecSend()','Send code',1)+btn("acctMode('in')",'Back'));
+    else if(m==='rec2')out.innerHTML=note('Enter the code from your email and choose a new password.')
+      +lab+'6-digit code</label><input type="text" inputmode="numeric" maxlength="6" id="acctRecCode" autocomplete="one-time-code" '+inp+'/>'
+      +lab+'New password (6+ characters)</label><input type="password" id="acctRecPw" autocomplete="new-password" '+inp+'/>'
+      +lab+'Confirm new password</label><input type="password" id="acctRecPw2" autocomplete="new-password" '+inp+'/>'+msg
+      +row(btn('acctRecConfirm()','Change password',1)+btn("acctMode('rec1')",'Send a new code'));
+    else out.innerHTML=note(up?'Create a login with your phone number to follow your application, subscription and renewal dates.':'Sign in with your phone number to follow your application, subscription and renewal dates.')+ph
+      +lab+'Password (6+ characters)</label><input type="password" id="acctPw" autocomplete="'+(up?'new-password':'current-password')+'" '+inp+'/>'
+      +(up?lab+'Confirm password</label><input type="password" id="acctPw2" autocomplete="new-password" '+inp+'/>'
+          +lab+'Recovery email (optional)</label><input type="email" id="acctRecEmail" autocomplete="email" placeholder="you@example.com" '+inp+'/><p style="font-size:.75rem;color:var(--muted);margin:-.4rem 0 .7rem">Only used to email you a code if you forget your password.</p>':'')+msg
+      +row(btn("acctAuth('"+(up?'up':'in')+"')",up?'Create login':'Sign in',1)+btn("acctMode('"+(up?'in':'up')+"')",up?'I already have a login':'Create login')+(up?'':btn("acctMode('rec1')",'Forgot password?')));
+    return;
+  }
+  out.innerHTML='<p style="color:var(--muted);font-size:.85rem">Loading…</p>';
+  const recs=await acctLoad();
+  const cards=recs===null?'<p style="color:#b91c1c;font-size:.85rem">Could not load your records. Check your connection.</p>'
+    :!recs.length?'<p style="font-size:.85rem;color:var(--muted)">Nothing is linked to this login yet. If you already applied as a rider or advertiser, send a link request below.</p>'
+    :recs.map(s=>'<div style="border:1px solid var(--border);border-radius:10px;padding:.8rem;margin-bottom:.6rem;font-size:.85rem;line-height:1.6">'
+      +'<strong>'+esc(s.name||(s._adv?'Business':'Rider'))+'</strong> <span style="color:var(--muted);font-size:.75rem">'+esc(s.ref||s.id)+'</span><br>'
+      +(s._adv?'📣 Advertiser listing<br>':'')
+      +(ACCT_STATUS[(s._adv&&s.status==='active'&&s.expiry&&s.expiry<new Date().toISOString().slice(0,10))?'expired':s.status]||esc(s.status||''))
+      +(s.plan?'<br>Plan: '+esc(s.plan):'')
+      +(s._adv&&s.tier?'<br>Plan: '+esc(String(s.tier).charAt(0).toUpperCase()+String(s.tier).slice(1)):'')
+      +(s.status==='active'||s.status==='expired'?'<br>'+(s._adv&&s.status==='active'&&s.expiry&&s.expiry<new Date().toISOString().slice(0,10)?'Subscription ended: ':'Subscription ends: ')+_acctDate(s.expiry):'')
+      +(s.rslExpiry?'<br>RSL expires: '+_acctDate(s.rslExpiry):'')+'</div>').join('');
+  out.innerHTML='<p style="font-size:.8rem;color:var(--muted);margin-bottom:.6rem">Signed in as +'+esc(_acct.phone||'')+'</p>'+cards+(recs&&recs.advErr?'<p style="font-size:.8rem;color:#b91c1c">Could not load your advertiser listings. Try again later.</p>':'')+msg
+    +'<details style="margin-top:.5rem"><summary style="font-size:.82rem;font-weight:600;cursor:pointer">Link an existing application, rider or advertiser listing</summary>'
+    +'<input type="text" id="acctLinkRef" placeholder="Reference, e.g. MCM-AB12CD or ADV-AB12CD" '+inp+'/><input type="tel" id="acctLinkPhone" placeholder="Phone number on the application" '+inp+'/>'
+    +'<button class="btn btn-ghost btn-sm" onclick="acctSendLink()">Send link request</button></details>'
+    +'<details style="margin-top:.6rem"><summary style="font-size:.82rem;font-weight:600;cursor:pointer">Recovery email (for a forgotten password)</summary>'
+    +'<input type="email" id="acctRecEmail" placeholder="you@example.com" '+inp+'/><button class="btn btn-ghost btn-sm" onclick="acctSaveRecovery()">Save recovery email</button></details>'
+    +'<div style="margin-top:1rem"><button class="btn btn-ghost btn-sm" onclick="acctSignOut()">Sign out</button></div>';
+}
+
 function getPendingSync(){return load(KEYS.pendingSync,[]);}
 function markPendingSync(id){
   const p=getPendingSync();
@@ -5045,39 +5539,19 @@ function clearPendingSync(id){
   save(KEYS.pendingSync,p);
 }
 
-// ── Zone sync (same retry-queue pattern as subscriptions, separate path) ──
-function getPendingZoneSync(){return load(KEYS.pendingZoneSync,[]);}
-function markPendingZoneSync(id){
-  const p=getPendingZoneSync();
-  if(!p.includes(id)){p.push(id);save(KEYS.pendingZoneSync,p);}
-}
-function clearPendingZoneSync(id){
-  save(KEYS.pendingZoneSync,getPendingZoneSync().filter(x=>x!==id));
-}
-
-async function fbZoneWrite(zone){
-  if(!zone||!zone.id)return;
-  markPendingZoneSync(zone.id);
+// One-time clean-up: earlier versions queued zone writes and subscription edits/deletes that the database refuses,
+// and retried them every 30 seconds forever. Drop the zone queue and keep only genuine pending applications.
+(function(){
   try{
-    const token=await _getAnonToken();
-    const url=_FB_DB_URL+'/motoconnect_zambia/zones/'+zone.id+'.json'+(token?'?auth='+token:'');
-    const res=await fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(zone)});
-    if(res&&res.ok)clearPendingZoneSync(zone.id);
-  }catch(e){
-    console.warn('Zone sync to cloud failed, will retry:',e);
-  }
-}
+    if(load('mc_public_writes_v1',false))return;
+    localStorage.removeItem(KEYS.pendingZoneSync);
+    const subs=getSubs();
+    save(KEYS.pendingSync,getPendingSync().filter(id=>{const x=subs.find(s=>s.id===id);return !!x&&x.isApplication===true&&x.status==='pending';}));
+    save('mc_public_writes_v1',true);
+  }catch(e){}
+})();
 
-async function flushPendingZoneSync(){
-  const pending=getPendingZoneSync();
-  if(!pending.length)return;
-  const zones=getZones();
-  for(const id of pending){
-    const z=zones.find(x=>x.id===id);
-    if(z)await fbZoneWrite(z);
-    else clearPendingZoneSync(id);
-  }
-}
+// ── Zones are READ-ONLY here: only admins can write them (done in the admin app) ──
 
 // Pulls the latest zones list from Firebase (e.g. zones another admin
 // device approved) and merges with any local-only zones, then refreshes
@@ -5094,9 +5568,6 @@ async function fbZonesLoad(){
     if(!res.ok)return;
     const data=await res.json();
     const fbZones=(data&&typeof data==='object')?Object.values(data).filter(Boolean):[];
-    const fbMap={};
-    fbZones.forEach(z=>{if(z&&z.id)fbMap[z.id]=z;});
-
     const localMap={};
     const local=getZones();
     // Start from local so nothing local ever silently vanishes.
@@ -5116,42 +5587,54 @@ async function fbZonesLoad(){
     initPubTownDropdown();
     renderPubZoneTabs();
     renderZones();
-
-    // Auto-heal: any local zone Firebase doesn't have yet gets pushed up
-    // (e.g. unsynced seed data) instead of being deleted on the next poll.
-    merged.forEach(z=>{
-      if(z&&z.id&&!fbMap[z.id])fbZoneWrite(z).catch(()=>{});
-    });
   }catch(e){
     console.warn('Zone load failed, showing local zones:',e);
   }
 }
 
-window.addEventListener('online',()=>{flushPendingSync();flushPendingZoneSync();flushPendingAdvSync();});
+window.addEventListener('online',()=>{flushPendingSync();flushPendingAdvSync();});
 window.addEventListener('DOMContentLoaded',()=>{
   fbZonesLoad();
-  setTimeout(flushPendingZoneSync,3000);
   setTimeout(flushPendingAdvSync,3000);
-  setInterval(()=>{fbZonesLoad();flushPendingZoneSync();},30000);
+  setInterval(fbZonesLoad,30000);
 });
 
 async function fbRestWrite(item){
-  if(!item||!item.id)return;
+  if(!item||!item.id)return 'skip';
+  // The database lets the public do exactly one thing to subscriptions: CREATE a new pending application.
+  // Edits, renewals, approvals, availability changes and deletes are admin-only (done in the admin app),
+  // so they are never sent or queued from here. Sending them just fails and retries every 30 seconds.
+  if(!(item.isApplication===true&&item.status==='pending'))return 'skip';
   // Mark as pending *before* attempting the write. If the write succeeds
   // we clear it below; if anything fails (offline, timeout, bad response)
   // it stays queued and gets retried automatically — so a rider never
   // silently disappears from the cloud just because the connection was
   // weak at the moment they were saved.
   markPendingSync(item.id);
+  let result='retry';
   try{
     const token=await _getAnonToken();
-    const url=_FB_DB_URL+'/motoconnect_zambia/subscriptions/'+item.id+'.json'+(token?'?auth='+token:'');
-    const res=await fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(item)});
-    if(res&&res.ok)clearPendingSync(item.id);
+    if(token){   // no login yet = not a real attempt; never mistake it for a refusal
+      const owner=_uidFromToken(token);
+      if(owner){   // the rate limit is keyed to this identity, so without a readable uid there is nothing to send
+        // If an earlier attempt landed but its reply was lost, the database accepts this identical re-send
+        // (same id + txnId + created, still pending) once the rate-limit window has passed; before that the
+        // lookup below finds the record already stored.
+        result=await _fbCreateThrottled('app','subscriptions',item.id,{...item,ownerUid:owner},owner,token);
+        let mine=false;
+        if(result==='denied'){const d=await _resolveDenied('subscriptions','riders_public',KEYS.subs,item.id,token);result=d.result;mine=d.mine;}
+        if((result==='ok'||(result==='settled'&&mine)))fetch(_FB_DB_URL+'/motoconnect_zambia/owner_index/'+owner+'/'+item.id+'.json?auth='+token,{method:'PUT',headers:{'Content-Type':'application/json'},body:'true'}).catch(()=>{});
+      }
+    }
   }catch(e){
     console.warn('Sync to cloud failed, will retry:',e);
   }
+  // 'settled' = the cloud already has it (e.g. the admin approved/rejected it); 'denied' = refused for real.
+  // Neither can ever succeed by retrying every 30s, so take it off the queue instead of trapping it there.
+  if(result==='ok'||result==='settled'||result==='denied')clearPendingSync(item.id);
+  if(result==='denied')console.warn('Application refused by the database, no longer retrying:',item.id);
   renderSyncBanner();
+  return result;
 }
 
 // Retries any riders that failed to sync earlier. Safe to call repeatedly —
@@ -5162,8 +5645,8 @@ async function flushPendingSync(){
   const subs=getSubs();
   for(const id of pending){
     const item=subs.find(s=>s.id===id);
-    if(item)await fbRestWrite(item);
-    else clearPendingSync(id); // record was deleted locally — drop from queue
+    if(item&&item.isApplication===true&&item.status==='pending')await fbRestWrite(item);
+    else clearPendingSync(id); // deleted locally, or no longer a pending application — not ours to send
   }
 }
 
@@ -5171,13 +5654,29 @@ async function flushPendingSync(){
 function renderSyncBanner(){
   const el=document.getElementById('syncPendingBanner');
   if(!el)return;
-  const n=getPendingSync().length;
-  if(n>0){
+  const retrying=getPendingSync().length+getPendingAdvSync().length;
+  const unseen=x=>x&&x.syncDenied===true&&!x.syncDeniedSeen;
+  const refused=getSubs().filter(unseen).length+getAdvertisers().filter(unseen).length;
+  const msgs=[];
+  if(retrying>0)msgs.push(`⚠️ ${retrying} application${retrying>1?'s':''} not yet sent to the cloud — retrying…`);
+  if(refused>0)msgs.push(`⚠️ ${refused} application${refused>1?'s were':' was'} not accepted by the cloud. Please contact the admin.`);
+  const btn=el.querySelector('button');
+  if(msgs.length){
     el.style.display='flex';
-    el.querySelector('span').textContent=`⚠️ ${n} rider${n>1?'s':''} not yet synced to the cloud — retrying…`;
+    el.querySelector('span').textContent=msgs.join('  ');
+    if(btn)btn.style.display=refused>0?'':'none';
   } else {
     el.style.display='none';
   }
+}
+// Acknowledge refused applications: the banner stops showing them, the records stay on the phone.
+function dismissSyncDenied(){
+  [KEYS.subs,KEYS.advertisers].forEach(k=>{
+    const list=load(k,[]);let changed=false;
+    list.forEach(x=>{if(x&&x.syncDenied===true&&!x.syncDeniedSeen){x.syncDeniedSeen=true;changed=true;}});
+    if(changed)save(k,list);
+  });
+  renderSyncBanner();
 }
 
 window.addEventListener('online',flushPendingSync);
@@ -5186,15 +5685,6 @@ window.addEventListener('DOMContentLoaded',()=>{
   setTimeout(flushPendingSync,3000);
   setInterval(flushPendingSync,30000);
 });
-
-async function fbRestDelete(id){
-  if(!id)return;
-  try{
-    const token=await _getAnonToken();
-    const url=_FB_DB_URL+'/motoconnect_zambia/subscriptions/'+id+'.json'+(token?'?auth='+token:'');
-    fetch(url,{method:'DELETE',headers:{'Content-Type':'application/json'}}).catch(()=>{});
-  }catch(e){}
-}
 
 // ══════════════════════════════════════════════════════
 //  RIDER ID CARD

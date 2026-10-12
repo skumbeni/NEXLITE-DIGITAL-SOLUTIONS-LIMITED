@@ -1,16 +1,17 @@
 // MotoConnect Zambia — Service Worker
-// Served at: https://nexlitedigitalsolutionslimited.digital/motoconnect/
-const GHPATH = '/motoconnect';
-const CACHE  = 'mc-v9';
+// Works from any folder it is served from (e.g. /motoconnect/ on the custom domain, /Motoconnect/ on GitHub Pages):
+// the folder is read from the scope the page registered it with, never hard-coded.
+const SCOPE = new URL(self.registration.scope).pathname;   // always ends with "/"
+const CACHE = 'mc-v18';
 
 // Every URL the app needs to open offline — both slash forms required
 const URLS = [
-  `${GHPATH}/`,
-  `${GHPATH}/index.html`,
-  `${GHPATH}/sw.js`,
-  `${GHPATH}/manifest.json`,
-  `${GHPATH}/privacy.html`,
-  `${GHPATH}/tos.html`,
+  SCOPE,
+  `${SCOPE}index.html`,
+  `${SCOPE}sw.js`,
+  `${SCOPE}manifest.json`,
+  `${SCOPE}privacy.html`,
+  `${SCOPE}tos.html`,
 ];
 
 // ── INSTALL: pre-cache shell URLs individually so one missing file
@@ -51,6 +52,8 @@ self.addEventListener('fetch', e => {
     url.includes('firebaseio.com')    ||
     url.includes('googleapis.com')    ||
     url.includes('identitytoolkit')   ||
+    url.includes('google.com/recaptcha') ||   // App Check's reCAPTCHA script: always live, never cached
+    url.includes('gstatic.com/recaptcha') ||
     url.includes('nominatim.openstreetmap.org')
   ) return;
 
@@ -76,7 +79,9 @@ self.addEventListener('fetch', e => {
           // Network failed and nothing cached — for navigation requests
           // fall back to the cached shell so app still opens
           if (e.request.mode === 'navigate') {
-            return caches.match(`${GHPATH}/`) || caches.match(`${GHPATH}/index.html`);
+            // caches.match() returns a Promise (always truthy), so `a || b` never reached b.
+            // Wait for the first lookup and only then fall back to the second.
+            return caches.match(SCOPE).then(r => r || caches.match(`${SCOPE}index.html`));
           }
         });
     })
