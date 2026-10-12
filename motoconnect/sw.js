@@ -2,7 +2,7 @@
 // Works from any folder it is served from (e.g. /motoconnect/ on the custom domain, /Motoconnect/ on GitHub Pages):
 // the folder is read from the scope the page registered it with, never hard-coded.
 const SCOPE = new URL(self.registration.scope).pathname;   // always ends with "/"
-const CACHE = 'mc-v18';
+const CACHE = 'mc-v20';
 
 // Every URL the app needs to open offline — both slash forms required
 const URLS = [

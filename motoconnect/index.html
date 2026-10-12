@@ -787,6 +787,16 @@
     line-height:1;padding:.15rem;display:none;
   }
   .cz-clear.visible{display:block}
+  /* ── MY ACCOUNT: feature hub + saved riders ── */
+  .acct-hub{display:grid;grid-template-columns:1fr 1fr;gap:.55rem;margin:.2rem 0 .9rem}
+  .acct-tile{display:flex;flex-direction:column;align-items:flex-start;gap:.15rem;text-align:left;background:var(--surface2);border:1.5px solid var(--border);border-radius:10px;padding:.7rem .75rem;cursor:pointer;color:var(--text);font:inherit;line-height:1.3}
+  .acct-tile:hover{border-color:var(--accent)}
+  .acct-tile b{font-size:.86rem}
+  .acct-tile span{font-size:.72rem;color:var(--muted);font-weight:400}
+  .acct-tile.hero{background:var(--accent);border-color:var(--accent);color:#fff}
+  .acct-tile.hero span{color:rgba(255,255,255,.88)}
+  .btn-save{flex:0 0 auto;background:#fff7e6;color:#b45309;border:1.5px solid #fcd34d;border-radius:8px;padding:.6rem .8rem;font-size:1rem;line-height:1;cursor:pointer}
+  .btn-save.on{background:#fbbf24;color:#000;border-color:#fbbf24}
 </style>
 </head>
 <body>
@@ -1067,7 +1077,7 @@
             <h3>Application Submitted!</h3>
             <p>Thank you for applying to MotoConnect Zambia. Keep your reference number safe — admin will contact you on your phone once reviewed.</p>
             <div class="ref-chip" id="appRefDisplay">MCM-XXXX</div>
-            <button class="btn btn-ghost btn-sm" onclick="openAcct()" style="margin-top:.6rem">👤 Create a login to track this application</button>
+            <button class="btn btn-ghost btn-sm" id="appTrackBtn" onclick="openAcct()" style="margin-top:.6rem">👤 Create a login to track this application</button>
             <p id="fbSubmitStatus" style="font-size:.8rem;margin-top:.6rem;font-weight:600">📡 Sending to admin…</p>
             <p style="font-size:.78rem;margin-top:.3rem;color:var(--muted)">Processing usually takes 1–2 business days.</p>
             <button class="btn btn-primary btn-sm mt1" onclick="showPublicPage()" style="margin-top:1rem">← Back to Directory</button>
@@ -1260,6 +1270,7 @@
             <h3>Listing Submitted!</h3>
             <p>Thank you for advertising on MotoConnect Zambia. Keep your reference number safe — admin will contact you once reviewed.</p>
             <div class="ref-chip" id="advRefDisplay">ADV-XXXX</div>
+            <button class="btn btn-ghost btn-sm" id="advTrackBtn" onclick="openAcct()" style="margin-top:.6rem">👤 Create a login to track this listing</button>
             <p id="advFbSubmitStatus" style="font-size:.8rem;margin-top:.6rem;font-weight:600">📡 Sending to admin…</p>
             <p style="font-size:.78rem;margin-top:.3rem;color:var(--muted)">Processing usually takes 1–2 business days.</p>
             <div id="advVoucherStaffReminder" style="display:none;margin-top:1rem;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:.75rem;font-size:.78rem;color:#92400e;text-align:left">
@@ -1327,6 +1338,13 @@
   <div class="modal">
     <div class="modal-header"><h3>👤 My Account</h3><button class="close-btn" onclick="closeModal('acctModal')">✕</button></div>
     <div class="modal-body" id="acctBody"></div>
+  </div>
+</div>
+
+<div class="overlay" id="fbkModal">
+  <div class="modal">
+    <div class="modal-header"><h3>⭐ Rate or report a rider</h3><button class="close-btn" onclick="closeModal('fbkModal')">✕</button></div>
+    <div class="modal-body" id="fbkBody"></div>
   </div>
 </div>
 
@@ -3111,6 +3129,18 @@ async function fbRestLoad(){
     if(!data||typeof data!=='object'){_showOfflineBanner(false);_pubLoadFirstAttemptDone=true;return;}
     // Firebase returns an object map {id: record}; convert to array
     const fbSubs=Object.values(data).filter(Boolean);
+    // Riders can switch their own availability / hours from My Account (rider_status): that live value wins over the mirror.
+    try{
+      const sr=await fetch(_FB_DB_URL+'/motoconnect_zambia/rider_status.json'+(token?'?auth='+token:''));
+      if(sr.ok){
+        const st=await sr.json();
+        if(st&&typeof st==='object')fbSubs.forEach(x=>{
+          const o=x&&st[x.id];if(!o||typeof o!=='object')return;
+          if(['available','busy','offline'].indexOf(o.availability)>-1)x.availability=o.availability;
+          if(typeof o.hours==='string')x.hours=o.hours;
+        });
+      }
+    }catch(e){}
     // Firebase is authoritative for any record it has ever synced. Keep a
     // locally cached record only if Firebase still has it, OR it's a local
     // record still waiting to be pushed out (pendingSync) — e.g. a new
@@ -4159,7 +4189,9 @@ function renderPublicDirectory(){
       <div class="rider-card-actions">
         ${phone?`<a class="btn-call" href="tel:+${phone}">📞 Call</a>`:'<span class="btn-call" style="opacity:.4;cursor:default">📞 No Phone</span>'}
         ${phone?`<a class="btn-wa" href="https://wa.me/${phone}?text=${waMsg}" target="_blank">💬 WhatsApp</a>`:'<span class="btn-wa" style="opacity:.4;cursor:default">💬 WhatsApp</span>'}
+        <button type="button" class="btn-save${_isSaved(s.id)?' on':''}" data-id="${sid(s.id)}" onclick="toggleSaved('${sid(s.id)}')" aria-label="Save this rider" title="Save this rider">${_isSaved(s.id)?'★':'☆'}</button>
       </div>
+      <div style="padding:0 1.1rem 1rem;text-align:center"><span style="font-size:.74rem;color:var(--muted);cursor:pointer;text-decoration:underline" onclick="openFeedback('${sid(s.id)}')">⭐ Rate or report this rider</span></div>
     </div>`;
   }).join('');
 
@@ -4770,6 +4802,7 @@ function submitApplication(){
   subs.push(app);
   save(KEYS.subs,subs);
   document.getElementById('appRefDisplay').textContent=ref;
+  _trackBtn('appTrackBtn','application');
   setApplyStep(4);
 
   // ── Silent admin WhatsApp notification (hidden from applicant) ──
@@ -4987,6 +5020,7 @@ function submitAdvertiser(){
   ads.push(ad);
   save(KEYS.advertisers,ads);
   document.getElementById('advRefDisplay').textContent=ref;
+  _trackBtn('advTrackBtn','listing');
   if(ad.voucherEnabled){
     const verifyUrl=window.location.origin+window.location.pathname+'?verify';
     document.getElementById('advVerifyLinkText').textContent=verifyUrl;
@@ -5406,7 +5440,7 @@ async function acctAuth(mode){
     await renderAcct();
   }catch(e){acctMsg(ACCT_ERR[String(e.message).split(' ')[0]]||'Could not reach the server. Check your connection and try again.');}
 }
-function acctSignOut(){_acctMode='in';_acct=null;save('mc_acct',null);_fbAnonToken=null;_fbTokenExpiry=0;renderAcct();}
+function acctSignOut(){_acctMode='in';_acct=null;save('mc_acct',null);_fbAnonToken=null;_fbTokenExpiry=0;_saved=[];_refreshStars();renderAcct();}
 const _validEmail=e=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)&&e.length<=100;
 async function _putRecovery(t,em){   // write-only for the rider: no client can read recovery emails back
   try{const r=await fetch(_FB_DB_URL+'/motoconnect_zambia/account_recovery/'+_acct.uid+'.json?auth='+t,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em})});return r.ok;}catch(e){return false;}
@@ -5462,11 +5496,18 @@ async function acctLoad(){
   };
   try{
     const ix=await rd('owner_index/'+uid,true);
-    const subs=await Promise.all(keys(ix).map(id=>light('subscriptions',id,['ownerUid','name','ref','status','plan','expiry','rslExpiry'])));
+    // Per record: this login's pending renewal request, and (riders) the live availability/hours the rider set.
+    const extra=async(o,adv)=>{
+      if(!o)return o;
+      try{o.renew=await rd('renewal_requests/'+encodeURIComponent(o.id));}catch(e){}
+      if(!adv){try{o.live=await rd('rider_status/'+encodeURIComponent(o.id));}catch(e){}}
+      return o;
+    };
+    const subs=await Promise.all(keys(ix).map(id=>light('subscriptions',id,['ownerUid','name','ref','status','plan','expiry','rslExpiry','availability','hours']).then(o=>extra(o,false))));
     let advs=[],advErr=false;
     try{
       const ax=await rd('owner_index_adv/'+uid,true);
-      advs=(await Promise.all(keys(ax).map(id=>light('advertisers',id,['ownerUid','name','ref','status','tier','expiry'])))).map(a=>a&&{...a,_adv:true});
+      advs=(await Promise.all(keys(ax).map(id=>light('advertisers',id,['ownerUid','name','ref','status','tier','expiry']).then(o=>extra(o,true))))).map(a=>a&&{...a,_adv:true});
     }catch(e){advErr=true;}   // advertiser list is optional: never block the rider list
     const out=subs.concat(advs).filter(Boolean);out.advErr=advErr;return out;
   }catch(e){return null;}
@@ -5509,9 +5550,12 @@ async function renderAcct(){
     return;
   }
   out.innerHTML='<p style="color:var(--muted);font-size:.85rem">Loading…</p>';
-  const recs=await acctLoad();
+  const [recs]=await Promise.all([acctLoad(),_savedLoad()]);
+  if(!_acct)return;   // signed out while loading
+  const fresh=Array.isArray(recs)&&!recs.length;   // brand-new login: nothing applied for yet
+  _acctRecs={};(recs||[]).forEach(r=>{if(r&&r.id)_acctRecs[r.id]=r;});
   const cards=recs===null?'<p style="color:#b91c1c;font-size:.85rem">Could not load your records. Check your connection.</p>'
-    :!recs.length?'<p style="font-size:.85rem;color:var(--muted)">Nothing is linked to this login yet. If you already applied as a rider or advertiser, send a link request below.</p>'
+    :!recs.length?'<p style="font-size:.85rem;color:var(--muted);margin-bottom:.6rem">No applications or listings on this login yet. Already applied before? Use \u201cLink an application\u201d below.</p>'
     :recs.map(s=>'<div style="border:1px solid var(--border);border-radius:10px;padding:.8rem;margin-bottom:.6rem;font-size:.85rem;line-height:1.6">'
       +'<strong>'+esc(s.name||(s._adv?'Business':'Rider'))+'</strong> <span style="color:var(--muted);font-size:.75rem">'+esc(s.ref||s.id)+'</span><br>'
       +(s._adv?'📣 Advertiser listing<br>':'')
@@ -5519,14 +5563,250 @@ async function renderAcct(){
       +(s.plan?'<br>Plan: '+esc(s.plan):'')
       +(s._adv&&s.tier?'<br>Plan: '+esc(String(s.tier).charAt(0).toUpperCase()+String(s.tier).slice(1)):'')
       +(s.status==='active'||s.status==='expired'?'<br>'+(s._adv&&s.status==='active'&&s.expiry&&s.expiry<new Date().toISOString().slice(0,10)?'Subscription ended: ':'Subscription ends: ')+_acctDate(s.expiry):'')
-      +(s.rslExpiry?'<br>RSL expires: '+_acctDate(s.rslExpiry):'')+'</div>').join('');
-  out.innerHTML='<p style="font-size:.8rem;color:var(--muted);margin-bottom:.6rem">Signed in as +'+esc(_acct.phone||'')+'</p>'+cards+(recs&&recs.advErr?'<p style="font-size:.8rem;color:#b91c1c">Could not load your advertiser listings. Try again later.</p>':'')+msg
-    +'<details style="margin-top:.5rem"><summary style="font-size:.82rem;font-weight:600;cursor:pointer">Link an existing application, rider or advertiser listing</summary>'
+      +(s.rslExpiry?'<br>RSL expires: '+_acctDate(s.rslExpiry):'')+acctCardActions(s)+'</div>').join('');
+  const hub=acctHubHtml();
+  const welcome='<div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:.75rem;margin-bottom:.8rem;font-size:.85rem;line-height:1.5;color:#065f46"><strong>\ud83c\udf89 Your login is ready.</strong><br>Pick what you want to do first. Anything you apply for here is linked to this login, so you can follow its progress.</div>';
+  out.innerHTML='<p style="font-size:.8rem;color:var(--muted);margin-bottom:.6rem">Signed in as +'+esc(_acct.phone||'')+'</p>'
+    +(fresh?welcome+hub+cards:cards+'<p style="font-size:.82rem;font-weight:600;margin:.8rem 0 .4rem">What would you like to do?</p>'+hub)
+    +(recs&&recs.advErr?'<p style="font-size:.8rem;color:#b91c1c">Could not load your advertiser listings. Try again later.</p>':'')+msg
+    +acctSavedHtml()
+    +'<details id="acctLinkBox" style="margin-top:.5rem"><summary style="font-size:.82rem;font-weight:600;cursor:pointer">Link an existing application, rider or advertiser listing</summary>'
     +'<input type="text" id="acctLinkRef" placeholder="Reference, e.g. MCM-AB12CD or ADV-AB12CD" '+inp+'/><input type="tel" id="acctLinkPhone" placeholder="Phone number on the application" '+inp+'/>'
     +'<button class="btn btn-ghost btn-sm" onclick="acctSendLink()">Send link request</button></details>'
     +'<details style="margin-top:.6rem"><summary style="font-size:.82rem;font-weight:600;cursor:pointer">Recovery email (for a forgotten password)</summary>'
     +'<input type="email" id="acctRecEmail" placeholder="you@example.com" '+inp+'/><button class="btn btn-ghost btn-sm" onclick="acctSaveRecovery()">Save recovery email</button></details>'
     +'<div style="margin-top:1rem"><button class="btn btn-ghost btn-sm" onclick="acctSignOut()">Sign out</button></div>';
+  _refreshStars();
+}
+
+// ══════════════════════════════════════════════════════
+//  MY ACCOUNT — FEATURE HUB + SAVED RIDERS
+//  A signed-in login (new or old) gets one-tap shortcuts: apply as a rider, advertise, browse riders and deals,
+//  save favourite riders (stored under the login, so they follow it to any phone), link an older application, share, install.
+//  Anything applied for while signed in is already tied to this login (ownerUid + owner_index), so it shows in My Account.
+// ══════════════════════════════════════════════════════
+const SAVED_MAX=30,_okId=x=>/^[A-Za-z0-9_-]{6,40}$/.test(x);
+let _saved=[];   // ids of saved riders (this login only)
+function _savedKey(){return _acct?'mc_saved_'+_acct.uid:null;}
+function _isSaved(id){return _saved.indexOf(String(id))>-1;}
+function _savedLocal(){const k=_savedKey();if(!k)return [];const v=load(k,[]);return (Array.isArray(v)?v:[]).filter(_okId).slice(0,SAVED_MAX);}
+_saved=_acct?_savedLocal():[];
+function _refreshStars(){document.querySelectorAll('.btn-save[data-id]').forEach(b=>{const on=_isSaved(b.getAttribute('data-id'));b.classList.toggle('on',on);b.textContent=on?'\u2605':'\u2606';});}
+// Cloud copy is one short string per login (comma-separated ids, capped), so it can never grow without bound.
+async function _savedPush(t){
+  const k=_savedKey();if(!k||!_acct)return false;
+  try{
+    const r=await fetch(_FB_DB_URL+'/motoconnect_zambia/saved_riders/'+_acct.uid+'.json?auth='+t,{method:'PUT',headers:{'Content-Type':'application/json'},body:_saved.length?JSON.stringify(_saved.join(',')):'null'});
+    save(k+'_dirty',!r.ok);return r.ok;
+  }catch(e){save(k+'_dirty',true);return false;}
+}
+async function _savedLoad(){
+  if(!_acct){_saved=[];return;}
+  const k=_savedKey();_saved=_savedLocal();
+  const t=await _getAnonToken();if(!t||!_acct||_savedKey()!==k)return;
+  try{
+    if(load(k+'_dirty',false)){await _savedPush(t);return;}   // a change made offline is waiting: it wins and is sent up now
+    const r=await fetch(_FB_DB_URL+'/motoconnect_zambia/saved_riders/'+_acct.uid+'.json?auth='+t);
+    if(!r.ok)return;
+    const v=await r.json();
+    _saved=typeof v==='string'?v.split(',').filter(_okId).slice(0,SAVED_MAX):[];   // otherwise the cloud copy is the truth
+    save(k,_saved);
+  }catch(e){}
+}
+async function toggleSaved(id){
+  id=sid(id);if(!id)return;
+  if(!_acct){openAcct();acctMsg('Create a login or sign in to save riders. They will follow you to any phone.',true);return;}
+  const i=_saved.indexOf(id);
+  if(i>-1)_saved.splice(i,1);
+  else{if(_saved.length>=SAVED_MAX){alert('You can save up to '+SAVED_MAX+' riders. Remove one first.');return;}_saved.push(id);}
+  save(_savedKey(),_saved);_refreshStars();
+  const t=await _getAnonToken();
+  if(t)_savedPush(t);else save(_savedKey()+'_dirty',true);   // offline: kept on this phone and sent up next time
+}
+function acctSavedHtml(){
+  const today=new Date();today.setHours(0,0,0,0);const subs=getSubs();
+  const box='border:1px solid var(--border);border-radius:10px;padding:.7rem;margin:.5rem 0;font-size:.85rem;line-height:1.5';
+  const rows=_saved.map(id=>{
+    const s=subs.find(x=>x&&x.id===id),live=!!s&&s.status==='active'&&!(s.expiry&&new Date(s.expiry)<today);
+    const rm='<button type="button" class="btn btn-ghost btn-sm" onclick="acctUnsave(\''+sid(id)+'\')">Remove</button>';
+    if(!live)return '<div style="'+box+'"><span style="color:var(--muted)">A saved rider is not listed right now.</span><div style="margin-top:.4rem">'+rm+'</div></div>';
+    const ph=zamPhone(s.phone);
+    return '<div style="'+box+'"><strong>'+esc(s.name)+'</strong><br><span style="color:var(--muted);font-size:.78rem">'+esc(s.type||'')+(s.zone?' \u00b7 '+esc(s.zone):'')+'</span>'
+      +'<div style="display:flex;gap:.4rem;margin-top:.45rem;flex-wrap:wrap">'
+      +(ph?'<a class="btn btn-primary btn-sm" style="width:auto;text-decoration:none" href="tel:+'+ph+'">\ud83d\udcde Call</a><a class="btn btn-ghost btn-sm" style="text-decoration:none" target="_blank" rel="noopener" href="https://wa.me/'+ph+'">\ud83d\udcac WhatsApp</a>':'')
+      +'<button type="button" class="btn btn-ghost btn-sm" onclick="openFeedback(\''+sid(id)+'\')">⭐ Rate / report</button>'+rm+'</div></div>';
+  }).join('');
+  return '<details id="acctSavedBox" style="margin-top:.5rem"><summary style="font-size:.82rem;font-weight:600;cursor:pointer">\u2b50 Saved riders ('+_saved.length+')</summary>'
+    +(rows||'<p style="font-size:.82rem;color:var(--muted);margin:.5rem 0">No saved riders yet. Tap \u2606 on a rider in the directory to keep them here.</p>')+'</details>';
+}
+async function acctUnsave(id){
+  await toggleSaved(id);
+  const d=document.getElementById('acctSavedBox');
+  if(d){const was=d.open;d.outerHTML=acctSavedHtml();const n=document.getElementById('acctSavedBox');if(n)n.open=was;}
+}
+function acctHubHtml(){
+  const tile=(fn,ic,t,sub,hero)=>'<button type="button" class="acct-tile'+(hero?' hero':'')+'" onclick="'+fn+'"><b>'+ic+' '+t+'</b><span>'+sub+'</span></button>';
+  return '<div class="acct-hub">'
+    +tile("acctGo('apply')",'\ud83d\ude80','Apply as a Rider','Get listed in the directory',1)
+    +tile("acctGo('advertise')",'\ud83d\udce3','Advertise','List your business in Nearby Deals',1)
+    +tile("acctGo('riders')",'\ud83c\udfcd\ufe0f','Find a Rider','Search riders near you')
+    +tile("acctGo('deals')",'\ud83c\udff7\ufe0f','Nearby Deals','Offers and partner rewards')
+    +tile("acctOpenBox('acctSavedBox')",'\u2b50','Saved riders'+(_saved.length?' ('+_saved.length+')':''),'Your favourites, on any phone')
+    +tile("acctOpenBox('acctLinkBox')",'\ud83d\udd17','Link an application','Already applied? Connect it here')
+    +tile('shareApp()','\ud83d\udce4','Share MotoConnect','Send the link to a friend')
+    +(_deferredInstall?tile('doInstall()','\ud83d\udcf2','Install the app','Add it to your home screen'):'')
+    +'</div>';
+}
+function acctOpenBox(id){const d=document.getElementById(id);if(d){d.open=true;d.scrollIntoView({behavior:'smooth',block:'center'});}}
+function acctGo(where){
+  const p=_acct?String(_acct.phone||''):'',local=p.length===12?'0'+p.slice(3):'';   // 260977123456 -> 0977123456
+  closeModal('acctModal');
+  if(where==='apply'){showApplyPage();const e=document.getElementById('appPhone');if(e&&local)e.value=local;}
+  else if(where==='advertise'){showAdvertisePage();const e=document.getElementById('advPhone');if(e&&local)e.value=local;}
+  else if(where==='deals')showDealsTab();
+  else showPublicPage();
+  window.scrollTo(0,0);
+}
+// Confirmation screens: signed in -> point at My Account; not signed in -> offer to create the login
+function _trackBtn(id,what){const b=document.getElementById(id);if(b)b.textContent=_acct?'\ud83d\udc64 View this '+what+' in My Account':'\ud83d\udc64 Create a login to track this '+what;}
+window.addEventListener('load',()=>{if(_acct)_savedLoad().then(_refreshStars);});
+
+// ══════════════════════════════════════════════════════
+//  MY ACCOUNT — RENEWAL REQUESTS, LISTING STATUS, RATE / REPORT A RIDER
+//  Renewals: the rider/advertiser sends plan + months + payment reference; the admin confirms the payment and renews.
+//  Status:   a rider switches Available / Busy / Offline and sets hours; shown in the directory within ~30 s.
+//  Feedback: a phone-login can rate or report a listed rider; only the admin sees it.
+// ══════════════════════════════════════════════════════
+let _acctRecs={};   // record id -> card data from the last My Account load
+const RENEW_PRICE={rider:{Basic:50,Standard:100,Premium:200},advertiser:{basic:300,featured:600,premium:1000}};
+const RENEW_PLANS={rider:[['Basic','Basic'],['Standard','Standard'],['Premium','Premium']],advertiser:[['basic','Basic'],['featured','Featured'],['premium','Premium']]};
+const _kw=n=>'K'+Number(n||0).toLocaleString('en-ZM');
+const _AV=['available','busy','offline'];
+const _fld='style="width:100%;background:var(--surface2);border:1.5px solid var(--border);border-radius:8px;padding:.5rem .7rem;font-size:.85rem;margin:.2rem 0 .55rem"';
+async function _fbPut(path,body){
+  const t=await _getAnonToken();if(!t)return{ok:false,status:0};
+  try{return await fetch(_FB_DB_URL+'/motoconnect_zambia/'+path+'.json?auth='+t,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});}
+  catch(e){return{ok:false,status:0};}
+}
+function acctCardActions(s){
+  const id=sid(s.id);
+  if(!id||(s.status!=='active'&&s.status!=='expired'))return '';   // pending / rejected / RSL-suspended: nothing to renew or edit here
+  const today=new Date().toISOString().slice(0,10),lapsed=!!(s.expiry&&s.expiry<today)||s.status==='expired',q=s.renew,sm='font-size:.78rem;margin:.35rem 0;';
+  let h='<div style="margin-top:.55rem;padding-top:.55rem;border-top:1px dashed var(--border)">';
+  if(q&&q.status==='pending')h+='<div style="'+sm+'color:#92400e">🔄 Renewal requested ('+esc(q.plan||'')+', '+esc(q.months||'')+' month'+(q.months==1?'':'s')+'). Waiting for the admin to confirm your payment.</div>';
+  else{
+    if(q&&q.status==='rejected')h+='<div style="'+sm+'color:#b91c1c">❌ Your last renewal request was not approved'+(q.adminNote?': '+esc(q.adminNote):'.')+'</div>';
+    h+='<button type="button" class="btn btn-ghost btn-sm" onclick="acctRenewOpen(\''+id+'\')">🔄 '+(lapsed?'Renew now':'Request renewal')+'</button>';
+  }
+  h+='<div id="acctRenew_'+id+'"></div>';
+  if(!s._adv&&s.status==='active'&&!lapsed)h+=acctStatusHtml(s);
+  return h+'</div>';
+}
+function acctStatusHtml(s){
+  const id=sid(s.id),live=s.live||{};
+  const cur=_AV.indexOf(live.availability)>-1?live.availability:(_AV.indexOf(s.availability)>-1?s.availability:'available');
+  const hrs=typeof live.hours==='string'?live.hours:(s.hours||'');
+  const pill=(v,l)=>'<button type="button" id="acctAv_'+id+'_'+v+'" class="btn btn-sm '+(cur===v?'btn-primary':'btn-ghost')+'" style="width:auto;flex:1" onclick="acctSaveStatus(\''+id+'\',\''+v+'\')">'+l+'</button>';
+  return '<div style="margin-top:.7rem"><div style="font-size:.78rem;font-weight:600;margin-bottom:.3rem">Your listing right now</div>'
+    +'<div style="display:flex;gap:.35rem">'+pill('available','✅ Available')+pill('busy','⏳ Busy')+pill('offline','⚫ Offline')+'</div>'
+    +'<input type="text" id="acctHours_'+id+'" maxlength="100" placeholder="Hours, e.g. Mon–Sat 06:00–20:00" value="'+esc(hrs)+'" '+_fld+' />'
+    +'<button type="button" class="btn btn-ghost btn-sm" onclick="acctSaveStatus(\''+id+'\')">Save hours</button>'
+    +'<div id="acctStMsg_'+id+'" style="font-size:.78rem;font-weight:600;margin-top:.3rem"></div></div>';
+}
+async function acctSaveStatus(id,avail){
+  id=sid(id);const rec=_acctRecs[id];if(!id||!rec||!_acct)return;
+  const msg=document.getElementById('acctStMsg_'+id),say=(t,ok)=>{if(msg){msg.textContent=t;msg.style.color=ok?'#065f46':'#b91c1c';}};
+  const live=rec.live||{},cur=_AV.indexOf(live.availability)>-1?live.availability:(_AV.indexOf(rec.availability)>-1?rec.availability:'available');
+  const a=_AV.indexOf(avail)>-1?avail:cur,he=document.getElementById('acctHours_'+id),hours=he?he.value.trim().slice(0,100):'';
+  say('Saving…',true);
+  const r=await _fbPut('rider_status/'+id,{availability:a,hours,updatedAt:new Date().toISOString()});
+  if(!r.ok){say(r.status===401||r.status===403?'Not allowed. Your listing must be active and linked to this login.':'Could not save. Check your connection and try again.');return;}
+  rec.live={availability:a,hours};
+  _AV.forEach(v=>{const b=document.getElementById('acctAv_'+id+'_'+v);if(b)b.className='btn btn-sm '+(v===a?'btn-primary':'btn-ghost');});
+  const subs=getSubs(),i=subs.findIndex(x=>x&&x.id===id);
+  if(i>-1){subs[i].availability=a;subs[i].hours=hours;save(KEYS.subs,subs);renderPublicDirectory();}
+  say('Saved. Riders searching will see this within about 30 seconds.',true);
+}
+function acctRenewCalc(id){
+  const rec=_acctRecs[id],pl=document.getElementById('acctRnPlan_'+id),mo=document.getElementById('acctRnMonths_'+id),el=document.getElementById('acctRnAmt_'+id);
+  if(!rec||!pl||!mo||!el)return;
+  const p=(RENEW_PRICE[rec._adv?'advertiser':'rider']||{})[pl.value]||0,m=parseInt(mo.value,10)||1;
+  el.textContent='Amount to pay: '+_kw(p*m)+' ('+_kw(p)+' × '+m+')';
+}
+function acctRenewOpen(id){
+  id=sid(id);const rec=_acctRecs[id],box=document.getElementById('acctRenew_'+id);if(!rec||!box)return;
+  if(box.innerHTML){box.innerHTML='';return;}   // tapping again closes the form
+  const k=rec._adv?'advertiser':'rider',cur=rec._adv?rec.tier:rec.plan,lab='<label style="font-size:.78rem;font-weight:600">';
+  box.innerHTML='<div style="margin-top:.5rem;background:var(--surface2);border-radius:10px;padding:.7rem">'
+    +lab+(rec._adv?'Tier':'Plan')+'</label><select id="acctRnPlan_'+id+'" onchange="acctRenewCalc(\''+id+'\')" '+_fld+'>'
+      +RENEW_PLANS[k].map(x=>'<option value="'+x[0]+'"'+(x[0]===cur?' selected':'')+'>'+x[1]+' — '+_kw(RENEW_PRICE[k][x[0]])+'/month</option>').join('')+'</select>'
+    +lab+'For how long?</label><select id="acctRnMonths_'+id+'" onchange="acctRenewCalc(\''+id+'\')" '+_fld+'><option value="1">1 month</option><option value="3">3 months</option><option value="6">6 months</option><option value="12">1 year</option></select>'
+    +'<div id="acctRnAmt_'+id+'" style="font-size:.9rem;font-weight:700;margin-bottom:.5rem"></div>'
+    +'<div style="font-size:.78rem;line-height:1.6;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:.5rem .65rem;margin-bottom:.55rem">💡 Pay via Airtel Money or MTN Mobile Money to <strong>0977 638790</strong> or <strong>0960271128</strong>, then enter the transaction ID below. The admin checks the payment and renews you.</div>'
+    +lab+'Transaction ID</label><input type="text" id="acctRnTxn_'+id+'" maxlength="50" placeholder="e.g. AIRTEL-20260612-XXXX or MTN-XXXXXXX" '+_fld+'/>'
+    +lab+'Note (optional)</label><input type="text" id="acctRnNote_'+id+'" maxlength="200" '+_fld+'/>'
+    +'<div id="acctRnMsg_'+id+'" style="font-size:.8rem;font-weight:600;margin:.2rem 0"></div>'
+    +'<div style="display:flex;gap:.5rem"><button type="button" class="btn btn-primary btn-sm" style="width:auto" onclick="acctRenewSend(\''+id+'\')">Send request</button><button type="button" class="btn btn-ghost btn-sm" onclick="acctRenewOpen(\''+id+'\')">Cancel</button></div></div>';
+  acctRenewCalc(id);
+}
+async function acctRenewSend(id){
+  id=sid(id);const rec=_acctRecs[id];if(!id||!rec||!_acct)return;
+  const g=n=>(document.getElementById(n+id)||{}).value||'',msg=document.getElementById('acctRnMsg_'+id),say=(t,ok)=>{if(msg){msg.textContent=t;msg.style.color=ok?'#065f46':'#b91c1c';}};
+  const k=rec._adv?'advertiser':'rider',plan=g('acctRnPlan_'),months=parseInt(g('acctRnMonths_'),10),txn=g('acctRnTxn_').trim(),note=g('acctRnNote_').trim();
+  if(!RENEW_PRICE[k][plan]||[1,3,6,12].indexOf(months)<0){say('Choose a plan and how long.');return;}
+  if(txn.length<5){say('Enter the transaction ID from your payment (at least 5 characters).');return;}
+  say('Sending…',true);
+  const body={id,refType:k,plan,months,txnId:txn.slice(0,50),status:'pending',ownerUid:_acct.uid,requestedAt:new Date().toISOString()};
+  if(rec.ref)body.ref=String(rec.ref).slice(0,40);
+  if(rec.name)body.name=String(rec.name).slice(0,100);
+  if(note)body.note=note.slice(0,200);
+  const r=await _fbPut('renewal_requests/'+id,body);
+  if(!r.ok){say(r.status===401||r.status===403?'Could not send. This record must be linked to your login. Use "Link an application" or contact the admin.':'Could not send. Check your connection and try again.');return;}
+  await renderAcct();
+  acctMsg('✅ Renewal request sent. The admin will confirm your payment and renew you.',true);
+}
+// ── Rate or report a rider ──
+let _fbkId='',_fbkRating=0;
+const FBK_CATS=['Unsafe riding','Overcharged','No-show','Rude behaviour','Fake or wrong details','Other'];
+function fbkStars(){const e=document.getElementById('fbkStars');if(!e)return;let h='';for(let i=1;i<=5;i++)h+='<span onclick="fbkStar('+i+')" style="cursor:pointer;color:'+(i<=_fbkRating?'#f59e0b':'#cbd5e1')+'">★</span>';e.innerHTML=h;}
+function fbkStar(n){_fbkRating=_fbkRating===n?0:n;fbkStars();}
+async function openFeedback(id){
+  id=sid(id);if(!id)return;
+  if(!_acct){openAcct();acctMsg('Sign in or create a login to rate or report a rider.',true);return;}
+  const s=getSubs().find(x=>x&&x.id===id),b=document.getElementById('fbkBody');
+  _fbkId=id;_fbkRating=0;
+  b.innerHTML='<p style="color:var(--muted);font-size:.85rem">Loading…</p>';openModal('fbkModal');
+  let mine=null;
+  try{const t=await _getAnonToken();if(t){const r=await fetch(_FB_DB_URL+'/motoconnect_zambia/rider_feedback/'+id+'/'+_acct.uid+'.json?auth='+t);if(r.ok)mine=await r.json();}}catch(e){}
+  if(!mine||typeof mine!=='object')mine=null;
+  _fbkRating=mine&&[1,2,3,4,5].indexOf(mine.rating)>-1?mine.rating:0;
+  const lab='<label style="font-size:.78rem;font-weight:600">';
+  b.innerHTML='<p style="font-size:.95rem;margin-bottom:.5rem"><strong>'+esc(s?s.name:'Rider')+'</strong></p>'
+    +lab+'Your rating</label><div id="fbkStars" style="font-size:2rem;line-height:1.1;margin:.2rem 0 .7rem"></div>'
+    +lab+'Report a problem (optional)</label><select id="fbkCat" '+_fld+'><option value="">No problem to report</option>'
+      +FBK_CATS.map(c=>'<option'+(mine&&mine.category===c?' selected':'')+'>'+c+'</option>').join('')+'</select>'
+    +lab+'Comment (optional)</label><textarea id="fbkComment" maxlength="300" rows="3" '+_fld+'>'+esc(mine&&mine.comment||'')+'</textarea>'
+    +'<p style="font-size:.75rem;color:var(--muted);margin-bottom:.6rem">Only the MotoConnect admin sees this. It is not shown on the rider\'s listing. Sending again replaces your earlier response for this rider.</p>'
+    +'<div id="fbkMsg" style="font-size:.82rem;font-weight:600;margin:.3rem 0"></div>'
+    +'<button type="button" class="btn btn-primary btn-sm" onclick="fbkSend()">Send</button>';
+  fbkStars();
+}
+async function fbkSend(){
+  const msg=document.getElementById('fbkMsg'),say=(t,ok)=>{if(msg){msg.textContent=t;msg.style.color=ok?'#065f46':'#b91c1c';}};
+  const cat=(document.getElementById('fbkCat')||{}).value||'',comment=((document.getElementById('fbkComment')||{}).value||'').trim();
+  if(!_acct||!_fbkId)return;
+  if(!_fbkRating&&!cat){say('Tap a star rating, or choose a problem to report.');return;}
+  if(cat&&FBK_CATS.indexOf(cat)<0){say('Choose a problem from the list.');return;}
+  const s=getSubs().find(x=>x&&x.id===_fbkId),body={status:'new',at:new Date().toISOString()};
+  if(_fbkRating)body.rating=_fbkRating;
+  if(cat)body.category=cat;
+  if(comment)body.comment=comment.slice(0,300);
+  if(s&&s.name)body.riderName=String(s.name).slice(0,100);
+  say('Sending…',true);
+  const r=await _fbPut('rider_feedback/'+_fbkId+'/'+_acct.uid,body);
+  if(!r.ok){say(r.status===401||r.status===403?'Could not send. You need a phone login, and the rider must be listed right now.':'Could not send. Check your connection and try again.');return;}
+  say('Thank you. The admin has received your '+(cat?'report':'rating')+'.',true);
+  setTimeout(()=>closeModal('fbkModal'),1400);
 }
 
 function getPendingSync(){return load(KEYS.pendingSync,[]);}
