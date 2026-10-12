@@ -523,6 +523,7 @@
   }
   .rider-meta{flex:1;min-width:0}
   .rider-name{font-size:1rem;font-weight:700;color:#fff;margin-bottom:.15rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .verified-badge{display:inline-flex;align-items:center;gap:.25rem;background:#dbeafe;color:#1e40af;font-size:.68rem;font-weight:800;padding:.15rem .5rem;border-radius:20px;margin-left:.3rem;white-space:nowrap}
   .rider-type-badge{display:inline-flex;align-items:center;gap:.3rem;background:rgba(255,255,255,.15);color:#fde68a;font-size:.72rem;font-weight:600;padding:.15rem .55rem;border-radius:20px}
   .avail-dot{
     position:absolute;top:.8rem;right:.9rem;
@@ -991,7 +992,7 @@
             <input type="hidden" id="appZoneCustom" value=""/>
             <div id="appZoneCustomHint" style="display:none;margin-top:.4rem" class="cz-new-badge">⚠️ New region — admin will review before it goes live</div>
           </div>
-          <div class="form-row"><label>Secondary Zone <span style="font-weight:400;color:var(--muted);font-size:.75rem">(optional — if you cover a second area)</span></label>
+          <div class="form-row" id="appZone2Row" style="display:none"><label>Secondary Zone <span style="font-weight:400;color:var(--muted);font-size:.75rem">(optional — if you cover a second area)</span></label>
             <div class="cz-wrap">
               <input type="text" class="cz-input" id="appZone2Input" placeholder="🔍 Search or leave blank…" autocomplete="off"
                 oninput="czOnInput('appZone2Input','czDrop2','appZone2','appZone2Custom',null,'czClear2')"
@@ -1338,6 +1339,20 @@
   <div class="modal">
     <div class="modal-header"><h3>👤 My Account</h3><button class="close-btn" onclick="closeModal('acctModal')">✕</button></div>
     <div class="modal-body" id="acctBody"></div>
+  </div>
+</div>
+
+<!-- ══ RIDER ID CARD MODAL (opened from My Account → 🆔 My ID card) ═════════ -->
+<div class="overlay" id="riderCardModal">
+  <div class="modal">
+    <div class="modal-header"><h3>🆔 Rider ID Card</h3><button class="close-btn" onclick="closeModal('riderCardModal')">✕</button></div>
+    <div class="modal-body">
+      <div id="riderCardBody"></div>
+      <div style="display:flex;gap:.5rem;margin-top:.75rem">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="printRiderCard()">🖨️ Print</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="shareRiderCard()">📤 Share</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -2467,7 +2482,7 @@ function renderSubs(){
       <td class="bold">${esc(s.name)}</td>
       <td>${esc(s.phone||'—')}</td>
       <td>${esc(s.type)}</td>
-      <td><span class="text-muted" style="font-size:.8rem">${esc(s.zone||'—')}${s.zone2?'<br><span style="font-size:.7rem">+'+esc(s.zone2)+'</span>':''}</span></td>
+      <td><span class="text-muted" style="font-size:.8rem">${esc(s.zone||'—')}${riderZone2(s)?'<br><span style="font-size:.7rem">+'+esc(riderZone2(s))+'</span>':''}</span></td>
       <td><span class="pill">${esc(s.plan)}</span></td>
       <td>${fmt(s.price)}</td>
       <td><div class="avail-toggle">
@@ -3056,6 +3071,8 @@ window.addEventListener('DOMContentLoaded',()=>{
     showVerifyPage();
     return;
   }
+  const _rq=new URLSearchParams(window.location.search).get('rider');
+  if(_rq)_pubRiderFocus=_rq.slice(0,64);
   showPublicPage();
   // Silent auto-detect on load — quietly filters to user's zone if permitted
   if(navigator.geolocation){
@@ -3166,6 +3183,7 @@ async function fbRestLoad(){
     _showOfflineBanner(true);
     if(!_pubLoadFirstAttemptDone){
       _pubLoadFirstAttemptDone=true;
+      if(_pubRiderFocus)renderPublicDirectory();   // a scanned rider that can't load: replace "Loading…" with the real reason
       setTimeout(fbRestLoad,4000);
     }
   }
@@ -3389,6 +3407,12 @@ async function fbVisitsLoad(phone,advId){
 // ══════════════════════════════════════════════════════
 let _pubZoneFilter='';
 let _pubTownFilter='';
+let _pubRiderFocus=''; // set by a scanned rider QR (?rider=<id>): the directory shows just that rider until cleared
+function clearRiderFocus(){
+  _pubRiderFocus='';
+  try{const u=new URL(location.href);u.searchParams.delete('rider');history.replaceState(null,'',u.pathname+u.search+u.hash);}catch(e){}
+  renderPublicDirectory();
+}
 let _pubDirLoaded=false; // becomes true once the first Firebase sync attempt finishes (success or fail)
 
 let _zoneSearchAllOptions=[];
@@ -3397,7 +3421,7 @@ function initPubTownDropdown(){
   // riders. Pending applicants' custom zone entries are intentionally
   // excluded until admin approval promotes them via addApprovedCustomZones().
   const zoneNames=getZones().map(z=>z.name);
-  const registeredExtras=getSubs().filter(s=>s.status==='active').flatMap(s=>[s.zone,s.zone2]).filter(Boolean);
+  const registeredExtras=getSubs().filter(s=>s.status==='active').flatMap(s=>[s.zone,riderZone2(s)]).filter(Boolean);
   _zoneSearchAllOptions=[...new Set([...zoneNames,...registeredExtras])].sort();
 }
 
@@ -4119,6 +4143,28 @@ function isOpenNow(hoursStr){
   }catch(e){return null;}
 }
 
+// Zone coverage by plan: Standard and Premium riders appear in every zone search; Basic riders
+// appear only in their primary zone (a second zone saved on an older Basic record is ignored).
+function coversAllZones(s){const p=String(s&&s.plan||'').toLowerCase();return p==='standard'||p==='premium';}
+function riderZone2(s){return coversAllZones(s)?(s.zone2||''):'';}
+
+// Verified badge is a Premium-plan feature, shown only while the subscription is live.
+function isVerifiedRider(s){
+  if(!s||String(s.plan||'').toLowerCase()!=='premium'||s.status!=='active')return false;
+  const t=new Date();t.setHours(0,0,0,0);
+  return !s.expiry||new Date(s.expiry)>=t;
+}
+const VERIFIED_BADGE_HTML='<span class="verified-badge" title="Verified Premium rider">✔ Verified</span>';
+
+// Plan ranking shared by the rider directory and the AI assistant: Premium, then Standard, then
+// Basic. Unknown or missing plan goes last. Used with Array.sort (stable), so riders on the same
+// plan keep their existing order.
+function sortRidersByPlan(list){
+  const rank={premium:0,standard:1,basic:2};
+  const r=p=>{const v=rank[String(p||'').toLowerCase()];return v===undefined?3:v;};
+  return list.slice().sort((x,y)=>r(x.plan)-r(y.plan));
+}
+
 function renderPublicDirectory(){
   const search=(document.getElementById('pubSearch')?.value||'').toLowerCase();
   const filterType=document.getElementById('pubFilterType')?.value||'';
@@ -4131,14 +4177,20 @@ function renderPublicDirectory(){
     return true;
   });
 
-  if(search)riders=riders.filter(s=>(s.name+' '+(s.zone||'')+(s.zone2||'')+(s.notes||'')+' '+(s.ref||'MCM-'+s.id.slice(-6).toUpperCase())).toLowerCase().includes(search));
+  // A scanned rider QR shows just that rider, until the visitor uses search, type, availability or a zone tab
+  const focusId=(_pubRiderFocus&&!search&&!filterType&&!filterAvail&&!_pubZoneFilter)?_pubRiderFocus:'';
+  if(focusId){riders=riders.filter(s=>s.id===focusId);}else{
+  if(search)riders=riders.filter(s=>(s.name+' '+(s.zone||'')+riderZone2(s)+(s.notes||'')+' '+(s.ref||'MCM-'+s.id.slice(-6).toUpperCase())).toLowerCase().includes(search));
   if(filterType)riders=riders.filter(s=>s.type===filterType);
   if(filterAvail)riders=riders.filter(s=>(s.availability||'available')===filterAvail);
   if(_pubTownFilter){
     const t=_pubTownFilter.toLowerCase();
-    riders=riders.filter(s=>(s.zone||'').toLowerCase().includes(t)||(s.zone2||'').toLowerCase().includes(t));
+    riders=riders.filter(s=>coversAllZones(s)||(s.zone||'').toLowerCase().includes(t));
   }
-  if(_pubZoneFilter)riders=riders.filter(s=>(s.zone||'').includes(_pubZoneFilter)||(s.zone2||'').includes(_pubZoneFilter)||(_pubZoneFilter&&(s.notes||'').toLowerCase().includes(_pubZoneFilter.toLowerCase())));
+  if(_pubZoneFilter)riders=riders.filter(s=>coversAllZones(s)||(s.zone||'').includes(_pubZoneFilter));
+  }
+
+  riders=sortRidersByPlan(riders);   // Premium → Standard → Basic
 
   // Stats row
   const statsEl=document.getElementById('pubStatsRow');
@@ -4153,6 +4205,11 @@ function renderPublicDirectory(){
   }
 
   const grid=document.getElementById('pubGrid');
+  const focusBar=focusId?`<div style="grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;background:var(--accent-light);border:1px solid var(--border);border-radius:10px;padding:.55rem .75rem;font-size:.8rem"><span>📱 Showing the rider from the QR code you scanned</span><button class="btn btn-ghost btn-sm" onclick="clearRiderFocus()">Show all riders</button></div>`:'';
+  if(focusId&&!riders.length){
+    grid.innerHTML=`<div class="pub-empty" style="grid-column:1/-1"><div>🏍️</div><p>${!_pubLoadFirstAttemptDone?'Loading rider…':(document.getElementById('offlineBanner')?.classList.contains('show')?'Can\'t load this rider. Check your connection.':'This rider is not listed right now.')}</p><p style="margin-top:.6rem"><button class="btn btn-ghost btn-sm" onclick="clearRiderFocus()">Show all riders</button></p></div>`;
+    return;
+  }
   if(!riders.length){
     // No spinner — cached riders are already visible even on first load
     const townMsg=_pubTownFilter?` in <strong>${esc(_pubTownFilter)}</strong>`:'';
@@ -4160,7 +4217,7 @@ function renderPublicDirectory(){
     return;
   }
 
-  grid.innerHTML=riders.map(s=>{
+  grid.innerHTML=focusBar+riders.map(s=>{
     const avail=s.availability||'available';
     const phone=zamPhone(s.phone);
     const waMsg=encodeURIComponent('Hi '+s.name+', I found you on MotoConnect Zambia. Are you available for a ride?');
@@ -4172,13 +4229,13 @@ function renderPublicDirectory(){
         <div class="rider-avatar">${esc(s.name.charAt(0).toUpperCase())}</div>
         <div class="rider-meta">
           <div class="rider-name">${esc(s.name)}</div>
-          <span class="rider-type-badge">${vehicleIcon(s.type)} ${esc(s.type)}</span>
+          <span class="rider-type-badge">${vehicleIcon(s.type)} ${esc(s.type)}</span>${isVerifiedRider(s)?VERIFIED_BADGE_HTML:''}
         </div>
         <div class="avail-dot ${avail}">${availLabel(avail)}</div>
       </div>
       ${photosHtml}
       <div class="rider-card-body">
-        <div class="rider-info-row">📍 <strong>${esc(s.zone||'Mansa')}${s.zone2?' &amp; '+esc(s.zone2):''}</strong></div>
+        <div class="rider-info-row">📍 <strong>${esc(s.zone||'Mansa')}${riderZone2(s)?' &amp; '+esc(riderZone2(s)):''}</strong></div>
         ${s.phone?`<div class="rider-info-row">📞 <strong>${esc(s.phone)}</strong></div>`:''}
         ${s.hours?(()=>{const open=isOpenNow(s.hours);const badge=open===true?'<span class="open-now-badge">● Open</span>':open===false?'<span class="closed-badge">● Closed</span>':'';return `<div class="rider-info-row">🕐 <strong>${esc(s.hours)}</strong>${badge}</div>`;})():''}
         <div class="rider-plan-row">
@@ -4200,6 +4257,23 @@ function renderPublicDirectory(){
   renderDealsBanner();
 }
 
+// Advertiser ranking: Premium is always first, in every zone. Below Premium, ads in the viewer's
+// current zone come first, and within a zone Featured ranks above Basic (the Featured zone boost).
+// Array.sort is stable, so ads of equal rank keep their existing order.
+function sortAdsByTier(list,zoneFilter){
+  const z=String(zoneFilter||'').toLowerCase();
+  const tierRank={premium:0,featured:1,basic:2};
+  const t=a=>tierRank[a&&a.tier]??3;
+  const zoneRank=a=>(z&&String(a.zone||'').toLowerCase().includes(z))?0:1;
+  return list.slice().sort((a,b)=>{
+    const pa=t(a)===0,pb=t(b)===0;
+    if(pa!==pb)return pa?-1:1;
+    const za=zoneRank(a),zb=zoneRank(b);
+    if(za!==zb)return za-zb;
+    return t(a)-t(b);
+  });
+}
+
 // ══════════════════════════════════════════════════════
 //  NEARBY DEALS — BANNER CAROUSEL (dashboard, riders tab)
 //  Only Featured/Premium active advertisers rotate here —
@@ -4207,7 +4281,7 @@ function renderPublicDirectory(){
 // ══════════════════════════════════════════════════════
 let _dealsBannerIndex=0,_dealsBannerInterval=null;
 function renderDealsBanner(){
-  const ads=getAdvertisers().filter(a=>a.status==='active'&&(a.tier==='featured'||a.tier==='premium'));
+  const ads=sortAdsByTier(getAdvertisers().filter(a=>a.status==='active'&&(a.tier==='featured'||a.tier==='premium')),'');   // Premium slides first
   const wrap=document.getElementById('dealsBannerWrap');
   const track=document.getElementById('dealsBannerTrack');
   const dots=document.getElementById('dealsBannerDots');
@@ -4281,18 +4355,9 @@ function renderDealsGrid(){
   if(!grid)return;
   let ads=getAdvertisers().filter(a=>a.status==='active');
   if(_dealsCategoryFilter!=='all')ads=ads.filter(a=>a.category===_dealsCategoryFilter);
-  // Zone-aware sort: ads matching the rider directory's current zone filter
-  // float to the top first, then Premium → Featured → Basic by tier.
-  const zoneFilter=(_pubZoneFilter||_pubTownFilter||'').toLowerCase();
-  const tierRank={premium:0,featured:1,basic:2};
-  ads.sort((a,b)=>{
-    if(zoneFilter){
-      const aMatch=(a.zone||'').toLowerCase().includes(zoneFilter)?0:1;
-      const bMatch=(b.zone||'').toLowerCase().includes(zoneFilter)?0:1;
-      if(aMatch!==bMatch)return aMatch-bMatch;
-    }
-    return (tierRank[a.tier]??3)-(tierRank[b.tier]??3);
-  });
+  // Premium first in every zone; then ads in the directory's current zone filter, with
+  // Featured above Basic inside that zone (see sortAdsByTier).
+  ads=sortAdsByTier(ads,_pubZoneFilter||_pubTownFilter);
 
   if(!ads.length){
     grid.innerHTML=`<div class="deals-empty"><div>🏷️</div><p>No deals in this category yet.</p><p style="font-size:.8rem;margin-top:.4rem">Check back soon, or <span style="color:#fbbf24;cursor:pointer" onclick="showAdvertisePage()">list your business</span>.</p></div>`;
@@ -4672,8 +4737,20 @@ const PLAN_INFO={
   }
 };
 
+function resolveApplyZone2(){
+  if((document.getElementById('appPlan')?.value||'Basic')==='Basic')return{value:'',isCustom:false};
+  return resolveZoneValue('appZone2','appZone2Custom');
+}
+
 function updatePlanInfo(){
   const plan=document.getElementById('appPlan')?.value||'Basic';
+  // Secondary zone is for Standard/Premium only; clear it when switching back to Basic
+  const z2row=document.getElementById('appZone2Row');
+  if(z2row){
+    const isBasic=plan==='Basic';
+    z2row.style.display=isBasic?'none':'';
+    if(isBasic)czClear('appZone2Input','czDrop2','appZone2','appZone2Custom','czClear2',null);
+  }
   const box=document.getElementById('planInfoBox');
   if(!box)return;
   const info=PLAN_INFO[plan]||PLAN_INFO.Basic;
@@ -4706,7 +4783,7 @@ function applyNext(fromStep){
   } else if(fromStep===2){
     const type=document.getElementById('appType').value;
     const z1=resolveZoneValue('appZone','appZoneCustom');
-    const z2=resolveZoneValue('appZone2','appZone2Custom');
+    const z2=resolveApplyZone2();
     const zone=z1.value;
     if(!type){alert('Please select a vehicle type.');return;}
     const licence=document.getElementById('appLicence').value.trim();
@@ -4761,7 +4838,7 @@ function submitApplication(){
   const ref='MCM-'+appId.slice(-6).toUpperCase();
   const planRaw=document.getElementById('appPlan').value;
   const z1=resolveZoneValue('appZone','appZoneCustom');
-  const z2=resolveZoneValue('appZone2','appZone2Custom');
+  const z2=resolveApplyZone2();
   const app={
     id:appId,
     ref,
@@ -5175,7 +5252,7 @@ function confirmApprove(){
 // list) into the local zones list, once their application is approved,
 // and refreshes every zone-aware UI (zone tabs, zone search dropdown).
 function addApprovedCustomZones(sub){
-  const names=[sub.zoneCustom,sub.zone2Custom].filter(Boolean);
+  const names=[sub.zoneCustom,coversAllZones(sub)?sub.zone2Custom:''].filter(Boolean);
   if(!names.length)return;
   const zones=getZones();
   let changed=false;
@@ -5699,8 +5776,18 @@ function acctCardActions(s){
     h+='<button type="button" class="btn btn-ghost btn-sm" onclick="acctRenewOpen(\''+id+'\')">🔄 '+(lapsed?'Renew now':'Request renewal')+'</button>';
   }
   h+='<div id="acctRenew_'+id+'"></div>';
+  if(!s._adv&&s.status==='active'&&!lapsed)h+='<div style="margin-top:.55rem"><button type="button" class="btn btn-ghost btn-sm" onclick="acctShowCard(\''+id+'\')">🆔 My ID card</button></div>';
   if(!s._adv&&s.status==='active'&&!lapsed)h+=acctStatusHtml(s);
   return h+'</div>';
+}
+// Opens the rider's ID card from My Account. Public listing data (type, zone, phone) is merged under the
+// fresh account record (status, plan, expiry) so the card is right even if the directory cache is older.
+function acctShowCard(id){
+  id=sid(id);if(!id)return;
+  const rec=Object.assign({},getSubs().find(x=>x&&x.id===id)||{},(_acctRecs&&_acctRecs[id])||{},{id});
+  if(rec.live&&rec.live.availability)rec.availability=rec.live.availability;
+  if(!rec.name)return;
+  showRiderCard(id,rec);
 }
 function acctStatusHtml(s){
   const id=sid(s.id),live=s.live||{};
@@ -5969,12 +6056,144 @@ window.addEventListener('DOMContentLoaded',()=>{
 // ══════════════════════════════════════════════════════
 //  RIDER ID CARD
 // ══════════════════════════════════════════════════════
-function showRiderCard(id){
-  const s=getSubs().find(x=>x.id===id);
+// ══════════════════════════════════════════════════════
+//  OFFLINE QR CODE GENERATOR (byte mode, error correction M, versions 1–10) → inline SVG.
+//  No network or library needed, so the Premium ID card QR works offline and prints cleanly.
+// ══════════════════════════════════════════════════════
+// Per version: [EC codewords per block, group-1 blocks, group-1 data codewords, group-2 blocks, group-2 data codewords]
+const QR_BLOCKS_M=[null,[10,1,16,0,0],[16,1,28,0,0],[26,1,44,0,0],[18,2,32,0,0],[24,2,43,0,0],[16,4,27,0,0],[18,4,31,0,0],[22,2,38,2,39],[22,3,36,2,37],[26,4,43,1,44]];
+const QR_ALIGN=[null,[],[6,18],[6,22],[6,26],[6,30],[6,34],[6,22,38],[6,24,42],[6,26,46],[6,28,50]];
+const _qrExp=new Array(512),_qrLog=new Array(256);
+(function(){let x=1;for(let i=0;i<255;i++){_qrExp[i]=x;_qrLog[x]=i;x<<=1;if(x&256)x^=0x11d;}for(let i=255;i<512;i++)_qrExp[i]=_qrExp[i-255];})();
+function _qrMul(a,b){return a&&b?_qrExp[_qrLog[a]+_qrLog[b]]:0;}
+function _qrRS(data,ec){
+  let gen=[1];
+  for(let i=0;i<ec;i++){const n=new Array(gen.length+1).fill(0);for(let j=0;j<gen.length;j++){n[j]^=gen[j];n[j+1]^=_qrMul(gen[j],_qrExp[i]);}gen=n;}
+  const res=new Array(ec).fill(0);
+  for(const b of data){const f=b^res[0];res.shift();res.push(0);for(let j=0;j<ec;j++)res[j]^=_qrMul(gen[j+1],f);}
+  return res;
+}
+function _qrCodewords(bytes,ver){
+  const [ecb,g1n,g1d,g2n,g2d]=QR_BLOCKS_M[ver],cap=g1n*g1d+g2n*g2d,bits=[];
+  const put=(v,n)=>{for(let i=n-1;i>=0;i--)bits.push((v>>i)&1);};
+  put(4,4);put(bytes.length,ver<10?8:16);bytes.forEach(b=>put(b,8));
+  for(let i=0;i<4&&bits.length<cap*8;i++)bits.push(0);
+  while(bits.length%8)bits.push(0);
+  const cw=[];for(let i=0;i<bits.length;i+=8){let v=0;for(let j=0;j<8;j++)v=v<<1|bits[i+j];cw.push(v);}
+  for(let p=0;cw.length<cap;p^=1)cw.push(p?0x11:0xEC);
+  const blocks=[];let o=0;
+  for(let i=0;i<g1n+g2n;i++){const n=i<g1n?g1d:g2d;blocks.push(cw.slice(o,o+n));o+=n;}
+  const ecs=blocks.map(b=>_qrRS(b,ecb)),out=[];
+  for(let i=0;i<Math.max(g1d,g2d);i++)blocks.forEach(b=>{if(i<b.length)out.push(b[i]);});
+  for(let i=0;i<ecb;i++)ecs.forEach(e=>out.push(e[i]));
+  return out;
+}
+function _qrBuild(text){
+  const bytes=Array.from(new TextEncoder().encode(text));
+  let ver=0;
+  for(let v=1;v<=10;v++){const [,a,b,c,d]=QR_BLOCKS_M[v];if(4+(v<10?8:16)+8*bytes.length<=(a*b+c*d)*8){ver=v;break;}}
+  if(!ver)return null;
+  const data=_qrCodewords(bytes,ver),N=17+4*ver;
+  const base=[],fn=[];
+  for(let i=0;i<N;i++){base.push(new Array(N).fill(0));fn.push(new Array(N).fill(false));}
+  const put=(r,c,v)=>{base[r][c]=v?1:0;fn[r][c]=true;};
+  const finder=(r0,c0)=>{for(let dr=-1;dr<=7;dr++)for(let dc=-1;dc<=7;dc++){const r=r0+dr,c=c0+dc;if(r<0||c<0||r>=N||c>=N)continue;const d=Math.max(Math.abs(dr-3),Math.abs(dc-3));put(r,c,d!==2&&d!==4);}};
+  finder(0,0);finder(0,N-7);finder(N-7,0);
+  for(let i=8;i<N-8;i++){put(6,i,i%2===0);put(i,6,i%2===0);}
+  const al=QR_ALIGN[ver];
+  al.forEach((r,i)=>al.forEach((c,j)=>{
+    if((i===0&&j===0)||(i===0&&j===al.length-1)||(i===al.length-1&&j===0))return;
+    for(let dr=-2;dr<=2;dr++)for(let dc=-2;dc<=2;dc++)put(r+dr,c+dc,Math.max(Math.abs(dr),Math.abs(dc))!==1);
+  }));
+  // reserve format + version areas (values drawn later)
+  for(let i=0;i<9;i++){fn[8][i]=true;fn[i][8]=true;}
+  for(let i=0;i<8;i++){fn[8][N-1-i]=true;fn[N-1-i][8]=true;}
+  if(ver>=7){
+    let rem=ver;for(let i=0;i<12;i++)rem=(rem<<1)^((rem>>>11)*0x1F25);
+    const vb=ver<<12|rem;
+    for(let i=0;i<18;i++){const a=N-11+i%3,b=Math.floor(i/3),v=(vb>>>i)&1;put(b,a,v);put(a,b,v);}
+  }
+  put(N-8,8,1);
+  // zig-zag data placement
+  let bi=0;
+  for(let right=N-1;right>=1;right-=2){
+    if(right===6)right=5;
+    for(let vert=0;vert<N;vert++)for(let j=0;j<2;j++){
+      const x=right-j,y=((right+1)&2)===0?N-1-vert:vert;
+      if(!fn[y][x]&&bi<data.length*8){base[y][x]=(data[bi>>>3]>>>(7-(bi&7)))&1;bi++;}
+    }
+  }
+  const masks=[(x,y)=>(x+y)%2===0,(x,y)=>y%2===0,(x,y)=>x%3===0,(x,y)=>(x+y)%3===0,(x,y)=>(Math.floor(x/3)+Math.floor(y/2))%2===0,(x,y)=>x*y%2+x*y%3===0,(x,y)=>(x*y%2+x*y%3)%2===0,(x,y)=>((x+y)%2+x*y%3)%2===0];
+  const penalty=m=>{
+    let p=0,dark=0;
+    for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+      dark+=m[r][c];
+      if(r<N-1&&c<N-1&&m[r][c]===m[r][c+1]&&m[r][c]===m[r+1][c]&&m[r][c]===m[r+1][c+1])p+=3;
+    }
+    for(let k=0;k<N;k++){
+      for(const get of [i=>m[k][i],i=>m[i][k]]){
+        let run=1;
+        for(let i=1;i<=N;i++){
+          if(i<N&&get(i)===get(i-1))run++;
+          else{if(run>=5)p+=run-2;run=1;}
+        }
+        for(let i=0;i+11<=N;i++){
+          const w=[];for(let t=0;t<11;t++)w.push(get(i+t));
+          const s=w.join('');
+          if(s==='10111010000'||s==='00001011101')p+=40;
+        }
+      }
+    }
+    p+=10*Math.floor(Math.abs(dark*100/(N*N)-50)/5);
+    return p;
+  };
+  let best=null,bestP=Infinity;
+  for(let mk=0;mk<8;mk++){
+    const m=base.map(row=>row.slice());
+    for(let y=0;y<N;y++)for(let x=0;x<N;x++)if(!fn[y][x]&&masks[mk](x,y))m[y][x]^=1;
+    const d=0<<3|mk;let rem=d;for(let i=0;i<10;i++)rem=(rem<<1)^((rem>>>9)*0x537);
+    const fb=(d<<10|rem)^0x5412,g=i=>(fb>>>i)&1;   // error correction M = 00
+    for(let i=0;i<=5;i++)m[i][8]=g(i);
+    m[7][8]=g(6);m[8][8]=g(7);m[8][7]=g(8);
+    for(let i=9;i<15;i++)m[8][14-i]=g(i);
+    for(let i=0;i<8;i++)m[8][N-1-i]=g(i);
+    for(let i=8;i<15;i++)m[N-15+i][8]=g(i);
+    m[N-8][8]=1;
+    const pn=penalty(m);if(pn<bestP){bestP=pn;best=m;}
+  }
+  return{N,m:best};
+}
+// Returns an <svg> string (black modules on white, with a 2-module quiet zone), or '' if the text is too long.
+function qrSvg(text,px){
+  const q=_qrBuild(String(text));if(!q)return '';
+  const Q=2,S=q.N+Q*2;let d='';
+  for(let y=0;y<q.N;y++){for(let x=0;x<q.N;x++){if(!q.m[y][x])continue;let e=x;while(e<q.N&&q.m[y][e])e++;d+='M'+(x+Q)+' '+(y+Q)+'h'+(e-x)+'v1h-'+(e-x)+'z';x=e;}}
+  return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 '+S+' '+S+'" width="'+px+'" height="'+px+'" shape-rendering="crispEdges" role="img" aria-label="QR code"><rect width="'+S+'" height="'+S+'" fill="#fff"/><path d="'+d+'" fill="#000"/></svg>';
+}
+
+// Link a scanned QR opens: the app's own address plus ?rider=<id>. Falls back to the published
+// site when the page is not served over http(s) (e.g. opened as a local file).
+let _riderCardLink='';   // listing link of the card currently open (Premium only), used by Share
+function riderListingUrl(s){
+  const base=/^https?:$/.test(location.protocol)?location.origin+location.pathname.replace(/index\.html$/,''):'https://skumbeni.github.io/Motoconnect/';
+  return base+'?rider='+encodeURIComponent(s.id);
+}
+// QR block for the ID card. Premium riders with a live listing only (same rule as the Verified badge).
+// Inline styles on purpose: printRiderCard() copies this markup into a separate print window.
+function riderQrBlock(s){
+  if(!isVerifiedRider(s))return '';
+  let svg='';try{svg=qrSvg(riderListingUrl(s),104);}catch(e){}
+  if(!svg)return '';
+  return `<div style="display:flex;align-items:center;gap:.75rem;margin-top:1rem;padding-top:.75rem;border-top:1px solid rgba(255,255,255,.15)"><div style="background:#fff;border-radius:8px;padding:4px;line-height:0;flex-shrink:0">${svg}</div><div style="font-size:.72rem;color:rgba(255,255,255,.7);line-height:1.4"><strong style="display:block;color:#fbbf24;font-size:.8rem">Scan to view my listing</strong>Opens my profile on MotoConnect Zambia.</div></div>`;
+}
+
+function showRiderCard(id,rec){
+  const s=rec||getSubs().find(x=>x.id===id);
   if(!s)return;
   const riderId='MCM-'+s.id.slice(-4).toUpperCase();
   const avail=s.availability||'available';
   const dl=daysLeft(s.expiry);
+  _riderCardLink=isVerifiedRider(s)?riderListingUrl(s):'';
   document.getElementById('riderCardBody').innerHTML=`
     <div class="id-card">
       <div class="id-card-top">
@@ -5982,15 +6201,17 @@ function showRiderCard(id){
         <div class="id-card-title">
           <h3>${esc(s.name)}</h3>
           <small>${vehicleIcon(s.type)} ${esc(s.type)} Operator</small>
+          ${isVerifiedRider(s)?'<div style="margin-top:.3rem">'+VERIFIED_BADGE_HTML+'</div>':''}
         </div>
         <div class="id-card-logo"><strong>MotoConnect</strong>Zambia</div>
       </div>
       <div class="id-card-fields">
-        <div class="id-field"><label>Zone</label><span>${esc(s.zone||'Mansa')}${s.zone2?' &amp; '+esc(s.zone2):''}</span></div>
+        <div class="id-field"><label>Zone</label><span>${esc(s.zone||'Mansa')}${riderZone2(s)?' &amp; '+esc(riderZone2(s)):''}</span></div>
         <div class="id-field"><label>Plan</label><span>${esc(s.plan)}</span></div>
         <div class="id-field"><label>Phone</label><span>${esc(s.phone||'—')}</span></div>
         <div class="id-field"><label>Expires</label><span>${s.expiry||'—'}${dl!==null&&dl>=0?` (${dl}d)`:''}</span></div>
       </div>
+      ${riderQrBlock(s)}
       <div class="id-card-footer">
         <span class="id-num">${riderId}</span>
         <div class="avail-dot ${avail}" style="position:relative;top:0;right:0">${availLabel(avail)}</div>
@@ -6018,6 +6239,7 @@ function printRiderCard(){
     .id-card-title h3{color:#fff;font-size:1rem;font-weight:800;margin:0 0 .2rem}
     .id-card-title small{color:rgba(255,255,255,.6);font-size:.75rem}
     .id-card-logo{margin-left:auto;text-align:right;font-size:.7rem;color:rgba(255,255,255,.5)}
+    .verified-badge{display:inline-flex;align-items:center;gap:.25rem;background:#dbeafe;color:#1e40af;font-size:.68rem;font-weight:800;padding:.15rem .5rem;border-radius:20px;white-space:nowrap}
     .id-card-logo strong{display:block;color:#fbbf24;font-size:.82rem}
     .id-card-fields{display:grid;grid-template-columns:1fr 1fr;gap:.4rem .75rem;font-size:.78rem}
     .id-field label{display:block;color:rgba(255,255,255,.55);font-size:.65rem;text-transform:uppercase;letter-spacing:.5px;margin-bottom:.1rem}
@@ -6034,11 +6256,12 @@ function printRiderCard(){
 
 function shareRiderCard(){
   const s=getSubs().find(x=>x.id===document.querySelector('#riderCardBody .id-num')?.textContent?.replace('MCM-','').toLowerCase());
-  const text=`🏍️ MotoConnect Zambia Verified Rider\nCheck out this rider on MotoConnect Zambia!`;
+  const _v=!!document.querySelector('#riderCardBody .verified-badge');
+  const text=`🏍️ MotoConnect Zambia ${_v?'Verified ':''}Rider\nCheck out this rider on MotoConnect Zambia!`;
   if(navigator.share){
-    navigator.share({title:'MotoConnect Rider',text}).catch(()=>{});
+    navigator.share(Object.assign({title:'MotoConnect Rider',text},_riderCardLink?{url:_riderCardLink}:{})).catch(()=>{});
   } else {
-    navigator.clipboard?.writeText(text).then(()=>alert('Rider info copied to clipboard!'));
+    navigator.clipboard?.writeText(text+(_riderCardLink?'\n'+_riderCardLink:'')).then(()=>alert('Rider info copied to clipboard!'));
   }
 }
 
@@ -6176,10 +6399,10 @@ function aiInputKeydown(e){
 function aiToolFindRiders({zone,vehicleType,availability}={}){
   const today=new Date();
   let subs=getSubs().filter(s=>s.status==='active'&&(!s.expiry||new Date(s.expiry)>=today));
-  if(zone) subs=subs.filter(s=>(s.zone||'').toLowerCase().includes(String(zone).toLowerCase())||(s.zone2||'').toLowerCase().includes(String(zone).toLowerCase()));
+  if(zone) subs=subs.filter(s=>coversAllZones(s)||(s.zone||'').toLowerCase().includes(String(zone).toLowerCase()));
   if(vehicleType) subs=subs.filter(s=>(s.type||'').toLowerCase()===String(vehicleType).toLowerCase());
   if(availability) subs=subs.filter(s=>(s.availability||'available')===availability);
-  subs=subs.slice(0,5);
+  subs=sortRidersByPlan(subs).slice(0,5);   // Premium → Standard → Basic, so the top 5 favour higher plans
   const summary={count:subs.length,riders:subs.map(s=>({name:s.name,type:s.type,zone:s.zone||'',availability:s.availability||'available',hasPhone:!!s.phone}))};
   return [summary,subs];
 }
@@ -6203,7 +6426,7 @@ function aiToolListZones({search}={}){
 function aiToolListDeals({category}={}){
   let ads=getAdvertisers().filter(a=>a.status==='active');
   if(category) ads=ads.filter(a=>(a.category||'').toLowerCase().includes(String(category).toLowerCase()));
-  return{count:ads.length,deals:ads.slice(0,6).map(a=>({business:a.name,category:a.category,zone:a.zone,offer:a.offerText||a.description||''}))};
+  return{count:ads.length,deals:sortAdsByTier(ads,'').slice(0,6).map(a=>({business:a.name,category:a.category,zone:a.zone,offer:a.offerText||a.description||''}))};
 }
 
 const AI_SYSTEM_PROMPT=`You are the "Ride Assistant" for MotoConnect Zambia, a mobile app that connects riders/customers with motorbike taxis, taxis, tour operators and trucks across Zambia, and also lists local business deals ("Nearby Deals").
