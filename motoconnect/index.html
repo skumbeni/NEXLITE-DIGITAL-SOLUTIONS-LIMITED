@@ -2903,8 +2903,50 @@ function _needLogin(where){
   openModal('acctModal');renderAcct();
   return true;
 }
-function showApplyPage(){if(_needLogin('apply'))return;_showApplyForm();}
-function showAdvertisePage(){if(_needLogin('advertise'))return;_showAdvertiseForm();}
+function showApplyPage(force){if(_needLogin('apply'))return;if(force===true)_openForm('apply');else _routeApply('apply');}
+function showAdvertisePage(force){if(_needLogin('advertise'))return;if(force===true)_openForm('advertise');else _routeApply('advertise');}
+// Signed in: look at this login's records first.
+//   active/expired plan   -> straight to the upgrade/renewal request (no new application)
+//   pending application   -> explain it is under review (no duplicate application)
+//   RSL-suspended listing -> explain, ask them to contact the admin
+//   nothing / only rejected -> the normal application form
+let _acctNoticeHtml='',_routing=false;
+function _takeNotice(){const h=_acctNoticeHtml;_acctNoticeHtml='';return h;}
+function _openForm(kind){
+  const p=_acct?String(_acct.phone||''):'',local=p.length===12?'0'+p.slice(3):'';   // 260977123456 -> 0977123456
+  closeModal('acctModal');
+  if(kind==='advertise'){_showAdvertiseForm();const e=document.getElementById('advPhone');if(e&&local)e.value=local;}
+  else{_showApplyForm();const e=document.getElementById('appPhone');if(e&&local)e.value=local;}
+  window.scrollTo(0,0);
+}
+async function _routeApply(kind){
+  if(_routing)return;_routing=true;
+  try{
+    const adv=kind==='advertise',box=document.getElementById('acctBody'),cap=x=>String(x||'').charAt(0).toUpperCase()+String(x||'').slice(1);
+    openModal('acctModal');
+    if(box)box.innerHTML='<p style="color:var(--muted);font-size:.85rem">Checking your account…</p>';
+    let recs=null;try{recs=await acctLoad();}catch(e){}
+    if(!_acct)return;   // signed out meanwhile
+    if(Array.isArray(recs)){saveRenewCache(recs);renderRenewBanner();}
+    const mine=Array.isArray(recs)?recs.filter(r=>r&&!!r._adv===adv):[];   // could not load: don't block, show the form
+    const live=mine.find(r=>r.status==='active')||mine.find(r=>r.status==='expired'),pend=mine.find(r=>r.status==='pending'),susp=mine.find(r=>r.status==='rsl_expired');
+    if(!live&&!pend&&!susp){_openForm(kind);return;}
+    const who=adv?'advertiser':'rider',box1='border-radius:10px;padding:.75rem;margin-bottom:.8rem;font-size:.85rem;line-height:1.5;';
+    const other='<br><a href="#" onclick="showApplyPageForce(\''+kind+'\');return false" style="font-size:.78rem;color:var(--muted);text-decoration:underline">'+(adv?'Register another business instead':'Register a different rider instead')+'</a>';
+    let html,openId=null;
+    if(live){
+      const pl=cap(adv?live.tier:live.plan),q=live.renew;
+      if(q&&q.status==='pending')html='<div style="'+box1+'background:#fffbeb;border:1px solid #fcd34d;color:#92400e"><strong>🔄 Your '+who+' plan request ('+esc(cap(q.plan))+', '+esc(q.months||'')+' month'+(q.months==1?'':'s')+') is waiting for the admin.</strong><br>They will confirm your payment and update your plan. No need to send another request.'+other+'</div>';
+      else if(live.status==='expired')html='<div style="'+box1+'background:#fef2f2;border:1px solid #fecaca;color:#991b1b"><strong>⚠️ Your '+who+' plan has expired.</strong><br>Renew it below. Pay, then enter the transaction ID.'+other+'</div>',openId=live.id;
+      else html='<div style="'+box1+'background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af"><strong>⬆️ You already have an active '+who+' plan'+(pl?' ('+esc(pl)+')':'')+'.</strong><br>Choose the plan you want below and send your upgrade request. The admin confirms your payment and changes your plan.'+other+'</div>',openId=live.id;
+    }else if(pend)html='<div style="'+box1+'background:#fffbeb;border:1px solid #fcd34d;color:#92400e"><strong>⏳ You already have an application under review'+(pend.ref?' ('+esc(pend.ref)+')':'')+'.</strong><br>The admin is checking it. You will see the result here in My Account, so there is no need to apply again.'+other+'</div>';
+    else html='<div style="'+box1+'background:#fef2f2;border:1px solid #fecaca;color:#991b1b"><strong>⚠️ Your rider listing is suspended because the Road Service Licence has expired.</strong><br>Please contact the admin to update it.'+other+'</div>';
+    _acctNoticeHtml=html;
+    await renderAcct();
+    if(openId){acctRenewOpen(openId,live.status==='active');const b=document.getElementById('acctRenew_'+sid(openId));if(b)b.scrollIntoView({behavior:'smooth',block:'center'});}
+  }finally{_routing=false;}
+}
+function showApplyPageForce(kind){if(kind==='advertise')showAdvertisePage(true);else showApplyPage(true);}
 function _acctIntentHtml(){
   if(!_acctNext)return '';
   return '<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:.7rem;margin-bottom:.8rem;font-size:.85rem;line-height:1.5;color:#9a3412"><strong>'
@@ -5553,7 +5595,7 @@ async function acctAuth(mode){
     _fbAnonToken=d.idToken;_fbTokenExpiry=Date.now()+parseInt(d.expiresIn||3600)*1000;
     if(mode==='up'){const re=((document.getElementById('acctRecEmail')||{}).value||'').trim().toLowerCase();if(re&&_validEmail(re))await _putRecovery(d.idToken,re);}
     const nx=_acctNext;_acctNext=null;
-    if(nx){renderAcct();acctGo(nx);return;}   // straight on to the form they asked for, phone pre-filled
+    if(nx){acctGo(nx);return;}   // carries on to what they asked for: form, upgrade or pending notice
     await renderAcct();
   }catch(e){acctMsg(ACCT_ERR[String(e.message).split(' ')[0]]||'Could not reach the server. Check your connection and try again.');}
 }
@@ -5685,7 +5727,7 @@ async function renderAcct(){
       +(s.rslExpiry?'<br>RSL expires: '+_acctDate(s.rslExpiry):'')+acctCardActions(s)+'</div>').join('');
   const hub=acctHubHtml();
   const welcome='<div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:.75rem;margin-bottom:.8rem;font-size:.85rem;line-height:1.5;color:#065f46"><strong>\ud83c\udf89 Your login is ready.</strong><br>Pick what you want to do first. Anything you apply for here is linked to this login, so you can follow its progress.</div>';
-  out.innerHTML='<p style="font-size:.8rem;color:var(--muted);margin-bottom:.6rem">Signed in as +'+esc(_acct.phone||'')+'</p>'
+  out.innerHTML=_takeNotice()+'<p style="font-size:.8rem;color:var(--muted);margin-bottom:.6rem">Signed in as +'+esc(_acct.phone||'')+'</p>'
     +(fresh?welcome+hub+cards:cards+'<p style="font-size:.82rem;font-weight:600;margin:.8rem 0 .4rem">What would you like to do?</p>'+hub)
     +(recs&&recs.advErr?'<p style="font-size:.8rem;color:#b91c1c">Could not load your advertiser listings. Try again later.</p>':'')+msg
     +acctSavedHtml()
@@ -5778,11 +5820,10 @@ function acctHubHtml(){
 }
 function acctOpenBox(id){const d=document.getElementById(id);if(d){d.open=true;d.scrollIntoView({behavior:'smooth',block:'center'});}}
 function acctGo(where){
-  const p=_acct?String(_acct.phone||''):'',local=p.length===12?'0'+p.slice(3):'';   // 260977123456 -> 0977123456
+  if(where==='apply'){showApplyPage();return;}   // routes by account state: upgrade / pending notice / form
+  if(where==='advertise'){showAdvertisePage();return;}
   closeModal('acctModal');
-  if(where==='apply'){showApplyPage();const e=document.getElementById('appPhone');if(e&&local)e.value=local;}
-  else if(where==='advertise'){showAdvertisePage();const e=document.getElementById('advPhone');if(e&&local)e.value=local;}
-  else if(where==='deals')showDealsTab();
+  if(where==='deals')showDealsTab();
   else showPublicPage();
   window.scrollTo(0,0);
 }
@@ -5815,7 +5856,7 @@ function acctCardActions(s){
   if(q&&q.status==='pending')h+='<div style="'+sm+'color:#92400e">🔄 Renewal requested ('+esc(q.plan||'')+', '+esc(q.months||'')+' month'+(q.months==1?'':'s')+'). Waiting for the admin to confirm your payment.</div>';
   else{
     if(q&&q.status==='rejected')h+='<div style="'+sm+'color:#b91c1c">❌ Your last renewal request was not approved'+(q.adminNote?': '+esc(q.adminNote):'.')+'</div>';
-    h+='<button type="button" class="btn btn-ghost btn-sm" onclick="acctRenewOpen(\''+id+'\')">🔄 '+(lapsed?'Renew now':'Request renewal')+'</button>';
+    h+='<button type="button" class="btn btn-ghost btn-sm" onclick="acctRenewOpen(\''+id+'\')">🔄 '+(lapsed?'Renew now':'Renew or upgrade')+'</button>';
   }
   h+='<div id="acctRenew_'+id+'"></div>';
   const ed=s.edit;
@@ -6091,13 +6132,14 @@ function acctRenewCalc(id){
   const p=(RENEW_PRICE[rec._adv?'advertiser':'rider']||{})[pl.value]||0,m=parseInt(mo.value,10)||1;
   el.textContent='Amount to pay: '+_kw(p*m)+' ('+_kw(p)+' × '+m+')';
 }
-function acctRenewOpen(id){
+function acctRenewOpen(id,up){
   id=sid(id);const rec=_acctRecs[id],box=document.getElementById('acctRenew_'+id);if(!rec||!box)return;
   if(box.innerHTML){box.innerHTML='';return;}   // tapping again closes the form
   const k=rec._adv?'advertiser':'rider',cur=rec._adv?rec.tier:rec.plan,lab='<label style="font-size:.78rem;font-weight:600">';
+  let sel=cur;if(up){const L=RENEW_PLANS[k].map(x=>x[0]),i=L.indexOf(cur);if(i>-1&&i<L.length-1)sel=L[i+1];}   // upgrade: start on the next plan up
   box.innerHTML='<div style="margin-top:.5rem;background:var(--surface2);border-radius:10px;padding:.7rem">'
     +lab+(rec._adv?'Tier':'Plan')+'</label><select id="acctRnPlan_'+id+'" onchange="acctRenewCalc(\''+id+'\')" '+_fld+'>'
-      +RENEW_PLANS[k].map(x=>'<option value="'+x[0]+'"'+(x[0]===cur?' selected':'')+'>'+x[1]+' — '+_kw(RENEW_PRICE[k][x[0]])+'/month</option>').join('')+'</select>'
+      +RENEW_PLANS[k].map(x=>'<option value="'+x[0]+'"'+(x[0]===sel?' selected':'')+'>'+x[1]+' — '+_kw(RENEW_PRICE[k][x[0]])+'/month</option>').join('')+'</select>'
     +lab+'For how long?</label><select id="acctRnMonths_'+id+'" onchange="acctRenewCalc(\''+id+'\')" '+_fld+'><option value="1">1 month</option><option value="3">3 months</option><option value="6">6 months</option><option value="12">1 year</option></select>'
     +'<div id="acctRnAmt_'+id+'" style="font-size:.9rem;font-weight:700;margin-bottom:.5rem"></div>'
     +'<div style="font-size:.78rem;line-height:1.6;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;padding:.5rem .65rem;margin-bottom:.55rem">💡 Pay via Airtel Money or MTN Mobile Money to <strong>0977 638790</strong> or <strong>0960271128</strong>, then enter the transaction ID below. The admin checks the payment and renews you.</div>'
