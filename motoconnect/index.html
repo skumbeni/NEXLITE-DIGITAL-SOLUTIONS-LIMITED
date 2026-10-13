@@ -2844,7 +2844,7 @@ function showPublicPage(){
   renderPubZoneTabs();
 }
 
-function showApplyPage(){
+function _showApplyForm(){
   hideAllPages();
   document.getElementById('applyPage').style.display='block';
   ['appName','appPhone','appPhone2','appNRC','appLicence','appRegNo','appArea','appNotes','appTxnId','appHours','appRSLNo','appRSLExpiry','appVIC'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
@@ -2895,7 +2895,23 @@ function showDealsTab(){
   renderDealsTab();
 }
 
-function showAdvertisePage(){
+// Applying / advertising needs a login: signed out -> ask to sign in or create one first, then continue to the form.
+let _acctNext=null;   // 'apply' | 'advertise': where to go once the login is ready
+function _needLogin(where){
+  if(_acct)return false;
+  _acctNext=where;
+  openModal('acctModal');renderAcct();
+  return true;
+}
+function showApplyPage(){if(_needLogin('apply'))return;_showApplyForm();}
+function showAdvertisePage(){if(_needLogin('advertise'))return;_showAdvertiseForm();}
+function _acctIntentHtml(){
+  if(!_acctNext)return '';
+  return '<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:.7rem;margin-bottom:.8rem;font-size:.85rem;line-height:1.5;color:#9a3412"><strong>'
+    +(_acctNext==='advertise'?'\ud83d\udce3 To advertise your business, first sign in or create a login.':'\ud83d\ude80 To apply as a rider, first sign in or create a login.')
+    +'</strong><br>Your application is then linked to it, so you can follow its progress.</div>';
+}
+function _showAdvertiseForm(){
   hideAllPages();
   document.getElementById('advertisePage').style.display='block';
   ['advName','advPhone','advOffer','advTxnId','advVoucherOffer','advVoucherStaffNote'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
@@ -5518,7 +5534,7 @@ async function _acctCall(path,body){
 }
 const ACCT_ERR={EMAIL_EXISTS:'This number already has a login. Tap "I already have a login" to sign in. Forgot the password? Tap Forgot password.',INVALID_LOGIN_CREDENTIALS:'Wrong phone number or password.',EMAIL_NOT_FOUND:'No login for this number yet. Tap Create login.',INVALID_PASSWORD:'Wrong phone number or password.',WEAK_PASSWORD:'Password must be at least 6 characters.',TOO_MANY_ATTEMPTS_TRY_LATER:'Too many attempts. Please wait a few minutes.',OPERATION_NOT_ALLOWED:'Logins are not switched on yet. Please tell the admin.'};
 function acctMsg(t,ok){const e=document.getElementById('acctMsg');if(e){e.textContent=t;e.style.display=t?'block':'none';e.style.color=ok?'#065f46':'#b91c1c';}}
-function openAcct(){openModal('acctModal');renderAcct();}
+function openAcct(){_acctNext=null;openModal('acctModal');renderAcct();}
 function acctMode(m){const p=document.getElementById('acctPhone');if(p)_acctPhone=p.value;_acctMode=m;renderAcct();}
 async function acctAuth(mode){
   const email=acctEmail(document.getElementById('acctPhone').value),pw=document.getElementById('acctPw').value;
@@ -5536,6 +5552,8 @@ async function acctAuth(mode){
     if(mode==='up')save('mc_anon',null);   // that anonymous identity is now this account: after sign-out the device must not fall back to it
     _fbAnonToken=d.idToken;_fbTokenExpiry=Date.now()+parseInt(d.expiresIn||3600)*1000;
     if(mode==='up'){const re=((document.getElementById('acctRecEmail')||{}).value||'').trim().toLowerCase();if(re&&_validEmail(re))await _putRecovery(d.idToken,re);}
+    const nx=_acctNext;_acctNext=null;
+    if(nx){renderAcct();acctGo(nx);return;}   // straight on to the form they asked for, phone pre-filled
     await renderAcct();
   }catch(e){acctMsg(ACCT_ERR[String(e.message).split(' ')[0]]||'Could not reach the server. Check your connection and try again.');}
 }
@@ -5631,7 +5649,7 @@ async function renderAcct(){
   const inp='style="width:100%;background:var(--surface2);border:1.5px solid var(--border);border-radius:8px;padding:.55rem .8rem;font-size:.9rem;margin:.25rem 0 .7rem"';
   const msg='<div id="acctMsg" style="display:none;font-size:.82rem;font-weight:600;margin:.4rem 0"></div>';
   if(!_acct){
-    const m=_acctMode,up=m==='up',lab='<label style="font-size:.8rem;font-weight:600">',
+    const m=_acctMode,up=m==='up',nx=_acctIntentHtml(),lab='<label style="font-size:.8rem;font-weight:600">',
       note=t=>'<p style="font-size:.85rem;color:var(--muted);margin-bottom:.8rem">'+t+'</p>',
       btn=(fn,txt,pri)=>'<button class="btn '+(pri?'btn-primary':'btn-ghost')+' btn-sm" onclick="'+fn+'">'+txt+'</button>',
       row=x=>'<div style="display:flex;gap:.5rem;flex-wrap:wrap">'+x+'</div>',
@@ -5642,7 +5660,7 @@ async function renderAcct(){
       +lab+'New password (6+ characters)</label><input type="password" id="acctRecPw" autocomplete="new-password" '+inp+'/>'
       +lab+'Confirm new password</label><input type="password" id="acctRecPw2" autocomplete="new-password" '+inp+'/>'+msg
       +row(btn('acctRecConfirm()','Change password',1)+btn("acctMode('rec1')",'Send a new code'));
-    else out.innerHTML=note(up?'Create a login with your phone number to follow your application, subscription and renewal dates.':'Sign in with your phone number to follow your application, subscription and renewal dates.')+ph
+    else out.innerHTML=nx+note(up?'Create a login with your phone number to follow your application, subscription and renewal dates.':'Sign in with your phone number to follow your application, subscription and renewal dates.')+ph
       +lab+'Password (6+ characters)</label><input type="password" id="acctPw" autocomplete="'+(up?'new-password':'current-password')+'" '+inp+'/>'
       +(up?lab+'Confirm password</label><input type="password" id="acctPw2" autocomplete="new-password" '+inp+'/>'
           +lab+'Recovery email (optional)</label><input type="email" id="acctRecEmail" autocomplete="email" placeholder="you@example.com" '+inp+'/><p style="font-size:.75rem;color:var(--muted);margin:-.4rem 0 .7rem">Only used to email you a code if you forget your password.</p>':'')+msg
