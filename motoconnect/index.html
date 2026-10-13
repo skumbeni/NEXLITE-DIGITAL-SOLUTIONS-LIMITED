@@ -560,6 +560,13 @@
   #offlineBanner strong{color:#fbbf24}
   #offlineBanner .ob-refresh{background:rgba(251,191,36,.25);border:1px solid rgba(251,191,36,.5);color:#fbbf24;border-radius:6px;padding:.25rem .65rem;font-size:.78rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit}
   #offlineBanner .ob-refresh:active{opacity:.75}
+  #renewBanner{display:none;flex-direction:column;gap:.45rem;margin:0 1.5rem .75rem}
+  #renewBanner .rb-row{display:flex;align-items:center;gap:.7rem;padding:.65rem 1rem;background:rgba(251,191,36,.13);border:1.5px solid rgba(251,191,36,.45);border-radius:10px;color:#fef3c7;font-size:.82rem;line-height:1.4}
+  #renewBanner .rb-icon{font-size:1.25rem;flex-shrink:0}
+  #renewBanner .rb-text{flex:1}
+  #renewBanner strong{color:#fbbf24}
+  #renewBanner .rb-btn{background:rgba(251,191,36,.25);border:1px solid rgba(251,191,36,.5);color:#fbbf24;border-radius:6px;padding:.25rem .65rem;font-size:.78rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit}
+  #renewBanner .rb-x{background:none;border:none;color:#fef3c7;opacity:.7;font-size:1rem;cursor:pointer;padding:0 .2rem;font-family:inherit}
   .pub-empty{text-align:center;padding:3rem 1rem;color:rgba(255,255,255,.6)}
   .open-now-badge{display:inline-flex;align-items:center;gap:.25rem;background:rgba(16,185,129,.2);border:1px solid rgba(16,185,129,.4);color:#6ee7b7;font-size:.65rem;font-weight:700;padding:.1rem .45rem;border-radius:20px;margin-left:.3rem;vertical-align:middle}
   .closed-badge{display:inline-flex;align-items:center;gap:.25rem;background:rgba(100,116,139,.15);border:1px solid rgba(100,116,139,.3);color:rgba(255,255,255,.4);font-size:.65rem;font-weight:700;padding:.1rem .45rem;border-radius:20px;margin-left:.3rem;vertical-align:middle}
@@ -812,6 +819,7 @@
       <button class="btn-pub-apply" id="navDealsBtn" onclick="showDealsTab()" style="background:rgba(255,255,255,.12);color:#fff">🏷️ Nearby Deals</button>
       <button class="btn-pub-apply" id="navRidersBtn" onclick="showRidersTab()" style="display:none">🏍️ Find a Rider</button>
       <button class="btn-pub-apply" onclick="openAcct()" style="background:rgba(255,255,255,.12);color:#fff">👤 My Account</button>
+      <button class="btn-pub-apply" id="btnAlerts" onclick="openAlerts()" aria-label="Alerts near you" style="position:relative;background:rgba(255,255,255,.12);color:#fff">🔔<span id="alertBadge" class="notif-badge" style="display:none"></span></button>
       <button class="btn-pub-apply" onclick="showApplyPage()">🚀 Apply as Rider</button>
     </div>
   </header>
@@ -877,6 +885,7 @@
     <button class="ob-refresh" onclick="fbRestLoad()">↻ Refresh</button>
   </div>
   <div id="syncPendingBanner"><span></span><button type="button" onclick="dismissSyncDenied()">OK</button></div>
+  <div id="renewBanner"></div>
   <div class="pub-stats-row" id="pubStatsRow"></div>
   <div class="pub-grid" id="pubGrid"></div>
 
@@ -1339,6 +1348,14 @@
   <div class="modal">
     <div class="modal-header"><h3>👤 My Account</h3><button class="close-btn" onclick="closeModal('acctModal')">✕</button></div>
     <div class="modal-body" id="acctBody"></div>
+  </div>
+</div>
+
+<!-- ══ NOTIFICATIONS: Premium advertiser alerts for the viewer's zone ═════════ -->
+<div class="overlay" id="alertsModal">
+  <div class="modal">
+    <div class="modal-header"><h3>🔔 Alerts near you</h3><button class="close-btn" onclick="closeModal('alertsModal')">✕</button></div>
+    <div class="modal-body"><div id="alertsBody"></div></div>
   </div>
 </div>
 
@@ -3074,6 +3091,8 @@ window.addEventListener('DOMContentLoaded',()=>{
   const _rq=new URLSearchParams(window.location.search).get('rider');
   if(_rq)_pubRiderFocus=_rq.slice(0,64);
   showPublicPage();
+  renewBannerRefresh();
+  renderAlertBadge();alertsRefresh(false);
   // Silent auto-detect on load — quietly filters to user's zone if permitted
   if(navigator.geolocation){
     navigator.geolocation.getCurrentPosition(
@@ -4224,7 +4243,7 @@ function renderPublicDirectory(){
     const riderId='MCM-'+s.id.slice(-4).toUpperCase();
     const safePhoto1=safeImgSrc(s.photo1),safePhoto2=safeImgSrc(s.photo2);
     const photosHtml=(safePhoto1||safePhoto2)?`<div style="display:flex;gap:.4rem;padding:.5rem .75rem 0;overflow:hidden">${safePhoto1?`<img src="${safePhoto1}" style="width:72px;height:54px;object-fit:cover;border-radius:7px;border:1px solid var(--border);flex-shrink:0" alt="Vehicle photo">`:''}${safePhoto2?`<img src="${safePhoto2}" style="width:72px;height:54px;object-fit:cover;border-radius:7px;border:1px solid var(--border);flex-shrink:0" alt="Vehicle photo">`:''}` +'</div>':'';
-    return `<div class="rider-card">
+    return `<div class="rider-card"${isVerifiedRider(s)?' data-rid="'+sid(s.id)+'"':''}>
       <div class="rider-card-top">
         <div class="rider-avatar">${esc(s.name.charAt(0).toUpperCase())}</div>
         <div class="rider-meta">
@@ -4251,6 +4270,9 @@ function renderPublicDirectory(){
       <div style="padding:0 1.1rem 1rem;text-align:center"><span style="font-size:.74rem;color:var(--muted);cursor:pointer;text-decoration:underline" onclick="openFeedback('${sid(s.id)}')">⭐ Rate or report this rider</span></div>
     </div>`;
   }).join('');
+
+  statObserveCards();
+  renderAlertBadge();
 
   // Refresh the deals banner + invite strip whenever the directory re-renders,
   // so approved advertisers appear without needing a manual page reload.
@@ -5517,7 +5539,7 @@ async function acctAuth(mode){
     await renderAcct();
   }catch(e){acctMsg(ACCT_ERR[String(e.message).split(' ')[0]]||'Could not reach the server. Check your connection and try again.');}
 }
-function acctSignOut(){_acctMode='in';_acct=null;save('mc_acct',null);_fbAnonToken=null;_fbTokenExpiry=0;_saved=[];_refreshStars();renderAcct();}
+function acctSignOut(){_acctMode='in';_acct=null;save('mc_acct',null);save(RENEW_CACHE_KEY,null);renderRenewBanner();_fbAnonToken=null;_fbTokenExpiry=0;_saved=[];_refreshStars();renderAcct();}
 const _validEmail=e=>/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e)&&e.length<=100;
 async function _putRecovery(t,em){   // write-only for the rider: no client can read recovery emails back
   try{const r=await fetch(_FB_DB_URL+'/motoconnect_zambia/account_recovery/'+_acct.uid+'.json?auth='+t,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em})});return r.ok;}catch(e){return false;}
@@ -5577,6 +5599,7 @@ async function acctLoad(){
     const extra=async(o,adv)=>{
       if(!o)return o;
       try{o.renew=await rd('renewal_requests/'+encodeURIComponent(o.id));}catch(e){}
+      try{o.edit=await rd('edit_requests/'+encodeURIComponent(o.id));}catch(e){}
       if(!adv){try{o.live=await rd('rider_status/'+encodeURIComponent(o.id));}catch(e){}}
       return o;
     };
@@ -5629,6 +5652,7 @@ async function renderAcct(){
   out.innerHTML='<p style="color:var(--muted);font-size:.85rem">Loading…</p>';
   const [recs]=await Promise.all([acctLoad(),_savedLoad()]);
   if(!_acct)return;   // signed out while loading
+  if(Array.isArray(recs)){saveRenewCache(recs);renderRenewBanner();}
   const fresh=Array.isArray(recs)&&!recs.length;   // brand-new login: nothing applied for yet
   _acctRecs={};(recs||[]).forEach(r=>{if(r&&r.id)_acctRecs[r.id]=r;});
   const cards=recs===null?'<p style="color:#b91c1c;font-size:.85rem">Could not load your records. Check your connection.</p>'
@@ -5776,10 +5800,239 @@ function acctCardActions(s){
     h+='<button type="button" class="btn btn-ghost btn-sm" onclick="acctRenewOpen(\''+id+'\')">🔄 '+(lapsed?'Renew now':'Request renewal')+'</button>';
   }
   h+='<div id="acctRenew_'+id+'"></div>';
+  const ed=s.edit;
+  if(ed&&ed.status==='pending')h+='<div style="'+sm+'color:#92400e">✏️ Your details change is waiting for the admin to approve it.</div>';
+  else if(ed&&ed.status==='rejected')h+='<div style="'+sm+'color:#b91c1c">❌ Your last details change was not approved'+(ed.adminNote?': '+esc(ed.adminNote):'.')+'</div>';
+  h+='<div style="margin-top:.55rem"><button type="button" class="btn btn-ghost btn-sm" onclick="acctEditOpen(\''+id+'\')">✏️ Edit my details</button><div id="acctEdit_'+id+'"></div></div>';
   if(!s._adv&&s.status==='active'&&!lapsed)h+='<div style="margin-top:.55rem"><button type="button" class="btn btn-ghost btn-sm" onclick="acctShowCard(\''+id+'\')">🆔 My ID card</button></div>';
+  if(!s._adv&&String(s.plan||'').toLowerCase()==='premium')h+='<div style="margin-top:.55rem"><button type="button" class="btn btn-ghost btn-sm" onclick="acctStatsToggle(\''+id+'\')">📊 Monthly report</button><div id="acctStats_'+id+'"></div></div>';
   if(!s._adv&&s.status==='active'&&!lapsed)h+=acctStatusHtml(s);
   return h+'</div>';
 }
+// ══════════════════════════════════════════════════════
+//  RENEWAL REMINDER BANNER (Standard & Premium)
+//  Home-page banner for a rider who is signed in to My Account on this phone and has a Standard or Premium
+//  plan ending within 7 days. The last account load is kept on the phone, so it also shows offline.
+//  Basic riders get no reminders. The admin sends the WhatsApp/SMS reminders (see the admin Renewals page).
+// ══════════════════════════════════════════════════════
+const RENEW_BANNER_DAYS=7,RENEW_CACHE_KEY='mc_renew_cache',RENEW_DISMISS_KEY='mc_renew_dismiss';
+let _renewRefreshed=false;
+function _renewDays(expiry){   // whole calendar days from today to the expiry date (0 = ends today)
+  const m=/^(\d{4})-(\d{2})-(\d{2})/.exec(String(expiry||''));if(!m)return null;
+  const t=new Date();t.setHours(0,0,0,0);
+  return Math.round((new Date(+m[1],+m[2]-1,+m[3])-t)/86400000);
+}
+function saveRenewCache(recs){
+  if(!_acct||!Array.isArray(recs))return;
+  save(RENEW_CACHE_KEY,{uid:_acct.uid,at:Date.now(),recs:recs.filter(r=>r&&!r._adv&&r.id).map(r=>({id:r.id,name:r.name||'',plan:r.plan||'',expiry:r.expiry||'',status:r.status||'',pending:!!(r.renew&&r.renew.status==='pending')}))});
+}
+function renewDueList(){
+  const c=load(RENEW_CACHE_KEY,null);
+  if(!_acct||!c||c.uid!==_acct.uid||!Array.isArray(c.recs))return [];
+  return c.recs.filter(r=>{
+    const p=String(r.plan||'').toLowerCase();
+    if(r.status!=='active'||r.pending||(p!=='standard'&&p!=='premium'))return false;   // a renewal already requested needs no nudge
+    const d=_renewDays(r.expiry);
+    return d!==null&&d>=0&&d<=RENEW_BANNER_DAYS;
+  }).sort((a,b)=>_renewDays(a.expiry)-_renewDays(b.expiry));
+}
+function renderRenewBanner(){
+  const el=document.getElementById('renewBanner');if(!el)return;
+  const due=load(RENEW_DISMISS_KEY,'')===new Date().toISOString().slice(0,10)?[]:renewDueList();
+  if(!due.length){el.style.display='none';el.innerHTML='';return;}
+  el.style.display='flex';
+  el.innerHTML=due.slice(0,3).map(r=>{
+    const d=_renewDays(r.expiry),when=d===0?'today':d===1?'tomorrow':'in '+d+' days';
+    return '<div class="rb-row"><span class="rb-icon">⏰</span><span class="rb-text"><strong>'+esc(r.name||'Your listing')+'</strong>: your '+esc(r.plan)+' plan ends '+when+' ('+_acctDate(r.expiry)+'). Renew to stay listed.</span><button type="button" class="rb-btn" onclick="openAcct()">Renew</button><button type="button" class="rb-x" aria-label="Hide for today" onclick="dismissRenewBanner()">✕</button></div>';
+  }).join('');
+}
+function dismissRenewBanner(){save(RENEW_DISMISS_KEY,new Date().toISOString().slice(0,10));renderRenewBanner();}
+// Shows the cached state at once, then refreshes it from the account (at most once per visit; skipped when the
+// cache is under 6 hours old and nothing is due).
+async function renewBannerRefresh(){
+  renderRenewBanner();
+  if(!_acct||_renewRefreshed||!navigator.onLine)return;
+  const c=load(RENEW_CACHE_KEY,null);
+  const stale=!c||c.uid!==_acct.uid||Date.now()-c.at>6*3600*1000;
+  if(!stale&&!renewDueList().length)return;
+  _renewRefreshed=true;
+  try{const recs=await acctLoad();if(Array.isArray(recs)){saveRenewCache(recs);renderRenewBanner();}}catch(e){}
+}
+
+// ══════════════════════════════════════════════════════
+//  PREMIUM RIDER STATS — monthly views, calls and WhatsApp taps
+//  Counted on the customer's phone and added to rider_stats/<riderId>/<YYYY-MM>/ with a server-side
+//  increment. Only Premium riders are tracked (the database rules enforce it too). A view = the rider's card
+//  stayed on screen for about a second, counted once per phone per day. Calls / WhatsApp = taps on those
+//  buttons (repeat taps within a minute count once). A rider's own views and taps are not counted.
+//  Counts are queued on the phone and sent in the background, so they are not lost when offline.
+// ══════════════════════════════════════════════════════
+const STAT_Q_KEY='mc_stat_q',STAT_SEEN_KEY='mc_stat_seen';
+let _statQ=load(STAT_Q_KEY,{}),_statTimer=null,_statLastTap={},_statIO=null,_statDwell=new Map();
+if(!_statQ||typeof _statQ!=='object')_statQ={};
+function _statMonth(){const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');}
+function _statToday(){const d=new Date();return _statMonth()+'-'+String(d.getDate()).padStart(2,'0');}
+function _statIsOwn(id){
+  if((typeof _acctRecs==='object'&&_acctRecs&&_acctRecs[id]))return true;
+  const c=load(RENEW_CACHE_KEY,null);
+  return !!(_acct&&c&&c.uid===_acct.uid&&Array.isArray(c.recs)&&c.recs.some(r=>r&&r.id===id));
+}
+function statQueue(id,field){
+  id=sid(id);if(!id||_statIsOwn(id))return;
+  const k=id+'|'+_statMonth()+'|'+field;
+  _statQ[k]=(_statQ[k]||0)+1;save(STAT_Q_KEY,_statQ);
+  if(!_statTimer)_statTimer=setTimeout(statFlush,20000);
+}
+function statView(id){
+  id=sid(id);if(!id)return;
+  const today=_statToday(),seen=load(STAT_SEEN_KEY,{})||{};
+  if(seen[id]===today)return;
+  const keep={};Object.keys(seen).forEach(k=>{if(seen[k]===today)keep[k]=today;});
+  keep[id]=today;save(STAT_SEEN_KEY,keep);
+  statQueue(id,'views');
+}
+function statTap(id,field){
+  id=sid(id);if(!id)return;
+  const k=id+'|'+field,now=Date.now();
+  if(_statLastTap[k]&&now-_statLastTap[k]<60000)return;
+  _statLastTap[k]=now;statQueue(id,field);
+}
+async function statFlush(){
+  _statTimer=null;
+  const keys=Object.keys(_statQ);if(!keys.length||!navigator.onLine)return;
+  const t=await _getAnonToken();
+  if(!t){_statTimer=setTimeout(statFlush,60000);return;}
+  const base=_FB_DB_URL+'/motoconnect_zambia/rider_stats/';
+  await Promise.all(keys.map(async k=>{
+    const n=Math.min(_statQ[k]||0,50),p=k.split('|');if(!n||p.length!==3){delete _statQ[k];return;}
+    try{
+      const r=await fetch(base+encodeURIComponent(p[0])+'/'+p[1]+'/'+p[2]+'.json?auth='+t,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({'.sv':{increment:n}}),keepalive:true});
+      // Done, or refused by the rules (e.g. the rider is no longer Premium): either way drop what was sent
+      if(r.ok||r.status===401||r.status===403){_statQ[k]=(_statQ[k]||0)-n;if(_statQ[k]<=0)delete _statQ[k];}
+    }catch(e){}
+  }));
+  save(STAT_Q_KEY,_statQ);
+  if(Object.keys(_statQ).length)_statTimer=setTimeout(statFlush,60000);
+}
+// Watches the Premium cards in the directory; a card counts as viewed after ~1 second at least half on screen.
+function statObserveCards(){
+  if(!('IntersectionObserver' in window))return;
+  if(!_statIO)_statIO=new IntersectionObserver(es=>es.forEach(e=>{
+    const el=e.target;
+    if(e.isIntersecting){
+      if(_statDwell.has(el))return;
+      _statDwell.set(el,setTimeout(()=>{_statDwell.delete(el);_statIO.unobserve(el);statView(el.getAttribute('data-rid'));},1000));
+    }else if(_statDwell.has(el)){clearTimeout(_statDwell.get(el));_statDwell.delete(el);}
+  }),{threshold:0.5});
+  _statDwell.forEach(tm=>clearTimeout(tm));_statDwell.clear();
+  document.querySelectorAll('#pubGrid .rider-card[data-rid]').forEach(c=>_statIO.observe(c));
+}
+document.addEventListener('click',ev=>{
+  const a=ev.target&&ev.target.closest?ev.target.closest('.rider-card[data-rid] a.btn-call,.rider-card[data-rid] a.btn-wa'):null;
+  if(!a)return;
+  statTap(a.closest('.rider-card').getAttribute('data-rid'),a.classList.contains('btn-call')?'calls':'whatsapp');
+},true);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&Object.keys(_statQ).length)statFlush();});
+window.addEventListener('online',()=>{if(Object.keys(_statQ).length)statFlush();});
+setTimeout(()=>{if(Object.keys(_statQ).length)statFlush();},5000);
+
+// Monthly report in My Account (Premium riders). Loaded on demand when the rider taps the button.
+async function acctStatsToggle(id){
+  id=sid(id);const box=document.getElementById('acctStats_'+id);if(!id||!box)return;
+  if(box.dataset.open==='1'){box.dataset.open='';box.innerHTML='';return;}
+  box.dataset.open='1';
+  const say=h=>{box.innerHTML='<div style="margin-top:.5rem;font-size:.78rem;color:#475569">'+h+'</div>';};
+  say('Loading…');
+  const t=await _getAnonToken();
+  if(!t||!_acct){say('Could not load the report. Check your connection and try again.');return;}
+  try{
+    const r=await fetch(_FB_DB_URL+'/motoconnect_zambia/rider_stats/'+encodeURIComponent(id)+'.json?auth='+t);
+    if(r.status===401||r.status===403){say('The report is not available yet. Please try again later.');return;}
+    if(!r.ok)throw new Error('X');
+    const d=(await r.json())||{},cur=_statMonth();
+    const months=Object.keys(d).filter(m=>/^\d{4}-\d{2}$/.test(m)).sort().reverse().slice(0,6);
+    const n=(m,f)=>Number(d[m]&&d[m][f])||0;
+    if(!months.length){say('No activity recorded yet. Views, calls and WhatsApp taps are counted while your Premium listing is live.');return;}
+    const label=m=>{const p=m.split('-');return new Date(+p[0],+p[1]-1,1).toLocaleDateString('en-ZM',{month:'short',year:'numeric'})+(m===cur?' (so far)':'');};
+    const td='style="padding:.3rem .4rem;text-align:right;border-top:1px solid #e2e8f0"';
+    box.innerHTML='<div style="margin-top:.55rem;overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.78rem;color:#0f172a"><thead><tr style="color:#475569"><th style="text-align:left;padding:.3rem .4rem">Month</th><th style="text-align:right;padding:.3rem .4rem">👁️ Views</th><th style="text-align:right;padding:.3rem .4rem">📞 Calls</th><th style="text-align:right;padding:.3rem .4rem">💬 WhatsApp</th></tr></thead><tbody>'
+      +months.map(m=>'<tr><td style="padding:.3rem .4rem;border-top:1px solid #e2e8f0;font-weight:600">'+esc(label(m))+'</td><td '+td+'>'+n(m,'views')+'</td><td '+td+'>'+n(m,'calls')+'</td><td '+td+'>'+n(m,'whatsapp')+'</td></tr>').join('')
+      +'</tbody></table></div><div style="margin-top:.4rem;font-size:.7rem;color:#64748b;line-height:1.4">A view is your card seen on a customer\'s screen, counted once per customer phone per day. Calls and WhatsApp are taps on those buttons. Your own views and taps are not counted.</div>';
+  }catch(e){say('Could not load the report. Check your connection and try again.');}
+}
+
+// ══════════════════════════════════════════════════════
+//  PREMIUM ADVERTISER ALERTS — in-app notification panel (🔔 in the header)
+//  The admin sends at most one alert per Premium advertiser per month (alerts/<YYYY-MM>_<advId>). It shows here
+//  for 14 days to anyone whose zone matches: a customer's selected or detected zone, or a signed-in rider's own
+//  listing zone. This is an in-app alert, not a phone push notification (that needs Firebase Cloud Messaging).
+//  The last fetch is kept on the phone, so the panel also works offline.
+// ══════════════════════════════════════════════════════
+const ALERTS_CACHE_KEY='mc_alerts_cache',ALERTS_SEEN_KEY='mc_alerts_seen',ALERTS_ZONE_KEY='mc_alert_zone',ALERT_DAYS=14;
+let _alertsFetchedAt=0,_alertsSeenAtOpen=null;   // _alertsSeenAtOpen keeps the NEW tags steady while the panel is open
+const _alertNorm=z=>String(z||'').toLowerCase().trim();
+function alertViewerZones(){
+  const z=[];
+  [_pubTownFilter,_pubZoneFilter].forEach(v=>{if(v)z.push(_alertNorm(v));});
+  try{   // a signed-in rider also gets alerts for their own listing's zones
+    const c=load(RENEW_CACHE_KEY,null);
+    if(_acct&&c&&c.uid===_acct.uid&&Array.isArray(c.recs)){
+      const subs=getSubs();
+      c.recs.forEach(r=>{const s=subs.find(x=>x&&x.id===r.id);if(s){z.push(_alertNorm(s.zone));const z2=riderZone2(s);if(z2)z.push(_alertNorm(z2));}});
+    }
+  }catch(e){}
+  const out=[...new Set(z.filter(Boolean))];
+  if(out.length){save(ALERTS_ZONE_KEY,out);return out;}
+  return load(ALERTS_ZONE_KEY,[])||[];   // nothing selected right now: use the last known zone
+}
+function _alertZoneMatch(alertZone,zones){const a=_alertNorm(alertZone);return !!a&&zones.some(v=>v===a||v.includes(a)||a.includes(v));}
+function alertsVisible(){
+  const c=load(ALERTS_CACHE_KEY,null);if(!c||!Array.isArray(c.list))return [];
+  const zones=alertViewerZones(),cut=Date.now()-ALERT_DAYS*864e5;
+  return c.list.filter(a=>a&&Number(a.createdAt)>=cut&&_alertZoneMatch(a.zone,zones)).sort((a,b)=>b.createdAt-a.createdAt);
+}
+async function alertsRefresh(force){
+  if(!navigator.onLine)return;
+  if(!force&&Date.now()-_alertsFetchedAt<5*60000)return;
+  const t=await _getAnonToken();if(!t)return;
+  const d=new Date(),pm=new Date(d.getFullYear(),d.getMonth()-1,1),prev=pm.getFullYear()+'-'+String(pm.getMonth()+1).padStart(2,'0');
+  try{
+    const r=await fetch(_FB_DB_URL+'/motoconnect_zambia/alerts.json?auth='+t+'&orderBy='+encodeURIComponent('"$key"')+'&startAt='+encodeURIComponent('"'+prev+'"'));
+    if(!r.ok)return;
+    const data=(await r.json())||{};
+    const list=Object.keys(data).map(k=>Object.assign({id:k},data[k])).filter(a=>a&&typeof a.text==='string'&&a.createdAt);
+    save(ALERTS_CACHE_KEY,{at:Date.now(),list});
+    _alertsFetchedAt=Date.now();
+  }catch(e){return;}
+  renderAlertBadge();
+}
+function renderAlertBadge(){
+  const b=document.getElementById('alertBadge');if(!b)return;
+  const seen=load(ALERTS_SEEN_KEY,[])||[],n=alertsVisible().filter(a=>seen.indexOf(a.id)<0).length;
+  b.style.display=n?'flex':'none';b.textContent=n>9?'9+':String(n);
+}
+function renderAlerts(){
+  const el=document.getElementById('alertsBody');if(!el)return;
+  const list=alertsVisible(),seen=load(ALERTS_SEEN_KEY,[])||[],seenAtOpen=_alertsSeenAtOpen||seen;
+  if(!list.length){
+    el.innerHTML='<div style="text-align:center;padding:1.2rem .5rem;color:#475569;font-size:.85rem"><div style="font-size:1.8rem">🔔</div>No alerts for your area right now.<div style="font-size:.76rem;margin-top:.4rem;color:#64748b">Choose or detect your zone on the home page to see alerts near you.</div></div>';
+  }else{
+    el.innerHTML=list.map(a=>{
+      const days=Math.floor((Date.now()-Number(a.createdAt))/864e5),when=days<=0?'Today':days===1?'Yesterday':days+' days ago';
+      return '<div style="border:1px solid #e2e8f0;border-left:3px solid #f59e0b;border-radius:8px;padding:.7rem .8rem;margin-bottom:.6rem;color:#0f172a;font-size:.84rem">'
+        +'<div style="display:flex;justify-content:space-between;gap:.5rem"><strong>📣 '+esc(a.advName||'Advertiser')+'</strong>'+(seenAtOpen.indexOf(a.id)<0?'<span style="background:#dc2626;color:#fff;border-radius:10px;padding:0 .45rem;font-size:.66rem;font-weight:700;align-self:flex-start">NEW</span>':'')+'</div>'
+        +'<div style="margin:.35rem 0;line-height:1.45">'+esc(a.text)+'</div>'
+        +'<div style="font-size:.72rem;color:#64748b">📍 '+esc(a.zone||'')+' · '+when+'</div>'
+        +'<button type="button" class="btn btn-ghost btn-sm" style="margin-top:.5rem" onclick="closeModal(\'alertsModal\');showDealsTab()">🏷️ See deals</button></div>';
+    }).join('');
+  }
+  const c=load(ALERTS_CACHE_KEY,null),live=new Set(((c&&c.list)||[]).map(a=>a.id));
+  save(ALERTS_SEEN_KEY,[...new Set(seen.concat(list.map(a=>a.id)))].filter(id=>live.has(id)));   // opening the panel marks what is shown as seen
+  renderAlertBadge();
+}
+function openAlerts(){_alertsSeenAtOpen=(load(ALERTS_SEEN_KEY,[])||[]).slice();renderAlerts();openModal('alertsModal');alertsRefresh(true).then(()=>{const m=document.getElementById('alertsModal');if(m&&m.classList.contains('open'))renderAlerts();});}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')alertsRefresh(false);});
+
 // Opens the rider's ID card from My Account. Public listing data (type, zone, phone) is merged under the
 // fresh account record (status, plan, expiry) so the card is right even if the directory cache is older.
 function acctShowCard(id){
@@ -5851,6 +6104,74 @@ async function acctRenewSend(id){
   if(!r.ok){say(r.status===401||r.status===403?'Could not send. This record must be linked to your login. Use "Link an application" or contact the admin.':'Could not send. Check your connection and try again.');return;}
   await renderAcct();
   acctMsg('✅ Renewal request sent. The admin will confirm your payment and renew you.',true);
+}
+// ── Edit my details: the change is sent to the admin and only applied once they approve it ──
+const EDIT_FORM={
+  rider:[['name','Full name','text'],['phone','Phone number','tel'],['phone2','Additional number (optional)','tel'],['type','Vehicle type','type'],['zone','Zone','zone'],['zone2','Secondary zone (optional)','zone'],['area','Home area','text'],['notes','Notes','area']],
+  advertiser:[['name','Business name','text'],['phone','Phone number','tel'],['category','Category','cat'],['zone','Zone','zone'],['offer','Offer for riders','area']]
+};
+const EDIT_MAXLEN={name:100,phone:15,phone2:20,type:50,zone:100,zone2:100,area:100,notes:500,category:40,offer:300};
+let _acctEditOrig={};
+async function _acctReadField(node,id,f){
+  const t=await _getAnonToken();if(!t)return null;
+  try{const r=await fetch(_FB_DB_URL+'/motoconnect_zambia/'+node+'/'+encodeURIComponent(id)+'/'+f+'.json?auth='+t);return r.ok?await r.json():null;}catch(e){return null;}
+}
+async function acctEditOpen(id){
+  id=sid(id);const rec=_acctRecs[id],box=document.getElementById('acctEdit_'+id);if(!rec||!box)return;
+  if(box.innerHTML){box.innerHTML='';return;}   // tapping again closes the form
+  const adv=!!rec._adv,k=adv?'advertiser':'rider',node=adv?'advertisers':'subscriptions';
+  const fields=EDIT_FORM[k].filter(x=>!(x[0]==='zone2'&&String(rec.plan||'').toLowerCase()==='basic'));   // Basic has one zone only
+  box.innerHTML='<p style="font-size:.8rem;color:var(--muted);margin:.4rem 0">Loading…</p>';
+  const vals=await Promise.all(fields.map(x=>_acctReadField(node,id,x[0])));
+  const box2=document.getElementById('acctEdit_'+id);if(!box2||!box2.innerHTML)return;   // closed or re-rendered while loading
+  const cur={};fields.forEach((x,i)=>{cur[x[0]]=typeof vals[i]==='string'?vals[i]:'';});
+  _acctEditOrig[id]={k,fields:fields.map(x=>x[0]),cur};
+  const lab='<label style="font-size:.78rem;font-weight:600">',opt=(v,t,sel)=>'<option value="'+esc(v)+'"'+(sel?' selected':'')+'>'+esc(t)+'</option>';
+  const zl='<datalist id="acctZl_'+id+'">'+getZones().map(z=>z&&z.name?'<option value="'+esc(z.name)+'">':'').join('')+'</datalist>';
+  const inputs=fields.map(x=>{
+    const f=x[0],v=cur[f],eid=' id="acctEd_'+f+'_'+id+'" ',ml='maxlength="'+EDIT_MAXLEN[f]+'" ';let el;
+    if(x[2]==='area')el='<textarea rows="2"'+eid+ml+_fld+'>'+esc(v)+'</textarea>';
+    else if(x[2]==='type'){const o=['Motorbike','Taxi','Tour Operator','Truck'];if(v&&o.indexOf(v)<0)o.unshift(v);
+      el='<select'+eid+_fld+'>'+(v?'':opt('','— Select —',1))+o.map(c=>opt(c,c,c===v)).join('')+'</select>';}
+    else if(x[2]==='cat'){const o=Object.keys(ADV_CATEGORY_META);if(v&&o.indexOf(v)<0)o.unshift(v);
+      el='<select'+eid+_fld+'>'+(v?'':opt('','— Select —',1))+o.map(c=>opt(c,(ADV_CATEGORY_META[c]?ADV_CATEGORY_META[c].icon+' '+ADV_CATEGORY_META[c].label:c),c===v)).join('')+'</select>';}
+    else if(x[2]==='zone')el='<input type="text" list="acctZl_'+id+'"'+eid+ml+'autocomplete="off" value="'+esc(v)+'" '+_fld+'/>';
+    else el='<input type="'+x[2]+'"'+eid+ml+'value="'+esc(v)+'" '+_fld+'/>';
+    return lab+x[1]+'</label>'+el;
+  }).join('');
+  box2.innerHTML='<div style="margin-top:.5rem;background:var(--surface2);border-radius:10px;padding:.7rem">'
+    +'<div style="font-size:.78rem;color:var(--muted);margin-bottom:.5rem">Change what you need. The admin checks your request, and your listing updates once it is approved. Plan, expiry and documents cannot be changed here.</div>'
+    +zl+inputs
+    +'<div id="acctEdMsg_'+id+'" style="font-size:.8rem;font-weight:600;margin:.2rem 0"></div>'
+    +'<div style="display:flex;gap:.5rem"><button type="button" class="btn btn-primary btn-sm" style="width:auto" onclick="acctEditSend(\''+id+'\')">Send for approval</button><button type="button" class="btn btn-ghost btn-sm" onclick="acctEditOpen(\''+id+'\')">Cancel</button></div></div>';
+}
+async function acctEditSend(id){
+  id=sid(id);const rec=_acctRecs[id],o=_acctEditOrig[id];if(!id||!rec||!o||!_acct)return;
+  const msg=document.getElementById('acctEdMsg_'+id),say=(t,ok)=>{if(msg){msg.textContent=t;msg.style.color=ok?'#065f46':'#b91c1c';}};
+  const dg=x=>String(x||'').replace(/\D/g,''),ch={};
+  o.fields.forEach(f=>{
+    const el=document.getElementById('acctEd_'+f+'_'+id);if(!el)return;
+    const ph=(f==='phone'||f==='phone2');
+    let v=String(el.value||'').trim(),was=String(o.cur[f]||'').trim();
+    if(ph){v=dg(v);was=dg(was);}
+    v=v.slice(0,EDIT_MAXLEN[f]);
+    if(v!==was)ch[f]=v;
+  });
+  if(!Object.keys(ch).length){say('Nothing changed.');return;}
+  if(ch.name!==undefined&&ch.name.length<2){say('Enter the name.');return;}
+  if(ch.phone!==undefined&&ch.phone.length<9){say('Enter a valid phone number (at least 9 digits).');return;}
+  if(ch.phone2&&ch.phone2.length<9){say('The additional number needs at least 9 digits, or leave it blank.');return;}
+  if(ch.zone!==undefined&&!ch.zone){say('Zone is required.');return;}
+  if(ch.category!==undefined&&!ch.category){say('Choose a category.');return;}
+  say('Sending…',true);
+  const body={id,refType:o.k,changes:ch,status:'pending',ownerUid:_acct.uid,requestedAt:new Date().toISOString()};
+  if(rec.ref)body.ref=String(rec.ref).slice(0,40);
+  if(rec.name)body.name=String(rec.name).slice(0,100);
+  const r=await _fbPut('edit_requests/'+id,body);   // one open request per record: sending again replaces it
+  if(!r.ok){say(r.status===401||r.status===403?'Could not send. This record must be linked to your login. Use "Link an application" or contact the admin.':'Could not send. Check your connection and try again.');return;}
+  delete _acctEditOrig[id];
+  await renderAcct();
+  acctMsg('✅ Sent to the admin for approval. Your details change once it is approved.',true);
 }
 // ── Rate or report a rider ──
 let _fbkId='',_fbkRating=0;
