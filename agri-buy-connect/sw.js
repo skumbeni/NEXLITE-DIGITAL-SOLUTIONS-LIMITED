@@ -10,10 +10,12 @@
  * Bump CACHE_NAME on every deploy so returning users pick up the new
  * shell instead of a stale cached copy.
  */
-const CACHE_NAME = 'agribuy-shell-v8';
+const CACHE_NAME = 'agribuy-shell-v9';
 const APP_SHELL = [
   './',
   './index.html',
+  './privacy.html',
+  './terms.html',
   './manifest.webmanifest',
   'icons/icon-192.png',
   'icons/icon-512.png',
@@ -61,6 +63,8 @@ self.addEventListener('fetch', (event) => {
   const isAppShellDoc = url.origin === self.location.origin &&
     (url.pathname === scopePath ||
      url.pathname.endsWith('/index.html') ||
+     url.pathname.endsWith('/privacy.html') ||
+     url.pathname.endsWith('/terms.html') ||
      url.pathname.endsWith('/agribuy-admin.html'));
 
   if(isAppShellDoc){
@@ -72,7 +76,7 @@ self.addEventListener('fetch', (event) => {
         const copy = res.clone();
         caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
         return res;
-      }).catch(() => caches.match('./index.html'))
+      }).catch(() => caches.match(req).then((hit) => hit || caches.match('./index.html')))
     );
     return;
   }
