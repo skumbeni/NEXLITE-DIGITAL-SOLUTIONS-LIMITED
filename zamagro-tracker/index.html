@@ -1304,6 +1304,13 @@
                             <label style="display:flex;align-items:center;gap:.5rem;flex:1;font-size:.88rem;"><input type="checkbox" id="setting-pod-signature" checked onchange="savePodSetting(this.checked)"> Print a proof-of-delivery signature block on receipts and invoices (quotations get an acceptance block)</label>
                         </div>
                         <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
+                            <label for="setting-thermal-cols" style="font-weight:600;color:var(--primary-dark);min-width:110px;">Thermal paper</label>
+                            <select id="setting-thermal-cols" onchange="saveThermalCols(this.value)" style="flex:1;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:.9rem;outline:none;">
+                                <option value="32">58 mm paper (32 characters)</option>
+                                <option value="48">80 mm paper (48 characters)</option>
+                            </select>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
                             <label for="setting-company-tpin" style="font-weight:600;color:var(--primary-dark);min-width:110px;">TPIN</label>
                             <input type="text" id="setting-company-tpin" placeholder="e.g. 1000000000" style="flex:1;padding:8px 12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:.9rem;outline:none;">
                         </div>
@@ -2314,6 +2321,7 @@
                 <!-- populated by printReceipt() -->
             </div>
             <div style="display: flex; gap: 0.5rem; margin-top: 1.25rem; flex-wrap:wrap;" id="receipt-actions">
+                <button class="btn btn-primary" style="flex:1 1 100%;" onclick="printThermalReceipt()">🧾 Print to Bluetooth printer</button>
                 <button class="btn btn-primary" style="flex:1;" onclick="window.print()">🖨 Print</button>
                 <button class="btn btn-sm" style="flex:1;background:var(--danger);color:#fff;font-weight:600;" onclick="exportReceiptPDF()">⬇ PDF</button>
                 <button class="btn btn-sm" style="flex:1; background:#25D366; color:#fff; font-weight:600;" onclick="shareReceiptWhatsApp()">📲 WhatsApp</button>
@@ -6056,6 +6064,8 @@
             if (ctEl) ctEl.value = db.settings.companyTPIN    || '';
             const podEl = document.getElementById('setting-pod-signature');
             if (podEl) podEl.checked = podOn();
+            const tcEl = document.getElementById('setting-thermal-cols');
+            if (tcEl) tcEl.value = String(thermalCols());
             if (cpEl) cpEl.value = db.settings.companyPhone   || '';
             if (caEl) caEl.value = db.settings.companyAddress || '';
             renderLogoPreview();
@@ -7392,6 +7402,116 @@
                 <div style="text-align:center;font-size:.7rem;color:#999;margin-top:4px;">Served by: ${esc(servedByLabel)}</div>
             `;
             openModal('modal-receipt');
+        }
+
+        // ── BLUETOOTH THERMAL PRINTING (ESC/POS → RawBT) ─────────────────
+        // A web page / Median WebView cannot open a Bluetooth printer by itself, so window.print()
+        // only ever produces a PDF. Instead we build raw ESC/POS bytes from the receipt on screen and
+        // hand them to the free RawBT Android app, which owns the printer connection and prints at once.
+        // One-time setup on the phone: install RawBT, pair the printer in Android Bluetooth settings,
+        // then choose that printer in RawBT.
+        const RAWBT_PKG = 'ru.a402d.rawbtprinter';
+        function thermalCols() { return parseInt(db.settings.thermalCols, 10) === 48 ? 48 : 32; }
+        function saveThermalCols(v) {
+            const st = db.settings;
+            st.thermalCols = parseInt(v, 10) === 48 ? 48 : 32;
+            db.settings = st;
+            showToast('Thermal paper width saved');
+        }
+        // Thermal printers only know plain ASCII by default — fold or drop everything else.
+        function _tAscii(str) {
+            return String(str == null ? '' : str)
+                .replace(/[\u00A0\u2007\u202F]/g, ' ')
+                .replace(/[×✕]/g, 'x').replace(/[–—−]/g, '-').replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/…/g, '...')
+                .normalize('NFKD').replace(/[^\x20-\x7E]/g, '')
+                .replace(/(\S) {2,}/g, '$1 ').replace(/\s+$/, '');
+        }
+        function _tWrap(text, w) {
+            const ind = (text.match(/^ */) || [''])[0];
+            const room = Math.max(4, w - ind.length);
+            const lines = []; let cur = '';
+            const push = () => { lines.push(ind + cur); cur = ''; };
+            text.trim().split(/ +/).forEach(wd => {
+                while (wd.length > room) { if (cur) push(); lines.push(ind + wd.slice(0, room)); wd = wd.slice(room); }
+                if (!cur) cur = wd;
+                else if ((cur + ' ' + wd).length <= room) cur += ' ' + wd;
+                else { push(); cur = wd; }
+            });
+            if (cur || !lines.length) push();
+            return lines;
+        }
+        function _tRow(l, r, w) {
+            r = r.trim();
+            if (!r) return _tWrap(l, w);
+            if (r.length > w - 8) return _tWrap(l, w).concat(_tWrap(r, w).map(x => ' '.repeat(w - x.length) + x));
+            const lines = _tWrap(l, w - r.length - 1);
+            const last = lines.pop();
+            lines.push(last + ' '.repeat(w - last.length - r.length) + r);
+            return lines;
+        }
+        // Turns whatever is in #receipt-body (sale receipt or credit payment receipt) into ESC/POS bytes.
+        function _receiptToEscPos(bodyEl, w) {
+            const B = [];
+            const cmd = (...b) => b.forEach(x => B.push(x));
+            const line = s => { for (let i = 0; i < s.length; i++) B.push(s.charCodeAt(i) & 0x7F); B.push(0x0A); };
+            const align = n => cmd(0x1B, 0x61, n);          // 0 left, 1 centre
+            const bold  = on => cmd(0x1B, 0x45, on ? 1 : 0);
+            const tall  = on => cmd(0x1D, 0x21, on ? 0x01 : 0x00);
+            const decode = html => { const ta = document.createElement('textarea'); ta.innerHTML = html; return ta.value; };
+            const textLines = el => decode(el.innerHTML.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ''))
+                .split('\n').map(_tAscii).filter(t => t.trim());
+
+            cmd(0x1B, 0x40);                                  // initialise printer
+            Array.from(bodyEl.children).forEach(el => {
+                const tag = el.tagName;
+                if (tag === 'IMG') return;                    // logo skipped (keeps printing fast + reliable)
+                if (tag === 'HR' || el.classList.contains('receipt-divider')) { align(0); line('-'.repeat(w)); return; }
+                if (el.classList.contains('receipt-row')) {
+                    const sp = el.querySelectorAll(':scope > span');
+                    const l = _tAscii(sp[0] ? sp[0].textContent : ''), r = _tAscii(sp[1] ? sp[1].textContent : '');
+                    const b = el.classList.contains('receipt-total') || !!el.querySelector('strong');
+                    align(0); bold(b); _tRow(l, r, w).forEach(line); bold(false);
+                    return;
+                }
+                if (el.classList.contains('receipt-title')) {
+                    align(1); bold(true); tall(true);
+                    textLines(el).forEach(t => _tWrap(t.trim(), w).forEach(line));
+                    tall(false); bold(false); return;
+                }
+                if (/Signature:/.test(el.textContent)) {      // proof-of-delivery block
+                    align(0); line('');
+                    Array.from(el.children).forEach((k, i) => {
+                        if (i === 0) { bold(true); _tWrap(_tAscii(k.textContent), w).forEach(line); bold(false); line(''); }
+                        else { const lab = _tAscii(k.querySelector('span') ? k.querySelector('span').textContent : ''); line(lab + ' ' + '_'.repeat(Math.max(4, w - lab.length - 1))); line(''); }
+                    });
+                    return;
+                }
+                const centred = el.classList.contains('receipt-sub') || /center/.test(el.getAttribute('style') || '');
+                align(centred ? 1 : 0);
+                textLines(el).forEach(t => _tWrap(centred ? t.trim() : t, w).forEach(line));
+            });
+            align(0);
+            cmd(0x1B, 0x64, 4);                               // feed 4 lines so the text clears the tear bar
+            return B;
+        }
+        function printThermalReceipt() {
+            const body = document.getElementById('receipt-body');
+            if (!body || !body.children.length) { showToast('Open a receipt first', 'danger'); return; }
+            let bytes;
+            try { bytes = _receiptToEscPos(body, thermalCols()); }
+            catch (e) { console.error(e); showToast('Could not prepare this receipt for the printer', 'danger'); return; }
+            let bin = '';
+            for (let i = 0; i < bytes.length; i += 0x2000) bin += String.fromCharCode.apply(null, bytes.slice(i, i + 0x2000));
+            const fallback = 'S.browser_fallback_url=' + encodeURIComponent('https://play.google.com/store/apps/details?id=' + RAWBT_PKG);
+            const url = 'intent:base64,' + btoa(bin) + '#Intent;scheme=rawbt;package=' + RAWBT_PKG + ';' + fallback + ';end;';
+            let left = false;
+            const onVis = () => { if (document.hidden) left = true; };
+            document.addEventListener('visibilitychange', onVis);
+            window.location.href = url;
+            setTimeout(() => {
+                document.removeEventListener('visibilitychange', onVis);
+                if (!left) showToast('If nothing printed: install RawBT, then pick your printer inside it', 'danger');
+            }, 2500);
         }
 
         // ── PROOF OF DELIVERY / CUSTOMER SIGNATURE BLOCK ─────────────────
