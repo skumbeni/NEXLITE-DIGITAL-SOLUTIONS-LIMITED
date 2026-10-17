@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Email customers · School Pro</title>
+<style>
+:root{--bg:#f5f7f9;--card:#fff;--ink:#1f2933;--mute:#6b7785;--line:#d9dee4;--accent:#1a5276;--ok:#1e8449;--bad:#b03a2e}
+@media(prefers-color-scheme:dark){:root{--bg:#10171d;--card:#18222b;--ink:#e6ebef;--mute:#93a0ac;--line:#2b3946;--accent:#5dade2;--ok:#58d68d;--bad:#ec7063}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif}
+main{max-width:640px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px}
+h1{font-size:20px;margin:4px 0 14px}h2{font-size:16px;margin:0 0 10px}
+label{display:block;font-size:14px;color:var(--mute);margin:10px 0 4px}
+input,textarea{width:100%;padding:10px;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px}
+textarea{min-height:160px;resize:vertical}
+button{font:inherit;padding:10px 16px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer}
+button.ghost{background:transparent;color:var(--accent)}button:disabled{opacity:.5}
+button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+#list{max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:8px}
+#list label{display:flex;gap:10px;align-items:center;margin:0;padding:8px 10px;border-bottom:1px solid var(--line);color:var(--ink)}
+#list label:last-child{border:0}#list span small{display:block;color:var(--mute)}
+#list input{width:auto}
+#status{font-size:14px;margin-top:12px;white-space:pre-wrap}.err{color:var(--bad)}.good{color:var(--ok)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <h1>Email customers</h1>
+
+  <section id="login" class="card">
+    <h2>Operator login</h2>
+    <label for="em">Email</label><input id="em" type="email" autocomplete="username">
+    <label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password">
+    <div class="row"><button id="loginBtn">Log in</button><button id="gBtn" class="ghost">Continue with Google</button></div>
+    <div id="loginErr" class="err" style="margin-top:10px"></div>
+  </section>
+
+  <div id="main" hidden>
+    <section class="card">
+      <h2>Recipients <small id="count" style="font-weight:normal;color:var(--mute)"></small></h2>
+      <input id="q" placeholder="Search school or email">
+      <div class="row" style="margin-top:8px"><button class="ghost" id="all">Select all</button><button class="ghost" id="none">Select none</button></div>
+      <div id="list"></div>
+    </section>
+
+    <section class="card">
+      <h2>Message</h2>
+      <label for="subject">Subject</label><input id="subject" maxlength="150">
+      <label for="message">Message (type {{school}} to insert each school's name)</label>
+      <textarea id="message"></textarea>
+      <div class="row"><button id="test" class="ghost">Send test to me</button><button id="send">Send to selected</button></div>
+      <div id="status" aria-live="polite"></div>
+    </section>
+
+    <p style="color:var(--mute);font-size:14px">Signed in as <span id="who"></span> · <a href="#" id="out" style="color:var(--accent)">Log out</a></p>
+  </div>
+</main>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, signInWithPopup, GoogleAuthProvider, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-auth.js";
+import { getDatabase, ref, get } from "https://www.gstatic.com/firebasejs/12.15.0/firebase-database.js";
+
+const MAILER_URL = 'https://nexlite-mailer.nexlitedigitalsolutions.workers.dev';   // your deployed mailer
+const OPERATOR_UID = 'd3ttBuJuTiY0EZUATKZxFbFbck12';        // same UID your database rules trust
+const app = initializeApp({
+  apiKey: "AIzaSyDjCuVE0G5zkQQd0itOmXujj8Jy7m6gPAU", authDomain: "school-pro-ultimate.firebaseapp.com",
+  databaseURL: "https://school-pro-ultimate-default-rtdb.firebaseio.com", projectId: "school-pro-ultimate",
+  storageBucket: "school-pro-ultimate.firebasestorage.app", messagingSenderId: "351105459639", appId: "1:351105459639:web:5a00c805d66c271a71b432"
+});
+const auth = getAuth(app), db = getDatabase(app);
+const $ = id => document.getElementById(id);
+const say = (t, cls = '') => { $('status').className = cls; $('status').textContent = t; };
+let people = [];
+
+$('loginBtn').onclick = () => signInWithEmailAndPassword(auth, $('em').value.trim(), $('pw').value).catch(e => $('loginErr').textContent = 'Login failed: ' + (e.code || e.message));
+$('gBtn').onclick = () => signInWithPopup(auth, new GoogleAuthProvider()).catch(e => $('loginErr').textContent = 'Login failed: ' + (e.code || e.message));
+$('out').onclick = e => { e.preventDefault(); signOut(auth); };
+
+onAuthStateChanged(auth, async u => {
+  if (u && u.uid !== OPERATOR_UID) { await signOut(auth); $('loginErr').textContent = 'This account is not the operator account.'; return; }
+  $('login').hidden = !!u; $('main').hidden = !u;
+  if (!u) return;
+  $('who').textContent = u.email;
+  try { await load(); } catch (e) { say('Could not load customers: ' + (e.code || e.message), 'err'); }
+});
+
+async function load() {
+  const snap = await get(ref(db, 'schoolsDirectory')), byEmail = new Map();
+  snap.forEach(owner => owner.forEach(s => {
+    const v = s.val() || {}, email = (v.email || '').trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return;
+    const prev = byEmail.get(email), name = v.schoolName || '';
+    byEmail.set(email, { email, school: prev ? prev.school + ' / ' + name : name });
+  }));
+  people = [...byEmail.values()].sort((a, b) => a.school.localeCompare(b.school));
+  render();
+}
+
+function render() {
+  const f = $('q').value.trim().toLowerCase();
+  $('list').innerHTML = '';
+  people.forEach((p, i) => {
+    if (f && !(p.school + ' ' + p.email).toLowerCase().includes(f)) return;
+    const l = document.createElement('label');
+    l.innerHTML = '<input type="checkbox" data-i="' + i + '"' + (p.off ? '' : ' checked') + '><span></span>';
+    l.querySelector('span').textContent = p.school || '(no name)';
+    const s = document.createElement('small'); s.textContent = p.email; l.querySelector('span').appendChild(s);
+    l.querySelector('input').onchange = e => { p.off = !e.target.checked; count(); };
+    $('list').appendChild(l);
+  });
+  count();
+}
+const chosen = () => people.filter(p => !p.off);
+const count = () => { $('count').textContent = '· ' + chosen().length + ' of ' + people.length + ' selected'; $('send').textContent = 'Send to ' + chosen().length + ' selected'; };
+$('q').oninput = render;
+$('all').onclick = () => { people.forEach(p => p.off = false); render(); };
+$('none').onclick = () => { people.forEach(p => p.off = true); render(); };
+
+async function send(list) {
+  const subject = $('subject').value.trim(), message = $('message').value.trim();
+  if (!subject || !message) { say('Write a subject and a message first.', 'err'); return; }
+  $('send').disabled = $('test').disabled = true;
+  let sent = 0; const failed = [];
+  try {
+    const token = await auth.currentUser.getIdToken(true);
+    for (let i = 0; i < list.length; i += 40) {
+      const chunk = list.slice(i, i + 40);
+      say('Sending ' + (i + 1) + ' to ' + (i + chunk.length) + ' of ' + list.length + '…');
+      try {
+        const r = await fetch(MAILER_URL + '/broadcast', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+          body: JSON.stringify({ subject, message, recipients: chunk.map(p => ({ email: p.email, school: p.school })) }) });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+        sent += j.sent || 0; const bad = new Set((j.failed || []).map(f => f.email));
+        (j.failed || []).forEach(f => failed.push(f.email + ' (' + f.error + ')'));
+        chunk.forEach(p => { if (!bad.has(p.email)) p.off = true; }); // sent ones get unticked, so tomorrow you only resend the rest
+      } catch (e) { chunk.forEach(p => failed.push(p.email + ' (' + e.message + ')')); }
+    }
+  } finally { $('send').disabled = $('test').disabled = false; }
+  render();
+  say('Sent: ' + sent + '. Failed: ' + failed.length + (failed.length ? '\n' + failed.join('\n') : ''), failed.length ? 'err' : 'good');
+}
+$('test').onclick = () => send([{ email: auth.currentUser.email, school: 'Your School (test)' }]);
+$('send').onclick = () => { const l = chosen(); if (l.length && confirm('Send this email to ' + l.length + ' customer(s)? This cannot be undone.' + (l.length > 100 ? '\n\nA free Gmail sends about 100 emails a day through Apps Script. Any that fail stay ticked so you can send them tomorrow.' : ''))) send(l); };
+</script>
+</body>
+</html>

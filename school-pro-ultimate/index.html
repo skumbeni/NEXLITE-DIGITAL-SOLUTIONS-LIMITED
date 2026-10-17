@@ -45,7 +45,7 @@
               https://*.firebase.google.com
               https://identitytoolkit.googleapis.com
               https://securetoken.googleapis.com
-              https://nexlite-mailer.YOUR-SUBDOMAIN.workers.dev
+              https://nexlite-mailer.nexlitedigitalsolutions.workers.dev
               https://accounts.google.com;
   frame-src   https://school-pro-ultimate.firebaseapp.com https://accounts.google.com https://*.firebaseio.com;
   object-src  'none';
@@ -7439,7 +7439,7 @@ function _setAuthBtn(id, loading, label) {
 
 // ==================== PASSWORD RESET + WELCOME EMAIL ====================
 // MAILER_URL = your deployed nexlite-mailer service (see mailer/README steps). '' turns the welcome email off.
-const MAILER_URL = 'https://nexlite-mailer.YOUR-SUBDOMAIN.workers.dev';
+const MAILER_URL = 'https://nexlite-mailer.nexlitedigitalsolutions.workers.dev';
 let _lastResetAt = 0;
 
 // Reset email comes from support@ through the mailer. If the mailer is not set up or is down, Firebase's own email is the backup.
@@ -7466,7 +7466,7 @@ async function forgotPasswordFromLanding(){
   const wait = 60000 - (Date.now() - _lastResetAt);
   if(wait > 0){ show(errEl, 'A reset email was just sent. Wait ' + Math.ceil(wait/1000) + ' seconds before asking for another.'); return; }
 
-  const okMsg = 'If an account exists for ' + email + ', a password reset link is on its way. Check your Spam or Junk folder too. If you signed up with Google, use Continue with Google instead.';
+  const okMsg = 'If an account exists for ' + email + ', a password reset link is on its way. Check your Spam or Junk folder too. If you signed up with Google, use Continue with Google instead. Still stuck? Email support@nexlitedigitalsolutionslimited.digital.';
   const link = document.getElementById('lpForgotLink');
   if(link) link.style.pointerEvents = 'none';
   try {
@@ -11662,7 +11662,7 @@ function _tgPlace(c, d, hh, L) {
   const lay = _tgLay(_tgSessOf(c.key), d), i = lay.findIndex(p => _tgK(p) === hh && p.k === 'p'), tag = c.short + ' ' + d.toUpperCase();
   if (i < 0) return tag + ': no lesson period starts at that time.';
   for (let j = i; j < i + L.n; j++) if (!lay[j] || lay[j].k !== 'p') return tag + ': not enough periods in a row for ' + L.n + ' periods.';
-  if (TG_EXTRA.indexOf(L.s) < 0 && (_tgGrade(c).subjects || []).indexOf(L.s) < 0) return c.short + ' does not have ' + L.s + '.';
+  if (!L.custom && TG_EXTRA.indexOf(L.s) < 0 && (_tgGrade(c).subjects || []).indexOf(L.s) < 0) return c.short + ' does not have ' + L.s + '.';
   if (L.t) { const k = _tgClash(L.t, d, lay[i].s, lay[i + L.n - 1].e, c.key); if (k) return _tgTName(L.t) + ' is already with ' + k.name + ' at ' + k.time + ' on ' + d.toUpperCase() + '.'; }
   const cc = _tg.cls[c.key];
   if (cc && cc.d && cc.d[d]) Object.keys(cc.d[d]).forEach(h => { const r = _tgRange(c.key, d, h, cc.d[d][h].n); if (r && r.i <= i + L.n - 1 && i <= r.j) _tgDel(c.key, d, h); });
@@ -11782,7 +11782,7 @@ function ttgOpen(ci, hh) {
   let max = 0; while (max < 4 && lay[i + max] && lay[i + max].k === 'p') max++;
   const mine = (_tgGrade(c).subjects || []).slice(), others = [];
   (config.grades || []).forEach(x => (x.subjects || []).forEach(s => { if (mine.indexOf(s) < 0 && others.indexOf(s) < 0 && TG_EXTRA.indexOf(s) < 0) others.push(s); }));
-  if (cur.s && mine.indexOf(cur.s) < 0 && others.indexOf(cur.s) < 0 && TG_EXTRA.indexOf(cur.s) < 0) mine.push(cur.s);
+  const isCus = !!cur.s && mine.indexOf(cur.s) < 0 && others.indexOf(cur.s) < 0 && TG_EXTRA.indexOf(cur.s) < 0;
   const opt = (v, sel, t) => '<option value="' + esc(v) + '"' + (sel ? ' selected' : '') + '>' + esc(t || v) + '</option>';
   const grp = (l, a) => a.length ? '<optgroup label="' + l + '">' + a.map(s => opt(s, cur.s === s)).join('') + '</optgroup>' : '';
   const chip = (k, v, on, t) => '<label style="display:inline-flex;align-items:center;gap:4px;margin:0 12px 6px 0;font-size:13px"><input type="checkbox" class="' + k + '" value="' + esc(v) + '"' + (on ? ' checked' : '') + '> ' + esc(t) + '</label>';
@@ -11791,7 +11791,8 @@ function ttgOpen(ci, hh) {
   _tg.ed = hh;
   const m = document.createElement('div'); m.className = 'modal-overlay'; m.id = 'ttgModal'; m.onclick = function (e) { if (e.target === m) ttgClose(); };
   m.innerHTML = '<div class="modal"><h3>' + esc(c.name) + ' · ' + _tg.day.toUpperCase() + ' · ' + esc(p.n) + ' ' + p.s + '–' + p.e + '</h3>' +
-    '<div class="form-group"><label>Subject</label><select id="ttgSub"><option value="">— Choose —</option>' + grp(esc(_tgGrade(c).name), mine) + grp('Other subjects', others) + grp('Other', TG_EXTRA) + '</select></div>' +
+    '<div class="form-group"><label>Subject or activity</label><select id="ttgSub" onchange="ttgSubChg()"><option value="">— Choose —</option>' + grp(esc(_tgGrade(c).name), mine) + grp('Other subjects', others) + grp('Other', TG_EXTRA) + '<option value="__custom__"' + (isCus ? ' selected' : '') + '>✏️ Custom: type what happens…</option></select></div>' +
+    '<div class="form-group" id="ttgCusBox" style="display:' + (isCus ? '' : 'none') + '"><label>What happens in this period?</label><input type="text" id="ttgCus" maxlength="30" list="ttgCusList" placeholder="e.g. Assembly, Devotion, Sports, Cleaning" value="' + esc(isCus ? cur.s : '') + '"><datalist id="ttgCusList"><option value="Assembly"><option value="Devotion"><option value="Parade"><option value="Sports"><option value="Cleaning"><option value="Music and Drama"><option value="Choir practice"><option value="Staff meeting"><option value="Exams"></datalist></div>' +
     '<div class="form-group"><label>Teacher</label><select id="ttgTch"><option value="">— No teacher yet —</option>' + _tgTeachers().sort((a, b) => a.name.localeCompare(b.name)).map(t => opt(t.pid, cur.t === t.pid, t.name.trim())).join('') + '</select></div>' +
     '<div class="form-group"><label>Length</label><select id="ttgSpan">' + spans + '</select></div>' +
     '<div class="form-group"><label>Also apply to these classes</label><div>' + _tg.cols.map((x, k) => chip('ttgC', k, k === ci, x.short)).join('') + '</div>' +
@@ -11802,14 +11803,15 @@ function ttgOpen(ci, hh) {
   document.body.appendChild(m);
 }
 function ttgClose() { const m = _tgEl('ttgModal'); if (m) m.remove(); }
+function ttgSubChg() { const on = _tgEl('ttgSub').value === '__custom__'; _tgEl('ttgCusBox').style.display = on ? '' : 'none'; if (on) _tgEl('ttgCus').focus(); }
 function ttgTick(gi) { document.querySelectorAll('.ttgC').forEach(x => { if (gi < 0 || _tg.cols[+x.value].gi === gi) x.checked = true; }); }
 function ttgDo(clear) {
-  const hh = _tg.ed, sub = _tgEl('ttgSub').value, t = _tgEl('ttgTch').value, n = +_tgEl('ttgSpan').value || 1;
+  const hh = _tg.ed, raw = _tgEl('ttgSub').value, cust = raw === '__custom__', sub = cust ? _tgEl('ttgCus').value.replace(/\s+/g, ' ').trim().slice(0, 30) : raw, t = _tgEl('ttgTch').value, n = +_tgEl('ttgSpan').value || 1;
   const cs = [].map.call(document.querySelectorAll('.ttgC:checked'), x => _tg.cols[+x.value]), ds = [].map.call(document.querySelectorAll('.ttgD:checked'), x => x.value);
   if (!cs.length || !ds.length) return (_tgEl('ttgErr').textContent = 'Tick at least one class and one day.');
-  if (!clear && !sub) return (_tgEl('ttgErr').textContent = 'Choose a subject, or use Clear.');
+  if (!clear && !sub) return (_tgEl('ttgErr').textContent = cust ? 'Type what happens in this period, for example Assembly.' : 'Choose a subject, or use Clear.');
   let ok = 0; const bad = [];
-  ds.forEach(d => cs.forEach(c => { const r = clear ? _tgClear(c, d, hh) : _tgPlace(c, d, hh, { s: sub, t: t, n: n }); if (r === true) ok++; else bad.push(r); }));
+  ds.forEach(d => cs.forEach(c => { const r = clear ? _tgClear(c, d, hh) : _tgPlace(c, d, hh, { s: sub, t: t, n: n, custom: cust }); if (r === true) ok++; else bad.push(r); }));
   ttgClose(); _tgLocalSave(); _tgRender();
   if (bad.length) _tgMsg('<b>' + ok + ' placed, ' + bad.length + ' skipped:</b><ul style="margin:4px 0 0 18px">' + bad.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul>', true);
   else _tgMsg('');
