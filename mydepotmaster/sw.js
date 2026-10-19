@@ -25,6 +25,26 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.3.1 (2026-10-19)
+//
+// v0.3.1 changes (2026-10-19) — Record Payment & Bulk Pay: pay for a period + total quantity:
+//   - New "Pay for a period" box in Record Payment and in Bulk Pay, with three modes:
+//       Amount   — the old way: type an amount (or a quantity).
+//       From – To — pick two dates; the amount is the unpaid work dated between them.
+//       Up to    — pick one date; it starts from the person's LAST PAY (the first work entry
+//                  that is not fully paid yet) and pays everything up to that date.
+//   - "Unpaid" is read from the same oldest-first allocation as the PAID / PARTIAL badges, so a
+//     part-paid entry only counts what is still owed. In Bulk Pay each person gets their own
+//     amount, quantity and start point; people with nothing unpaid are left unticked.
+//   - The amount stays editable (part-payment); the quantity scales with it.
+//   - Payments still settle the OLDEST work first. If a From – To period starts after older
+//     unpaid work, a warning says that work will be settled first.
+//   - Total quantity line at the bottom of both forms, totalled per unit (bags, hours, days,
+//     trips, tons, custom units like month). Salaried staff show months (amount ÷ monthly salary).
+//   - The period is saved on each payment (payMode / payFrom / payTo / payQtys), shown in the
+//     Payments list, the confirm dialog and the audit log.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
 // Current version: v0.3.0 (2026-10-19)
 //
 // v0.3.0 changes (2026-10-19) — Bulk Pay: pay by quantity of work (hours, bags, days…):
@@ -1647,7 +1667,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.0';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.1';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

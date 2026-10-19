@@ -3991,7 +3991,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.0';
+const SW_VERSION  = 'v0.3.1';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -12813,7 +12813,7 @@ function renderPayments(){
         return `<tr class="unp-row">
           <td style="white-space:nowrap">${fmtDate(ev.date)}${approvalBadge(ev._rec)}</td>
           <td><span class="bdg bb2">PAID</span></td>
-          <td style="font-size:17px;color:var(--muted)">${ev.notes||'PAYMENT'}${ev._rec.payQty?` · ${Number(ev._rec.payQty).toLocaleString()} ${esc(_pfUnitText(ev._rec.payUnit||'',ev._rec.payQty))}${ev._rec.payTask?' ('+esc(ev._rec.payTask)+')':''}`:''}</td>
+          <td style="font-size:17px;color:var(--muted)">${ev.notes||'PAYMENT'}${_ppPayNote(ev._rec)}</td>
           <td style="color:var(--muted);text-align:right">—</td>
           <td style="color:var(--blue);font-weight:700;text-align:right">${zm(ev.amount)}</td>
           <td style="color:var(--green);font-weight:700;text-align:right">${zm(cumEarned)}</td>
@@ -14264,14 +14264,29 @@ function openPayForm(){
   openModal(`
     <div class="mtitle">💳 Record Payment</div>
     <div class="fw"><div class="fl">Staff Member</div><select class="fi" id="pf-staff" onchange="_pfStaffChanged()">${opts}</select></div>
+    <div id="pf-period-wrap" style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:12px;background:var(--surface2)">
+      <div class="fl" style="margin-bottom:6px">Pay for a period</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button type="button" class="pb act" id="pf-pm-amt" onclick="_pfPeriodMode('amt')">Amount</button>
+        <button type="button" class="pb" id="pf-pm-range" onclick="_pfPeriodMode('range')">From – To</button>
+        <button type="button" class="pb" id="pf-pm-upto" onclick="_pfPeriodMode('upto')">Up to</button>
+      </div>
+      <div class="twobox" id="pf-range-in" style="display:none;margin-top:8px">
+        <div class="fw" style="margin-bottom:0"><div class="fl">From (date)</div><input class="fi" type="date" id="pf-from" onchange="_pfPeriodCalc()"/></div>
+        <div class="fw" style="margin-bottom:0"><div class="fl">To (date)</div><input class="fi" type="date" id="pf-to" onchange="_pfPeriodCalc()"/></div>
+      </div>
+      <div id="pf-upto-in" style="display:none;margin-top:8px"><div class="fw" style="margin-bottom:0"><div class="fl">Pay up to (date)</div><input class="fi" type="date" id="pf-upto" onchange="_pfPeriodCalc()"/></div></div>
+      <div id="pf-period-info" style="display:none;font-size:14px;margin-top:8px;line-height:1.5"></div>
+    </div>
     <div class="fw" id="pf-task-wrap" style="display:none"><div class="fl">Paid For (task &amp; rate)</div><select class="fi" id="pf-task" onchange="_pfRecalc()"></select></div>
     <div class="fw"><div class="fl">Amount Paid (${cur()})</div><input class="fi" type="number" id="pf-amount" placeholder="0.00" step="0.01" inputmode="decimal" oninput="_pfFromAmount()"/></div>
     <div class="fw" id="pf-qty-wrap" style="display:none"><div class="fl" id="pf-qty-label">Quantity</div><input class="fi" type="number" id="pf-qty" placeholder="0" step="any" inputmode="decimal" oninput="_pfFromQty()"/></div>
     <div id="pf-cover" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:12px"></div>
     <div class="fw"><div class="fl">Date of Payment</div><input class="fi" type="date" id="pf-date" value="${today()}"/></div>
     <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="pf-notes" placeholder="E.G. CASH, MOBILE MONEY…" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div id="pf-total" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:17px"></div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="_confirmPayment()">✓ Save Payment</button></div>`);
-  _pfLast='amount';
+  _pfLast='amount';_pfPM='amt';_pfScope=null;_pfEdited=false;
   _pfStaffChanged();
 }
 
@@ -14394,7 +14409,7 @@ function _pfCoverUpdate(){
 let _pfLast='amount';   // which field was edited last: 'amount' | 'qty'
 let _pfTaskList=[];     // [{role,task,rate,unit,customUnit}] for the selected staff
 function _pfUnitText(unit,q){
-  const std=['bag','day','hour','trip','ton'];
+  const std=['bag','day','hour','trip','ton','month'];
   return (std.includes(unit)&&Number(q)!==1)?unit+'s':unit;
 }
 function _pfTasksFor(s){
@@ -14412,11 +14427,13 @@ function _pfStaffChanged(){
   const sel=document.getElementById('pf-staff');if(!sel)return;
   const s=DATA.staff.find(x=>String(x.id)===String(sel.value));
   _pfTaskList=_pfTasksFor(s);
+  _pfPeriodStaff(s);
   const taskWrap=document.getElementById('pf-task-wrap'),qtyWrap=document.getElementById('pf-qty-wrap');
   const taskSel=document.getElementById('pf-task'),qtyEl=document.getElementById('pf-qty');
   if(!_pfTaskList.length){
     taskWrap.style.display='none';qtyWrap.style.display='none';taskSel.innerHTML='';qtyEl.value='';
-    _pfCoverUpdate();
+    if(_pfPM==='amt')_pfCoverUpdate();else _pfPeriodCalc();
+    _pfTotalUpdate();
     return;
   }
   // Default to the task this staff member most recently logged work under
@@ -14430,8 +14447,8 @@ function _pfStaffChanged(){
     const u=t.unit==='custom'?(t.customUnit||'unit'):t.unit;
     return `<option value="${i}"${i===defIdx?' selected':''}>${esc(t.role)} · ${esc(t.task)} — ${zm(t.rate)}/${esc(u)}</option>`;
   }).join('');
-  taskWrap.style.display='';qtyWrap.style.display='';
-  _pfRecalc();
+  taskWrap.style.display=_pfPM==='amt'?'':'none';qtyWrap.style.display=_pfPM==='amt'?'':'none';
+  if(_pfPM==='amt')_pfRecalc();else _pfPeriodCalc();
 }
 function _pfCurrentTask(){
   const el=document.getElementById('pf-task');
@@ -14446,6 +14463,8 @@ function _pfRecalc(){
 }
 function _pfFromAmount(){
   _pfLast='amount';
+  // Period mode: a typed amount is a part-payment of the period (quantity scales with it)
+  if(_pfPM!=='amt'){_pfEdited=true;_pfPeriodInfo();_pfCoverUpdate();_pfTotalUpdate();return;}
   const t=_pfCurrentTask();
   if(t){
     const amt=parseFloat(document.getElementById('pf-amount').value);
@@ -14453,6 +14472,7 @@ function _pfFromAmount(){
     qtyEl.value=(isFinite(amt)&&amt>0)?String(Math.round(amt/t.rate*100)/100):'';
   }
   _pfCoverUpdate();
+  _pfTotalUpdate();
 }
 function _pfFromQty(){
   _pfLast='qty';
@@ -14462,11 +14482,186 @@ function _pfFromQty(){
     document.getElementById('pf-amount').value=(isFinite(q)&&q>0)?(Math.round(q*t.rate*100)/100).toFixed(2):'';
   }
   _pfCoverUpdate();
+  _pfTotalUpdate();
 }
 function _pfFillUnpaid(total){
   const el=document.getElementById('pf-amount');if(!el)return;
+  if(_pfPM!=='amt')_pfPeriodMode('amt',true);   // "Pay all" = a plain amount, not a period
   el.value=(Math.round(Number(total)*100)/100).toFixed(2);
   _pfFromAmount();
+}
+// ── PAY FOR A PERIOD: From – To / Up to (v0.3.1) ─────────────────────────────
+// Record Payment and Bulk Pay can fill the amount from the work itself:
+//   From – To   the unpaid work dated from → to (both days included)
+//   Up to       the unpaid work from the person's LAST PAY — the first work entry
+//               that is not fully paid yet — up to the chosen date
+// "Unpaid" comes from the same oldest-first allocation that drives the PAID /
+// PARTIAL badges, so a part-paid entry only counts what is still owed. The amount
+// stays editable and the quantity scales with it. Payments still settle the OLDEST
+// work first, so a From – To period that starts after older unpaid work shows a
+// warning. The quantity covered is totalled per unit (bags, hours, days, trips,
+// tons or a custom unit such as month). Salaried staff have no work logs: their
+// amount is shown as months (amount ÷ monthly salary). The period is saved on the
+// payment as payMode / payFrom / payTo / payQtys.
+function _ppUnit(l){
+  const u=l.rateUnit||'bag';
+  if(u!=='custom')return u;
+  const ro=(DATA.staffRoles||[]).find(r=>r.name===l.role),to=((ro&&ro.tasks)||[]).find(t=>t.name===l.task);
+  return (to&&to.customUnit)||'unit';
+}
+function _ppAdd(by,u,q){by[u]=_payR2((by[u]||0)+q);}
+function _ppQtyText(by){
+  return Object.keys(by||{}).filter(u=>by[u]>0.004).map(u=>`${_payR2(by[u]).toLocaleString()} ${_pfUnitText(u,by[u])}`).join(' · ');
+}
+function _ppQtyArr(by){return Object.keys(by||{}).filter(u=>by[u]>0.004).map(u=>({unit:u,qty:_payR2(by[u])}));}
+function _ppPeriodText(p,f){
+  f=f||(x=>x);
+  return p.mode==='upto'?`up to ${f(p.to)}${p.from?` (from ${f(p.from)})`:''}`:`${f(p.from)} → ${f(p.to)}`;
+}
+function _ppPayFields(p){
+  if(!p)return {};
+  const q=_ppQtyArr(p.by),o={payMode:p.mode,payFrom:p.from||'',payTo:p.to||''};
+  if(q.length)o.payQtys=q;
+  return o;
+}
+// What the Payments list shows beside a payment: quantity + period
+function _ppPayNote(r){
+  if(!r)return'';
+  let h='';
+  if(Array.isArray(r.payQtys)&&r.payQtys.length){
+    const by={};r.payQtys.forEach(x=>{by[x.unit]=(by[x.unit]||0)+Number(x.qty||0);});
+    h+=` · ${esc(_ppQtyText(by))}`;
+  }else if(r.payQty){
+    h+=` · ${Number(r.payQty).toLocaleString()} ${esc(_pfUnitText(r.payUnit||'',r.payQty))}${r.payTask?' ('+esc(r.payTask)+')':''}`;
+  }
+  if((r.payMode==='range'||r.payMode==='upto')&&r.payTo)h+=` · ${esc(_ppPeriodText({mode:r.payMode,from:r.payFrom,to:r.payTo},fmtDate))}`;
+  return h;
+}
+// Oldest-first allocation rows for every non-salaried person, grouped by staff id (one pass)
+function _ppRowsAll(){
+  const by={};
+  _payAllocAll().forEach(r=>{const k=String(r.log.staffId);(by[k]=by[k]||[]).push(r);});
+  return by;
+}
+function _ppFirstUnpaid(sid,rows){
+  const r=(rows||_staffPayAlloc(sid,0).rows).find(x=>x.paid<x.net-0.004);
+  return r?String(r.log.date||''):'';
+}
+function _ppLastPay(sid){
+  return approvedArr(DATA.staffPayments||[]).filter(p=>String(p.staffId)===String(sid)).reduce((m,p)=>String(p.date||'')>m?String(p.date):m,'');
+}
+// Unpaid work for one person inside a period. `rows` = their allocation rows (optional).
+function _ppScope(sid,mode,from,to,rows){
+  const out={sid:String(sid),mode,rows:[],amount:0,by:{},tasks:{},n:0,first:'',last:'',from:'',to:to||'',earlier:0,err:''};
+  const st=(DATA.staff||[]).find(x=>String(x.id)===String(sid));
+  if(!st||st.payType==='salary')return out;
+  if(mode==='range'&&!from){out.err='Pick the From date.';return out;}
+  if(!to){out.err=mode==='range'?'Pick the To date.':'Pick the date to pay up to.';return out;}
+  if(mode==='range'&&from>to){out.err='The From date is after the To date.';return out;}
+  (rows||_staffPayAlloc(sid,0).rows).forEach(r=>{
+    const rem=_payR2(r.net-r.paid);
+    if(rem<=0.004)return;
+    const l=r.log,d=String(l.date||'');
+    if(mode==='range'&&d<from){out.earlier=_payR2(out.earlier+rem);return;}
+    if(d>to)return;
+    const u=_ppUnit(l),q=_payR2(_prQty(l)*rem/r.net);
+    out.rows.push({l,rem,q,u});out.n++;
+    out.amount=_payR2(out.amount+rem);_ppAdd(out.by,u,q);
+    const k=(l.role||'')+'|'+(l.task||'')+'|'+u;
+    if(!out.tasks[k])out.tasks[k]={role:l.role||'',task:l.task||'',u};
+    if(!out.first||d<out.first)out.first=d;
+    if(d>out.last)out.last=d;
+  });
+  out.from=mode==='range'?from:out.first;
+  return out;
+}
+// Scale a period's quantity to the amount actually being paid (never above the period total)
+function _ppScale(sc,amt){
+  const a=Number(amt)||0,f=sc.amount>0?Math.min(1,a/sc.amount):0,by={};
+  Object.keys(sc.by).forEach(u=>{const q=_payR2(sc.by[u]*f);if(q>0.004)by[u]=q;});
+  let meta=null;
+  const ks=Object.keys(sc.tasks);
+  if(ks.length===1){
+    const t=sc.tasks[ks[0]],q=by[t.u];
+    if(q>0&&sc.by[t.u]>0)meta={role:t.role,task:t.task,rate:_payR2(sc.amount/sc.by[t.u]),qty:q,unit:t.u};
+  }
+  return {by,meta,f};
+}
+
+let _pfPM='amt';        // pay by: 'amt' (typed amount) | 'range' (From – To) | 'upto' (Up to)
+let _pfScope=null;      // unpaid work found for the chosen period
+let _pfEdited=false;    // amount typed over the period total
+function _pfSelStaff(){
+  const sel=document.getElementById('pf-staff');
+  return sel?DATA.staff.find(x=>String(x.id)===String(sel.value)):null;
+}
+// Salaried staff have no work logs, so the period options are hidden for them
+function _pfPeriodStaff(s){
+  const w=document.getElementById('pf-period-wrap'),sal=!!(s&&s.payType==='salary');
+  if(w)w.style.display=sal?'none':'';
+  if(sal&&_pfPM!=='amt')_pfPeriodMode('amt',true);
+}
+function _pfPeriodMode(m,skip){
+  _pfPM=m;_pfEdited=false;_pfScope=null;
+  const g=id=>document.getElementById(id);
+  ['amt','range','upto'].forEach(k=>{const b=g('pf-pm-'+k);if(b)b.classList.toggle('act',k===m);});
+  if(g('pf-range-in'))g('pf-range-in').style.display=m==='range'?'':'none';
+  if(g('pf-upto-in'))g('pf-upto-in').style.display=m==='upto'?'':'none';
+  const show=(m==='amt'&&_pfTaskList.length)?'':'none';   // task / quantity boxes belong to the typed-amount mode
+  if(g('pf-task-wrap'))g('pf-task-wrap').style.display=show;
+  if(g('pf-qty-wrap'))g('pf-qty-wrap').style.display=show;
+  const info=g('pf-period-info');if(info){info.style.display='none';info.innerHTML='';}
+  if(m==='range'){
+    if(g('pf-to')&&!g('pf-to').value)g('pf-to').value=today();
+    if(g('pf-from')&&!g('pf-from').value){const s=_pfSelStaff(),f=s?_ppFirstUnpaid(s.id):'';g('pf-from').value=f||today();}
+  }else if(m==='upto'){
+    if(g('pf-upto')&&!g('pf-upto').value)g('pf-upto').value=today();
+  }
+  if(skip)return;
+  if(m==='amt'){_pfRecalc();_pfTotalUpdate();}else _pfPeriodCalc();
+}
+function _pfPeriodCalc(){
+  if(_pfPM==='amt')return;
+  const s=_pfSelStaff();if(!s)return;
+  const g=id=>(document.getElementById(id)||{}).value||'';
+  const sc=_ppScope(s.id,_pfPM,_pfPM==='range'?g('pf-from'):'',_pfPM==='range'?g('pf-to'):g('pf-upto'));
+  _pfScope=sc;_pfEdited=false;_pfLast='amount';
+  const a=document.getElementById('pf-amount');
+  if(a)a.value=sc.amount>0?sc.amount.toFixed(2):'';
+  _pfPeriodInfo();_pfCoverUpdate();_pfTotalUpdate();
+}
+function _pfPeriodInfo(){
+  const el=document.getElementById('pf-period-info');if(!el)return;
+  const sc=_pfScope;
+  if(_pfPM==='amt'||!sc){el.style.display='none';el.innerHTML='';return;}
+  let h='';
+  if(sc.err)h=`<span style="color:var(--red)">${esc(sc.err)}</span>`;
+  else{
+    if(_pfPM==='upto'){const lp=_ppLastPay(sc.sid);h+=`<div style="color:var(--muted)">Last paid: <strong style="color:var(--text)">${lp?fmtDate(lp):'never'}</strong> — starts from the first work not fully paid.</div>`;}
+    if(sc.n)h+=`<div style="color:var(--muted)">${fmtDate(sc.first)}${sc.last!==sc.first?' → '+fmtDate(sc.last):''} · <strong style="color:var(--amber)">${sc.n} ${sc.n===1?'entry':'entries'} · ${zm(sc.amount)}</strong></div>`;
+    else h+=`<div style="color:var(--muted)">No unpaid work ${_pfPM==='range'?'in this period':'up to that date'}.</div>`;
+    if(sc.earlier>0.004)h+=`<div style="color:var(--amber);margin-top:4px">⚠ ${zm(sc.earlier)} of older unpaid work (before ${fmtDate(sc.from)}) is still outstanding. Payments always settle the oldest work first, so this payment will go to that work before this period.</div>`;
+    if(_pfEdited&&sc.n)h+=`<div style="color:var(--blue);margin-top:4px">Amount changed — the period total is ${zm(sc.amount)}.</div>`;
+  }
+  el.innerHTML=h;el.style.display='';
+}
+// Bottom line: total quantity this payment pays for (hours / bags / days / months …)
+function _pfTotalUpdate(){
+  const el=document.getElementById('pf-total');if(!el)return;
+  const s=_pfSelStaff(),amt=parseFloat((document.getElementById('pf-amount')||{}).value)||0;
+  let by={};
+  if(s&&s.payType==='salary'){
+    const ms=Number(s.monthlySalary)||0;
+    if(ms>0&&amt>0)by.month=_payR2(amt/ms);
+  }else if(_pfPM!=='amt'){
+    if(_pfScope&&_pfScope.n>0)by=_ppScale(_pfScope,amt).by;
+  }else{
+    const t=_pfCurrentTask(),q=parseFloat((document.getElementById('pf-qty')||{}).value);
+    if(t&&isFinite(q)&&q>0)by[t.unit==='custom'?(t.customUnit||'unit'):t.unit]=q;
+  }
+  const txt=_ppQtyText(by);
+  el.innerHTML=txt?`Total quantity: <strong style="color:var(--green)">${esc(txt)}</strong>`:'';
+  el.style.display=txt?'':'none';
 }
 // Fix 15: collect payment details then require admin password before persisting
 function _confirmPayment(){
@@ -14477,24 +14672,33 @@ function _confirmPayment(){
   const date=document.getElementById('pf-date').value;
   const notes=uc(document.getElementById('pf-notes').value);
   // Record the unit equivalent alongside the amount when it was calculated
-  let meta=null;
-  const _t=_pfCurrentTask();
-  const _q=parseFloat(document.getElementById('pf-qty')?.value);
-  if(_t&&isFinite(_q)&&_q>0){
-    meta={role:_t.role,task:_t.task,rate:_t.rate,qty:_q,unit:_t.unit==='custom'?(_t.customUnit||'unit'):_t.unit};
+  let meta=null,period=null;
+  if(_pfPM!=='amt'){
+    // Period payment: the quantity comes from the work found in the period, not the task picker
+    if(_pfScope&&_pfScope.sid===String(sid)&&_pfScope.n>0){
+      const sc=_ppScale(_pfScope,amount);
+      meta=sc.meta;
+      period={mode:_pfPM,from:_pfScope.from,to:_pfScope.to,by:sc.by};
+    }
+  }else{
+    const _t=_pfCurrentTask();
+    const _q=parseFloat(document.getElementById('pf-qty')?.value);
+    if(_t&&isFinite(_q)&&_q>0){
+      meta={role:_t.role,task:_t.task,rate:_t.rate,qty:_q,unit:_t.unit==='custom'?(_t.customUnit||'unit'):_t.unit};
+    }
   }
   requireAdminPassword('save this payment', ()=>{
-    savePayment(sid, amount, date, notes, meta);
+    savePayment(sid, amount, date, notes, meta, period);
   });
 }
-function savePayment(sid, amount, date, notes, meta){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+function savePayment(sid, amount, date, notes, meta, period){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
   const s=DATA.staff.find(x=>String(x.id)===String(sid));
   const _st=_paySettleSummary(sid,amount);
   const _settleLine=(_st.full||_st.partial)?`Marks ${_st.full} work entr${_st.full===1?'y':'ies'} as paid${_st.partial?` and ${_st.partial} partly paid`:''} (oldest first)\n`:'';
-  if(!confirm(`Confirm Staff Payment:\n${s?s.name:'Staff'} · ${cur()}${Number(amount).toFixed(2)}\n${meta?`≈ ${meta.qty} ${_pfUnitText(meta.unit,meta.qty)} (${meta.task} @ ${cur()}${Number(meta.rate).toFixed(2)})\n`:''}${_settleLine}Date: ${fmtDate(date)}${notes?`\nNotes: ${notes}`:''}\n\nProceed?`))return;
-  const payload=stampEntry({id:uid(),staffId:sid,date,amount,notes,...(meta?{payQty:meta.qty,payTask:meta.task,payRole:meta.role,payUnit:meta.unit,payRate:meta.rate}:{})});
+  if(!confirm(`Confirm Staff Payment:\n${s?s.name:'Staff'} · ${cur()}${Number(amount).toFixed(2)}\n${period?`Period: ${_ppPeriodText(period,fmtDate)}\nTotal quantity: ${_ppQtyText(period.by)||'—'}\n`:(meta?`≈ ${meta.qty} ${_pfUnitText(meta.unit,meta.qty)} (${meta.task} @ ${cur()}${Number(meta.rate).toFixed(2)})\n`:'')}${_settleLine}Date: ${fmtDate(date)}${notes?`\nNotes: ${notes}`:''}\n\nProceed?`))return;
+  const payload=stampEntry({id:uid(),staffId:sid,date,amount,notes,...(meta?{payQty:meta.qty,payTask:meta.task,payRole:meta.role,payUnit:meta.unit,payRate:meta.rate}:{}),..._ppPayFields(period)});
   updateData(d=>({...d,staffPayments:[...(d.staffPayments||[]),payload]}));
-  logAuditEvent('CREATE','Staff Payment',`Staff ID:${sid} · Amount:${amount} · Date:${date}${(_st.full||_st.partial)?` · Marked paid:${_st.full}${_st.partial?` (+${_st.partial} partial)`:''}`:''}`);
+  logAuditEvent('CREATE','Staff Payment',`Staff ID:${sid} · Amount:${amount} · Date:${date}${period?` · Period:${_ppPeriodText(period)}${_ppQtyText(period.by)?' · Qty:'+_ppQtyText(period.by):''}`:''}${(_st.full||_st.partial)?` · Marked paid:${_st.full}${_st.partial?` (+${_st.partial} partial)`:''}`:''}`);
   STAB='payments';
   render();
 }
@@ -14508,7 +14712,7 @@ function delPayment(id){const _r=(DATA.staffPayments||[]).find(p=>String(p.id)==
 // "PAYMENTS SETTLE EARLIER WORK"). Admin only; one admin-password check covers
 // the whole batch. Salaried staff are listed but start unticked and blank,
 // since they have no per-work balance to pay off.
-let _bp={staff:[],bal:{},tasks:{},roles:new Set(),roleList:[],hideZero:true,rows:{},date:'',notes:''};
+let _bp={staff:[],bal:{},tasks:{},roles:new Set(),roleList:[],hideZero:true,rows:{},date:'',notes:'',pm:'amt',from:'',to:'',upto:'',perErr:''};
 function _bpBalance(s){
   if(s.payType==='salary')return null;
   const sid=String(s.id);
@@ -16339,19 +16543,20 @@ function openBulkPayForm(resume){
     });
     const roleList=[...allRoleNames()];
     staff.forEach(s=>staffRoleList(s).forEach(r=>{if(!roleList.includes(r))roleList.push(r);}));
-    _bp={staff,bal,tasks,roles:new Set(),roleList,hideZero:true,rows,date:today(),notes:''};
+    _bp={staff,bal,tasks,roles:new Set(),roleList,hideZero:true,rows,date:today(),notes:'',pm:'amt',from:'',to:today(),upto:today(),perErr:''};
     staff.forEach(s=>_bpSyncQty(String(s.id)));
   }
   openModal(`
     <div class="mtitle">💳👥 Bulk Pay ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>
-    <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Pay several staff at once. Tap one or more roles to narrow the list (none = everyone), tick who to pay and adjust each amount — it starts at what each person is owed. You can also type the quantity of work paid for (hours, bags, days…) and the amount is worked out from the task rate — or type the amount and the quantity is worked out. Every payment settles that person's oldest unpaid work first.</div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Pay several staff at once. Tap one or more roles to narrow the list (none = everyone), tick who to pay and adjust each amount — it starts at what each person is owed. You can also type the quantity of work paid for (hours, bags, days…) and the amount is worked out from the task rate — or type the amount and the quantity is worked out. Use “Pay for a period” to fill each person's amount from their unpaid work — between two dates, or up to a date (picking up from each person's last pay). Every payment settles that person's oldest unpaid work first.</div>
     <div class="fw"><div class="fl">Roles</div><div id="bp-chips" style="display:flex;flex-wrap:wrap;gap:8px"></div></div>
+    ${_bpPeriodCard()}
     <div class="twobox">
       <div class="fw"><div class="fl">Date of Payment</div><input class="fi" type="date" id="bp-date" value="${esc(_bp.date||today())}"/></div>
       <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="bp-notes" placeholder="E.G. CASH, MOBILE MONEY…" value="${esc(_bp.notes||'')}" oninput="this.value=this.value.toUpperCase()"/></div>
     </div>
     <div class="fw"><div class="fl">Amount (${cur()} — same for everyone ticked)</div><input class="fi" id="bp-all" type="number" placeholder="Same for everyone…" inputmode="decimal" step="0.01" oninput="_bpApplyAll()"/></div>
-    <div class="fw"><div class="fl">Quantity of work (hours, bags, days… — same for everyone ticked)</div><input class="fi" id="bp-qty-all" type="number" min="0" placeholder="Same for everyone…" inputmode="decimal" step="any" oninput="_bpApplyQtyAll()"/></div>
+    <div class="fw" id="bp-qtyall-wrap" style="${(_bp.pm||'amt')==='amt'?'':'display:none'}"><div class="fl">Quantity of work (hours, bags, days… — same for everyone ticked)</div><input class="fi" id="bp-qty-all" type="number" min="0" placeholder="Same for everyone…" inputmode="decimal" step="any" oninput="_bpApplyQtyAll()"/></div>
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
       <div class="fl" style="margin-bottom:0">Staff</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
@@ -16383,9 +16588,18 @@ function _bpPicks(){
     const id=String(s.id),r=_bp.rows[id]||{},amt=_payR2(parseFloat(r.amt));
     if(!(r.on&&amt>0))return null;
     // Unit equivalent saved with the payment (same fields as Record Payment)
+    const isPer=(_bp.pm||'amt')!=='amt';
+    // Period payment: quantity comes from the unpaid work found for that person
+    if(isPer&&r.per&&r.per.n>0){
+      const sk=_ppScale(r.per,amt);
+      return {s,amt,meta:sk.meta,by:sk.by,period:{mode:_bp.pm,from:r.per.from,to:r.per.to,by:sk.by}};
+    }
     const t=_bpTaskOf(id),q=parseFloat(r.qty);
-    const meta=(t&&isFinite(q)&&q>0)?{role:t.role,task:t.task,rate:t.rate,qty:q,unit:t.unit==='custom'?(t.customUnit||'unit'):t.unit}:null;
-    return {s,amt,meta};
+    const meta=(!isPer&&t&&isFinite(q)&&q>0)?{role:t.role,task:t.task,rate:t.rate,qty:q,unit:t.unit==='custom'?(t.customUnit||'unit'):t.unit}:null;
+    const by={};
+    if(meta)by[meta.unit]=meta.qty;
+    else if(s.payType==='salary'&&Number(s.monthlySalary)>0)by.month=_payR2(amt/Number(s.monthlySalary));   // salaried: amount ÷ monthly salary
+    return {s,amt,meta,by,period:null};
   }).filter(Boolean);
 }
 function _bpRender(){
@@ -16411,7 +16625,7 @@ function _bpRenderRows(){
     else if(b<-0.004)owed=`<span style="color:var(--blue)">${zm(-b)} advance</span>`;
     else owed=`<span style="color:var(--green)">settled</span>`;
     const st=(s.status&&s.status!=='active')?` · ${esc(String(s.status).toUpperCase())}`:'';
-    const qline=_bpQtyLine(id,r);
+    const qline=(_bp.pm||'amt')==='amt'?_bpQtyLine(id,r):(r.per?`<div id="bp-per-${id}" style="margin:6px 0 0 36px;font-size:13px;color:var(--muted)">${_bpPerText(id)}</div>`:'');
     return `<div style="padding:8px 0;border-bottom:1px solid var(--border)">
       <div style="display:grid;grid-template-columns:28px 1fr 112px;gap:8px;align-items:center">
         <input type="checkbox" class="bp-chk" data-id="${id}" ${r.on?'checked':''} onchange="_bpChk('${id}',this.checked)" style="width:18px;height:18px"/>
@@ -16424,6 +16638,7 @@ function _bpRenderRows(){
   }).join(''):'<div class="empty">No staff match this filter.</div>';
   vis.forEach(s=>_bpHint(String(s.id)));
   _bpTotals();
+  _bpPeriodInfo();
 }
 // What this person's amount will do to their work entries (live, per row)
 function _bpHint(id){
@@ -16442,6 +16657,7 @@ function _bpTotals(){
   const picks=_bpPicks(),total=_payR2(picks.reduce((a,p)=>a+p.amt,0));
   const hidden=Object.keys(_bp.rows).filter(id=>_bp.rows[id].on&&parseFloat(_bp.rows[id].amt)>0&&!visIds.has(id)).length;
   el.innerHTML=`<strong>${picks.length}</strong> staff · Total <strong style="color:var(--green)">${zm(total)}</strong>`
+    +(_bpQtyTotal(picks)?`<div style="margin-top:4px">Total quantity: <strong style="color:var(--green)">${esc(_bpQtyTotal(picks))}</strong></div>`:'')
     +(hidden?`<div style="font-size:13px;color:var(--amber)">${hidden} ticked staff hidden by the current filter are not included.</div>`:'');
 }
 function _bpToggleRole(i){
@@ -16453,7 +16669,7 @@ function _bpToggleHide(on){_bp.hideZero=!!on;_bpRenderRows();}
 function _bpChk(id,on){
   const r=_bp.rows[id];if(!r)return;
   r.on=!!on;
-  if(r.on&&!(parseFloat(r.amt)>0)){
+  if(r.on&&!(parseFloat(r.amt)>0)&&(_bp.pm||'amt')==='amt'){
     const b=_bp.bal[id];
     if(b!==null&&b>0.004){
       r.amt=b.toFixed(2);
@@ -16466,11 +16682,112 @@ function _bpChk(id,on){
 function _bpAmt(id,v){
   const r=_bp.rows[id];if(!r)return;
   r.amt=v;r.last='amt';_bpSyncQty(id);_bpPaintQty(id);
+  if((_bp.pm||'amt')!=='amt'){r.edited=true;_bpPerPaint(id);}
   if(parseFloat(v)>0&&!r.on){
     r.on=true;
     const c=document.querySelector(`#bp-rows input.bp-chk[data-id="${id}"]`);if(c)c.checked=true;
   }
   _bpHint(id);_bpTotals();
+}
+// ── Bulk Pay: pay for a period (From – To / Up to) ───────────────────────────
+// Applies to everyone in the list: each person's amount is filled from THEIR OWN
+// unpaid work (Up to starts at each person's last pay). Amounts stay editable.
+function _bpPeriodCard(){
+  const m=_bp.pm||'amt',pb=(k,l)=>`<button type="button" class="pb${m===k?' act':''}" id="bp-pm-${k}" onclick="_bpPeriodMode('${k}')">${l}</button>`;
+  return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:12px;background:var(--surface2)">
+      <div class="fl" style="margin-bottom:6px">Pay for a period</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${pb('amt','Amount')}${pb('range','From – To')}${pb('upto','Up to')}</div>
+      <div class="twobox" id="bp-range-in" style="margin-top:8px${m==='range'?'':';display:none'}">
+        <div class="fw" style="margin-bottom:0"><div class="fl">From (date)</div><input class="fi" type="date" id="bp-from" value="${esc(_bp.from||'')}" onchange="_bpPeriodCalc()"/></div>
+        <div class="fw" style="margin-bottom:0"><div class="fl">To (date)</div><input class="fi" type="date" id="bp-to" value="${esc(_bp.to||'')}" onchange="_bpPeriodCalc()"/></div>
+      </div>
+      <div id="bp-upto-in" style="margin-top:8px${m==='upto'?'':';display:none'}"><div class="fw" style="margin-bottom:0"><div class="fl">Pay up to (date)</div><input class="fi" type="date" id="bp-upto" value="${esc(_bp.upto||'')}" onchange="_bpPeriodCalc()"/></div></div>
+      <div id="bp-period-info" style="display:none;font-size:14px;margin-top:8px;line-height:1.5"></div>
+    </div>`;
+}
+function _bpFirstUnpaid(){
+  const all=_ppRowsAll();let best='';
+  _bpVisible().forEach(s=>{const d=_ppFirstUnpaid(s.id,all[String(s.id)]||[]);if(d&&(!best||d<best))best=d;});
+  return best;
+}
+function _bpPeriodMode(m){
+  _bp.pm=m;
+  ['amt','range','upto'].forEach(k=>{const b=document.getElementById('bp-pm-'+k);if(b)b.classList.toggle('act',k===m);});
+  const d=(id,on)=>{const e=document.getElementById(id);if(e)e.style.display=on?'':'none';};
+  d('bp-range-in',m==='range');d('bp-upto-in',m==='upto');d('bp-qtyall-wrap',m==='amt');
+  const set=(id,v)=>{const e=document.getElementById(id);if(e)e.value=v||'';};
+  if(m==='range'){
+    if(!_bp.to)_bp.to=today();
+    if(!_bp.from)_bp.from=_bpFirstUnpaid()||today();
+    set('bp-from',_bp.from);set('bp-to',_bp.to);
+  }else if(m==='upto'){
+    if(!_bp.upto)_bp.upto=today();
+    set('bp-upto',_bp.upto);
+  }
+  if(m==='amt'){
+    Object.keys(_bp.rows).forEach(id=>{const r=_bp.rows[id];r.per=null;r.edited=false;_bpSyncQty(id);});
+    _bp.perErr='';
+    _bpRenderRows();
+    return;
+  }
+  _bpPeriodCalc();
+}
+function _bpPeriodCalc(){
+  const m=_bp.pm||'amt';if(m==='amt')return;
+  const g=id=>(document.getElementById(id)||{}).value||'';
+  if(m==='range'){_bp.from=g('bp-from');_bp.to=g('bp-to');}else _bp.upto=g('bp-upto');
+  const f=m==='range'?_bp.from:'',t=m==='range'?_bp.to:_bp.upto,all=_ppRowsAll();
+  _bp.perErr='';
+  _bp.staff.forEach(s=>{
+    const id=String(s.id),r=_bp.rows[id];if(!r)return;
+    if(s.payType==='salary'){r.per=null;return;}
+    const sc=_ppScope(id,m,f,t,all[id]||[]);
+    if(sc.err)_bp.perErr=sc.err;
+    r.per=sc;r.edited=false;r.last='amt';
+    r.amt=sc.amount>0?sc.amount.toFixed(2):'';
+    r.on=sc.amount>0;
+    _bpSyncQty(id);
+  });
+  ['bp-all','bp-qty-all'].forEach(i=>{const e=document.getElementById(i);if(e)e.value='';});
+  _bpRenderRows();
+}
+// Per-row line: the work found for that person and the quantity their amount covers
+function _bpPerText(id){
+  const r=_bp.rows[id],sc=r&&r.per;if(!sc)return'';
+  if(!(sc.n>0))return'No unpaid work '+((_bp.pm||'amt')==='range'?'in this period':'up to that date');
+  const sk=_ppScale(sc,parseFloat(r.amt)||0);
+  return `📅 ${fmtDate(sc.first)}${sc.last!==sc.first?' → '+fmtDate(sc.last):''} · ${sc.n} ${sc.n===1?'entry':'entries'} · <strong style="color:var(--text)">${esc(_ppQtyText(sk.by)||'—')}</strong>${r.edited?' <span style="color:var(--blue)">(amount edited)</span>':''}`;
+}
+function _bpPerPaint(id){const e=document.getElementById('bp-per-'+id);if(e)e.innerHTML=_bpPerText(id);}
+function _bpPeriodInfo(){
+  const el=document.getElementById('bp-period-info');if(!el)return;
+  const m=_bp.pm||'amt';
+  if(m==='amt'){el.style.display='none';el.innerHTML='';return;}
+  if(_bp.perErr){el.innerHTML=`<span style="color:var(--red)">${esc(_bp.perErr)}</span>`;el.style.display='';return;}
+  let n=0,tot=0,earlier=0,ne=0;const by={};
+  _bpVisible().forEach(s=>{
+    const r=_bp.rows[String(s.id)],sc=r&&r.per;if(!sc)return;
+    if(sc.amount>0){n++;tot=_payR2(tot+sc.amount);Object.keys(sc.by).forEach(u=>_ppAdd(by,u,sc.by[u]));}
+    if(sc.earlier>0.004){earlier=_payR2(earlier+sc.earlier);ne++;}
+  });
+  const where=m==='range'?'in this period':'up to that date';
+  let h=n?`<div style="color:var(--muted)"><strong style="color:var(--amber)">${n} staff</strong> ha${n===1?'s':'ve'} unpaid work ${where} · ${zm(tot)}${_ppQtyText(by)?' · '+esc(_ppQtyText(by)):''}</div>`
+         :`<div style="color:var(--muted)">No unpaid work ${where} for the staff shown.</div>`;
+  if(m==='upto')h+=`<div style="color:var(--muted);margin-top:4px">Each person is paid from their own last pay — the first work entry not fully paid yet.</div>`;
+  if(ne)h+=`<div style="color:var(--amber);margin-top:4px">⚠ ${ne} staff still have older unpaid work (${zm(earlier)}) from before ${fmtDate(_bp.from)}. Payments settle the oldest work first, so it goes to that work before this period.</div>`;
+  el.innerHTML=h;el.style.display='';
+}
+// Bottom line: total quantity across everyone ticked, per unit
+function _bpQtyTotal(picks){
+  const by={};
+  (picks||[]).forEach(p=>Object.keys(p.by||{}).forEach(u=>_ppAdd(by,u,p.by[u])));
+  return _ppQtyText(by);
+}
+function _bpPeriodLine(){
+  const m=_bp.pm||'amt';
+  if(m==='range')return `Period: ${fmtDate(_bp.from)} → ${fmtDate(_bp.to)}\n`;
+  if(m==='upto')return `Pay up to: ${fmtDate(_bp.upto)} (from each person's last pay)\n`;
+  return '';
 }
 // ── Bulk Pay: amount (money) ⇄ quantity of work (hours, bags, days…) ─────────
 // Same idea as Record Payment. Each row's rate comes from its task; staff with
@@ -16544,12 +16861,13 @@ function _bpApplyAll(){
   const qa=document.getElementById('bp-qty-all');if(qa)qa.value='';
   _bpVisible().forEach(s=>{
     const id=String(s.id),r=_bp.rows[id];
-    if(r&&r.on){r.amt=v;r.last='amt';_bpSyncQty(id);}
+    if(r&&r.on){r.amt=v;r.last='amt';if((_bp.pm||'amt')!=='amt')r.edited=true;_bpSyncQty(id);}
   });
   _bpRenderRows();
 }
 // Reset every visible person who is owed money to exactly what they're owed
 function _bpFullBalance(){
+  if((_bp.pm||'amt')!=='amt')_bpPeriodMode('amt');   // full balance = a plain amount, not a period
   _bpVisible().forEach(s=>{
     const id=String(s.id),b=_bp.bal[id];
     const r=_bp.rows[id];
@@ -16564,7 +16882,7 @@ function _bpSelectAll(on){
     const id=String(s.id),r=_bp.rows[id],b=_bp.bal[id];
     if(!r)return;
     r.on=on;
-    if(on&&!(parseFloat(r.amt)>0)&&b!==null&&b>0.004){r.amt=b.toFixed(2);r.last='amt';_bpSyncQty(id);}
+    if(on&&!(parseFloat(r.amt)>0)&&b!==null&&b>0.004&&(_bp.pm||'amt')==='amt'){r.amt=b.toFixed(2);r.last='amt';_bpSyncQty(id);}
   });
   _bpRenderRows();
 }
@@ -16588,25 +16906,26 @@ function _bpCommit(picks,date,notes){
     const b=_bp.bal[String(p.s.id)];
     if(b!==null&&b!==undefined&&p.amt>Math.max(0,b)+0.004)over++;
   });
-  const list=picks.slice(0,12).map(p=>`• ${p.s.name} — ${cur()}${p.amt.toFixed(2)}${p.meta?` (≈ ${p.meta.qty} ${_pfUnitText(p.meta.unit,p.meta.qty)})`:''}`).join('\n')+(picks.length>12?`\n… and ${picks.length-12} more`:'');
-  const msg=`Confirm Bulk Payment:\n${picks.length} staff · Total ${cur()}${total.toFixed(2)}\n${list}\n`
+  const list=picks.slice(0,12).map(p=>`• ${p.s.name} — ${cur()}${p.amt.toFixed(2)}${_ppQtyText(p.by)?` (≈ ${_ppQtyText(p.by)})`:''}`).join('\n')+(picks.length>12?`\n… and ${picks.length-12} more`:'');
+  const _tq=_bpQtyTotal(picks);
+  const msg=`Confirm Bulk Payment:\n${picks.length} staff · Total ${cur()}${total.toFixed(2)}\n${_tq?`Total quantity: ${_tq}\n`:''}${_bpPeriodLine()}${list}\n`
     +((full||partial)?`Marks ${full} work entr${full===1?'y':'ies'} as paid${partial?` and ${partial} partly paid`:''} (oldest first)\n`:'')
     +(over?`⚠ ${over} payment${over===1?' exceeds':'s exceed'} the unpaid balance (advance)\n`:'')
     +`Date: ${fmtDate(date)}${notes?`\nNotes: ${notes}`:''}\n\nProceed?`;
   // Declined → bring the form back exactly as it was instead of losing the work
   if(!confirm(msg)){openBulkPayForm(true);return;}
-  const payloads=picks.map(p=>stampEntry({id:uid(),staffId:p.s.id,date,amount:p.amt,notes,...(p.meta?{payQty:p.meta.qty,payTask:p.meta.task,payRole:p.meta.role,payUnit:p.meta.unit,payRate:p.meta.rate}:{})}));
+  const payloads=picks.map(p=>stampEntry({id:uid(),staffId:p.s.id,date,amount:p.amt,notes,...(p.meta?{payQty:p.meta.qty,payTask:p.meta.task,payRole:p.meta.role,payUnit:p.meta.unit,payRate:p.meta.rate}:{}),..._ppPayFields(p.period)}));
   // One audit entry per payment (same shape as logAuditEvent), written in the
   // same update as the payments so a big batch only saves and re-renders once.
   const ts=new Date().toISOString(),au=USER||{};
   const audits=picks.map(p=>({id:uid(),ts,date:today(),time:nowTime(),user:au.username||'—',role:au.role||'—',
-    action:'CREATE',entity:'Staff Payment',detail:`Staff ID:${p.s.id} · Amount:${p.amt} · Date:${date}${p.meta?` · Qty:${p.meta.qty} ${p.meta.unit}`:''} · via Bulk Pay`}));
+    action:'CREATE',entity:'Staff Payment',detail:`Staff ID:${p.s.id} · Amount:${p.amt} · Date:${date}${_ppQtyText(p.by)?` · Qty:${_ppQtyText(p.by)}`:''}${p.period?` · Period:${_ppPeriodText(p.period)}`:''} · via Bulk Pay`}));
   STAB='payments';
   updateData(d=>{
     const log=[...(d.auditLog||[]),...audits];
     return {...d,staffPayments:[...(d.staffPayments||[]),...payloads],auditLog:log.length>2000?log.slice(log.length-2000):log};
   });
-  _bp={staff:[],bal:{},tasks:{},roles:new Set(),roleList:[],hideZero:true,rows:{},date:'',notes:''};
+  _bp={staff:[],bal:{},tasks:{},roles:new Set(),roleList:[],hideZero:true,rows:{},date:'',notes:'',pm:'amt',from:'',to:'',upto:'',perErr:''};
   closeModal();
   showToast(`💳 Paid ${picks.length} staff · ${zm(total)}`);
 }
