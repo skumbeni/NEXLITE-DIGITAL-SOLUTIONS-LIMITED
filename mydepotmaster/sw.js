@@ -25,6 +25,526 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.2.8 (2026-10-19)
+//
+// v0.2.8 changes (2026-10-19) — Payroll Run and the stock check are Pro plan features:
+//   - Two new Pro feature keys: 'payroll_run' (Payroll Run) and 'stock_check' (Payroll
+//     Stock Check). Both are added to TIER_FEATURES.pro, the upgrade-prompt labels and the
+//     Pro card's bullet list, so the upgrade screen names them and sends people to Pro.
+//     Trial still counts as Pro, so trial depots keep everything while the trial runs.
+//   - Payroll Run gate: 🧮 Payroll (Staff tab) shows a 🔒 on Free / Starter / Growth and opens
+//     the upgrade screen instead of Prepare Payroll. The steps that write data are gated too,
+//     so a plan that lapses while the screen is open cannot finish: Review & lock run, the lock
+//     itself, and Create payments (both the opening screen and the confirm button).
+//   - Stock check gate: the 📦 Stock check tab inside Prepare Payroll shows a locked card, and
+//     the "✓ 21,000 of 21,000 paid for" badge on stock rows is hidden (not locked, so stock
+//     rows stay clean) with its breakdown screen refusing to open.
+//   - Settings: the Stock Check Tolerance and NAPSA / NHIMA / PAYE sections show a locked
+//     block with an Unlock button instead of the fields.
+//   - Depot Assistant: "prepare payroll" says it needs Pro instead of opening the screen.
+//   - NOT gated, on purpose: stock links on tasks, the commodity / batch tag on work logs,
+//     who-entered-it records, the delete-stock warning, Advances & Loans and Labour Cost per
+//     Bag. These are data entry and reports that were already there. Nothing stored is
+//     touched or hidden: locked runs, payments already made and loan balances are kept and
+//     still count in every other screen. They reappear in Payroll when the plan is Pro again.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.2.7 (2026-10-18)
+//
+// v0.2.7 changes (2026-10-18) — Advances & loans: reports, statements, Depot Assistant, staff view:
+//   - GAP FIXED from v0.2.6: instalments taken from pay settle a person's work, but
+//     several screens worked out "paid" / "unpaid" from staff payments alone, so a
+//     withheld instalment would have shown as unpaid wages. Now counted everywhere:
+//     Staff → Payments (per-role totals and each person's statement, which gets a
+//     LOAN row "instalment withheld · run #n · no cash paid"), staff profile and profile
+//     PDF, the monthly payslip (extra "Loan / advance instalment withheld" line and the
+//     outstanding balance), the Staff Earnings CSV, and the period summary's payroll
+//     table. Unpaid balances now agree with Prepare Payroll.
+//   - Cash Flow: advances and loans handed to staff are cash OUT (breakdown row, totals
+//     and the monthly trend); repayments received directly are cash IN. Instalments taken
+//     from pay are not cash: they appear as a muted "withheld" line that is not counted,
+//     because the staff payment is already net of them. Footnote explains this.
+//   - Profit & Loss: no change to profit (a loan is not an expense); the "Staff actually
+//     paid" note now also shows loan instalments withheld in the period.
+//   - Depot Assistant: Admin accounts are given every loan with balance, repaid, status
+//     and next instalment already worked out (loans are never date-trimmed, so an old loan
+//     that is still owed is not missed) plus recent repayments, and the prompt explains
+//     'payroll' (taken from pay, no cash) vs 'manual' (paid back directly) repayments.
+//     Loan words (loan, advance, instalment, owe, repay…) pull in the staff topic. Manager
+//     accounts get NO loan data — Advances & Loans is an Admin-only screen, so the Assistant
+//     is not a side door. Staff logins get only their own loans (myLoans).
+//   - Staff login dashboard: a "My Advances & Loans" card (own loans only) with what is
+//     still owed and the next instalment; hidden when there is nothing outstanding.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.2.6 (2026-10-18)
+//
+// v0.2.6 changes (2026-10-18) — Advances & loans with automatic instalments:
+//   - Staff tab → 🏦 Advances (Admin) and a 🏦 Advances & Loans button on each staff
+//     profile (shows what the person owes). Record an Advance or a Loan: staff member,
+//     amount, date given, how it was paid out (cash / Airtel / MTN / bank) and a
+//     reference, then the repayment plan — number of instalments, one every month or
+//     week, and the first due date (month-end by default). The form previews the
+//     schedule (e.g. 4 × K225.00, 31 Oct → 31 Jan; the last instalment absorbs
+//     rounding) and warns if the person already owes money. Admin password to save.
+//   - Instalments come out of pay automatically. Prepare Payroll takes, per person,
+//     everything scheduled up to the period end minus everything already repaid, so a
+//     missed instalment is caught up by itself. It is capped at the pay available
+//     (never makes net pay negative); whatever could not be taken stays due, is shown
+//     on the person's card and listed under ⚠ Problems. A Pay-up-to hold is protected
+//     first: instalments only come out of pay that is released in this run.
+//   - Locking a run records the instalments (DATA.loanRepayments, source 'payroll')
+//     and stores them in the run snapshot (loan, loan balance left, loanItems). They
+//     settle the person's oldest work exactly like a payment does, so the pay-now
+//     figure in Create payments is already net of the instalment and nobody is paid
+//     the withheld amount twice. No cash moves, so they are not staff payments and do
+//     not appear in the payments list or Cash Flow. Run cards, the review list and the
+//     summary show the instalments; payslips (PDF and WhatsApp) show a "Loan / advance
+//     instalment" line and the loan balance remaining.
+//   - Per loan: ＋ Repayment (the person pays back directly — lowers the balance only,
+//     wages untouched), 🗓 Reschedule (new plan for what is left, e.g. skip a month;
+//     earlier repayments kept), ✂ Write off (partial or full, with a reason; the record
+//     stays) and 🗑 Delete (only before any repayment). Each writes an audit entry.
+//   - The loan itself is not a payment and never enters the oldest-first pool. A loan
+//     paid out in cash lowers the Create-payments cash estimate; a cash repayment
+//     received directly raises it. Problems also flags someone who has left while
+//     still owing money.
+//   - Stored in DATA.staffLoans / DATA.loanRepayments (both included in Clear All Data
+//     snapshots). They sync inside depots/<id>/data, so database_rules.json is unchanged.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.2.5 (2026-10-18)
+//
+// v0.2.5 changes (2026-10-18) — Productivity report + Gang split:
+//   - Staff tab → 📈 Productivity (Admin + Manager). Output per person per shift,
+//     task by task, for the chosen period. A shift is one person's work on one
+//     task in one day (two clock-ins the same day on the same task are one
+//     shift). Per person: shifts, total, average per shift, best shift, output
+//     per hour (only from logs that have time in/out) and the gap to the task's
+//     average. A by-day table shows crew size against output and each person's
+//     average that day. Filter: All shifts / Solo only / Gang only.
+//   - Counts approved, completed work logs with a quantity. Day-rate and hourly
+//     tasks, salaried staff and late/pooled stock-gap logs are left out; units
+//     are never mixed across tasks. Read-only.
+//   - Staff tab → 👥➗ Gang Split (Admin + Manager). One total for the whole gang
+//     on one role, task and date, shared out as an ordinary work log per person:
+//     equally, by hours worked (prefilled from time in/out, editable), or by a
+//     custom share (e.g. 1.5 for a team leader). Shares always add up to the
+//     total exactly; bag tasks can be split in whole bags (default).
+//     Live preview of each person's share and the total pay before saving.
+//   - Gang logs carry the stock tag (remembered like Bulk Log), the same approval
+//     rules (Manager entries wait as pending) and an audit entry. Each log has a
+//     gangId, so the Work Logs row shows a 👥 Gang split chip (people and total
+//     worked out from the gang's own logs) and Productivity can separate them.
+//     Pay, payments, stock check and payroll treat them as normal work logs.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.2.4 (2026-10-18)
+//
+// v0.2.4 changes (2026-10-18) — Stock rows: "paid for" badge + Labour budget:
+//   - Received / Issued rows (commodities and general inventory) whose stock has a
+//     linked task get a small badge, e.g. "✓ 21,000 of 21,000 paid for". Tap it for
+//     the per-task breakdown (admin also sees labour earned, paid and per bag).
+//   - "Paid for" = bags on approved work logs tagged to that commodity / item,
+//     counted as paid in the same proportion as the staff member's payments have
+//     settled them (oldest work first, as in Paid / Partial / Unpaid). Each task is
+//     counted on its own, so offloading + stacking never add up. A log goes to the
+//     stock record nearest its date (same batch when tagged); spill-over goes to the
+//     next nearest, and bags beyond the stock show as "over". The stock-check
+//     tolerance decides when a small gap still shows ✓. Hidden from Staff logins.
+//     Amber = some bags not logged or not yet paid, red = more logged than stock.
+//   - Budget targets get an optional Labour Budget. Budget vs Actual shows it against
+//     Actual Pay (earnings − deductions on approved work logs tagged to the item in
+//     the selected period) with a used-% bar, what is left or over, and how much of
+//     it has been paid out. A Labour summary row totals every line that has one.
+//     A target can now be saved with only a labour budget.
+//   - Read-only apart from the new budget field; no pay figure changes.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.2.3 (2026-10-18)
+//
+// v0.2.3 changes (2026-10-18) — Profit & Loss: Labour cost per bag:
+//   - The Profit & Loss view (General Inventory and Commodity tabs) gets a
+//     Labour Cost per Bag section, under the Cost of Goods Sold breakdown and for
+//     the same period as the rest of the report.
+//   - Source: approved, closed work logs tagged to a commodity or inventory item,
+//     grouped by commodity/item and direction (Received / Issued), then by batch
+//     ("All batches" plus one line per batch; logs with no batch show as "No
+//     batch"). Labour = earnings − deductions, the same measure as Staff Wages.
+//   - Each task is worked out on its own (task cost ÷ bags that task logged) and
+//     a line's per-bag figure adds its tasks together, so a bag that is offloaded
+//     and then stacked is not counted twice. Tap a line for the task breakdown.
+//   - Labour on tasks that logged no bags (day rate) is shown as "no bags logged"
+//     and kept out of the per-bag figure. Salaried staff and untagged logs are not
+//     in the section; the footnote says how many untagged logs and how much.
+//   - Read-only; nothing is saved. No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.2.2 (2026-10-18)
+//
+// v0.2.2 changes (2026-10-18) — Payroll: Batch payslips:
+//   - Each locked run in the Runs view gets a 🧾 Payslips button (Pro, admin).
+//     The window lists everyone in the run with a tick box (all / none / only
+//     people paid now).
+//   - 📄 One PDF: every ticked person on their own page, from the run's locked
+//     snapshot (earnings, salary, carried forward, deductions, unpaid leave,
+//     earlier payments, advances, net payable, held to the next run, pay now,
+//     and the payment method and reference once paid). Print / Save PDF, or
+//     Share from the print window.
+//   - Per person: 🧾 PDF (single page) and 💬 WhatsApp, which opens a chat with
+//     the number on the staff profile (260XXXXXXXXX) with the payslip as text.
+//     A WhatsApp link cannot attach a file; use the person's PDF + Share for that.
+//     People with no usable phone number show "no phone number".
+//   - Each export writes an audit entry. Run figures are never changed.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.2.1 (2026-10-18)
+//
+// v0.2.1 changes (2026-10-18) — Payroll: Mobile money CSV:
+//   - New 📱 Mobile money CSV button in the Create payments form (the ticked
+//     people paid by Airtel or MTN, before you pay) and on each locked run in
+//     the Runs view (its recorded Airtel/MTN payouts).
+//   - Columns: Name, Phone, Amount, Network, Reference. Phone comes from the staff
+//     profile, written as 260XXXXXXXXX (0977… and 977… are converted). Rows are
+//     sorted by network then name; download all, MTN only or Airtel only (portals
+//     usually take one network at a time), or copy the CSV as text if downloads
+//     are blocked. A real CSV file is built because the app's _csvDownload()
+//     prints a PDF. Each download writes an audit entry.
+//   - People with no usable phone number are left out and listed in red. A number
+//     whose prefix looks like another network (MTN 96/76, Airtel 97/77, Zamtel
+//     95/75) is flagged in amber but kept.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.2.0 (2026-10-18)
+//
+// v0.2.0 changes (2026-10-18) — Payroll: Cash notes + cash-balance warning:
+//   - Create payments (from a locked run) gets a 💵 Cash block. It counts only
+//     people paid in cash (the default method or a per-person override) and
+//     updates live as you tick people or change methods.
+//   - Cash note breakdown: the notes needed in total (for the withdrawal) and
+//     per person (for envelopes), largest first, e.g. K100 × 12 · K50 × 3. The
+//     note list is editable and defaults to 100, 50, 20, 10, 5, 2, 1 (1000, 500,
+//     200, 100, 50 when the depot currency is KES). Anything below the smallest
+//     note shows as "in coins".
+//   - Cash available starts as an estimate from the app's records (all-time cash
+//     sales in, minus stock purchases, minus cash staff payments; no opening
+//     balance; payments with no method count as cash) and can be overwritten with
+//     the cash actually held. A red warning shows when the cash payments are more
+//     than it; an amber note shows when the whole payroll is more but the cash
+//     part is not. The final confirm repeats the red warning. It never blocks.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.1.9 (2026-10-18)
+//
+// v0.1.9 changes (2026-10-18) — Payroll: Create payments from a locked run:
+//   - Runs view: each locked run with people still owed shows 💸 Create
+//     payments. The form has a payment date, a default method (Cash / Airtel /
+//     MTN / Bank), a batch reference (prefilled RUN-<n>) and, per person, a tick,
+//     a method override and an optional transaction reference.
+//   - Admin password, then a confirm that says how many work entries get marked
+//     paid. One staff payment is made per person (the run's pay-now figure), so
+//     the existing oldest-first logic marks the oldest unpaid work as paid.
+//   - Each payment stores method, reference, runId and runNumber, and shows
+//     "RUN #n · METHOD · REF" in its note; one audit entry per payment.
+//   - A person is paid once per run (run.payouts). Unticked people can be paid
+//     later from the same run. The run's locked figures are never changed.
+//   - Salaried payments get forDate = the run's period end, and Prepare Payroll
+//     now counts a salaried payment by forDate (else its date), so paying a run
+//     after the period ends does not reduce the next period's salary.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.1.8 (2026-10-18)
+//
+// v0.1.8 changes (2026-10-18) — Payroll: Review & lock the run:
+//   - Pay view gets 🔒 Review & lock run (admin). The review lists each person
+//     with their pay-now figure; every person must be ticked before Lock is
+//     enabled. A warning shows if Problems still has items to fix. The lock
+//     needs the admin password and refuses if the figures changed since the
+//     review was opened, or if a locked run already covers the period/group.
+//   - Locking saves an immutable snapshot to DATA.payrollRuns (synced and
+//     snapshotted like other records): period, group, end date, Pay-up-to
+//     limit, each person's earnings/salary/deductions/leave/paid/advance/net/
+//     held/pay, the held entries (the carry-forward), totals and who locked it.
+//     An audit entry is written. There is no unlock; fix things in the next run.
+//   - New 🔒 Runs view lists locked runs, newest first, with each person's pay.
+//   - Carry-forward and corrections: the next run (any period starting after a
+//     locked run ended) adds "Carried forward" to net pay = unpaid work from
+//     before its period. That is live, so it already holds the entries a run
+//     held back and any later correction (a late, edited or newly approved log)
+//     inside a locked period. The correction (live − snapshot) is shown beside
+//     it. Before any run is locked nothing changes (old info-only line stays).
+//   - Pay recording is unchanged: locking does not create payments (next step).
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.1.7 (2026-10-18)
+//
+// v0.1.7 changes (2026-10-18) — Payroll: End at last work day:
+//   - New "End at last work day" switch under the period buttons in Prepare
+//     Payroll. When on, the end date for work logs and stock becomes the latest
+//     day any (non-rejected) work was logged in the period, and is shown next
+//     to the switch. Stock recorded after that day is left out of the stock
+//     check (and of the "pending stock records" problem) and waits for the
+//     next run, so it no longer shows as a gap against work not yet done.
+//   - Gap actions (late log) and the Pay up to date default use the same end.
+//   - Salary proration, leave and payments are NOT shortened; they still use
+//     the chosen period dates. Off by default; not saved between sessions.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.1.6 (2026-10-18)
+//
+// v0.1.6 changes (2026-10-18) — Payroll: Pay up to (cut-off):
+//   - Payroll → Pay view gets a ⏸ Pay up to card (Off / Date-time / Bags).
+//     Work is counted oldest-first (date, time, id); anything past the limit
+//     is held and left out of this run. Review-only: nothing is saved or paid.
+//       Date / time  holds work after the chosen date (and time of day, if set).
+//       Bags         pays per-bag work up to N bags; the log at the limit is
+//                    split (e.g. 80 paid, 20 held). The hold on that cut day
+//                    comes from the last entries (default), is shared across
+//                    the day in proportion, or is taken first from entries you
+//                    tick. Entries after the cut day are held whole.
+//   - Each person's card shows "Held back" and a PAY NOW figure; the summary
+//     shows To pay (after holds) and Held back, with the held entries listed.
+//   - Held amount per person is capped at their positive net, so a person paid
+//     ahead is never shown as overpaid because of a hold. Salaried staff and
+//     non-bag work are never held by a bags limit.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.1.5 (2026-10-18)
+//
+// v0.1.5 changes (2026-10-18) — Payroll: Problems list:
+//   - Payroll screen gets a third view, ⚠ Problems (with a count; red when
+//     something needs fixing). It follows the chosen period and group and
+//     lists, in two levels:
+//       Fix before paying — open shifts (also ones left open from before the
+//         period; button: Clock out), missing rates (a task with no rate, a task
+//         that no longer exists under its role, logs that earned nothing although
+//         the task now pays, a salaried person with no monthly salary), and
+//         negative net pay.
+//       Check — pending entries (work logs, payments, leave, and the pending
+//         stock records the stock check is waiting on), duplicates (identical
+//         work logs or payments), zero quantities, and unusually high pay (a log
+//         at 3x the task's usual quantity or more, or a person at 3x the group's
+//         median earnings).
+//   - Each item has a button to where it is fixed (clock-out form, staff
+//     profile, pending approvals, Roles & Rates). Read-only: nothing is blocked
+//     or changed by the list itself.
+//   - "Unusually high" is deliberately cautious: it needs 6+ earlier logs of the
+//     task (or 4+ people) to form a baseline, ignores day-rate tasks, ignores
+//     late/pooled gap logs, and only looks at non-rejected entries.
+//   - The Pay view shows a tappable banner when there are problems.
+//   - Date and group changes now refresh the problem count too.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.1.4 (2026-10-18)
+//
+// v0.1.4 changes (2026-10-18) — Stock check: gap actions:
+//   - Every gap row in Payroll → Stock check (a gap outside the tolerance) now
+//     has four admin-only actions, so a gap can be fixed or explained on the spot:
+//       ＋ Late log    add a missed work log for one person (stock > logged).
+//                      Pick the person (and role), a date inside that month and
+//                      period, and the bags (starts at the gap). Shows the pay
+//                      and the gap that will remain.
+//       👥 Pooled log  share the missing bags across the crew who logged that
+//                      task on a chosen day (starts at the month's latest work
+//                      day). Split equally or in proportion to bags logged that
+//                      day; untick anyone to leave them out. Shares add up to
+//                      the total exactly; each person gets their own log in the
+//                      role they worked that day. Salaried staff are never pooled.
+//       ✂ Write off   accept the gap with a reason (preset reasons for a +
+//                      gap or a − gap, a note is required for "Other"). Partial
+//                      write-offs are allowed. Needs the admin password. The row
+//                      shows ✓ WRITTEN OFF once the rest is within tolerance,
+//                      with an Undo (admin password) that keeps the history.
+//       ⏸ Hold        park the gap as unresolved with a note; the row shows
+//                      ⏸ HELD until a log fixes it, it is written off, or the
+//                      hold is released. A hold changes no pay yet — it is the
+//                      marker the payroll lock will read.
+//   - Late and pooled logs are ordinary approved work logs, tagged to the same
+//     commodity/item as the gap row (and marked gapAction late/pooled, with a
+//     note), so they raise "logged" and the gap closes by itself. Each action
+//     returns to the stock check afterwards.
+//   - Write-offs and holds are stored in DATA.stockGapActions (synced with the
+//     rest of the depot data, snapshotted by Clear All Data) and every action
+//     writes an audit entry.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.1.3 (2026-10-18)
+//
+// v0.1.3 changes (2026-10-18) — Stock check tolerance:
+//   - New Settings → Staff & Records Policy → "Stock Check Tolerance (%)",
+//     default 0.5, 0–10, saved with the admin password (depotInfo.stockTolerancePct).
+//   - In Payroll → Stock check, a gap within that % of the month's stock now
+//     shows ✓ "WITHIN 0.5%" (the gap itself is still shown in the row text).
+//     0 means exact match only. With no stock but logged bags, any gap is a
+//     real gap — the tolerance is measured against stock.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.1.2 (2026-10-18)
+//
+// v0.1.2 changes (2026-10-18) — Stock check per task, per month:
+//   - Payroll screen gets a 📦 Stock check view. For each per-bag task with a
+//     stock link, and each calendar month in the chosen period: stock bags
+//     (approved received/issued records of the task's commodities/items),
+//     logged bags (approved work logs of that task) and the gap (stock −
+//     logged). + = stock with no work logged, − = more logged than stock.
+//   - Rows are per commodity/item so different commodities never get mixed;
+//     logs with no stock tag show as "Not tagged". The same task name under
+//     several roles is counted together. Tasks not paid per bag are listed as
+//     not checked. Stock counted in a unit other than bags is flagged.
+//   - Read-only; no tolerance yet (a gap shows ✓ only when exactly zero).
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.1.1 (2026-10-18)
+//
+// v0.1.1 changes (2026-10-18) — Prepare Payroll (review screen):
+//   - Staff tab → 🧮 Payroll (admin). Choose a period (this month, last month,
+//     last 7 days, custom dates) and a group (all staff or one role).
+//   - Each person's net pay = earnings + prorated salary − deductions −
+//     unpaid leave − paid already − advances, from APPROVED entries only.
+//     Salary is prorated month by month (joined/left mid-period handled);
+//     unpaid leave = "Absent (Unexcused)" days for salaried staff; "paid
+//     already" and "advance" use the app's existing oldest-first payment
+//     allocation. Unpaid work from before the period is shown, not added.
+//   - Read-only screen: nothing is saved or paid yet (lock / payouts come in
+//     later steps). Pending entries in the period are flagged, not counted.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.1.0 (2026-10-18)
+//
+// v0.1.0 changes (2026-10-18) — Warn before deleting stock that work logs depend on:
+//   - Deleting a received/issued record (general inventory or commodity) now
+//     warns when approved work logs are tagged to the same commodity/item in
+//     the same direction (for commodities: no batch on the log, or the same
+//     batch). Covers single delete, bulk delete and the Depot Assistant's bulk
+//     delete preview. Shows the log count and bags; admin can still go ahead.
+//   - Only APPROVED logs are counted — pending and rejected ones are not
+//     official data yet. A log shared by several selected records counts once.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.0.9 (2026-10-18)
+//
+// v0.0.9 changes (2026-10-18) — Every record shows who entered it (admin too):
+//   - ROOT CAUSE: stampEntry() only wrote enteredBy/enteredByRole/enteredAt
+//     for non-admin accounts, so anything the admin entered carried no author.
+//   - FIX: stampEntry() now stamps enteredBy, enteredByRole, enteredAt for
+//     every account, plus enteredByStaffId (the staff profile linked to that
+//     login, when there is one). Approval behaviour is unchanged: admin
+//     entries are approved at once, others stay pending.
+//   - index.html: new enteredByStaff()/enteredByLabel()/enteredByTag(). Every
+//     row that shows approvalBadge() now also shows "✍ by <staff name> (login)"
+//     and the Pending Approvals cards show the same, with the name opening the
+//     staff profile. Older records without an author show nothing extra; if
+//     only the login name was stored, the profile is looked up from the
+//     login's current staff link.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// Current version: v0.0.8 (2026-10-18)
+//
+// v0.0.8 changes (2026-10-18) — Signup no longer depends on the phone's clock:
+//   - ROOT CAUSE: a brand-new depot gets into depots/<id>/authorizedUids only
+//     if licenses/<id>/createdAt is within 5 minutes of Firebase's clock
+//     (rule: createdAt > now - 300000). signupFinish() wrote createdAt from
+//     Date.now() on the phone, so a phone whose clock ran more than 5 minutes
+//     behind could never claim its own new depot — the grant and the
+//     depots/<id>/auth write were both refused.
+//   - FIX: createdAt on the license record is now {'.sv':'timestamp'}, i.e.
+//     stamped by the Firebase server. trialStart stays device time (the rules
+//     don't read it).
+//   - index.html: rules comment brought up to date — licenses/ and
+//     subscriptionRequests/ operator-only read (published rules), and the old
+//     "no real Firebase Auth / licenses write must be unconditional" KEY POINTS
+//     replaced with what is true now.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// Current version: v0.0.7 (2026-10-18)
+//
+// v0.0.7 changes (2026-10-18) — "Delete My Account" now really deletes cloud data:
+//   - ROOT CAUSE: _executeAccountDeletion() issued DELETE depots/<id> as one
+//     request, but the Firebase rules only granted .write on the CHILD nodes
+//     (data, auth, meta, notifications, copilotChats, authorizedUids/<uid>),
+//     never on depots/<id> itself. A delete of the parent node needs write
+//     access at the parent, so Firebase refused it — and the app's
+//     .catch(()=>{}) hid the error. The phone was wiped and "Account deleted"
+//     was shown while the whole depot stayed in the cloud.
+//   - RULES CHANGE (publish in Firebase Console → Realtime Database → Rules):
+//     inside depots → "$depotKey": { ... } add as the first line
+//       ".write": "auth.uid != null && data.child('authorizedUids').child(auth.uid).exists() && !newData.exists()",
+//     Delete-only (!newData.exists()) and only for a member of that depot, so
+//     it grants nothing beyond what data.write already allowed.
+//   - index.html: usernames/ are now freed BEFORE the depot node is deleted
+//     (the usernames delete rule needs authorizedUids, which lives inside the
+//     depot — deleting the depot first would orphan the usernames). The depot
+//     delete is no longer swallowed: if it fails, the error is shown and local
+//     data is NOT wiped, so the admin can simply retry.
+//   - Until the rules change is published, Delete My Account will show that
+//     error instead of falsely reporting success.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// Current version: v0.0.6 (2026-10-18)
+//
+// v0.0.6 changes (2026-10-18) — Bulk Pay (per role / multi-role):
+//   - Staff tab now has a "💳👥 Bulk Pay" button (Admin only) next to Pay.
+//     Tap one or more role chips to narrow the list (none = everyone), tick
+//     who to pay and adjust each person's amount; amounts start at each
+//     person's unpaid balance. Shared Date and Notes, a "same amount for
+//     everyone ticked" quick-fill, Pay Full Balance / Select All / Clear All,
+//     and a "hide staff with nothing owed" toggle (on by default).
+//   - Each row shows what the amount will do to that person's oldest work
+//     (✓ n entries paid · ◐ n part-paid · advance if it exceeds the balance),
+//     and a running total sits above the Pay button. Only staff currently
+//     shown by the filter are ever paid; ticked-but-hidden staff are flagged.
+//   - Saving asks for the admin password once for the whole batch, then a
+//     summary confirm (declining brings the form back as it was). It writes
+//     one normal payment record per person — so each settles their oldest
+//     unpaid work first — plus one audit entry per payment, in a single save.
+//   - Salaried staff are listed (unticked, blank) with their monthly salary
+//     shown; leavers appear only while they still have an unpaid balance.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// Current version: v0.0.5 (2026-10-18)
+//
+// v0.0.5 changes (2026-10-18) — Payments settle earlier work, oldest first:
+//   - Every approved payment for a staff member now goes into one pool that
+//     is spent on that person's approved, completed work logs from the
+//     OLDEST date forward (same date → creation order). A log shows ✓ PAID
+//     when the pool covers its full net (earnings − deduction), PARTIAL when
+//     it covers part (with "K x of K y"), and UNPAID when nothing has reached
+//     it yet. Marks appear under Net in Staff → Work Logs, on WORK rows in
+//     Staff → Payments, in a staff profile's recent sessions, and on a Staff
+//     login's own dashboard. Searching the log table for "unpaid" filters to
+//     the unpaid rows.
+//   - The status is derived, not stored on each log, so it stays correct if a
+//     payment is deleted, a log is edited, or an entry is approved later —
+//     and payments recorded before this version settle work the same way.
+//     Salaried staff are skipped (their pay isn't tied to work logs).
+//   - Record Payment now shows the staff member's unpaid work (with a "Pay
+//     all" shortcut) and, as an amount or quantity is typed, exactly which
+//     earlier work entries it will settle — full or part, with the matching
+//     quantity for a part-paid entry. The confirm dialog and audit log say how
+//     many entries were marked paid / part-paid.
+//   - Work-log CSV export gains "Paid Status" and "Paid Amount" columns.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
+// Current version: v0.0.4 (2026-10-18)
+//
+// v0.0.4 changes (2026-10-18) — Record Payment: amount ⇄ unit quantity:
+//   - Staff → Payments → Record Payment now has a "Paid For (task & rate)"
+//     selector (defaults to the task the staff member last logged work
+//     under) and a quantity field in that task's unit of measure (bags,
+//     days, hours, trips, tons or custom).
+//   - Type a money amount and the equivalent quantity fills in (amount ÷
+//     rate); type a quantity and the amount fills in (quantity × rate).
+//     Changing staff or task re-calculates from whichever field was edited
+//     last. Salaried staff and staff with no priced task see the form as
+//     before.
+//   - The unit equivalent is saved with the payment (payQty/payTask/
+//     payUnit/payRate), shown in the confirm dialog and in the payment row.
+//   - No sw.js fetch/cache logic changes — bump only, so the updated
+//     index.html JS is fetched instead of served from the old cached shell.
+//
 // Current version: v0.0.3 (2026-09-22)
 //
 // v0.0.3 changes (2026-09-22) — Bulk Clock In/Out UX matched to Bulk Log:
@@ -1091,7 +1611,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.0.3';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.2.8';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
