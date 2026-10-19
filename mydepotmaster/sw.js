@@ -25,6 +25,24 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.3.0 (2026-10-19)
+//
+// v0.3.0 changes (2026-10-19) — Bulk Pay: pay by quantity of work (hours, bags, days…):
+//   - Bulk Pay now has the same amount ⇄ quantity link as Record Payment. Every staff row
+//     with a priced task gets a quantity box (Hours Worked, Bags Handled, Days Worked, Trips,
+//     Tons or a custom unit, whatever that task is rated in) next to the amount. Type the
+//     quantity and the amount is worked out from the task rate; type the amount and the
+//     quantity is worked out. Staff with more than one priced task get a task picker, starting
+//     on the task they last logged work under. Changing the task recalculates from whichever
+//     box was edited last.
+//   - New "Quantity of work — same for everyone ticked" field next to the same-for-everyone
+//     amount. Use it with a role filter so everyone shares one unit (e.g. all loaders, bags).
+//   - The quantity is saved with each payment (payQty / payTask / payUnit / payRate), shown in
+//     the confirm dialog, the Payments list and the audit log, exactly like Record Payment.
+//   - Salaried staff and staff with no priced task have no quantity box — amount only.
+//   - Record Payment already had amount ⇄ quantity (v0.0.4) and is unchanged.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
 // Current version: v0.2.9 (2026-10-19)
 //
 // v0.2.9 changes (2026-10-19) — cloud sync recovers from "HTTP 401 Permission denied":
@@ -1629,7 +1647,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.2.9';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.0';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
