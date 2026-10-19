@@ -2069,13 +2069,130 @@ async function _getAppCheckToken() {
 }
 
 // Wrap a fetch promise with a timeout so a stalled connection never hangs the UI forever.
-function _fetchWithTimeout(url, opts, ms) {
+function _fetchWithTimeout(url, opts, ms, sizeBytes) {
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), ms);
+  let timedOut = false;
+  const t = setTimeout(() => { timedOut = true; ctrl.abort(); }, ms);
   return fetch(url, Object.assign({}, opts, { signal: ctrl.signal }))
+    .catch(e => {
+      // Fix: a bare ctrl.abort() surfaces as the useless browser text
+      // "signal is aborted without reason". Say what really happened instead.
+      // name stays 'AbortError' so existing callers (Depot Assistant) that
+      // check e.name keep working.
+      if (timedOut) {
+        const err = new Error('Connection too slow — timed out after ' + Math.round(ms/1000) + 's' +
+          (sizeBytes ? ' sending ' + (sizeBytes >= 1048576 ? (sizeBytes/1048576).toFixed(1) + ' MB' : Math.round(sizeBytes/1024) + ' KB') : ''));
+        err.name = 'AbortError';
+        err.code = 'TIMEOUT';
+        throw err;
+      }
+      throw e;
+    })
     .finally(() => clearTimeout(t));
 }
-const _FB_TIMEOUT_MS = 10000; // 10s — generous for slow mobile connections, still bounded
+const _FB_TIMEOUT_MS = 10000; // 10s — fine for small reads/tokens; uploads use _fbUploadTimeout() below
+// Fix: the whole depot DATA blob is sent as ONE request, and the 10s flat limit
+// covers the entire upload (the response only arrives once the upload is done).
+// Photos / contracts / logs make that blob big, so on a weak mobile signal it
+// could never finish in 10s — and since it only ever grows, sync stayed broken
+// for good. Scale the limit with payload size, assuming a pessimistic ~10 KB/s
+// uplink, with a 20s floor and a 5-minute ceiling.
+function _fbUploadTimeout(bodyLen) {
+  return Math.min(300000, Math.max(20000, 15000 + Math.round(bodyLen / 10)));
+}
+
+// ── DELTA SYNC — send only what changed ─────────────────────────────────────
+// Before: every sync PUT the ENTIRE depot data (books, photos, contracts, all
+// logs) even when one entry changed. Now the app remembers a fingerprint
+// ("baseline") of every piece of data as the cloud last held it, and each sync
+// sends (PATCH) only the pieces whose fingerprint changed, plus nulls for
+// pieces that were deleted. A "piece" is one top-level value, or one entry of a
+// top-level list (staffLogs/12), or one entry of a top-level group
+// (commodityReceived/Maize/3). The baseline is kept in IndexedDB so it survives
+// app restarts. If anything looks off (no baseline yet, someone else synced
+// since, cloud copy missing, server refuses PATCH) the code falls back to the
+// old full upload, so the worst case is exactly the previous behaviour.
+let _fbBaseline = null;          // { key, ts, h:{ path: fingerprint } }
+let _fbBaselineLoaded = false;
+let _fbDeltaDisabled = false;    // set for the session if the server ever refuses PATCH
+const _FB_BASELINE_IDB_KEY = 'fbBaseline';
+
+function _hash53(str) {          // fast 53-bit string hash (cyrb53)
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+function _fbFingerprint(v) {
+  const s = JSON.stringify(v);
+  return s === undefined ? 'u' : _hash53(s) + '.' + s.length;
+}
+// Split a data object into pieces: { vals:{path:value}, hs:{path:fingerprint} }
+function _fbUnits(obj) {
+  const vals = {}, hs = {};
+  const put = (path, v) => { vals[path] = v; hs[path] = _fbFingerprint(v); };
+  Object.keys(obj).forEach(k => {
+    if (k === '_syncTs') return;               // server timestamp — handled separately
+    const v = obj[k];
+    if (Array.isArray(v)) {
+      for (let i = 0; i < v.length; i++) if (v[i] !== null && v[i] !== undefined) put(k + '/' + i, v[i]);
+    } else if (v && typeof v === 'object') {
+      Object.keys(v).forEach(c => {
+        const cv = v[c];
+        if (Array.isArray(cv)) {
+          for (let i = 0; i < cv.length; i++) if (cv[i] !== null && cv[i] !== undefined) put(k + '/' + c + '/' + i, cv[i]);
+        } else if (cv !== null && cv !== undefined) put(k + '/' + c, cv);
+      });
+    } else if (v !== null && v !== undefined) put(k, v);
+  });
+  return { vals, hs };
+}
+// True if one path is inside another (e.g. "a/b" and "a/b/0") — Firebase refuses
+// such a mixed update, so we fall back to a full upload in that rare case.
+function _fbPathsConflict(paths) {
+  const set = new Set(paths);
+  for (const p of paths) {
+    let i = p.indexOf('/');
+    while (i !== -1) { if (set.has(p.slice(0, i))) return true; i = p.indexOf('/', i + 1); }
+  }
+  return false;
+}
+function _fbComputeDelta(payload, base) {
+  const { vals, hs } = _fbUnits(payload);
+  const upd = {};
+  let n = 0;
+  for (const p in hs) if (base.h[p] !== hs[p]) { upd[p] = vals[p]; n++; }
+  for (const p in base.h) if (!(p in hs)) { upd[p] = null; n++; }   // deleted since last sync
+  return { upd, n, hs, conflict: _fbPathsConflict(Object.keys(upd)) };
+}
+function _fbBaselineSave() {
+  try {
+    openIDB().then(db => { db.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).put(_fbBaseline, _FB_BASELINE_IDB_KEY); }).catch(() => {});
+  } catch (e) {}
+}
+function _fbBaselineLoad() {
+  return openIDB().then(db => new Promise(res => {
+    const r = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(_FB_BASELINE_IDB_KEY);
+    r.onsuccess = () => res(r.result || null);
+    r.onerror = () => res(null);
+  })).catch(() => null);
+}
+// Forget the baseline — the next sync does one full upload and starts fresh.
+function _fbBaselineInvalidate() {
+  _fbBaseline = null;
+  _fbBaselineLoaded = true;
+  try { openIDB().then(db => { db.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).delete(_FB_BASELINE_IDB_KEY); }).catch(() => {}); } catch (e) {}
+}
+function _fbBaselineSet(key, ts, hs) {
+  _fbBaseline = { key, ts: (typeof ts === 'number' ? ts : null), h: hs };
+  _fbBaselineLoaded = true;
+  _fbBaselineSave();
+}
 
 // Same purpose as _fetchWithTimeout, but for SDK calls (like Firebase Auth's
 // signInWithEmailAndPassword) that take a plain Promise and no AbortSignal.
@@ -2297,26 +2414,32 @@ async function fbGet(path) {
   }
 }
 
-async function fbSet(path, data) {
+async function fbSet(path, data, method) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const idToken = await _getIdToken(attempt > 0);
     const url = _withAuthParam(FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json', idToken);
     const acToken = await _getAppCheckToken();
     const headers = { 'Content-Type': 'application/json', ...(acToken ? { 'X-Firebase-AppCheck': acToken } : {}) };
+    const body = JSON.stringify(data);
     const res = await _fetchWithTimeout(url, {
-      method: 'PUT',
+      method: method || 'PUT',
       headers,
-      body: JSON.stringify(data)
-    }, _FB_TIMEOUT_MS);
+      body
+    }, _fbUploadTimeout(body.length), body.length);
     // See fbGet: refresh the token and retry once on a 401 before failing.
     if (res.status === 401 && idToken && attempt === 0) continue;
     if (!res.ok) {
       const body = await res.text().catch(()=>'');
       throw new Error('HTTP ' + res.status + (body ? ': ' + body.slice(0,120) : ''));
     }
+    // Any whole-data overwrite (offline-queue flush, rescue push, full sync) makes
+    // the remembered baseline untrustworthy; the caller re-sets it if it knows better.
+    if (!method && /\/data$/.test(path)) _fbBaselineInvalidate();
     return res.json();
   }
 }
+// PATCH: update only the given paths, leave everything else untouched.
+function fbPatch(path, updates) { return fbSet(path, updates, 'PATCH'); }
 
 // Write only if the key does not yet exist in Firebase.
 // Firebase Realtime DB REST does not honour If-None-Match, so we use a
@@ -2361,6 +2484,7 @@ async function fbDelete(path) {
     const body = await res.text().catch(()=>'');
     throw new Error('HTTP ' + res.status + (body ? ': ' + body.slice(0,120) : ''));
   }
+  if (/^depots\//.test(path)) _fbBaselineInvalidate();
   return true;
 }
 
@@ -2526,13 +2650,10 @@ let _fbSyncTimer = null;
 function scheduleFbSync() {
   if (!isFbConfigured()) return;
   if (!navigator.onLine) {
-    // Offline: queue the write so it flushes on reconnect
-    const key = DATA.installId;
-    if (key && key !== 'MDM-????-????-????') {
-      const payload = JSON.parse(JSON.stringify(DATA));
-      delete payload.gdrive;
-      enqueueOfflineWrite('depots/' + key + '/data', payload);
-    }
+    // Offline: nothing to queue. Edits are already saved on the phone, and the
+    // delta baseline remembers what the cloud last held, so the first sync after
+    // reconnecting sends exactly what changed. (This used to queue a full copy of
+    // ALL data per edit — up to 50 copies — and re-send them one by one on reconnect.)
     return;
   }
   clearTimeout(_fbSyncTimer);
@@ -2644,23 +2765,73 @@ async function _doFbSyncImpl() {
     // Firebase itself, not the device clock), which gives a single shared,
     // trustworthy clock that every device can compare against.
     payload._syncTs = {'.sv': 'timestamp'};
-    // Fix 4: run both writes in parallel — halves round-trip time vs sequential awaits
-    const [savedData] = await Promise.all([
-      fbSet('depots/' + key + '/data', payload),
-      fbSet('depots/' + key + '/meta', {
-        lastSync: now,
-        depotName: (DATA.depotInfo||{}).name || '',
-        version: DATA._v || 0
-      }),
-      // Lightweight credentials mirror — kept in sync automatically on every
-      // write so login can verify a password before pulling the full depot.
-      fbSet('depots/' + key + '/auth', _buildAuthSnapshot(DATA.users))
-    ]);
-    // Firebase's PUT response echoes back the data actually written, with
+    const dataPath = 'depots/' + key + '/data';
+    const metaObj = {
+      lastSync: now,
+      depotName: (DATA.depotInfo||{}).name || '',
+      version: DATA._v || 0
+    };
+    // Lightweight credentials mirror — kept in sync automatically on every
+    // write so login can verify a password before pulling the full depot.
+    const authObj = _buildAuthSnapshot(DATA.users);
+
+    // ── Delta sync: work out what changed since the last successful sync ──
+    if (!_fbBaselineLoaded) {
+      const saved = await _fbBaselineLoad();
+      if (!_fbBaseline) _fbBaseline = saved;
+      _fbBaselineLoaded = true;
+    }
+    let plan = null;
+    const base = (!_fbDeltaDisabled && _fbBaseline && _fbBaseline.key === key) ? _fbBaseline : null;
+    if (base && base.ts !== null) {
+      // Tiny check: is the cloud copy still the one we last wrote/adopted?
+      // If it's missing, or another device has written since, do a full
+      // upload exactly as before instead of patching onto an unknown state.
+      const cloudTs = await fbGet(dataPath + '/_syncTs');
+      if (cloudTs !== null && cloudTs !== undefined && cloudTs === base.ts) {
+        const d = _fbComputeDelta(payload, base);
+        if (!d.conflict) plan = d;
+      }
+    }
+
+    let savedData = null;
+    let hs = null;
+    let deltaRefused = false;
+    if (plan) {
+      try {
+        plan.upd._syncTs = {'.sv': 'timestamp'};
+        [savedData] = await Promise.all([
+          fbPatch(dataPath, plan.upd),
+          fbSet('depots/' + key + '/meta', metaObj),
+          fbSet('depots/' + key + '/auth', authObj)
+        ]);
+        hs = plan.hs;
+      } catch (e) {
+        // Timeouts and permission problems are real sync failures — report them.
+        // Anything else (server refusing PATCH, odd key, CORS) → full upload below.
+        if (e && (e.name === 'AbortError' || /HTTP (401|403)|permission denied/i.test(e.message || ''))) throw e;
+        console.warn('[MDM] Delta sync refused, falling back to full upload:', e);
+        plan = null;
+        deltaRefused = true;
+      }
+    }
+    if (!plan) {
+      // Fix 4: run all writes in parallel — halves round-trip time vs sequential awaits
+      [savedData] = await Promise.all([
+        fbSet(dataPath, payload),
+        fbSet('depots/' + key + '/meta', metaObj),
+        fbSet('depots/' + key + '/auth', authObj)
+      ]);
+      if (deltaRefused) _fbDeltaDisabled = true;   // full worked where PATCH didn't — stop trying this session
+      hs = _fbUnits(payload).hs;
+    }
+    // Firebase's PUT/PATCH response echoes back the data actually written, with
     // ".sv" placeholders resolved to the real server epoch millis — capture
     // that so this device knows the authoritative timestamp of its own push
     // (no extra round-trip needed).
-    DATA._syncTs = (savedData && savedData._syncTs) || now;
+    const newTs = (savedData && savedData._syncTs) || now;
+    _fbBaselineSet(key, (savedData && typeof savedData._syncTs === 'number') ? savedData._syncTs : null, hs);
+    DATA._syncTs = newTs;
     DATA._lastFbSync = now;
     sv(DATA); // persist updated _lastFbSync to both localStorage and IDB
     _lastFbSyncError = null;
@@ -2749,6 +2920,9 @@ async function _fbRestoreDataImpl() {
     }
       DATA._syncTs = cloudTs; // remember the server timestamp we just adopted
       DATA._lastFbSync = Date.now(); // mark this device as now synced
+      // Delta sync: the cloud copy we just adopted is the new baseline, so the
+      // next push sends only what changes locally from here (incl. local-only users).
+      _fbBaselineSet(key, cloudTs, _fbUnits(val).hs);
       // Ensure the installId is pinned in the separate key after restore
       if (DATA.installId) _persistInstallId(DATA.installId);
       sv(DATA); // write back to localStorage + IDB
@@ -3991,7 +4165,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.2';
+const SW_VERSION  = 'v0.3.4';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -4225,7 +4399,13 @@ function enqueueOfflineWrite(path, data) {
 
 async function flushOfflineQueue() { return _fbSerial(_flushOfflineQueueImpl); }
 async function _flushOfflineQueueImpl() {
-  if (!navigator.onLine || !isFbConfigured() || _offlineQueue.length === 0) return;
+  if (!navigator.onLine || !isFbConfigured()) return;
+  // Drop whole-data snapshots queued by older versions: the sync that follows a
+  // flush pushes the current data (as a small delta), so they're superseded.
+  const _qBefore = _offlineQueue.length;
+  _offlineQueue = _offlineQueue.filter(item => !/\/data$/.test((item && item.path) || ''));
+  if (_offlineQueue.length !== _qBefore) _saveOfflineQueue();
+  if (_offlineQueue.length === 0) return;
   const toFlush = [..._offlineQueue];
   _offlineQueue = [];
   _saveOfflineQueue();

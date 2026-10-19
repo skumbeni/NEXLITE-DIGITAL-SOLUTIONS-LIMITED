@@ -25,7 +25,29 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.2 (2026-10-19)
+// Current version: v0.3.4 (2026-10-20)
+//
+// v0.3.4 changes (2026-10-20) — Cloud sync now sends only what changed:
+//   - Every sync used to upload ALL depot data (books, photos, contracts, logs).
+//     Now the app remembers what the cloud last held and sends only the entries
+//     that were added / edited / deleted (Firebase PATCH). First sync after
+//     updating still sends everything once; after that only changes go up.
+//   - Safe fallbacks to the old full upload: no baseline yet, another device
+//     synced in between, cloud copy missing, or the server refuses PATCH.
+//   - Offline edits no longer queue a full copy of all data each time (up to 50
+//     copies re-sent on reconnect); the next sync sends just the changes.
+//   - Full-upload time limit ceiling raised to 5 minutes for the one-off first sync.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// v0.3.3 changes (2026-10-20) — Cloud sync fix ("Sync failing — signal is aborted without reason"):
+//   - Root cause: the whole depot data blob is uploaded in one request and the
+//     10s limit covered the entire upload, so on a weak mobile signal a large
+//     blob (photos, contracts, logs) could never finish in time and sync stayed
+//     broken. Not an HTTP/HTTPS problem — the database URL was already https.
+//   - fbSet now scales its time limit with payload size (20s minimum, 3 min max).
+//   - Timeouts now report "Connection too slow — timed out after Ns sending X KB"
+//     instead of the browser's "signal is aborted without reason".
+//   - No sw.js fetch/cache logic changes — bump only.
 //
 // v0.3.2 changes (2026-10-19) — Bulk Pay: tick the tasks to pay (staff with several roles / tasks):
 //   - A person with more than one priced task now gets a tick-list instead of one amount box.
@@ -1687,7 +1709,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.2';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.4';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
