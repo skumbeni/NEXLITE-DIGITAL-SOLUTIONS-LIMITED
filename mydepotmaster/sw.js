@@ -25,6 +25,26 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.3.2 (2026-10-19)
+//
+// v0.3.2 changes (2026-10-19) — Bulk Pay: tick the tasks to pay (staff with several roles / tasks):
+//   - A person with more than one priced task now gets a tick-list instead of one amount box.
+//     Every task has its own tick, quantity and amount. Type the quantity → the amount is worked
+//     out from that task's rate; type the amount → the quantity is worked out. Tasks never affect
+//     each other. Ticking the person ticks every task that has unpaid work; unticking clears all.
+//   - The person's row shows the total of the ticked tasks: total quantity per unit (bags, days,
+//     hours…) and total money. The row's amount box is read-only (it is that total).
+//   - Works in every mode: Amount, From – To and Up to. In a period each task starts at its own
+//     unpaid work in that period (its own quantity and money). Staff with one task are unchanged.
+//   - The confirm dialog lists every ticked task (quantity + money), the person's total, then the
+//     grand total quantity and money for everyone.
+//   - Ticked tasks settle ONLY their own work entries: the payment is saved with payTasks and the
+//     PAID / PARTIAL badges follow it (oldest entry of that task first). Money a task cannot absorb
+//     falls back into the person's general pool. Payments without payTasks behave exactly as before.
+//   - The Payments list shows each task's quantity + money and the total; the audit log lists tasks.
+//   - Record Payment is unchanged (one task at a time).
+//   - No sw.js fetch/cache logic changes — bump only.
+//
 // Current version: v0.3.1 (2026-10-19)
 //
 // v0.3.1 changes (2026-10-19) — Record Payment & Bulk Pay: pay for a period + total quantity:
@@ -1667,7 +1687,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.1';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.2';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

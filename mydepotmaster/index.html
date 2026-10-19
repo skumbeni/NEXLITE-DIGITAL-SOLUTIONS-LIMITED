@@ -3991,7 +3991,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.1';
+const SW_VERSION  = 'v0.3.2';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -14301,26 +14301,61 @@ function openPayForm(){
 // payments recorded before this feature existed settle work the same way.
 // Salaried staff are skipped (their pay isn't tied to individual work logs).
 function _payR2(n){return Math.round(Number(n||0)*100)/100;}
-function _payAllocCore(logs,pool){
+// ── Task-targeted payments (Bulk Pay "tick tasks") ────────────────────────────
+// A payment made for chosen tasks carries payTasks:[{key,role,task,unit,qty,amount}].
+// Its money settles ONLY the work of those tasks (oldest first). Whatever a task
+// cannot absorb falls back into the general pool. Payments with no payTasks behave
+// exactly as before: one pool per person, oldest work first.
+function _payTaskKey(l){return (l.role||'')+'|'+(l.task||'')+'|'+_ppUnit(l);}
+function _paySplit(pays){
+  let general=0;const targets={};
+  (pays||[]).forEach(p=>{
+    const amt=Number(p.amount||0);
+    const ts=Array.isArray(p.payTasks)?p.payTasks.filter(x=>x&&x.key&&Number(x.amount)>0):[];
+    const sum=ts.reduce((a,x)=>a+Number(x.amount),0);
+    if(!ts.length||!(amt>0)){general+=amt;return;}
+    const f=Math.min(1,amt/sum);   // never aim more money at tasks than the payment itself
+    ts.forEach(x=>{targets[x.key]=_payR2((targets[x.key]||0)+Number(x.amount)*f);});
+    general+=Math.max(0,_payR2(amt-sum*f));
+  });
+  return {general,targets};
+}
+function _payAllocCore(logs,pool,targets){
   const rows=(logs||[]).map(l=>({log:l,net:_payR2(Number(l.earnings||0)-Number(l.deduction||0))}))
     .filter(r=>r.net>0.004&&r.log.status!=='open')
     .sort((a,b)=>String(a.log.date).localeCompare(String(b.log.date))||String(a.log.id).localeCompare(String(b.log.id)));
+  rows.forEach(r=>{r.paid=0;});
   let left=Math.max(0,Number(pool||0));
+  // 1) money aimed at a task settles that task's work only
+  const tg=targets||{};
+  Object.keys(tg).forEach(k=>{
+    let t=Math.max(0,Number(tg[k])||0);
+    rows.forEach(r=>{
+      if(t<=0.004||_payTaskKey(r.log)!==k)return;
+      const take=Math.min(_payR2(r.net-r.paid),t);
+      r.paid=_payR2(r.paid+take);t=_payR2(t-take);
+    });
+    left=_payR2(left+t);   // anything the task could not absorb joins the general pool
+  });
+  // 2) the general pool settles what is left, oldest first
   rows.forEach(r=>{
-    const take=Math.min(r.net,left);
-    r.paid=_payR2(take);left=_payR2(left-take);
+    const take=Math.min(_payR2(r.net-r.paid),left);
+    r.paid=_payR2(r.paid+take);left=_payR2(left-take);
     r.status=r.paid>=r.net-0.004?'paid':(r.paid>0.004?'partial':'unpaid');
   });
   return {rows,poolLeft:_payR2(left)};
 }
 // One staff member; extraAmt simulates an additional payment (for previews)
-function _staffPayAlloc(staffId,extraAmt){
+function _staffPayAlloc(staffId,extraAmt,extraTargets){
   const sid=String(staffId);
   const st=(DATA.staff||[]).find(x=>String(x.id)===sid);
   if(st&&st.payType==='salary')return {rows:[],poolLeft:0};
   const logs=approvedArr((DATA.staffLogs||[]).filter(l=>String(l.staffId)===sid&&(!l.entryType||l.entryType==='work')));
-  const pool=approvedArr((DATA.staffPayments||[]).filter(p=>String(p.staffId)===sid)).reduce((a,b)=>a+Number(b.amount||0),0)+_lnPoolFor(sid)+Number(extraAmt||0);
-  return _payAllocCore(logs,pool);
+  const sp=_paySplit(approvedArr((DATA.staffPayments||[]).filter(p=>String(p.staffId)===sid)));
+  const tg=Object.assign({},sp.targets);
+  Object.keys(extraTargets||{}).forEach(k=>{tg[k]=_payR2((tg[k]||0)+Number(extraTargets[k]||0));});
+  const pool=sp.general+_lnPoolFor(sid)+Number(extraAmt||0);
+  return _payAllocCore(logs,pool,tg);
 }
 // Map logId → {log,net,paid,status} for one staff member / for every staff member
 function _payAllocMap(staffId){
@@ -14329,18 +14364,19 @@ function _payAllocMap(staffId){
   return m;
 }
 function _payAllocAll(){
-  const m=new Map(),logsBy={},paidBy={};
+  const m=new Map(),logsBy={},paidBy={},payBy={},tgBy={};
   approvedArr(DATA.staffLogs||[]).forEach(l=>{
     if(l.entryType&&l.entryType!=='work')return;
     const k=String(l.staffId);(logsBy[k]=logsBy[k]||[]).push(l);
   });
-  approvedArr(DATA.staffPayments||[]).forEach(p=>{const k=String(p.staffId);paidBy[k]=(paidBy[k]||0)+Number(p.amount||0);});
+  approvedArr(DATA.staffPayments||[]).forEach(p=>{const k=String(p.staffId);(payBy[k]=payBy[k]||[]).push(p);});
+  Object.keys(payBy).forEach(k=>{const sp=_paySplit(payBy[k]);paidBy[k]=(paidBy[k]||0)+sp.general;tgBy[k]=sp.targets;});
   approvedArr(DATA.loanRepayments||[]).forEach(r=>{if(r.source!=='payroll')return;const k=String(r.staffId);paidBy[k]=(paidBy[k]||0)+Number(r.amount||0);});
   _stRecs().forEach(r=>{paidBy[r.staffId]=(paidBy[r.staffId]||0)+r.amount;});   // NAPSA/NHIMA/PAYE withheld at run locks
   const salaried=new Set((DATA.staff||[]).filter(x=>x.payType==='salary').map(x=>String(x.id)));
   Object.keys(logsBy).forEach(k=>{
     if(salaried.has(k))return;
-    _payAllocCore(logsBy[k],paidBy[k]||0).rows.forEach(r=>m.set(String(r.log.id),r));
+    _payAllocCore(logsBy[k],paidBy[k]||0,tgBy[k]).rows.forEach(r=>m.set(String(r.log.id),r));
   });
   return m;
 }
@@ -14352,8 +14388,8 @@ function _payBadge(r,compact){
   return`<span class="bdg br2" style="${f}">UNPAID</span>`;
 }
 // How many work entries would a payment of `amount` mark as paid / partly paid?
-function _paySettleSummary(sid,amount){
-  const base=_staffPayAlloc(sid,0),after=_staffPayAlloc(sid,amount);
+function _paySettleSummary(sid,amount,tg){
+  const base=_staffPayAlloc(sid,0),after=_staffPayAlloc(sid,amount,tg);
   let full=0,partial=0;
   base.rows.forEach((r,i)=>{
     const n=after.rows[i];
@@ -14528,7 +14564,14 @@ function _ppPayFields(p){
 function _ppPayNote(r){
   if(!r)return'';
   let h='';
-  if(Array.isArray(r.payQtys)&&r.payQtys.length){
+  if(Array.isArray(r.payTasks)&&r.payTasks.length){
+    // Bulk Pay with ticked tasks: each task's own quantity + money, then the total
+    h+=` · ${r.payTasks.map(x=>`${esc(x.task||x.role||'')}${Number(x.qty)>0?' '+Number(x.qty).toLocaleString()+' '+esc(_pfUnitText(x.unit||'',x.qty)):''} (${zm(x.amount)})`).join(' + ')}`;
+    if(r.payTasks.length>1&&Array.isArray(r.payQtys)&&r.payQtys.length){
+      const by={};r.payQtys.forEach(x=>{by[x.unit]=(by[x.unit]||0)+Number(x.qty||0);});
+      h+=` · Total ${esc(_ppQtyText(by))}`;
+    }
+  }else if(Array.isArray(r.payQtys)&&r.payQtys.length){
     const by={};r.payQtys.forEach(x=>{by[x.unit]=(by[x.unit]||0)+Number(x.qty||0);});
     h+=` · ${esc(_ppQtyText(by))}`;
   }else if(r.payQty){
@@ -14568,7 +14611,8 @@ function _ppScope(sid,mode,from,to,rows){
     out.rows.push({l,rem,q,u});out.n++;
     out.amount=_payR2(out.amount+rem);_ppAdd(out.by,u,q);
     const k=(l.role||'')+'|'+(l.task||'')+'|'+u;
-    if(!out.tasks[k])out.tasks[k]={role:l.role||'',task:l.task||'',u};
+    if(!out.tasks[k])out.tasks[k]={key:k,role:l.role||'',task:l.task||'',u,amount:0,qty:0,n:0};
+    {const tk=out.tasks[k];tk.amount=_payR2(tk.amount+rem);tk.qty=_payR2(tk.qty+q);tk.n++;}
     if(!out.first||d<out.first)out.first=d;
     if(d>out.last)out.last=d;
   });
@@ -16545,10 +16589,12 @@ function openBulkPayForm(resume){
     staff.forEach(s=>staffRoleList(s).forEach(r=>{if(!roleList.includes(r))roleList.push(r);}));
     _bp={staff,bal,tasks,roles:new Set(),roleList,hideZero:true,rows,date:today(),notes:'',pm:'amt',from:'',to:today(),upto:today(),perErr:''};
     staff.forEach(s=>_bpSyncQty(String(s.id)));
+    // Staff with several priced tasks get a tick-list: every task starts at what is owed on it
+    staff.forEach(s=>{const id=String(s.id);if((_bp.tasks[id]||[]).length>1){const r=_bp.rows[id];r.tk=_bpTkBuild(id);_bpTkFillOwed(r);_bpTkSync(id);}});
   }
   openModal(`
     <div class="mtitle">💳👥 Bulk Pay ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>
-    <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Pay several staff at once. Tap one or more roles to narrow the list (none = everyone), tick who to pay and adjust each amount — it starts at what each person is owed. You can also type the quantity of work paid for (hours, bags, days…) and the amount is worked out from the task rate — or type the amount and the quantity is worked out. Use “Pay for a period” to fill each person's amount from their unpaid work — between two dates, or up to a date (picking up from each person's last pay). Every payment settles that person's oldest unpaid work first.</div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Pay several staff at once. Tap one or more roles to narrow the list (none = everyone), tick who to pay and adjust each amount — it starts at what each person is owed. You can also type the quantity of work paid for (hours, bags, days…) and the amount is worked out from the task rate — or type the amount and the quantity is worked out. Use “Pay for a period” to fill each person's amount from their unpaid work — between two dates, or up to a date (picking up from each person's last pay). Staff with more than one task get a tick-list: tick the tasks to pay — each task has its own quantity and amount, and the person's total is the sum of the ticked tasks. Every payment settles that person's oldest unpaid work first (ticked tasks settle only their own work).</div>
     <div class="fw"><div class="fl">Roles</div><div id="bp-chips" style="display:flex;flex-wrap:wrap;gap:8px"></div></div>
     ${_bpPeriodCard()}
     <div class="twobox">
@@ -16586,6 +16632,13 @@ function _bpVisible(){
 function _bpPicks(){
   return _bpVisible().map(s=>{
     const id=String(s.id),r=_bp.rows[id]||{},amt=_payR2(parseFloat(r.amt));
+    if(r.tk){   // ticked tasks: each with its own quantity and money
+      const ts=_bpTkTasks(r);if(!ts.length)return null;
+      const by={};ts.forEach(t=>{if(t.qty>0)_ppAdd(by,t.unit,t.qty);});
+      const tot=_payR2(ts.reduce((a,t)=>a+t.amount,0));
+      const per=(_bp.pm||'amt')!=='amt'&&r.per&&r.per.n>0;
+      return {s,amt:tot,meta:null,by,period:per?{mode:_bp.pm,from:r.per.from,to:r.per.to,by}:null,tasks:ts};
+    }
     if(!(r.on&&amt>0))return null;
     // Unit equivalent saved with the payment (same fields as Record Payment)
     const isPer=(_bp.pm||'amt')!=='amt';
@@ -16625,12 +16678,13 @@ function _bpRenderRows(){
     else if(b<-0.004)owed=`<span style="color:var(--blue)">${zm(-b)} advance</span>`;
     else owed=`<span style="color:var(--green)">settled</span>`;
     const st=(s.status&&s.status!=='active')?` · ${esc(String(s.status).toUpperCase())}`:'';
-    const qline=(_bp.pm||'amt')==='amt'?_bpQtyLine(id,r):(r.per?`<div id="bp-per-${id}" style="margin:6px 0 0 36px;font-size:13px;color:var(--muted)">${_bpPerText(id)}</div>`:'');
+    const qline=r.tk?_bpTkHtml(id,r):((_bp.pm||'amt')==='amt'?_bpQtyLine(id,r):(r.per?`<div id="bp-per-${id}" style="margin:6px 0 0 36px;font-size:13px;color:var(--muted)">${_bpPerText(id)}</div>`:''));
+    const amtAttr=r.tk?`readonly tabindex="-1" title="Total of the ticked tasks"`:`oninput="_bpAmt('${id}',this.value)"`;
     return `<div style="padding:8px 0;border-bottom:1px solid var(--border)">
       <div style="display:grid;grid-template-columns:28px 1fr 112px;gap:8px;align-items:center">
         <input type="checkbox" class="bp-chk" data-id="${id}" ${r.on?'checked':''} onchange="_bpChk('${id}',this.checked)" style="width:18px;height:18px"/>
         <div><div style="font-weight:600">${esc(s.name)}</div><div style="font-size:13px;color:var(--muted)">${esc(staffRoleLabel(s))}${st} · ${owed}</div></div>
-        <input class="fi bp-amt" data-id="${id}" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00" value="${esc(r.amt)}" oninput="_bpAmt('${id}',this.value)" style="margin-bottom:0;padding:8px 10px;font-size:17px"/>
+        <input class="fi bp-amt" data-id="${id}" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00" value="${esc(r.amt)}" ${amtAttr} style="margin-bottom:0;padding:8px 10px;font-size:17px${r.tk?';font-weight:700':''}"/>
       </div>
       ${qline}
       <div id="bp-hint-${id}" style="margin:2px 0 0 36px;font-size:13px;color:var(--muted)"></div>
@@ -16644,6 +16698,16 @@ function _bpRenderRows(){
 function _bpHint(id){
   const el=document.getElementById('bp-hint-'+id);if(!el)return;
   const r=_bp.rows[id]||{},amt=_payR2(parseFloat(r.amt)),b=_bp.bal[id];
+  if(r.tk){   // ticked tasks settle only their own entries
+    const ts=_bpTkTasks(r);
+    if(!ts.length){el.innerHTML='';return;}
+    const st=_paySettleSummary(id,0,_bpTgOf(ts)),bits=[];
+    if(st.full)bits.push(`<span style="color:var(--green)">✓ ${st.full} entr${st.full===1?'y':'ies'} paid</span>`);
+    if(st.partial)bits.push(`<span style="color:var(--amber)">◐ ${st.partial} part-paid</span>`);
+    const ov=_payR2(ts.reduce((a,t)=>a+Math.max(0,t.amount-t.owed),0));
+    if(ov>0.004)bits.push(`<span style="color:var(--blue)">${zm(ov)} over owed (advance)</span>`);
+    el.innerHTML=bits.join(' · ');return;
+  }
   if(!r.on||!(amt>0)||b===null||b===undefined){el.innerHTML='';return;}
   const st=_paySettleSummary(id,amt),bits=[];
   if(st.full)bits.push(`<span style="color:var(--green)">✓ ${st.full} entr${st.full===1?'y':'ies'} paid</span>`);
@@ -16668,6 +16732,7 @@ function _bpToggleRole(i){
 function _bpToggleHide(on){_bp.hideZero=!!on;_bpRenderRows();}
 function _bpChk(id,on){
   const r=_bp.rows[id];if(!r)return;
+  if(r.tk){_bpTkSet(r,on);_bpTkSync(id);_bpRenderRows();return;}
   r.on=!!on;
   if(r.on&&!(parseFloat(r.amt)>0)&&(_bp.pm||'amt')==='amt'){
     const b=_bp.bal[id];
@@ -16725,7 +16790,10 @@ function _bpPeriodMode(m){
     set('bp-upto',_bp.upto);
   }
   if(m==='amt'){
-    Object.keys(_bp.rows).forEach(id=>{const r=_bp.rows[id];r.per=null;r.edited=false;_bpSyncQty(id);});
+    Object.keys(_bp.rows).forEach(id=>{
+      const r=_bp.rows[id];r.per=null;r.edited=false;_bpSyncQty(id);
+      if((_bp.tasks[id]||[]).length>1){r.tk=_bpTkBuild(id);_bpTkFillOwed(r);_bpTkSync(id);}else r.tk=null;
+    });
     _bp.perErr='';
     _bpRenderRows();
     return;
@@ -16747,6 +16815,13 @@ function _bpPeriodCalc(){
     r.amt=sc.amount>0?sc.amount.toFixed(2):'';
     r.on=sc.amount>0;
     _bpSyncQty(id);
+    // More than one task in the period → tick-list, each task from its own unpaid work
+    const tks=Object.keys(sc.tasks).map(k=>sc.tasks[k]);
+    if(tks.length>1){
+      tks.sort((a,b)=>(a.role+'|'+a.task).localeCompare(b.role+'|'+b.task));
+      r.tk=tks.map(t=>({key:t.key,role:t.role,task:t.task,unit:t.u,rate:t.qty>0?t.amount/t.qty:0,owed:t.amount,on:t.amount>0,amt:t.amount.toFixed(2),qty:String(_payR2(t.qty)),last:'amt'}));
+      _bpTkSync(id);
+    }else r.tk=null;
   });
   ['bp-all','bp-qty-all'].forEach(i=>{const e=document.getElementById(i);if(e)e.value='';});
   _bpRenderRows();
@@ -16755,6 +16830,7 @@ function _bpPeriodCalc(){
 function _bpPerText(id){
   const r=_bp.rows[id],sc=r&&r.per;if(!sc)return'';
   if(!(sc.n>0))return'No unpaid work '+((_bp.pm||'amt')==='range'?'in this period':'up to that date');
+  if(r.tk)return `📅 ${fmtDate(sc.first)}${sc.last!==sc.first?' → '+fmtDate(sc.last):''} · ${sc.n} ${sc.n===1?'entry':'entries'}`;
   const sk=_ppScale(sc,parseFloat(r.amt)||0);
   return `📅 ${fmtDate(sc.first)}${sc.last!==sc.first?' → '+fmtDate(sc.last):''} · ${sc.n} ${sc.n===1?'entry':'entries'} · <strong style="color:var(--text)">${esc(_ppQtyText(sk.by)||'—')}</strong>${r.edited?' <span style="color:var(--blue)">(amount edited)</span>':''}`;
 }
@@ -16848,7 +16924,7 @@ function _bpApplyQtyAll(){
   const q=parseFloat(v);
   _bpVisible().forEach(s=>{
     const id=String(s.id),r=_bp.rows[id],t=_bpTaskOf(id);
-    if(!r||!r.on||!t)return;
+    if(!r||!r.on||!t||r.tk)return;
     r.qty=v;r.last='qty';
     r.amt=(isFinite(q)&&q>0)?(Math.round(q*t.rate*100)/100).toFixed(2):'';
   });
@@ -16861,7 +16937,7 @@ function _bpApplyAll(){
   const qa=document.getElementById('bp-qty-all');if(qa)qa.value='';
   _bpVisible().forEach(s=>{
     const id=String(s.id),r=_bp.rows[id];
-    if(r&&r.on){r.amt=v;r.last='amt';if((_bp.pm||'amt')!=='amt')r.edited=true;_bpSyncQty(id);}
+    if(r&&r.on&&!r.tk){r.amt=v;r.last='amt';if((_bp.pm||'amt')!=='amt')r.edited=true;_bpSyncQty(id);}
   });
   _bpRenderRows();
 }
@@ -16871,6 +16947,7 @@ function _bpFullBalance(){
   _bpVisible().forEach(s=>{
     const id=String(s.id),b=_bp.bal[id];
     const r=_bp.rows[id];
+    if(r&&r.tk){r.tk.forEach(t=>{if(t.owed>0.004){t.on=true;t.amt=t.owed.toFixed(2);t.last='amt';_bpTkSyncQty(t);}});_bpTkSync(id);return;}
     if(r&&b!==null&&b>0.004){r.on=true;r.amt=b.toFixed(2);r.last='amt';_bpSyncQty(id);}
   });
   const all=document.getElementById('bp-all');if(all)all.value='';
@@ -16881,6 +16958,7 @@ function _bpSelectAll(on){
   _bpVisible().forEach(s=>{
     const id=String(s.id),r=_bp.rows[id],b=_bp.bal[id];
     if(!r)return;
+    if(r.tk){_bpTkSet(r,on);_bpTkSync(id);return;}
     r.on=on;
     if(on&&!(parseFloat(r.amt)>0)&&b!==null&&b>0.004&&(_bp.pm||'amt')==='amt'){r.amt=b.toFixed(2);r.last='amt';_bpSyncQty(id);}
   });
@@ -16902,24 +16980,37 @@ function _bpCommit(picks,date,notes){
   const total=_payR2(picks.reduce((a,p)=>a+p.amt,0));
   let full=0,partial=0,over=0;
   picks.forEach(p=>{
-    const st=_paySettleSummary(p.s.id,p.amt);full+=st.full;partial+=st.partial;
+    // Ticked tasks settle only their own work; a plain payment settles oldest-first
+    const st=p.tasks?_paySettleSummary(p.s.id,0,_bpTgOf(p.tasks)):_paySettleSummary(p.s.id,p.amt);
+    full+=st.full;partial+=st.partial;
+    if(p.tasks){if(p.tasks.some(t=>t.amount>t.owed+0.004))over++;return;}
     const b=_bp.bal[String(p.s.id)];
     if(b!==null&&b!==undefined&&p.amt>Math.max(0,b)+0.004)over++;
   });
-  const list=picks.slice(0,12).map(p=>`• ${p.s.name} — ${cur()}${p.amt.toFixed(2)}${_ppQtyText(p.by)?` (≈ ${_ppQtyText(p.by)})`:''}`).join('\n')+(picks.length>12?`\n… and ${picks.length-12} more`:'');
+  const list=picks.slice(0,12).map(p=>{
+    const head=`• ${p.s.name} — ${cur()}${p.amt.toFixed(2)}`;
+    if(!p.tasks)return head+(_ppQtyText(p.by)?` (≈ ${_ppQtyText(p.by)})`:'');
+    // every ticked task: its own quantity and money, then the person's total
+    let h=head+p.tasks.map(t=>`\n     ✓ ${t.task}${t.role&&t.role!==t.task?' ('+t.role+')':''} — ${t.qty>0?t.qty.toLocaleString()+' '+_pfUnitText(t.unit,t.qty)+' · ':''}${cur()}${t.amount.toFixed(2)}`).join('');
+    if(p.tasks.length>1)h+=`\n     Σ ${_ppQtyText(p.by)?_ppQtyText(p.by)+' · ':''}${cur()}${p.amt.toFixed(2)}`;
+    return h;
+  }).join('\n')+(picks.length>12?`\n… and ${picks.length-12} more`:'');
   const _tq=_bpQtyTotal(picks);
   const msg=`Confirm Bulk Payment:\n${picks.length} staff · Total ${cur()}${total.toFixed(2)}\n${_tq?`Total quantity: ${_tq}\n`:''}${_bpPeriodLine()}${list}\n`
-    +((full||partial)?`Marks ${full} work entr${full===1?'y':'ies'} as paid${partial?` and ${partial} partly paid`:''} (oldest first)\n`:'')
+    +((full||partial)?`Marks ${full} work entr${full===1?'y':'ies'} as paid${partial?` and ${partial} partly paid`:''}\n`:'')
     +(over?`⚠ ${over} payment${over===1?' exceeds':'s exceed'} the unpaid balance (advance)\n`:'')
     +`Date: ${fmtDate(date)}${notes?`\nNotes: ${notes}`:''}\n\nProceed?`;
   // Declined → bring the form back exactly as it was instead of losing the work
   if(!confirm(msg)){openBulkPayForm(true);return;}
-  const payloads=picks.map(p=>stampEntry({id:uid(),staffId:p.s.id,date,amount:p.amt,notes,...(p.meta?{payQty:p.meta.qty,payTask:p.meta.task,payRole:p.meta.role,payUnit:p.meta.unit,payRate:p.meta.rate}:{}),..._ppPayFields(p.period)}));
+  const payloads=picks.map(p=>stampEntry({id:uid(),staffId:p.s.id,date,amount:p.amt,notes,
+    ...(p.meta?{payQty:p.meta.qty,payTask:p.meta.task,payRole:p.meta.role,payUnit:p.meta.unit,payRate:p.meta.rate}:{}),
+    ...(p.tasks?{payTasks:p.tasks.map(t=>({key:t.key,role:t.role,task:t.task,unit:t.unit,qty:t.qty,amount:t.amount,rate:t.rate})),...(!p.period&&_ppQtyArr(p.by).length?{payQtys:_ppQtyArr(p.by)}:{})}:{}),
+    ..._ppPayFields(p.period)}));
   // One audit entry per payment (same shape as logAuditEvent), written in the
   // same update as the payments so a big batch only saves and re-renders once.
   const ts=new Date().toISOString(),au=USER||{};
   const audits=picks.map(p=>({id:uid(),ts,date:today(),time:nowTime(),user:au.username||'—',role:au.role||'—',
-    action:'CREATE',entity:'Staff Payment',detail:`Staff ID:${p.s.id} · Amount:${p.amt} · Date:${date}${_ppQtyText(p.by)?` · Qty:${_ppQtyText(p.by)}`:''}${p.period?` · Period:${_ppPeriodText(p.period)}`:''} · via Bulk Pay`}));
+    action:'CREATE',entity:'Staff Payment',detail:`Staff ID:${p.s.id} · Amount:${p.amt} · Date:${date}${_ppQtyText(p.by)?` · Qty:${_ppQtyText(p.by)}`:''}${p.tasks?` · Tasks:${p.tasks.map(t=>`${t.task} ${t.qty>0?t.qty+' '+t.unit+' = ':''}${t.amount}`).join('; ')}`:''}${p.period?` · Period:${_ppPeriodText(p.period)}`:''} · via Bulk Pay`}));
   STAB='payments';
   updateData(d=>{
     const log=[...(d.auditLog||[]),...audits];
@@ -16928,6 +17019,143 @@ function _bpCommit(picks,date,notes){
   _bp={staff:[],bal:{},tasks:{},roles:new Set(),roleList:[],hideZero:true,rows:{},date:'',notes:'',pm:'amt',from:'',to:'',upto:'',perErr:''};
   closeModal();
   showToast(`💳 Paid ${picks.length} staff · ${zm(total)}`);
+}
+// ── Bulk Pay: tick the tasks to pay (staff with several roles / tasks) ───────
+// A person with more than one task gets a tick-list instead of one amount box.
+// Every task has its own tick, quantity and amount, worked out independently
+// from that task's rate (type the quantity → amount; type the amount → quantity).
+// The person's total quantity (per unit) and money are the sum of the ticked tasks,
+// and the confirm dialog lists every ticked task. In a period (From – To / Up to)
+// each task starts at its own unpaid work in that period. The payment is saved
+// with payTasks, so its money settles ONLY those tasks' entries (see _paySplit).
+function _bpTkOwed(id){
+  const m={};
+  _staffPayAlloc(id,0).rows.forEach(r=>{
+    const rem=_payR2(r.net-r.paid);if(rem<=0.004)return;
+    const k=_payTaskKey(r.log);
+    if(!m[k])m[k]={role:r.log.role||'',task:r.log.task||'',unit:_ppUnit(r.log),owed:0};
+    m[k].owed=_payR2(m[k].owed+rem);
+  });
+  return m;
+}
+function _bpTkBuild(id){
+  const L=_bp.tasks[id]||[],owed=_bpTkOwed(id),seen={},out=[];
+  L.forEach(t=>{
+    const u=t.unit==='custom'?(t.customUnit||'unit'):t.unit,key=(t.role||'')+'|'+(t.task||'')+'|'+u;
+    if(seen[key])return;seen[key]=1;
+    out.push({key,role:t.role,task:t.task,unit:u,rate:Number(t.rate)||0,owed:owed[key]?owed[key].owed:0,on:false,amt:'',qty:'',last:'amt'});
+  });
+  Object.keys(owed).forEach(k=>{   // unpaid work under a task that is no longer priced: amount only
+    if(seen[k])return;
+    const o=owed[k];
+    out.push({key:k,role:o.role,task:o.task,unit:o.unit,rate:0,owed:o.owed,on:false,amt:'',qty:'',last:'amt'});
+  });
+  return out;
+}
+function _bpTkSyncQty(t){
+  const a=parseFloat(t.amt);
+  t.qty=(t.rate>0&&isFinite(a)&&a>0)?String(Math.round(a/t.rate*100)/100):'';
+}
+// Tick every task that has unpaid work, starting at what is owed on it
+function _bpTkFillOwed(r){
+  r.tk.forEach(t=>{
+    if(t.owed>0.004){t.on=true;t.amt=t.owed.toFixed(2);t.last='amt';_bpTkSyncQty(t);}
+  });
+}
+// Staff tick-box: tick all tasks that have something to pay / untick all
+function _bpTkSet(r,on){
+  r.tk.forEach(t=>{
+    if(!on){t.on=false;return;}
+    if(!(parseFloat(t.amt)>0)&&t.owed>0.004){t.amt=t.owed.toFixed(2);t.last='amt';_bpTkSyncQty(t);}
+    t.on=parseFloat(t.amt)>0;
+  });
+}
+// The ticked tasks with money on them, ready to pay
+function _bpTkTasks(r){
+  return (r.tk||[]).map(t=>{
+    const a=_payR2(parseFloat(t.amt));
+    if(!(t.on&&a>0))return null;
+    const q=parseFloat(t.qty);
+    return {key:t.key,role:t.role,task:t.task,unit:t.unit,rate:t.rate,owed:t.owed,amount:a,qty:(t.rate>0&&isFinite(q)&&q>0)?_payR2(q):0};
+  }).filter(Boolean);
+}
+function _bpTgOf(ts){
+  const g={};
+  (ts||[]).forEach(t=>{g[t.key]=_payR2((g[t.key]||0)+t.amount);});
+  return g;
+}
+// Staff row total = sum of the ticked tasks (the row's amount box is read-only)
+function _bpTkSync(id){
+  const r=_bp.rows[id];if(!r||!r.tk)return;
+  const tot=_payR2(_bpTkTasks(r).reduce((a,t)=>a+t.amount,0));
+  r.amt=tot>0?tot.toFixed(2):'';r.on=tot>0;
+}
+function _bpTkTotalHtml(id){
+  const r=_bp.rows[id];if(!r||!r.tk)return'';
+  const ts=_bpTkTasks(r);
+  if(!ts.length)return `<span style="color:var(--muted)">No task ticked</span>`;
+  const by={};let tot=0;
+  ts.forEach(t=>{if(t.qty>0)_ppAdd(by,t.unit,t.qty);tot=_payR2(tot+t.amount);});
+  const q=_ppQtyText(by);
+  return `${ts.length} of ${r.tk.length} task${r.tk.length===1?'':'s'} · ${q?`<strong style="color:var(--green)">${esc(q)}</strong> · `:''}<strong style="color:var(--green)">${zm(tot)}</strong>`;
+}
+function _bpTkHtml(id,r){
+  const per=(_bp.pm||'amt')!=='amt';
+  const inp='margin-bottom:0;padding:8px 10px;font-size:16px';
+  const rowsHtml=r.tk.map((t,i)=>{
+    const b=`bp-tk-${id}-${i}`;
+    const sub=(t.owed>0.004?`<span style="color:var(--amber);font-weight:700">${zm(t.owed)} ${per?'in period':'owed'}</span> · `:'')
+      +(t.rate>0?`${per?'≈ ':''}${zm(t.rate)}/${esc(t.unit)}`:'amount only');
+    return `<div id="${b}-row" style="padding:8px 0;border-top:1px dashed var(--border);${t.on?'':'opacity:.6'}">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="${b}-chk" ${t.on?'checked':''} onchange="_bpTkChk('${id}',${i},this.checked)" style="width:18px;height:18px"/>
+        <span style="flex:1;min-width:0"><span style="font-weight:600">${esc(t.task)}</span> <span style="font-size:13px;color:var(--muted)">· ${esc(t.role)}</span><br><span style="font-size:13px;color:var(--muted)">${sub}</span></span>
+      </label>
+      <div style="display:grid;grid-template-columns:${t.rate>0?'1fr 1fr':'1fr'};gap:8px;margin:6px 0 0 26px">
+        ${t.rate>0?`<div><div style="font-size:12px;color:var(--muted)">Qty (${esc(t.unit)})</div><input class="fi" id="${b}-qty" type="number" min="0" step="any" inputmode="decimal" placeholder="0" value="${esc(t.qty||'')}" oninput="_bpTkQty('${id}',${i},this.value)" style="${inp}"/></div>`:''}
+        <div><div style="font-size:12px;color:var(--muted)">Amount (${cur()})</div><input class="fi" id="${b}-amt" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00" value="${esc(t.amt||'')}" oninput="_bpTkAmt('${id}',${i},this.value)" style="${inp}"/></div>
+      </div>
+    </div>`;
+  }).join('');
+  const perLine=(per&&r.per)?`<div id="bp-per-${id}" style="font-size:13px;color:var(--muted);margin-bottom:2px">${_bpPerText(id)}</div>`:'';
+  return `<div style="margin:6px 0 0 36px">${perLine}${rowsHtml}<div id="bp-tkt-${id}" style="margin-top:6px;padding:6px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:14px">${_bpTkTotalHtml(id)}</div></div>`;
+}
+// Update the row in place (no re-render, so typing never loses focus)
+function _bpTkRepaint(id){
+  const r=_bp.rows[id];if(!r||!r.tk)return;
+  _bpTkSync(id);
+  const g=x=>document.getElementById(x),act=document.activeElement;
+  r.tk.forEach((t,i)=>{
+    const b=`bp-tk-${id}-${i}`,c=g(b+'-chk'),q=g(b+'-qty'),a=g(b+'-amt'),w=g(b+'-row');
+    if(c)c.checked=!!t.on;
+    if(q&&q!==act)q.value=t.qty||'';
+    if(a&&a!==act)a.value=t.amt||'';
+    if(w)w.style.opacity=t.on?'':'.6';
+  });
+  const sc=document.querySelector(`#bp-rows input.bp-chk[data-id="${id}"]`);if(sc)sc.checked=!!r.on;
+  const sa=document.querySelector(`#bp-rows input.bp-amt[data-id="${id}"]`);if(sa)sa.value=r.amt||'';
+  const tt=g('bp-tkt-'+id);if(tt)tt.innerHTML=_bpTkTotalHtml(id);
+  _bpHint(id);_bpTotals();
+}
+function _bpTkChk(id,i,on){
+  const r=_bp.rows[id],t=r&&r.tk&&r.tk[i];if(!t)return;
+  t.on=!!on;
+  if(t.on&&!(parseFloat(t.amt)>0)&&t.owed>0.004){t.amt=t.owed.toFixed(2);t.last='amt';_bpTkSyncQty(t);}
+  _bpTkRepaint(id);
+}
+function _bpTkAmt(id,i,v){
+  const r=_bp.rows[id],t=r&&r.tk&&r.tk[i];if(!t)return;
+  t.amt=v;t.last='amt';_bpTkSyncQty(t);
+  if(parseFloat(v)>0&&!t.on)t.on=true;
+  _bpTkRepaint(id);
+}
+function _bpTkQty(id,i,v){
+  const r=_bp.rows[id],t=r&&r.tk&&r.tk[i];if(!t||!(t.rate>0))return;
+  t.qty=v;t.last='qty';
+  const q=parseFloat(v);
+  t.amt=(isFinite(q)&&q>0)?(Math.round(q*t.rate*100)/100).toFixed(2):'';
+  if(parseFloat(t.amt)>0&&!t.on)t.on=true;
+  _bpTkRepaint(id);
 }
 // ══ END BULK PAY ═════════════════════════════════════════════
 
