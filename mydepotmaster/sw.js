@@ -25,6 +25,24 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
+// Current version: v0.2.9 (2026-10-19)
+//
+// v0.2.9 changes (2026-10-19) — cloud sync recovers from "HTTP 401 Permission denied":
+//   - A 401 while a token was attached now force-refreshes the Firebase ID token and
+//     retries once (fbGet / fbSet) before reporting a failure. Fixes stale tokens, including
+//     phones whose clock is off so the SDK thinks an expired token is still valid.
+//   - After a silent "Stay Signed In" start, requests wait up to 8s for the Auth session to
+//     finish restoring instead of going out with no token (the old 4s limit was too short on
+//     slow phones). Backs off for 30s after a miss so a truly lost session isn't slowed.
+//   - The "not authorized" self-heal no longer loops. It used to clear its flag and re-sync
+//     even when the grant write failed (which it always does for a uid not yet listed),
+//     retrying every few seconds. Now one attempt per 10 min; the flag clears only if the
+//     grant worked, so Settings and the pill show the real state.
+//   - A successful cloud read clears stale "reconnect" / "not authorized" state, and the
+//     Settings "Last cloud sync" label refreshes after every push instead of every 5 min.
+//   - The "Not Authorized" dialog now shows the exact Firebase console path to add the uid.
+//   - database_rules.json unchanged. No sw.js fetch/cache logic changes — bump only.
+//
 // Current version: v0.2.8 (2026-10-19)
 //
 // v0.2.8 changes (2026-10-19) — Payroll Run and the stock check are Pro plan features:
@@ -1611,7 +1629,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.2.8';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.2.9';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

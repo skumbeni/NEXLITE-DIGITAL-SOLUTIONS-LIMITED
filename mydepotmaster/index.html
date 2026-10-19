@@ -2238,13 +2238,33 @@ async function fbAuthSignOutSilently() {
 // of the time it resolves from memory, so this doesn't add a round trip to
 // every request. Returning null here just means the RTDB request goes out
 // unauthenticated — harmless while rules stay open (pre-Phase 4).
-async function _getIdToken() {
+// Fix: _fbAuthSdkReady gives up waiting for the Auth SDK's session restore
+// after 4s. On a slow or memory-starved phone the restore can take longer, so
+// the first sync after a silent auto-login went out with NO token and came
+// back 401 \"Permission denied\". If the app believes someone is signed in but
+// the SDK has no user yet, wait a little longer for the restore to finish
+// before sending anything unauthenticated. Gives up for 30s after a miss so a
+// genuinely lost session doesn't make every request wait.
+let _authWaitGaveUpUntil = 0;
+async function _getIdToken(forceRefresh) {
   try {
     await window._fbAuthSdkReady;
     if (typeof firebase === 'undefined' || !firebase.auth) return null;
-    const user = firebase.auth().currentUser;
+    let user = firebase.auth().currentUser;
+    if (!user && USER && Date.now() >= _authWaitGaveUpUntil) {
+      const deadline = Date.now() + 8000;
+      while (!user && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 250));
+        user = firebase.auth().currentUser;
+      }
+      if (!user) _authWaitGaveUpUntil = Date.now() + 30000;
+    }
     if (!user) return null;
-    return await user.getIdToken();
+    _authWaitGaveUpUntil = 0;
+    // forceRefresh: skip the SDK's cached token. Used for the one retry after a
+    // 401 — a phone with a wrong clock can hold a token the server already
+    // considers expired while the SDK still thinks it is valid.
+    return await user.getIdToken(!!forceRefresh);
   } catch (e) {
     console.warn('_getIdToken failed (request will go out unauthenticated):', e);
     return null;
@@ -2260,33 +2280,42 @@ function _withAuthParam(url, idToken) {
 
 // Firebase Realtime Database REST API helpers (no SDK needed)
 async function fbGet(path) {
-  const idToken = await _getIdToken();
-  const url = _withAuthParam(FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json', idToken);
-  const acToken = await _getAppCheckToken();
-  const headers = acToken ? { 'X-Firebase-AppCheck': acToken } : {};
-  const res = await _fetchWithTimeout(url, { headers }, _FB_TIMEOUT_MS);
-  if (!res.ok) {
-    const body = await res.text().catch(()=>'');
-    throw new Error('HTTP ' + res.status + (body ? ': ' + body.slice(0,120) : ''));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const idToken = await _getIdToken(attempt > 0);
+    const url = _withAuthParam(FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json', idToken);
+    const acToken = await _getAppCheckToken();
+    const headers = acToken ? { 'X-Firebase-AppCheck': acToken } : {};
+    const res = await _fetchWithTimeout(url, { headers }, _FB_TIMEOUT_MS);
+    // A 401 with a token attached means the token itself was rejected (stale,
+    // or clock skew). Refresh it and retry once before reporting a failure.
+    if (res.status === 401 && idToken && attempt === 0) continue;
+    if (!res.ok) {
+      const body = await res.text().catch(()=>'');
+      throw new Error('HTTP ' + res.status + (body ? ': ' + body.slice(0,120) : ''));
+    }
+    return res.json();
   }
-  return res.json();
 }
 
 async function fbSet(path, data) {
-  const idToken = await _getIdToken();
-  const url = _withAuthParam(FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json', idToken);
-  const acToken = await _getAppCheckToken();
-  const headers = { 'Content-Type': 'application/json', ...(acToken ? { 'X-Firebase-AppCheck': acToken } : {}) };
-  const res = await _fetchWithTimeout(url, {
-    method: 'PUT',
-    headers,
-    body: JSON.stringify(data)
-  }, _FB_TIMEOUT_MS);
-  if (!res.ok) {
-    const body = await res.text().catch(()=>'');
-    throw new Error('HTTP ' + res.status + (body ? ': ' + body.slice(0,120) : ''));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const idToken = await _getIdToken(attempt > 0);
+    const url = _withAuthParam(FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json', idToken);
+    const acToken = await _getAppCheckToken();
+    const headers = { 'Content-Type': 'application/json', ...(acToken ? { 'X-Firebase-AppCheck': acToken } : {}) };
+    const res = await _fetchWithTimeout(url, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(data)
+    }, _FB_TIMEOUT_MS);
+    // See fbGet: refresh the token and retry once on a 401 before failing.
+    if (res.status === 401 && idToken && attempt === 0) continue;
+    if (!res.ok) {
+      const body = await res.text().catch(()=>'');
+      throw new Error('HTTP ' + res.status + (body ? ': ' + body.slice(0,120) : ''));
+    }
+    return res.json();
   }
-  return res.json();
 }
 
 // Write only if the key does not yet exist in Firebase.
@@ -2457,11 +2486,13 @@ function _refreshNotifBadge(){
 // only once, so a failed write here just gets retried on the next call site
 // that has the same (installId, uid) pair — never blocks the caller's flow.
 async function _grantAuthorizedUid(installId, uid) {
-  if (!installId || !uid) return;
+  if (!installId || !uid) return false;
   try {
     await fbSet('depots/' + installId + '/authorizedUids/' + uid, true);
+    return true;
   } catch (e) {
     console.warn('_grantAuthorizedUid failed (will retry on next confirmed login):', e && e.message || e);
+    return false;
   }
 }
 
@@ -2553,6 +2584,14 @@ let _fbAuthSessionLost = false;
 // an automatic repair attempt, instead of pill/toast saying "tap to
 // reconnect" for something reconnecting can't fix.
 let _fbAuthorizationDenied = false;
+// Fix: the self-heal below used to clear the denied flag and re-schedule a sync
+// whether or not the grant write worked. Under the current rules a uid that is
+// not already in authorizedUids can never grant itself, so the grant always
+// failed silently -> flag cleared -> sync retried -> 401 -> heal again, forever
+// (every few seconds), and the Settings label flipped between \"Not authorized\"
+// and a bare \"Sync failing\". Now: at most one heal attempt per 10 minutes, and
+// the flag only clears if the grant really succeeded.
+let _lastAuthHealAt = 0;
 function _flagIfAuthSessionLost(e) {
   const hasAuthSession = !!(typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser);
   if (!USER) return;
@@ -2570,13 +2609,18 @@ function _flagIfAuthSessionLost(e) {
     // Idempotent — safe to call even if the grant already exists.
     const uid = firebase.auth().currentUser.uid;
     const installId = DATA.installId;
-    if (uid && installId) {
-      _grantAuthorizedUid(installId, uid).then(() => {
-        _fbAuthorizationDenied = false;
-        updPill();
-        scheduleFbSync();
+    if (uid && installId && Date.now() - _lastAuthHealAt > 10 * 60 * 1000) {
+      _lastAuthHealAt = Date.now();
+      _grantAuthorizedUid(installId, uid).then(ok => {
+        if (ok) {
+          _fbAuthorizationDenied = false;
+          updPill();
+          scheduleFbSync();
+        }
+        updateLastSyncDisplay();
       });
     }
+    updateLastSyncDisplay();
   }
 }
 
@@ -2624,6 +2668,7 @@ async function _doFbSyncImpl() {
     _fbAuthSessionLost = false; // a successful write proves the Auth session is fine
     _fbAuthorizationDenied = false; // ...and that this uid is authorized too
     updPill();
+    updateLastSyncDisplay(); // Fix: the Settings label only refreshed on a 5-min tick, so it kept showing an old failure after sync recovered
     return true;
   } catch(e) {
     _lastFbSyncError = (e && (e.message || e.status || String(e))) || 'unknown error';
@@ -2631,6 +2676,7 @@ async function _doFbSyncImpl() {
     _flagIfAuthSessionLost(e);
     console.warn('[MDM] Data sync error:', e);
     updPill();
+    updateLastSyncDisplay();
     return false;
   }
 }
@@ -2656,6 +2702,16 @@ async function _fbRestoreDataImpl() {
   if (!key || key === 'MDM-????-????-????') return false;
   try {
     const val = await fbGet('depots/' + key + '/data');
+    // Fix: reading depots/{key}/data needs exactly the same authorizedUids
+    // entry as writing it, so a successful read proves the session and the
+    // grant are both fine. Clear any stale "reconnect" / "not authorized"
+    // state instead of leaving it up until the next successful push.
+    if (_fbAuthSessionLost || _fbAuthorizationDenied) {
+      _fbAuthSessionLost = false;
+      _fbAuthorizationDenied = false;
+      updPill();
+      updateLastSyncDisplay();
+    }
     if (!val || !val._v) return false;
     // Restore if: cloud is newer, OR local has never successfully pulled from cloud.
     // Never skip on a device that has no sync history — that is exactly the
@@ -3935,7 +3991,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.2.8';
+const SW_VERSION  = 'v0.2.9';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -5227,6 +5283,7 @@ function showAuthorizationDeniedInfo(){
       <div><strong>Auth UID:</strong> ${esc(uid)}</div>
     </div>
     <div style="font-size:16px;color:var(--muted);margin-bottom:16px">Share these details with support so your uid can be added to this depot's authorized list.</div>
+    <div style="font-size:14px;color:var(--muted);margin:-8px 0 16px;word-break:break-all">Admin fix: Firebase console → Realtime Database → Data → depots → ${esc(DATA.installId||'')} → authorizedUids → add child <strong>${esc(uid)}</strong> with value <strong>true</strong>.</div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Close</button><button class="btn bg" onclick="closeModal();showTab('settings')">Contact Support</button></div>`);
 }
 
