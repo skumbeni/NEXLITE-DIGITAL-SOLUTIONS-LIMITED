@@ -25,9 +25,33 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.4 (2026-10-20)
+// Current version: v0.3.5 (2026-10-20)
 //
-// v0.3.4 changes (2026-10-20) — Cloud sync now sends only what changed:
+// v0.3.5 changes (2026-10-20) — Edit staff payments (single + bulk):
+//   - Payments tab: ✏️ Edit beside 🗑 on every PAID row (admin only). Same guards as
+//     delete: admin password + edit window. Staff is locked; date, amount, notes editable.
+//   - Multi-task rows: tick / quantity / amount per task (same tick-list as Bulk Pay);
+//     total is their sum; saves payTasks + payQtys. Old single-task payments open as
+//     one row, plain payments as one "general, oldest first" amount.
+//   - Each row's task is a dropdown of the priced tasks for that staff member's roles.
+//     Switching task moves key/role/task/unit/rate together; money stays fixed and the
+//     quantity is recalculated, or tick "keep quantity" to recalculate the money.
+//   - One payment can be split across tasks (e.g. K300 loading + K200 stacking).
+//   - Old label-only payments (task label, no payTasks): changing the task converts them
+//     to targeted payments so the change really moves; the preview warns first.
+//   - Review screen before saving: per task, how many entries go back to unpaid / become
+//     paid. Overflow beyond a task's owed work falls into the general pool.
+//   - Save keeps id, staffId, enteredBy, approvalStatus; writes an EDIT audit entry with
+//     the old record. Paid/partial/unpaid is calculated live, so nothing else to fix.
+//   - Payroll-run payments (runId): amount and task locked; only date and notes change,
+//     so the run's payouts never go out of sync.
+//   - Bulk edit: tick PAID rows (or "Select all paid" per staff) → "Edit selected" bar.
+//     Change date, notes, amount (set / ± amount / ± %) and task for all; each row stays
+//     editable. Payments outside the edit window, or staff without that task priced, are
+//     skipped and listed. One save, one audit entry per payment, before → after total.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// v0.3.4 changes (2026-10-20) — Cloud sync now sends only what changed:// v0.3.4 changes (2026-10-20) — Cloud sync now sends only what changed:
 //   - Every sync used to upload ALL depot data (books, photos, contracts, logs).
 //     Now the app remembers what the cloud last held and sends only the entries
 //     that were added / edited / deleted (Firebase PATCH). First sync after
@@ -1709,7 +1733,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.4';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.5';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

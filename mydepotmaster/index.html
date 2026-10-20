@@ -4165,7 +4165,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.4';
+const SW_VERSION  = 'v0.3.5';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -12990,8 +12990,9 @@ function renderPayments(){
           <td></td>
         </tr>`;
       } else {if(isApproved(ev._rec))cumPaid+=ev.amount;
+        const _pEd=isWithin24h(ev._rec,true);   // same edit window as delete
         return `<tr class="unp-row">
-          <td style="white-space:nowrap">${fmtDate(ev.date)}${approvalBadge(ev._rec)}</td>
+          <td style="white-space:nowrap">${USER.role==='admin'?`<input type="checkbox" class="px-chk" data-sid="${esc(String(s.id))}" ${_pxSel.has(String(ev.id))?'checked':''} onchange="_pxTog('${ev.id}',this.checked)" style="width:18px;height:18px;vertical-align:middle;margin-right:6px"/>`:''}${fmtDate(ev.date)}${approvalBadge(ev._rec)}</td>
           <td><span class="bdg bb2">PAID</span></td>
           <td style="font-size:17px;color:var(--muted)">${ev.notes||'PAYMENT'}${_ppPayNote(ev._rec)}</td>
           <td style="color:var(--muted);text-align:right">—</td>
@@ -12999,7 +13000,7 @@ function renderPayments(){
           <td style="color:var(--green);font-weight:700;text-align:right">${zm(cumEarned)}</td>
           <td style="color:var(--blue);font-weight:700;text-align:right">${zm(cumPaid)}</td>
           <td style="color:${(cumEarned-cumPaid)>0?'var(--amber)':'var(--green)'};font-weight:700;text-align:right">${zm(cumEarned-cumPaid)}</td>
-          ${USER.role==='admin'?`<td><button class="delbtn" onclick="delPayment('${ev.id}')">🗑</button></td>`:'<td></td>'}
+          ${USER.role==='admin'?`<td style="white-space:nowrap"><button class="${_pEd?'editbtn':'editbtn disabled'}" onclick="${_pEd?`openEditPayment('${ev.id}')`:''}" title="${_pEd?'Edit':'Edit window closed (>'+_editWindowLabel(true)+')'}">✏️</button> <button class="delbtn" onclick="delPayment('${ev.id}')">🗑</button></td>`:'<td></td>'}
         </tr>`;
       }
     }).join('');
@@ -13015,7 +13016,7 @@ function renderPayments(){
         <div class="sl">${unpaid>0?'UNPAID BALANCE':'FULLY PAID ✓'}</div>
       </div>
       ${events.length===0?'<div class="empty">No work logs or payments yet</div>':`
-      <div style="text-align:right;margin-bottom:8px"><button class="btn bg bsm" onclick="generatePayslip('${s.id}')">🧾 Generate Payslip</button></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px">${USER.role==='admin'&&sPays.length?`<label style="display:flex;align-items:center;gap:6px;font-size:15px;cursor:pointer"><input type="checkbox" data-pxall="${esc(String(s.id))}" ${sPays.every(p=>_pxSel.has(String(p.id)))?'checked':''} onchange="_pxAll('${s.id}',this.checked)" style="width:18px;height:18px"/> Select all paid</label>`:'<span></span>'}<button class="btn bg bsm" onclick="generatePayslip('${s.id}')">🧾 Generate Payslip</button></div>
       <div class="tw"><table>
         <thead><tr><th>Date</th><th>Type</th><th>Details</th><th style="text-align:right">Earned</th><th style="text-align:right">Paid</th><th style="text-align:right;color:var(--green)">Cum.Earned</th><th style="text-align:right;color:var(--blue)">Cum.Paid</th><th style="text-align:right;color:var(--amber)">Unpaid</th><th></th></tr></thead>
         <tbody>${eRows}</tbody>
@@ -13023,6 +13024,7 @@ function renderPayments(){
     </div>`;
   }).join('');
   return `
+    <div id="px-bar-wrap">${_pxBarHtml()}</div>
     <div class="card" style="padding:0">
       <div class="ctitle" style="padding:14px 16px;margin-bottom:0">💳 Payment Summary by Role</div>
       <div class="tw"><table>
@@ -14927,6 +14929,486 @@ function savePayment(sid, amount, date, notes, meta, period){if(isReadOnly()){al
   render();
 }
 function delPayment(id){const _r=(DATA.staffPayments||[]).find(p=>String(p.id)===String(id));if(_r&&!isWithin24h(_r,true)){alert('🔒 This record is older than the '+_editWindowLabel(true)+' edit window and cannot be deleted.');return;}requireAdminPassword('delete this payment record',()=>{logAuditEvent('DELETE','Staff Payment',`ID:${id} · Amount:${_r?_r.amount:''} · Staff:${_r?_r.staffId:''}`,_r);updateData(d=>({...d,staffPayments:(d.staffPayments||[]).filter(p=>String(p.id)!==String(id))}));});}
+
+// ── EDIT PAYMENT ─────────────────────────────────────────────────────────────
+// Step 1: entry point with the same guards as delPayment (admin, edit window,
+// admin password). The edit form itself is built in _doOpenEditPayment (step 2).
+function openEditPayment(id){
+  if(!requireAdmin('edit payment records'))return;
+  if(isReadOnly()){alert('🔒 This account is in read-only mode. Contact your administrator.');return;}
+  const rec=(DATA.staffPayments||[]).find(p=>String(p.id)===String(id));
+  if(!rec){alert('Payment record not found.');return;}
+  if(!isWithin24h(rec,true)){alert('⏰ Editing is only allowed within '+_editWindowLabel(true)+' of entry.');return;}
+  requireAdminPassword('edit this payment record',()=>_doOpenEditPayment(id));
+}
+function _doOpenEditPayment(id){
+  const rec=(DATA.staffPayments||[]).find(p=>String(p.id)===String(id));
+  if(!rec){alert('Payment record not found.');return;}
+  // Staff is LOCKED: an edit may change when / how much / what note, but never
+  // move the money to another person. Shown (marked) even if they are no longer active.
+  const s=DATA.staff.find(x=>String(x.id)===String(rec.staffId));
+  const staffTxt=s?`${s.name} (${staffRoleLabel(s)}${s.status&&s.status!=='active'?' — '+String(s.status).toUpperCase():''})`:'Unknown staff';
+  // Rows: one per task the payment was made for (payTasks), one for an old single-task
+  // payment, or a single "general, oldest first" amount for a plain payment.
+  const _b=_epBuild(rec,s);
+  _ep={id:String(rec.id),sid:String(rec.staffId),mode:_b.mode,legacy:_b.legacy,tk:_b.tk,opts:_epOpts(s),
+       gen:_b.mode==='general'&&Number(rec.amount)>0?Number(rec.amount).toFixed(2):'',
+       staffTxt,date:rec.date||'',notes:rec.notes||'',lock:!!rec.runId,amt0:_payR2(rec.amount)};
+  openModal(_epFormHtml());
+}
+function _epFormHtml(){
+  const L=_ep.lock;
+  return `
+    <div class="mtitle">✏️ Edit Payment</div>
+    <div class="warn">⏰ Editing is only allowed within ${_editWindowLabel(true)} of entry.</div>
+    ${L?`<div class="warn">🔒 Payroll-run payment — amount and tasks are locked so the run's payouts stay in sync. Date and notes can change.</div>`:''}
+    <div class="fw"><div class="fl">Staff Member 🔒</div><input class="fi" id="epy-staff" value="${esc(_ep.staffTxt)}" disabled/></div>
+    <div class="fw"><div class="fl">${L?'Amount Paid 🔒':_ep.mode==='tasks'?'Paid For — tick the tasks':'Amount Paid ('+cur()+')'}</div>
+      <div id="epy-body" style="${_ep.mode==='tasks'&&!L?'border:1px solid var(--border);border-radius:10px;padding:0 12px 10px':''}">${_epBodyHtml()}</div></div>
+    <div class="fw"><div class="fl">Date of Payment</div><input class="fi" type="date" id="epy-date" value="${esc(_ep.date)}"/></div>
+    <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="epy-notes" value="${esc(_ep.notes)}" placeholder="E.G. CASH, MOBILE MONEY…" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveEditPayment('${esc(_ep.id)}')">${L?'✓ Save Changes':'Review Changes →'}</button></div>`;
+}
+function _epBack(){openModal(_epFormHtml());}
+// Would converting this old label-only payment change how it settles work?
+function _epConverting(){
+  if(!_ep.legacy)return false;
+  const ts=_epTkTasks();
+  return ts.length!==1||ts[0].key!==_ep.tk[0].origKey;
+}
+// The updated record: keeps id, staffId, enteredBy, approvalStatus (and everything else untouched)
+function _epBuildRec(rec,c){
+  const u={...rec,date:_ep.date,notes:_ep.notes,amount:c.amount};
+  if(c.mode==='general'){
+    const old=_payR2(rec.amount),f=old>0?c.amount/old:1;
+    if(Math.abs(f-1)>1e-9){   // quantity follows the money
+      if(Array.isArray(rec.payQtys))u.payQtys=rec.payQtys.map(x=>({unit:x.unit,qty:_payR2(Number(x.qty||0)*f)}));
+      if(Number(rec.payQty)>0)u.payQty=_payR2(Number(rec.payQty)*f);
+    }
+  }else if(_ep.legacy&&!_epConverting()){
+    const t=c.tasks[0];
+    if(t.qty>0)u.payQty=t.qty;else delete u.payQty;
+  }else{
+    ['payTask','payRole','payUnit','payRate','payQty'].forEach(k=>{delete u[k];});   // old label → targeted payTasks
+    u.payTasks=c.tasks.map(t=>({key:t.key,role:t.role,task:t.task,unit:t.unit,qty:t.qty,amount:t.amount,rate:t.rate}));
+    if(!rec.payMode){if(c.qtys.length)u.payQtys=c.qtys;else delete u.payQtys;}
+  }
+  u.id=rec.id;u.staffId=rec.staffId;
+  if(rec.enteredBy!==undefined)u.enteredBy=rec.enteredBy;
+  if(rec.approvalStatus!==undefined)u.approvalStatus=rec.approvalStatus;
+  return u;
+}
+// Paid / partial / unpaid per work log for one person, with a given list of payments
+function _epAllocFor(sid,pays,noPool){
+  const st=(DATA.staff||[]).find(x=>String(x.id)===sid);
+  if(st&&st.payType==='salary')return [];
+  const logs=approvedArr((DATA.staffLogs||[]).filter(l=>String(l.staffId)===sid&&(!l.entryType||l.entryType==='work')));
+  const sp=_paySplit(approvedArr((pays||[]).filter(p=>String(p.staffId)===sid)));
+  return _payAllocCore(logs,noPool?0:sp.general+_lnPoolFor(sid),sp.targets).rows;
+}
+function _epPreviewHtml(rec,upd,c){
+  const sid=String(rec.staffId),all=DATA.staffPayments||[],same=p=>String(p.id)===String(rec.id);
+  const before=_epAllocFor(sid,all),after=_epAllocFor(sid,all.map(p=>same(p)?upd:p)),without=_epAllocFor(sid,all.filter(p=>!same(p)),true);
+  const bm=new Map();before.forEach(r=>bm.set(String(r.log.id),r.status));
+  const g={};
+  after.forEach(r=>{
+    const was=bm.get(String(r.log.id));if(was===r.status)return;
+    const k=r.log.task||r.log.role||'Work',o=g[k]=g[k]||{unpaid:0,paid:0,partial:0};
+    o[r.status]++;
+  });
+  const lines=Object.keys(g).map(k=>{
+    const o=g[k],bits=[];
+    if(o.unpaid)bits.push(`<strong style="color:var(--amber)">${o.unpaid} go back to unpaid</strong>`);
+    if(o.paid)bits.push(`<strong style="color:var(--green)">${o.paid} become paid</strong>`);
+    if(o.partial)bits.push(`${o.partial} become partly paid`);
+    return `<div style="margin:4px 0"><strong>${esc(k)}:</strong> ${bits.join(' · ')}</div>`;
+  }).join('')||`<div style="color:var(--muted)">No work entry changes status.</div>`;
+  // overflow: money aimed at a task beyond what that task still owes joins the general pool
+  const owed={};without.forEach(r=>{const rem=_payR2(r.net-r.paid);if(rem>0.004){const k=_payTaskKey(r.log);owed[k]=_payR2((owed[k]||0)+rem);}});
+  const over=(upd.payTasks||[]).map(t=>({t,x:_payR2(t.amount-(owed[t.key]||0))})).filter(o=>o.x>0.004&&c.mode==='tasks');
+  const conv=_epConverting();
+  const oldTxt=(rec.payTask||'').trim();
+  const dChg=[];
+  if(upd.date!==rec.date)dChg.push(`Date ${esc(fmtDate(rec.date))} → ${esc(fmtDate(upd.date))}`);
+  if((upd.notes||'')!==(rec.notes||''))dChg.push('Notes changed');
+  return `
+    <div class="mtitle">🔎 Review Changes</div>
+    <div style="font-size:15px;margin-bottom:8px">${esc(_ep.staffTxt)}<br>Amount <strong>${zm(rec.amount)}</strong> → <strong style="color:var(--green)">${zm(upd.amount)}</strong>${dChg.length?'<br><span style="font-size:13px;color:var(--muted)">'+dChg.join(' · ')+'</span>':''}</div>
+    ${conv?`<div class="warn">⚠ This old payment only had a task label${oldTxt?' ('+esc(oldTxt)+')':''}, so it paid the oldest work first. Saving makes it a targeted payment: it will settle only ${esc((upd.payTasks||[]).map(t=>t.task).join(' + '))}.</div>`:''}
+    <div style="border:1px solid var(--border);border-radius:10px;padding:8px 12px;font-size:15px">${lines}</div>
+    ${over.length?`<div style="font-size:13px;color:var(--muted);margin-top:8px">${over.map(o=>esc(o.t.task)+': '+zm(o.x)+' is more than its owed work').join(' · ')} — the extra falls into the general pool, so nothing is lost.</div>`:''}
+    <div class="mact"><button class="btn bo" onclick="_epBack()">← Back</button><button class="btn bg" onclick="saveEditPayment('${esc(_ep.id)}',true)">✓ Confirm &amp; Save</button></div>`;
+}
+// Step 1 (no 2nd arg): validate and show the preview. Step 2 (go=true): write it.
+function saveEditPayment(id,go){
+  if(!requireAdmin('edit payment records'))return;
+  if(isReadOnly()){alert('🔒 This account is in read-only mode. Contact your administrator.');return;}
+  const rec=(DATA.staffPayments||[]).find(p=>String(p.id)===String(id));
+  if(!rec||!_ep||_ep.id!==String(id)){alert('Payment record not found.');return;}
+  if(!isWithin24h(rec,true)){alert('⏰ Editing is only allowed within '+_editWindowLabel(true)+' of entry.');return;}
+  const dEl=document.getElementById('epy-date'),nEl=document.getElementById('epy-notes');
+  if(dEl)_ep.date=dEl.value;if(nEl)_ep.notes=nEl.value.trim();
+  if(!_ep.date){alert('Please choose the payment date.');return;}
+  let upd,c=null;
+  if(_ep.lock){upd={...rec,date:_ep.date,notes:_ep.notes};go=true;}   // run payment: date + notes only
+  else{
+    c=_epCollect();
+    if(!(c.amount>0)){alert(_ep.mode==='tasks'?'Tick at least one task and enter an amount.':'Enter the amount paid.');return;}
+    upd=_epBuildRec(rec,c);
+    if(!go){openModal(_epPreviewHtml(rec,upd,c));return;}
+  }
+  const sid=String(rec.staffId);
+  const tk=upd.payTasks?` · Tasks:${upd.payTasks.map(t=>`${t.task} ${t.qty>0?t.qty+' '+t.unit+' = ':''}${t.amount}`).join('; ')}`:'';
+  updateData(d=>({...d,staffPayments:(d.staffPayments||[]).map(p=>String(p.id)===String(id)?upd:p)}));
+  logAuditEvent('EDIT','Staff Payment',`ID:${id} · Staff:${sid} · Amount:${rec.amount}→${upd.amount} · Date:${rec.date}→${upd.date}${tk}${_ep.lock?' · Run payment (date/notes only)':''}${_ep.legacy&&_epConverting()?' · Converted label-only payment to targeted':''}`,rec);
+  closeModal();
+  showToast('✏️ Payment updated');
+}
+
+// ── BULK EDIT PAYMENTS ───────────────────────────────────────────────────────
+// Tick PAID rows (or "Select all paid" per staff), then "Edit selected". One modal
+// changes date / notes / amount / task for all of them; every row stays editable.
+let _pxSel=new Set();
+let _px={ids:[],date:'',nMode:'keep',notes:'',aMode:'keep',aVal:'',taskKey:'',ov:{},off:{}};
+function _pxBarHtml(){
+  if(!USER||USER.role!=='admin'){_pxSel.clear();return '';}
+  const all=DATA.staffPayments||[];
+  [..._pxSel].forEach(id=>{if(!all.some(p=>String(p.id)===id))_pxSel.delete(id);});
+  if(!_pxSel.size)return '';
+  const tot=all.filter(p=>_pxSel.has(String(p.id))).reduce((a,p)=>a+Number(p.amount||0),0);
+  return `<div style="position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 12px;margin-bottom:10px;border-radius:10px;background:var(--surface);border:1px solid var(--border)"><span style="flex:1;min-width:120px;font-weight:700">✏️ ${_pxSel.size} selected · ${zm(tot)}</span><button class="btn bg bsm" onclick="openBulkEditPayments()">Edit selected</button><button class="btn bo bsm" onclick="_pxClear()">Clear</button></div>`;
+}
+function _pxBar(){
+  const e=document.getElementById('px-bar-wrap');if(e)e.innerHTML=_pxBarHtml();
+  document.querySelectorAll('[data-pxall]').forEach(c=>{
+    const ps=(DATA.staffPayments||[]).filter(p=>String(p.staffId)===c.dataset.pxall);
+    c.checked=ps.length>0&&ps.every(p=>_pxSel.has(String(p.id)));
+  });
+}
+function _pxTog(id,on){id=String(id);if(on)_pxSel.add(id);else _pxSel.delete(id);_pxBar();}
+function _pxAll(sid,on){
+  (DATA.staffPayments||[]).filter(p=>String(p.staffId)===String(sid)).forEach(p=>{if(on)_pxSel.add(String(p.id));else _pxSel.delete(String(p.id));});
+  document.querySelectorAll('.px-chk').forEach(c=>{if(c.dataset.sid===String(sid))c.checked=!!on;});
+  _pxBar();
+}
+function _pxClear(){_pxSel.clear();document.querySelectorAll('.px-chk').forEach(c=>{c.checked=false;});_pxBar();}
+function openBulkEditPayments(){
+  if(!requireAdmin('edit payment records'))return;
+  if(isReadOnly()){alert('🔒 This account is in read-only mode. Contact your administrator.');return;}
+  if(!_pxSel.size){alert('Tick at least one PAID row first.');return;}
+  requireAdminPassword('edit these payment records',()=>{
+    _px={ids:[..._pxSel],date:'',nMode:'keep',notes:'',aMode:'keep',aVal:'',taskKey:'',ov:{},off:{}};
+    openModal(_pxFormHtml());
+  });
+}
+function _pxTaskOpts(){
+  const m=new Map();
+  _px.ids.forEach(id=>{
+    const r=(DATA.staffPayments||[]).find(p=>String(p.id)===id);
+    const st=r&&(DATA.staff||[]).find(x=>String(x.id)===String(r.staffId));
+    if(!st)return;
+    _epOpts(st).forEach(o=>{const e=m.get(o.key)||{o,staff:new Set()};e.staff.add(String(st.id));m.set(o.key,e);});
+  });
+  return [...m.values()];
+}
+function _pxFormHtml(){
+  const sel='class="fi" style="margin-bottom:6px"';
+  const to=_pxTaskOpts().map(e=>`<option value="${esc(e.o.key)}"${_px.taskKey===e.o.key?' selected':''}>${esc(e.o.role)} · ${esc(e.o.task)} (${esc(e.o.unit)}) — ${e.staff.size} staff</option>`).join('');
+  return `
+    <div class="mtitle">✏️ Edit ${_px.ids.length} Payments</div>
+    <div class="warn">Leave a field on "keep" to leave it alone. Payments outside the ${_editWindowLabel(true)} edit window, or for staff without that task priced, are skipped and listed.</div>
+    <div class="fw"><div class="fl">New Date</div><input class="fi" type="date" value="${esc(_px.date)}" oninput="_pxSet('date',this.value)"/></div>
+    <div class="fw"><div class="fl">Notes</div>
+      <select ${sel} onchange="_pxSet('nMode',this.value)"><option value="keep"${_px.nMode==='keep'?' selected':''}>Keep notes</option><option value="replace"${_px.nMode==='replace'?' selected':''}>Replace with…</option><option value="append"${_px.nMode==='append'?' selected':''}>Add to end…</option></select>
+      <input class="fi" value="${esc(_px.notes)}" placeholder="NOTES" oninput="this.value=this.value.toUpperCase();_pxSet('notes',this.value)"/></div>
+    <div class="fw"><div class="fl">Amount (${cur()})</div>
+      <select ${sel} onchange="_pxSet('aMode',this.value)"><option value="keep"${_px.aMode==='keep'?' selected':''}>Keep amounts</option><option value="set"${_px.aMode==='set'?' selected':''}>Set every amount to…</option><option value="add"${_px.aMode==='add'?' selected':''}>± Amount (use + or −)</option><option value="pct"${_px.aMode==='pct'?' selected':''}>± Percent (use + or −)</option></select>
+      <input class="fi" type="number" inputmode="decimal" step="any" value="${esc(_px.aVal)}" placeholder="E.G. 50 OR -10" oninput="_pxSet('aVal',this.value)"/></div>
+    <div class="fw"><div class="fl">Task</div>
+      <select ${sel} onchange="_pxSet('taskKey',this.value)"><option value="">— Keep each payment's task —</option>${to}</select>
+      <div style="font-size:13px;color:var(--muted)">Money stays the same; the quantity is recalculated at the new task's rate.</div></div>
+    <div id="pxe-list">${_pxListHtml()}</div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="_pxCommit()">✓ Save All</button></div>`;
+}
+function _pxSet(k,v){_px[k]=v;_pxRefresh();}
+function _pxRefresh(){const e=document.getElementById('pxe-list');if(e)e.innerHTML=_pxListHtml();}
+function _pxOv(id,v){if(String(v).trim()==='')delete _px.ov[id];else _px.ov[id]=v;_pxRefresh();}
+function _pxOff(id,off){_px.off[id]=!!off;_pxRefresh();}
+// What would happen to one payment with the current settings (skip reason, or the updated record)
+function _pxCompute(id){
+  const rec=(DATA.staffPayments||[]).find(p=>String(p.id)===String(id));
+  if(!rec)return {id:String(id),skip:'Record not found',rec:{}};
+  const st=(DATA.staff||[]).find(x=>String(x.id)===String(rec.staffId));
+  const r={id:String(id),rec,s:st,skip:'',note:'',upd:null};
+  if(!isWithin24h(rec,true)){r.skip='Edit window closed';return r;}
+  const u={...rec},old=_payR2(rec.amount),locked=!!rec.runId;
+  if(_px.date)u.date=_px.date;
+  const tx=(_px.notes||'').trim().toUpperCase();
+  if(_px.nMode==='replace')u.notes=tx;else if(_px.nMode==='append'&&tx)u.notes=(rec.notes?rec.notes+' · ':'')+tx;
+  let na=old;const v=parseFloat(_px.aVal);
+  if(_px.aMode!=='keep'&&isFinite(v))na=_payR2(_px.aMode==='set'?v:_px.aMode==='add'?old+v:old*(1+v/100));
+  const ov=parseFloat(_px.ov[id]);if(isFinite(ov))na=_payR2(ov);
+  const wantAmt=Math.abs(na-old)>0.004,wantTask=!!_px.taskKey;
+  if(locked&&(wantAmt||wantTask)){r.note='Run payment — amount/task locked (date & notes only)';}
+  else if(wantAmt||wantTask){
+    if(!(na>0)){r.skip='Amount would be zero or negative';return r;}
+    const pts=Array.isArray(rec.payTasks)&&rec.payTasks.length?rec.payTasks:null;
+    if(wantTask){
+      if(!st){r.skip='Staff not found';return r;}
+      const o=_epOpts(st).find(x=>x.key===_px.taskKey);
+      if(!o){r.skip='Task not priced for '+st.name;return r;}
+      if(!pts&&!rec.payTask){r.skip='No task on this payment';return r;}
+      if(pts&&pts.length>1){r.skip='Split across tasks — edit it on its own';return r;}
+      ['payTask','payRole','payUnit','payRate','payQty'].forEach(k=>{delete u[k];});
+      const q=o.rate>0?_payR2(na/o.rate):0;
+      u.payTasks=[{key:o.key,role:o.role,task:o.task,unit:o.unit,qty:q,amount:na,rate:o.rate}];
+      if(!rec.payMode){if(q>0)u.payQtys=[{unit:o.unit,qty:q}];else delete u.payQtys;}
+      if(!pts)r.note='Old label → targeted payment';
+    }else{
+      const f=old>0?na/old:1;
+      if(pts){
+        let left=na;
+        u.payTasks=pts.map((t,i)=>{const a=i===pts.length-1?_payR2(left):_payR2(Number(t.amount||0)*f);left=_payR2(left-a);const rt=Number(t.rate)||0;return {...t,amount:a,qty:rt>0?_payR2(a/rt):_payR2(Number(t.qty||0)*f)};});
+        if(!rec.payMode){const by={};u.payTasks.forEach(t=>{if(t.qty>0)_ppAdd(by,t.unit,t.qty);});const qa=_ppQtyArr(by);if(qa.length)u.payQtys=qa;else delete u.payQtys;}
+      }else{
+        if(Array.isArray(rec.payQtys))u.payQtys=rec.payQtys.map(x=>({unit:x.unit,qty:_payR2(Number(x.qty||0)*f)}));
+        if(Number(rec.payQty)>0)u.payQty=_payR2(Number(rec.payQty)*f);
+      }
+    }
+    u.amount=na;
+  }
+  u.id=rec.id;u.staffId=rec.staffId;
+  if(rec.enteredBy!==undefined)u.enteredBy=rec.enteredBy;
+  if(rec.approvalStatus!==undefined)u.approvalStatus=rec.approvalStatus;
+  if(JSON.stringify(u)===JSON.stringify(rec)){r.skip=r.note||'No change';r.note='';return r;}
+  r.upd=u;return r;
+}
+function _pxPlan(){
+  const items=_px.ids.map(_pxCompute);
+  const picks=items.filter(x=>x.upd&&!_px.off[x.id]);
+  const before=_payR2(picks.reduce((a,x)=>a+Number(x.rec.amount||0),0));
+  const after=_payR2(picks.reduce((a,x)=>a+Number(x.upd.amount||0),0));
+  // how many work entries flip paid / partial / unpaid
+  let flips=0;
+  const by={};picks.forEach(x=>{(by[String(x.rec.staffId)]=by[String(x.rec.staffId)]||[]).push(x);});
+  const all=DATA.staffPayments||[],rep=new Map(picks.map(x=>[x.id,x.upd]));
+  Object.keys(by).forEach(sid=>{
+    const b=_epAllocFor(sid,all),a=_epAllocFor(sid,all.map(p=>rep.get(String(p.id))||p));
+    const m=new Map(b.map(r=>[String(r.log.id),r.status]));
+    a.forEach(r=>{if(m.get(String(r.log.id))!==r.status)flips++;});
+  });
+  return {items,picks,before,after,flips,skipped:items.filter(x=>x.skip)};
+}
+function _pxListHtml(){
+  const P=_pxPlan(),d=_payR2(P.after-P.before);
+  const rows=P.items.filter(x=>!x.skip).map(x=>{
+    const off=!!_px.off[x.id];
+    return `<div style="display:flex;gap:8px;align-items:center;padding:6px 0;border-top:1px solid var(--border);${off?'opacity:.5':''}"><input type="checkbox" ${off?'':'checked'} onchange="_pxOff('${esc(x.id)}',!this.checked)" style="width:18px;height:18px"/><div style="flex:1;min-width:0;font-size:14px"><strong>${esc(x.s?x.s.name:'?')}</strong> · ${esc(fmtDate(x.upd.date))}<br><span style="color:var(--muted)">${esc((x.upd.payTasks?x.upd.payTasks.map(t=>t.task).join(' + '):x.upd.payTask||'General'))}${x.note?' · '+esc(x.note):''}</span></div><div style="text-align:right"><div style="font-size:13px;color:var(--muted)">${zm(x.rec.amount)} →</div><input class="fi" type="number" inputmode="decimal" step="any" value="${esc(String(x.upd.amount))}" onchange="_pxOv('${esc(x.id)}',this.value)" style="width:96px;margin:0;padding:6px 8px"/></div></div>`;
+  }).join('');
+  const sk=P.skipped.length?`<div style="margin-top:10px;font-size:13px;color:var(--amber)"><strong>Skipped (${P.skipped.length}):</strong>${P.skipped.map(x=>`<div>${esc(x.s?x.s.name:'?')} · ${esc(fmtDate(x.rec.date||''))} — ${esc(x.skip)}</div>`).join('')}</div>`:'';
+  return `<div style="border:1px solid var(--border);border-radius:10px;padding:8px 12px"><div style="font-size:15px;margin-bottom:4px"><strong>${P.picks.length}</strong> of ${P.items.length} will change · Total <strong>${zm(P.before)}</strong> → <strong style="color:var(--green)">${zm(P.after)}</strong>${Math.abs(d)>0.004?` (${d>0?'+':'−'}${zm(Math.abs(d))})`:''}${P.flips?`<br><span style="font-size:13px;color:var(--muted)">${P.flips} work entr${P.flips===1?'y':'ies'} change paid/unpaid status</span>`:''}</div>${rows||'<div style="color:var(--muted);font-size:14px">Nothing would change yet.</div>'}</div>${sk}`;
+}
+// One updateData, one audit entry per payment, then a before → after summary
+function _pxCommit(){
+  if(!requireAdmin('edit payment records'))return;
+  if(isReadOnly()){alert('🔒 This account is in read-only mode. Contact your administrator.');return;}
+  const P=_pxPlan();
+  if(!P.picks.length){alert('Nothing to save — no ticked payment would change.');return;}
+  const ts=new Date().toISOString(),au=USER||{};
+  const audits=P.picks.map(x=>({id:uid(),ts,date:today(),time:nowTime(),user:au.username||'—',role:au.role||'—',
+    action:'EDIT',entity:'Staff Payment',
+    detail:`ID:${x.id} · Staff:${x.rec.staffId} · Amount:${x.rec.amount}→${x.upd.amount} · Date:${x.rec.date}→${x.upd.date}${x.upd.payTasks?` · Tasks:${x.upd.payTasks.map(t=>`${t.task} ${t.qty>0?t.qty+' '+t.unit+' = ':''}${t.amount}`).join('; ')}`:''} · Bulk edit${x.note?' · '+x.note:''}`,
+    before:JSON.stringify(x.rec)}));
+  const by=new Map(P.picks.map(x=>[x.id,x.upd]));
+  STAB='payments';
+  updateData(d=>{
+    const log=[...(d.auditLog||[]),...audits];
+    return {...d,staffPayments:(d.staffPayments||[]).map(p=>by.has(String(p.id))?by.get(String(p.id)):p),auditLog:log.length>2000?log.slice(log.length-2000):log};
+  });
+  P.picks.forEach(x=>_pxSel.delete(x.id));
+  const d=_payR2(P.after-P.before);
+  openModal(`<div class="mtitle">✅ ${P.picks.length} Payment${P.picks.length===1?'':'s'} Updated</div>
+    <div style="font-size:17px;margin-bottom:8px">Total <strong>${zm(P.before)}</strong> → <strong style="color:var(--green)">${zm(P.after)}</strong>${Math.abs(d)>0.004?` (${d>0?'+':'−'}${zm(Math.abs(d))})`:''}</div>
+    ${P.flips?`<div style="font-size:14px;color:var(--muted)">${P.flips} work entr${P.flips===1?'y':'ies'} changed paid/unpaid status.</div>`:''}
+    ${P.skipped.length?`<div style="margin-top:8px;font-size:13px;color:var(--amber)"><strong>Skipped (${P.skipped.length}):</strong>${P.skipped.map(x=>`<div>${esc(x.s?x.s.name:'?')} · ${esc(fmtDate(x.rec.date||''))} — ${esc(x.skip)}</div>`).join('')}</div>`:''}
+    <div class="mact"><button class="btn bg" onclick="closeModal()">Done</button></div>`);
+  _pxBar();
+}
+
+// ── EDIT PAYMENT: task rows (reuses the Bulk Pay tick-list look & maths) ─────
+// _ep holds the form state. mode 'tasks': one row per task, each with a tick, a
+// quantity and an amount; the payment total is the sum of the ticked rows.
+// mode 'general': a plain payment — one amount, settles oldest work first.
+// Row shape = Bulk Pay's (key, role, task, unit, rate, on, amt, qty, last) plus
+// orig / origKey (what the record held) for the save and task-change steps.
+// _ep.legacy = an old single-task payment (task label only, no payTasks).
+let _ep={id:'',sid:'',mode:'general',legacy:false,tk:[],gen:'',opts:[],staffTxt:'',date:'',notes:'',lock:false,amt0:0};
+function _epRateFor(s,role,task,unit){
+  const L=_pfTasksFor(s),u=t=>t.unit==='custom'?(t.customUnit||'unit'):t.unit;
+  const m=L.find(t=>t.role===role&&t.task===task&&u(t)===unit)||L.find(t=>t.role===role&&t.task===task)||(!role?L.find(t=>t.task===task):null);
+  return m?(Number(m.rate)||0):0;
+}
+// Priced tasks this staff member can be paid for (same list Pay uses), keyed like work logs
+function _epOpts(s){
+  const seen={},out=[];
+  _pfTasksFor(s).forEach(t=>{
+    const u=t.unit==='custom'?(t.customUnit||'unit'):t.unit,key=(t.role||'')+'|'+(t.task||'')+'|'+u;
+    if(seen[key])return;seen[key]=1;
+    out.push({key,role:t.role,task:t.task,unit:u,rate:Number(t.rate)||0});
+  });
+  return out;
+}
+// Row header: tick + task dropdown (or plain name when there is nothing to switch to)
+function _epHead(t,i,b,sub){
+  const used=new Set(_ep.tk.filter((x,j)=>j!==i).map(x=>x.key));
+  const opts=_ep.opts.slice();
+  const cur=opts.find(o=>o.key===t.key);
+  if(!cur)opts.unshift({key:t.key,role:t.role,task:t.task,unit:t.unit,rate:t.rate,stale:true});
+  const canSwitch=opts.some(o=>o.key!==t.key&&!used.has(o.key));
+  const chk=`<input type="checkbox" id="${b}-chk" ${t.on?'checked':''} onchange="_epTkChk(${i},this.checked)" style="width:18px;height:18px"/>`;
+  const moved=(t.origKey&&t.key!==t.origKey)?` <span style="color:var(--amber)">· was ${esc(t.origTask||'—')}</span>`:'';
+  const subTxt=`<span style="font-size:13px;color:var(--muted)">${sub}${moved}</span>`;
+  if(!canSwitch)return `<label style="display:flex;align-items:center;gap:8px;cursor:pointer">${chk}<span style="flex:1;min-width:0"><span style="font-weight:600">${esc(t.task)}</span> <span style="font-size:13px;color:var(--muted)">· ${esc(t.role)}</span><br>${subTxt}</span></label>`;
+  const o=opts.map(x=>`<option value="${esc(x.key)}"${x.key===t.key?' selected':''}${x.key!==t.key&&used.has(x.key)?' disabled':''}>${esc(x.role)} · ${esc(x.task)}${x.rate>0?' — '+zm(x.rate)+'/'+esc(x.unit):' (not priced now)'}</option>`).join('');
+  return `<div style="display:flex;align-items:center;gap:8px">${chk}<span style="flex:1;min-width:0"><select class="fi" id="${b}-task" onchange="_epTkTask(${i},this.value)" style="margin-bottom:2px;padding:8px 10px;font-size:15px">${o}</select>${subTxt}</span></div>`;
+}
+// "Keep quantity instead" — only when the task was switched and the record had a quantity
+function _epKeepHtml(t,i){
+  let h='';
+  if(t.key!==t.origKey&&t.rate>0&&parseFloat(t.origQty)>0)h+=`<label style="display:flex;align-items:center;gap:6px;margin:6px 0 0 26px;font-size:13px;color:var(--muted);cursor:pointer"><input type="checkbox" ${t.keep?'checked':''} onchange="_epTkKeep(${i},this.checked)" style="width:16px;height:16px"/> Keep quantity (${esc(String(t.origQty))} ${esc(t.unit)}) instead — money recalculates</label>`;
+  if(t.added)h+=`<div style="margin:6px 0 0 26px"><a href="#" onclick="_epRemoveRow(${i});return false" style="font-size:13px;color:var(--red,#e5484d)">✕ Remove this task</a></div>`;
+  return h;
+}
+// Split one payment across tasks: add a row for another priced task
+function _epAddBtn(){
+  if(_ep.mode!=='tasks')return '';
+  const used=new Set(_ep.tk.map(x=>x.key));
+  if(!_ep.opts.some(o=>!used.has(o.key)))return '';
+  return `<div style="margin-top:8px"><button class="btn bo bsm" onclick="_epAddRow()">➕ Add another task (split)</button></div>`;
+}
+function _epAddRow(){
+  const used=new Set(_ep.tk.map(x=>x.key)),o=_ep.opts.find(x=>!used.has(x.key));
+  if(!o)return;
+  _ep.tk.push({key:o.key,role:o.role,task:o.task,unit:o.unit,rate:o.rate,owed:0,on:true,amt:'',qty:'',last:'amt',orig:'',origKey:'',origQty:'',origTask:'',keep:false,added:true});
+  _epRerender();
+}
+function _epRemoveRow(i){if(_ep.tk[i]&&_ep.tk[i].added){_ep.tk.splice(i,1);_epRerender();}}
+function _epRerender(){const e=document.getElementById('epy-body');if(e)e.innerHTML=_epBodyHtml();}
+// Switch a row to another task: key, role, task, unit and rate move together.
+// Money stays fixed (quantity recalculated) unless "keep quantity" is ticked.
+function _epTkTask(i,key){
+  const t=_ep.tk[i],o=_ep.opts.find(x=>x.key===key);
+  if(!t||!o||o.key===t.key)return;
+  t.key=o.key;t.role=o.role;t.task=o.task;t.unit=o.unit;t.rate=o.rate;
+  if(t.key===t.origKey)t.keep=false;
+  if(t.keep&&parseFloat(t.qty)>0){const q=parseFloat(t.qty);t.amt=(Math.round(q*t.rate*100)/100).toFixed(2);t.last='qty';}
+  else{t.last='amt';_bpTkSyncQty(t);}
+  _epRerender();
+}
+function _epTkKeep(i,on){
+  const t=_ep.tk[i];if(!t)return;
+  t.keep=!!on;
+  if(t.keep){t.qty=String(t.origQty);t.amt=(Math.round(parseFloat(t.qty)*t.rate*100)/100).toFixed(2);t.last='qty';}
+  else{t.amt=t.orig;t.last='amt';_bpTkSyncQty(t);}
+  _epRerender();
+}
+function _epBuild(rec,s){
+  const row=(key,role,task,unit,rate,amount,qty)=>{
+    const a=_payR2(amount),amt=a>0?a.toFixed(2):'',q=Number(qty)>0?String(_payR2(qty)):'';
+    const k=key||((role||'')+'|'+(task||'')+'|'+(unit||''));
+    return {key:k,role:role||'',task:task||'',unit:unit||'',rate:Number(rate)||0,owed:0,on:true,amt,qty:q,last:'amt',orig:amt,origKey:k,origQty:q,origTask:task||'',keep:false};
+  };
+  if(Array.isArray(rec.payTasks)&&rec.payTasks.length){
+    return {mode:'tasks',legacy:false,tk:rec.payTasks.map(x=>row(x.key,x.role,x.task,x.unit,Number(x.rate)>0?x.rate:_epRateFor(s,x.role,x.task,x.unit),x.amount,x.qty))};
+  }
+  if(rec.payTask){
+    const rate=Number(rec.payRate)>0?rec.payRate:_epRateFor(s,rec.payRole,rec.payTask,rec.payUnit||'');
+    return {mode:'tasks',legacy:true,tk:[row('',rec.payRole,rec.payTask,rec.payUnit||'',rate,rec.amount,rec.payQty)]};
+  }
+  return {mode:'general',legacy:false,tk:[]};
+}
+// The ticked rows that carry money
+function _epTkTasks(){
+  return (_ep.tk||[]).map(t=>{
+    const a=_payR2(parseFloat(t.amt));
+    if(!(t.on&&a>0))return null;
+    const q=parseFloat(t.qty);
+    return {key:t.key,role:t.role,task:t.task,unit:t.unit,rate:t.rate,amount:a,qty:(isFinite(q)&&q>0)?_payR2(q):0};
+  }).filter(Boolean);
+}
+// Everything the save step needs: total money, the per-task rows and the quantity per unit
+function _epCollect(){
+  if(_ep.mode==='general'){const a=_payR2(parseFloat(_ep.gen));return {mode:'general',amount:a>0?a:0,tasks:null,qtys:[]};}
+  const ts=_epTkTasks(),by={};let tot=0;
+  ts.forEach(t=>{if(t.qty>0)_ppAdd(by,t.unit,t.qty);tot=_payR2(tot+t.amount);});
+  return {mode:'tasks',amount:tot,tasks:ts,qtys:_ppQtyArr(by)};
+}
+function _epTkTotalHtml(){
+  const ts=_epTkTasks();
+  if(!ts.length)return `<span style="color:var(--muted)">No task ticked</span>`;
+  const by={};let tot=0;
+  ts.forEach(t=>{if(t.qty>0)_ppAdd(by,t.unit,t.qty);tot=_payR2(tot+t.amount);});
+  const q=_ppQtyText(by);
+  return `${ts.length} of ${_ep.tk.length} task${_ep.tk.length===1?'':'s'} · ${q?`<strong style="color:var(--green)">${esc(q)}</strong> · `:''}Total <strong style="color:var(--green)">${zm(tot)}</strong>${Math.abs(tot-_ep.amt0)>0.004?` <span style="color:var(--muted)">(was ${zm(_ep.amt0)})</span>`:''}`;
+}
+function _epBodyHtml(){
+  if(_ep.lock){
+    const r=(DATA.staffPayments||[]).find(p=>String(p.id)===_ep.id)||{};
+    return `<div style="font-weight:700;font-size:18px">${zm(r.amount)}</div><div style="font-size:13px;color:var(--muted);margin-top:4px">${_ppPayNote(r)||'Locked'}</div>`;
+  }
+  if(_ep.mode==='general'){
+    return `<input class="fi" type="number" id="epy-gen" min="0" step="0.01" inputmode="decimal" placeholder="0.00" value="${esc(_ep.gen)}" oninput="_epGen(this.value)"/>
+      <div style="font-size:13px;color:var(--muted);margin-top:4px">General payment — settles the oldest unpaid work first</div>`;
+  }
+  const inp='margin-bottom:0;padding:8px 10px;font-size:16px';
+  const rowsHtml=_ep.tk.map((t,i)=>{
+    const b=`epy-tk-${i}`;
+    const sub=t.rate>0?`${zm(t.rate)}/${esc(t.unit)}`:'amount only';
+    return `<div id="${b}-row" style="padding:8px 0;border-top:1px dashed var(--border);${t.on?'':'opacity:.6'}">
+      ${_epHead(t,i,b,sub)}
+      <div style="display:grid;grid-template-columns:${t.rate>0?'1fr 1fr':'1fr'};gap:8px;margin:6px 0 0 26px">
+        ${t.rate>0?`<div><div style="font-size:12px;color:var(--muted)">Qty (${esc(t.unit)})</div><input class="fi" id="${b}-qty" type="number" min="0" step="any" inputmode="decimal" placeholder="0" value="${esc(t.qty||'')}" oninput="_epTkQty(${i},this.value)" style="${inp}"/></div>`:''}
+        <div><div style="font-size:12px;color:var(--muted)">Amount (${cur()})</div><input class="fi" id="${b}-amt" type="number" min="0" step="0.01" inputmode="decimal" placeholder="0.00" value="${esc(t.amt||'')}" oninput="_epTkAmt(${i},this.value)" style="${inp}"/></div>
+      </div>
+      ${_epKeepHtml(t,i)}
+    </div>`;
+  }).join('');
+  return `${rowsHtml}${_epAddBtn()}<div id="epy-tkt" style="margin-top:6px;padding:6px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;font-size:14px">${_epTkTotalHtml()}</div>`;
+}
+// Update in place (no re-render, so typing never loses focus)
+function _epTkRepaint(){
+  const g=x=>document.getElementById(x),act=document.activeElement;
+  _ep.tk.forEach((t,i)=>{
+    const b=`epy-tk-${i}`,c=g(b+'-chk'),q=g(b+'-qty'),a=g(b+'-amt'),w=g(b+'-row');
+    if(c)c.checked=!!t.on;
+    if(q&&q!==act)q.value=t.qty||'';
+    if(a&&a!==act)a.value=t.amt||'';
+    if(w)w.style.opacity=t.on?'':'.6';
+  });
+  const tt=g('epy-tkt');if(tt)tt.innerHTML=_epTkTotalHtml();
+}
+function _epTkChk(i,on){
+  const t=_ep.tk[i];if(!t)return;
+  t.on=!!on;
+  // ticking a row that was emptied brings back what the record held
+  if(t.on&&!(parseFloat(t.amt)>0)&&parseFloat(t.orig)>0){t.amt=t.orig;t.last='amt';_bpTkSyncQty(t);}
+  _epTkRepaint();
+}
+function _epTkAmt(i,v){
+  const t=_ep.tk[i];if(!t)return;
+  t.amt=v;t.last='amt';_bpTkSyncQty(t);
+  if(parseFloat(v)>0&&!t.on)t.on=true;
+  _epTkRepaint();
+}
+function _epTkQty(i,v){
+  const t=_ep.tk[i];if(!t||!(t.rate>0))return;
+  t.qty=v;t.last='qty';
+  const q=parseFloat(v);
+  t.amt=(isFinite(q)&&q>0)?(Math.round(q*t.rate*100)/100).toFixed(2):'';
+  if(parseFloat(t.amt)>0&&!t.on)t.on=true;
+  _epTkRepaint();
+}
+function _epGen(v){_ep.gen=v;}
 
 // ── BULK PAY (per role / multi-role) ─────────────────────────────────────────
 // Pay many staff in one go. Tap one or more roles to narrow the list (none =
@@ -24680,1176 +25162,4 @@ _registerAIAction('log_commodity_issued', {
     commodityName: { type:'string', description:'Name of the commodity. Leave blank if the depot only tracks one.' },
     batchName: { type:'string', description:'Batch to issue from — must be a batch that has received stock.' },
     transporterName: { type:'string', description:'Name of the transporter/truck.' },
-    quantity: { type:'number', description:'Quantity issued.' },
-    salePrice: { type:'number', description:'Optional sale price per unit.' },
-    date: { type:'string', description:'Date in YYYY-MM-DD format. Leave blank to use today.' }
-  }, required:['batchName','transporterName','quantity'] }
-}, function resolveCommodityIssued(args){
-  const comMatches = _findCommodityByName(args.commodityName);
-  if(comMatches.length===0){
-    const names = (DATA.commodities||[]).map(c=>c.name).join(', ') || 'none defined yet';
-    return { error:`I couldn't tell which commodity — this depot tracks: ${names}. Which one?` };
-  }
-  if(comMatches.length>1) return { error:`A few commodities match: ${comMatches.map(c=>c.name).join(', ')}. Which one?` };
-  const com = comMatches[0];
-  const batchMatches = _findReceivedBatch(com.id, args.batchName);
-  if(batchMatches.length===0){
-    const available = [...new Set(cRec(com.id).map(r=>r.batchName))].join(', ') || 'none received yet';
-    return { error:`I couldn't find a received batch matching "${args.batchName}" for ${com.name}. Batches on hand: ${available}.` };
-  }
-  if(batchMatches.length>1) return { error:`A few batches match "${args.batchName}": ${batchMatches.join(', ')}. Which one?` };
-  const batch = batchMatches[0];
-  const transporter = (args.transporterName||'').trim();
-  if(!transporter) return { error:'Who is the transporter for this issue?' };
-  const qty = Number(args.quantity||0);
-  if(!(qty>0)) return { error:`How many ${com.unit} of ${com.name} should I issue from batch "${batch}"?` };
-  const salePrice = Number(args.salePrice||0);
-  const useDate = _aiDate(args.date);
-  const totalRev = qty*salePrice;
-  const description = `Log ${com.name} Issued: batch "${batch}" · ${qty} ${com.unit}`+
-    (salePrice>0?` × K${salePrice.toFixed(2)} = K${totalRev.toFixed(2)}`:'')+
-    ` · Transporter: ${transporter.toUpperCase()} on ${useDate}. Save this?`;
-  return { description, action:{ cid:com.id, batch, transporter:transporter.toUpperCase(), qty, salePrice, date:useDate } };
-}, function executeCommodityIssued(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  const com = getCom(action.cid);
-  const sourceRec = cRec(action.cid).filter(r=>r.batchName===action.batch).sort((a,b)=>b.date.localeCompare(a.date))[0];
-  const payload = stampEntry({id:uid(),batchName:action.batch,date:action.date,time:nowTime(),
-    transporter:action.transporter,issued:action.qty,salePrice:action.salePrice,
-    sourceReceiveId:sourceRec?sourceRec.id:'',creditStatus:'paid',partialPaid:0});
-  updateData(d=>{ const ci={...(d.commodityIssued||{})}; ci[action.cid]=[...(ci[action.cid]||[]),payload]; return {...d,commodityIssued:ci}; });
-  logAuditEvent('CREATE',`${com.name} Issued`,`Batch: ${action.batch} · Qty: ${action.qty} · Transporter: ${action.transporter} · via Depot Assistant`);
-  return { ok:true, msg:`Logged ${action.qty} ${com.unit} of ${com.name} issued from batch "${action.batch}" to ${action.transporter}.` };
-});
-
-// ═══ 6. Log transport entry ════════════════════════════════════════════
-_registerAIAction('log_transport', {
-  type: 'function',
-  name: 'log_transport',
-  description: 'Log a transport/trip entry — the same as the "Log Transport" '+
-    'form (vehicle, driver, quantity moved). Only call this when the user '+
-    'has clearly asked to log transport and given a vehicle registration, '+
-    'driver name, and quantity. Never guess any of those.',
-  parameters: { type:'object', properties: {
-    commodityName: { type:'string', description:'Name of the commodity being moved. Leave blank if the depot only tracks one.' },
-    vehicleReg: { type:'string', description:'Vehicle registration.' },
-    driverName: { type:'string', description:'Driver\'s name.' },
-    batchName: { type:'string', description:'Optional batch name.' },
-    quantity: { type:'number', description:'Quantity loaded.' },
-    origin: { type:'string', description:'Optional origin location.' },
-    destination: { type:'string', description:'Optional destination location.' },
-    status: { type:'string', description:'One of "scheduled", "in-transit", or "completed". Leave blank to default to "in-transit".' }
-  }, required:['vehicleReg','driverName','quantity'] }
-}, function resolveTransport(args){
-  const comMatches = _findCommodityByName(args.commodityName);
-  if(comMatches.length===0){
-    const names = (DATA.commodities||[]).map(c=>c.name).join(', ') || 'none defined yet';
-    return { error:`I couldn't tell which commodity — this depot tracks: ${names}. Which one?` };
-  }
-  if(comMatches.length>1) return { error:`A few commodities match: ${comMatches.map(c=>c.name).join(', ')}. Which one?` };
-  const com = comMatches[0];
-  const vehicle = (args.vehicleReg||'').trim();
-  const driver = (args.driverName||'').trim();
-  if(!vehicle) return { error:'What\'s the vehicle registration?' };
-  if(!driver) return { error:'What\'s the driver\'s name?' };
-  const qty = Number(args.quantity||0);
-  if(!(qty>0)) return { error:`How many ${com.unit} were loaded?` };
-  const status = ['scheduled','in-transit','completed'].includes(args.status) ? args.status : 'in-transit';
-  const batch = (args.batchName||'').trim().toUpperCase();
-  const origin = (args.origin||'').trim().toUpperCase();
-  const destination = (args.destination||'').trim().toUpperCase();
-  const description = `Log Transport: ${vehicle.toUpperCase()} driven by ${driver.toUpperCase()} · ${qty} ${com.unit}`+
-    (batch?` · Batch: ${batch}`:'')+(origin||destination?` · Route: ${origin||'—'} → ${destination||'—'}`:'')+
-    `. Save this?`;
-  return { description, action:{ cid:com.id, vehicle:vehicle.toUpperCase(), driver:driver.toUpperCase(), batch, qty, origin, destination, status } };
-}, function executeTransport(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  const com = getCom(action.cid);
-  const payload = stampEntry({id:uid(),date:today(),time:nowTime(),vehicleReg:action.vehicle,driverName:action.driver,
-    commodity:action.cid,batchName:action.batch,qty:action.qty,unit:com.unit,
-    origin:action.origin,destination:action.destination,status:action.status,notes:''});
-  updateData(d=>({...d,transportLog:[...(d.transportLog||[]),payload]}));
-  logAuditEvent('CREATE','Transport Log',`Vehicle:${action.vehicle} · Driver:${action.driver} · Batch:${action.batch} · Qty:${action.qty} · via Depot Assistant`);
-  return { ok:true, msg:`Logged transport: ${action.vehicle} (${action.driver}) — ${action.qty} ${com.unit}.` };
-});
-
-// ═══ 7. Log staff absence / leave / sick day ═══════════════════════════
-_registerAIAction('log_staff_absence', {
-  type: 'function',
-  name: 'log_staff_absence',
-  description: 'Log a staff member as absent, on leave, or sick for a day — '+
-    'the same as the non-work entry types in the "Log Work" form. Only '+
-    'call this when the user has clearly asked to log an absence and named '+
-    'the staff member and which type it is.',
-  parameters: { type:'object', properties: {
-    staffName: { type:'string', description:'The staff member\'s name.' },
-    type: { type:'string', description:'One of "absent", "leave", or "sick".' },
-    date: { type:'string', description:'Date in YYYY-MM-DD format. Leave blank to use today.' },
-    note: { type:'string', description:'Optional note, e.g. reason.' }
-  }, required:['staffName','type'] }
-}, function resolveAbsence(args){
-  const matches = _findActiveStaffByName(args.staffName);
-  if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
-  if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
-  const s = matches[0];
-  const type = ['absent','leave','sick'].includes((args.type||'').toLowerCase()) ? args.type.toLowerCase() : null;
-  if(!type) return { error:`Should I log ${s.name} as "absent", "leave", or "sick"?` };
-  const useDate = _aiDate(args.date);
-  const note = (args.note||'').trim().toUpperCase();
-  const labels = { absent:'Absent (Unexcused)', leave:'On Leave', sick:'Sick Day' };
-  return { description:`Log ${s.name} as ${labels[type]} on ${useDate}${note?' — "'+note+'"':''}. Save this?`,
-    action:{ staffId:s.id, type, date:useDate, note } };
-}, function executeAbsence(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  const s = DATA.staff.find(x=>String(x.id)===String(action.staffId));
-  if(!s) return { ok:false, msg:'Could not find that staff member anymore — they may have been removed.' };
-  const logId = uid();
-  const payload = stampEntry({id:logId,staffId:action.staffId,date:action.date,entryType:action.type,
-    absenceNote:action.note,time:nowTime(),status:'completed',timeOutTs:Date.now()});
-  const leaveEntry = stampEntry({id:'lv_'+logId,staffId:action.staffId,type:action.type,date:action.date,
-    days:1,note:action.note,time:nowTime(),_fromLog:logId});
-  updateData(d=>({...d,staffLogs:[...d.staffLogs,payload],leaveLog:[...(d.leaveLog||[]),leaveEntry]}));
-  logAuditEvent('CREATE','Absence Log',`Staff ID:${action.staffId} · Type:${action.type} · Date:${action.date} · via Depot Assistant`);
-  return { ok:true, msg:`Logged ${s.name} as ${action.type} on ${action.date}.` };
-});
-
-// ═══ 8. Record staff payment (money-moving — extra admin password step) ═
-// Marked `sensitive`: unlike the other actions, tapping Confirm here does
-// NOT write immediately — confirmCopilotAction() additionally prompts for
-// the admin password first, exactly like the manual Payment form does,
-// before calling execute(). This keeps the same financial control in place
-// regardless of who initiated the entry.
-_registerAIAction('record_staff_payment', {
-  type: 'function',
-  name: 'record_staff_payment',
-  description: 'Record a payment made to a staff member — the same as the '+
-    '"Record Payment" form. Only call this when the user has clearly asked '+
-    'to log a payment and given the staff member and an amount. Never '+
-    'guess the amount.',
-  parameters: { type:'object', properties: {
-    staffName: { type:'string', description:'The staff member\'s name.' },
-    amount: { type:'number', description:'Amount paid.' },
-    date: { type:'string', description:'Date in YYYY-MM-DD format. Leave blank to use today.' },
-    notes: { type:'string', description:'Optional notes, e.g. "cash" or "mobile money".' }
-  }, required:['staffName','amount'] }
-}, function resolvePayment(args){
-  const matches = _findActiveStaffByName(args.staffName);
-  if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
-  if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
-  const s = matches[0];
-  const amount = Number(args.amount||0);
-  if(!(amount>0)) return { error:`How much was paid to ${s.name}?` };
-  const useDate = _aiDate(args.date);
-  const notes = (args.notes||'').trim().toUpperCase();
-  return {
-    description: `Record payment to ${s.name}: K${amount.toFixed(2)} on ${useDate}${notes?' — "'+notes+'"':''}. You'll be asked to confirm your admin password next. Save this?`,
-    action: { staffId:s.id, amount, date:useDate, notes }
-  };
-}, function executePayment(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  const s = DATA.staff.find(x=>String(x.id)===String(action.staffId));
-  if(!s) return { ok:false, msg:'Could not find that staff member anymore — they may have been removed.' };
-  const payload = stampEntry({id:uid(),staffId:action.staffId,date:action.date,amount:action.amount,notes:action.notes});
-  updateData(d=>({...d,staffPayments:[...(d.staffPayments||[]),payload]}));
-  logAuditEvent('CREATE','Staff Payment',`Staff ID:${action.staffId} · Amount:${action.amount} · Date:${action.date} · via Depot Assistant`);
-  return { ok:true, msg:`Recorded payment of K${action.amount.toFixed(2)} to ${s.name}.` };
-}, true);
-
-// ═══ 8b. Prepare payroll (a draft — opens the Prepare Payroll screen) ═══
-// "Prepare payroll for last week" proposes a period (and optionally one job role),
-// shows a short preview, and on Confirm opens Prepare Payroll filled in with them.
-// It writes NOTHING: it never locks a run, creates payments or sends payslips —
-// those stay in Prepare Payroll (review, then the admin password to lock). Admin only,
-// like that screen. The period is worked out here in code, not by the model, and the
-// card spells the exact dates out so "last week" can't be misread (weeks are Mon–Sun).
-function _aiPayrollRange(period,from,to){
-  if(_YMD_RE.test(from||'')&&_YMD_RE.test(to||''))return from<=to?{from,to,preset:'custom'}:null;
-  const p=String(period||'').toLowerCase().replace(/[\s\-]+/g,'_');
-  if(p==='last_week'||p==='previous_week')return{..._prWeek(-1),preset:'lastweek'};
-  if(p==='this_week'||p==='current_week')return{..._prWeek(0),preset:'custom'};
-  if(p==='last_month'||p==='previous_month')return{..._prRange('lastmonth'),preset:'lastmonth'};
-  if(p==='this_month'||p==='current_month')return{..._prRange('thismonth'),preset:'thismonth'};
-  if(p==='last_7_days'||p==='last7'||p==='past_7_days'||p==='past_week')return{..._prRange('last7'),preset:'last7'};
-  return null;
-}
-function _aiPayrollClash(from,to,group){
-  return(DATA.payrollRuns||[]).find(r=>r.status==='locked'&&r.from<=to&&r.to>=from&&(!r.group||!group||r.group===group));
-}
-_registerAIAction('prepare_payroll', {
-  type: 'function',
-  name: 'prepare_payroll',
-  description: 'Prepare payroll as a DRAFT for a period: opens the Prepare Payroll screen filled in with that '+
-    'period (and optionally one job role) so the Admin can review it. Call this when the user asks to '+
-    'prepare, start or run payroll for a period, e.g. \"prepare payroll for last week\". It can NOT lock a '+
-    'run, create payments or send payslips — if the user asks for those, tell them they are done inside '+
-    'Prepare Payroll after reviewing the figures. Weeks run Monday to Sunday. Use \"period\" for a named '+
-    'period, or \"from\" and \"to\" for specific dates. If the user gave no period, ask which one instead of calling this.',
-  parameters: { type:'object', properties: {
-    period: { type:'string', description:'One of: last_week, this_week, last_month, this_month, last_7_days. Leave blank if from/to are given.' },
-    from: { type:'string', description:'Start date in YYYY-MM-DD format, only for specific dates.' },
-    to: { type:'string', description:'End date in YYYY-MM-DD format, only for specific dates.' },
-    role: { type:'string', description:'Optional — prepare for ONE job role only (e.g. \"Loader\"). Leave blank for all staff.' }
-  } }
-}, function resolvePrepPayroll(args){
-  if(!isAdmin()) return { error:'Preparing payroll is for Admin accounts only — ask your Admin to do this.' };
-  if(!hasFeature('payroll_run')) return { error:'Payroll Run is a Pro plan feature, so I can\'t prepare payroll on this plan. Upgrade to Pro to use it.' };
-  const rg = _aiPayrollRange(args.period, args.from, args.to);
-  if(!rg) return { error:'Which period should I prepare payroll for — last week, this week, last month, this month, last 7 days, or specific dates?' };
-  let group = '';
-  const gq = String(args.role||'').trim().toLowerCase().replace(/\s+/g,' ');
-  if(gq && !['all','all staff','everyone','everybody'].includes(gq)){
-    const roles = (DATA.staffRoles||[]).map(r=>r.name).filter(Boolean);
-    const q = gq.replace(/s$/,'');
-    const exact = roles.find(r=>r.toLowerCase()===gq || r.toLowerCase()===q);
-    const part = exact ? [exact] : roles.filter(r=>r.toLowerCase().includes(q));
-    if(part.length===0) return { error:`I couldn't find a job role matching \"${args.role}\". Roles: ${roles.join(', ')||'none set up yet'}.` };
-    if(part.length>1) return { error:`A few roles match \"${args.role}\": ${part.join(', ')}. Which one did you mean?` };
-    group = part[0];
-  }
-  const scope = group ? group+'s only' : 'all staff';
-  const clash = _aiPayrollClash(rg.from, rg.to, group);
-  if(clash) return { error:`Run #${clash.number} is already locked for ${fmtDate(clash.from)} → ${fmtDate(clash.to)}${clash.group?' ('+clash.group+'s)':''}, which overlaps ${fmtDate(rg.from)} → ${fmtDate(rg.to)}. Corrections go into the next run — pick a later period.` };
-  const R = _prCompute(rg.from, rg.to, group);
-  if(!R.rows.length) return { error:`There's no payroll activity for ${scope} from ${fmtDate(rg.from)} to ${fmtDate(rg.to)} (approved entries only)${R.pending?` — ${R.pending} pending entr${R.pending===1?'y is':'ies are'} waiting for approval`:''}, so there's nothing to prepare.` };
-  // Problems read the screen's \"end at last work day\" switch — preview with it off, as the draft will open.
-  const keepLwd = _pr.lwd; _pr.lwd = false;
-  let probs = {items:[],fixN:0};
-  try { probs = _prProblems(rg.from, rg.to, group); } finally { _pr.lwd = keepLwd; }
-  const n = R.rows.length;
-  const lines = [
-    `Prepare payroll for ${fmtDate(rg.from)} → ${fmtDate(rg.to)} (${scope})?`,
-    `Preview: ${n} ${n===1?'person':'people'} · gross ${zm(R.gross)}${R.stat>0.004?` · NAPSA/NHIMA/PAYE ${zm(R.stat)}`:''} · to pay ${zm(R.payable)}`
-  ];
-  if(R.pending) lines.push(`⏳ ${R.pending} pending entr${R.pending===1?'y':'ies'} not counted until approved.`);
-  if(probs.fixN) lines.push(`⚠ ${probs.fixN} problem${probs.fixN===1?'':'s'} to fix before locking.`);
-  lines.push('This only opens the Prepare Payroll screen — nothing is locked or paid.');
-  return { description: lines.join('\n'), action: { from:rg.from, to:rg.to, group, preset:rg.preset } };
-}, function executePrepPayroll(action){
-  if(!isAdmin()) return { ok:false, msg:'Preparing payroll is for Admin accounts only.' };
-  if(!hasFeature('payroll_run')) return { ok:false, msg:'Payroll Run is a Pro plan feature, so I haven\'t opened it.' };
-  const clash = _aiPayrollClash(action.from, action.to, action.group||'');
-  if(clash) return { ok:false, msg:`Run #${clash.number} has been locked for ${fmtDate(clash.from)} → ${fmtDate(clash.to)} since this was proposed, so I haven't opened it. Pick a later period.` };
-  // A fresh draft: the period and group asked for, the Pay view, and no leftover limit / end-date switch from an earlier session.
-  _pr.preset = action.preset||'custom'; _pr.from = action.from; _pr.to = action.to; _pr.group = action.group||'';
-  _pr.view = 'pay'; _pr.lwd = false; _pr.lim = {mode:'off',date:'',time:'',bags:'',hold:'last',picks:[]};
-  _prRev = null;
-  openPayrollPrep();
-  return { ok:true, msg:`Opened Prepare Payroll for ${fmtDate(action.from)} → ${fmtDate(action.to)} (${action.group?action.group+'s only':'all staff'}). Check the figures, then use “Review & lock run” when you're happy — nothing has been locked or paid.` };
-});
-
-// ═══ 9. Bulk-move work log dates ═══════════════════════════════════════
-// Edits an existing field (date) on possibly many staffLogs at once — e.g.
-// "move all stitching logs from 20 Aug to 19 Aug". Unlike the CREATE-only
-// actions above, this touches existing records, so it mirrors the manual
-// Edit Work Log flow exactly: Admin-only (requireAdmin gate in manual UI),
-// respects the per-record 24h edit window (isWithin24h), and is flagged
-// sensitive so confirmCopilotAction() re-checks the admin password before
-// execute() ever runs, same as record_staff_payment above.
-_registerAIAction('bulk_edit_log_date', {
-  type: 'function',
-  name: 'bulk_edit_log_date',
-  description: 'Move a group of existing work logs from one date to another — '+
-    'e.g. "change all stitching logs from 20 August to 19 August". Matches '+
-    'logs by date, optionally narrowed by task name and/or staff name. Only '+
-    'call this when the user has clearly given the date to move logs FROM '+
-    'and the date to move them TO — never guess either date. This only '+
-    'changes the date field; quantities, earnings and staff are untouched.',
-  parameters: { type:'object', properties: {
-    task: { type:'string', description:'Optional task name to filter by (e.g. "Stitching"). Leave blank to match logs for any task.' },
-    staffName: { type:'string', description:'Optional staff member name to filter by. Leave blank to match all staff.' },
-    fromDate: { type:'string', description:'The current date of the logs to move, in YYYY-MM-DD format.' },
-    toDate: { type:'string', description:'The new date to move the logs to, in YYYY-MM-DD format.' }
-  }, required:['fromDate','toDate'] }
-}, function resolveBulkEditLogDate(args){
-  if(!isAdmin()) return { error:'Editing existing work logs needs Admin access — this account can\'t do that.' };
-  const fromDate = _YMD_RE.test(args.fromDate||'') ? args.fromDate : '';
-  const toDate = _YMD_RE.test(args.toDate||'') ? args.toDate : '';
-  if(!fromDate || !toDate) return { error:'I need both dates in YYYY-MM-DD format — which date should I move logs from, and which date should they move to?' };
-  if(fromDate===toDate) return { error:'The "from" and "to" dates are the same — there\'s nothing to move.' };
-  let staffFilter = null;
-  if(args.staffName){
-    const matches = _findActiveStaffByName(args.staffName);
-    if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
-    if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
-    staffFilter = matches[0].id;
-  }
-  const taskQ = (args.task||'').trim().toLowerCase();
-  const candidates = (DATA.staffLogs||[]).filter(l=>
-    l.date===fromDate &&
-    (!staffFilter || String(l.staffId)===String(staffFilter)) &&
-    (!taskQ || (l.task||'').toLowerCase()===taskQ || (l.task||'').toLowerCase().includes(taskQ))
-  );
-  if(candidates.length===0) return { error:`I couldn't find any${args.task?' "'+args.task+'"':''} work logs on ${fromDate}${args.staffName?' for '+args.staffName:''} to move.` };
-  const editable = candidates.filter(l=>isWithin24h(l,true));
-  const blocked = candidates.length - editable.length;
-  if(editable.length===0) return { error:`Found ${candidates.length} matching log${candidates.length===1?'':'s'} on ${fromDate}, but all of them are outside the ${_editWindowLabel(true)} edit window and can no longer be edited.` };
-  const names = [...new Set(editable.map(l=>{
-    const st = DATA.staff.find(x=>String(x.id)===String(l.staffId));
-    return st ? st.name : 'Unknown';
-  }))];
-  const namesStr = names.length<=4 ? names.join(', ') : `${names.slice(0,4).join(', ')} and ${names.length-4} more`;
-  return {
-    description: `Move ${editable.length} work log${editable.length===1?'':'s'}${args.task?' ("'+args.task+'")':''} from ${fromDate} to ${toDate} — ${namesStr}?`+
-      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel(true)} edit window and will be skipped.)` : '')+
-      ` You'll be asked to confirm your admin password next. Save this?`,
-    action: { logIds: editable.map(l=>l.id), toDate }
-  };
-}, function executeBulkEditLogDate(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  if(!isAdmin()) return { ok:false, msg:'Admin access is required to edit work logs.' };
-  const idSet = new Set((action.logIds||[]).map(String));
-  let moved = 0;
-  updateData(d=>({...d, staffLogs:d.staffLogs.map(l=>{
-    if(idSet.has(String(l.id)) && isWithin24h(l,true)){
-      moved++;
-      return {...l, date:action.toDate};
-    }
-    return l;
-  })}));
-  if(moved===0) return { ok:false, msg:'None of those logs could be moved — they may have fallen outside the edit window while waiting for confirmation.' };
-  logAuditEvent('EDIT','Work Log (Bulk Date Change)',`${moved} log(s) moved to ${action.toDate} · via Depot Assistant`);
-  return { ok:true, msg:`Moved ${moved} work log${moved===1?'':'s'} to ${action.toDate}.` };
-}, true);
-
-// ═══ 10. Bulk-delete work logs ═════════════════════════════════════════
-// Deletes a group of existing work logs — e.g. "delete the first 10
-// stitching logs for 22 August" or "delete all loader logs for John on
-// 20 Aug". Mirrors the manual delLog() flow exactly (same isWithin24h
-// gate, same requireAdminPassword prompt, same 'DELETE','Work Log' audit
-// event per record) so this can never remove more, or bypass more, than
-// tapping the 🗑 button on each log manually would. Admin-only, sensitive
-// (re-checks admin password before execute() runs), and irreversible —
-// so resolve() always shows exactly which logs matched before confirming.
-_registerAIAction('bulk_delete_work_logs', {
-  type: 'function',
-  name: 'bulk_delete_work_logs',
-  description: 'Delete a group of existing work logs — e.g. "delete the '+
-    'first 10 stitching logs for 22 August" or "delete John\'s loader logs '+
-    'from yesterday". Matches logs by date, optionally narrowed by task '+
-    'name and/or staff name, and optionally capped to the first N matches '+
-    'in the order they were created. Only call this when the user has '+
-    'clearly asked to delete work logs and given at least a date to match '+
-    'on — never guess the date. This permanently removes the logs '+
-    '(earnings, pay totals and payroll all update accordingly) — it '+
-    'cannot be undone.',
-  parameters: { type:'object', properties: {
-    task: { type:'string', description:'Optional task name to filter by (e.g. "Stitching"). Leave blank to match logs for any task.' },
-    staffName: { type:'string', description:'Optional staff member name to filter by. Leave blank to match all staff.' },
-    date: { type:'string', description:'The date of the logs to delete, in YYYY-MM-DD format.' },
-    limit: { type:'number', description:'Optional — only delete the first N matching logs (in creation order), e.g. "the first 10". Leave blank to delete all matches.' }
-  }, required:['date'] }
-}, function resolveBulkDeleteLogs(args){
-  if(!isAdmin()) return { error:'Deleting work logs needs Admin access — this account can\'t do that.' };
-  const date = _YMD_RE.test(args.date||'') ? args.date : '';
-  if(!date) return { error:'I need a date in YYYY-MM-DD format — which date\'s logs should I delete?' };
-  let staffFilter = null;
-  if(args.staffName){
-    const matches = _findActiveStaffByName(args.staffName);
-    if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
-    if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
-    staffFilter = matches[0].id;
-  }
-  const taskQ = (args.task||'').trim().toLowerCase();
-  let candidates = (DATA.staffLogs||[]).filter(l=>
-    l.date===date &&
-    (!staffFilter || String(l.staffId)===String(staffFilter)) &&
-    (!taskQ || (l.task||'').toLowerCase()===taskQ || (l.task||'').toLowerCase().includes(taskQ))
-  );
-  if(candidates.length===0) return { error:`I couldn't find any${args.task?' "'+args.task+'"':''} work logs on ${date}${args.staffName?' for '+args.staffName:''} to delete.` };
-  const limit = Number(args.limit||0);
-  const capped = (limit>0) ? candidates.slice(0, limit) : candidates;
-  const skippedByLimit = candidates.length - capped.length;
-  const editable = capped.filter(l=>isWithin24h(l,true));
-  const blocked = capped.length - editable.length;
-  if(editable.length===0) return { error:`Found ${capped.length} matching log${capped.length===1?'':'s'} on ${date}, but all of them are outside the ${_editWindowLabel(true)} edit window and can no longer be deleted.` };
-  const names = [...new Set(editable.map(l=>{
-    const st = DATA.staff.find(x=>String(x.id)===String(l.staffId));
-    return st ? st.name : 'Unknown';
-  }))];
-  const namesStr = names.length<=4 ? names.join(', ') : `${names.slice(0,4).join(', ')} and ${names.length-4} more`;
-  const totalQty = editable.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
-  return {
-    description: `Permanently delete ${editable.length} work log${editable.length===1?'':'s'}${args.task?' ("'+args.task+'")':''} on ${date} (${namesStr}, ${totalQty.toLocaleString()} total qty) — this cannot be undone.`+
-      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel(true)} edit window and will be skipped.)` : '')+
-      (skippedByLimit>0 ? ` (${skippedByLimit} more matched the filter but were beyond the requested limit of ${limit}.)` : '')+
-      ` You'll be asked to confirm your admin password next. Delete these?`,
-    action: { logIds: editable.map(l=>l.id) }
-  };
-}, function executeBulkDeleteLogs(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  if(!isAdmin()) return { ok:false, msg:'Admin access is required to delete work logs.' };
-  const idSet = new Set((action.logIds||[]).map(String));
-  const toDelete = (DATA.staffLogs||[]).filter(l=>idSet.has(String(l.id)) && isWithin24h(l,true));
-  if(toDelete.length===0) return { ok:false, msg:'None of those logs could be deleted — they may have fallen outside the edit window while waiting for confirmation.' };
-  toDelete.forEach(l=>{
-    logAuditEvent('DELETE','Work Log',`ID:${l.id} · Staff:${l.staffId} · Task:${l.task} · via Depot Assistant`, l);
-  });
-  const deletedIds = new Set(toDelete.map(l=>String(l.id)));
-  updateData(d=>({...d, staffLogs:d.staffLogs.filter(l=>!deletedIds.has(String(l.id)))}));
-  return { ok:true, msg:`Deleted ${toDelete.length} work log${toDelete.length===1?'':'s'}.` };
-}, true);
-
-// ═══ 11. Bulk-edit commodity received dates ════════════════════════════
-_registerAIAction('bulk_edit_commodity_received_date', {
-  type: 'function',
-  name: 'bulk_edit_commodity_received_date',
-  description: 'Move a group of existing commodity RECEIVED entries from one '+
-    'date to another — e.g. "move maize receipts from 20 Aug to 19 Aug". '+
-    'Matches by date, optionally narrowed by commodity and/or batch name. '+
-    'Only call this when the user has clearly given both dates — never guess.',
-  parameters: { type:'object', properties: {
-    commodityName: { type:'string', description:'Optional commodity name. Leave blank if the depot only tracks one.' },
-    batchName: { type:'string', description:'Optional batch name to filter by.' },
-    fromDate: { type:'string', description:'Current date of the entries to move, YYYY-MM-DD.' },
-    toDate: { type:'string', description:'New date to move them to, YYYY-MM-DD.' }
-  }, required:['fromDate','toDate'] }
-}, function resolveBulkEditRecDate(args){
-  if(!isAdmin()) return { error:'Editing received records needs Admin access — this account can\'t do that.' };
-  const comMatches = _findCommodityByName(args.commodityName);
-  if(comMatches.length===0){ const names=(DATA.commodities||[]).map(c=>c.name).join(', ')||'none defined yet'; return { error:`I couldn't tell which commodity — this depot tracks: ${names}. Which one?` }; }
-  if(comMatches.length>1) return { error:`A few commodities match: ${comMatches.map(c=>c.name).join(', ')}. Which one?` };
-  const com = comMatches[0];
-  const fromDate = _YMD_RE.test(args.fromDate||'') ? args.fromDate : '';
-  const toDate = _YMD_RE.test(args.toDate||'') ? args.toDate : '';
-  if(!fromDate || !toDate) return { error:'I need both dates in YYYY-MM-DD format — which date should I move receipts from, and which to?' };
-  if(fromDate===toDate) return { error:'The "from" and "to" dates are the same — there\'s nothing to move.' };
-  const batchQ = (args.batchName||'').trim().toLowerCase();
-  const candidates = cRec(com.id).filter(r=>r.date===fromDate && (!batchQ || (r.batchName||'').toLowerCase().includes(batchQ)));
-  if(candidates.length===0) return { error:`I couldn't find any ${com.name} receipts${args.batchName?' for batch "'+args.batchName+'"':''} on ${fromDate} to move.` };
-  const editable = candidates.filter(r=>isWithin24h(r));
-  const blocked = candidates.length - editable.length;
-  if(editable.length===0) return { error:`Found ${candidates.length} matching receipt${candidates.length===1?'':'s'} on ${fromDate}, but all are outside the ${_editWindowLabel()} edit window.` };
-  const batches = [...new Set(editable.map(r=>r.batchName))];
-  return {
-    description: `Move ${editable.length} ${com.name} receipt${editable.length===1?'':'s'} (batches: ${batches.join(', ')}) from ${fromDate} to ${toDate}?`+
-      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel()} edit window and will be skipped.)` : '')+
-      ` You'll be asked to confirm your admin password next. Save this?`,
-    action: { cid:com.id, ids: editable.map(r=>r.id), toDate }
-  };
-}, function executeBulkEditRecDate(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  if(!isAdmin()) return { ok:false, msg:'Admin access is required to edit received records.' };
-  const idSet = new Set((action.ids||[]).map(String));
-  let moved = 0;
-  updateData(d=>{ const cr={...(d.commodityReceived||{})}; cr[action.cid]=(cr[action.cid]||[]).map(r=>{
-    if(idSet.has(String(r.id)) && isWithin24h(r)){ moved++; return {...r, date:action.toDate}; }
-    return r;
-  }); return {...d, commodityReceived:cr}; });
-  if(moved===0) return { ok:false, msg:'None of those receipts could be moved — they may have fallen outside the edit window.' };
-  logAuditEvent('EDIT',`${getCom(action.cid).name} Received (Bulk Date Change)`,`${moved} record(s) moved to ${action.toDate} · via Depot Assistant`);
-  return { ok:true, msg:`Moved ${moved} receipt${moved===1?'':'s'} to ${action.toDate}.` };
-}, true);
-
-// ═══ 12. Bulk-delete commodity received entries ════════════════════════
-_registerAIAction('bulk_delete_commodity_received', {
-  type: 'function',
-  name: 'bulk_delete_commodity_received',
-  description: 'Delete a group of existing commodity RECEIVED entries — e.g. '+
-    '"delete the maize receipt for batch LOT-2 on 22 August". Matches by '+
-    'date, optionally narrowed by commodity, batch name, and/or a limit '+
-    '("the first N"). Only call this when the user has clearly asked to '+
-    'delete and given at least a date. This permanently removes the '+
-    'record(s) and cannot be undone.',
-  parameters: { type:'object', properties: {
-    commodityName: { type:'string', description:'Optional commodity name. Leave blank if the depot only tracks one.' },
-    batchName: { type:'string', description:'Optional batch name to filter by.' },
-    date: { type:'string', description:'The date of the receipts to delete, YYYY-MM-DD.' },
-    limit: { type:'number', description:'Optional — only delete the first N matches. Leave blank to delete all matches.' }
-  }, required:['date'] }
-}, function resolveBulkDeleteRec(args){
-  if(!isAdmin()) return { error:'Deleting received records needs Admin access — this account can\'t do that.' };
-  const comMatches = _findCommodityByName(args.commodityName);
-  if(comMatches.length===0){ const names=(DATA.commodities||[]).map(c=>c.name).join(', ')||'none defined yet'; return { error:`I couldn't tell which commodity — this depot tracks: ${names}. Which one?` }; }
-  if(comMatches.length>1) return { error:`A few commodities match: ${comMatches.map(c=>c.name).join(', ')}. Which one?` };
-  const com = comMatches[0];
-  const date = _YMD_RE.test(args.date||'') ? args.date : '';
-  if(!date) return { error:'I need a date in YYYY-MM-DD format — which date\'s receipts should I delete?' };
-  const batchQ = (args.batchName||'').trim().toLowerCase();
-  let candidates = cRec(com.id).filter(r=>r.date===date && (!batchQ || (r.batchName||'').toLowerCase().includes(batchQ)));
-  if(candidates.length===0) return { error:`I couldn't find any ${com.name} receipts${args.batchName?' for batch "'+args.batchName+'"':''} on ${date} to delete.` };
-  const limit = Number(args.limit||0);
-  const capped = (limit>0) ? candidates.slice(0, limit) : candidates;
-  const skippedByLimit = candidates.length - capped.length;
-  const editable = capped.filter(r=>isWithin24h(r));
-  const blocked = capped.length - editable.length;
-  if(editable.length===0) return { error:`Found ${capped.length} matching receipt${capped.length===1?'':'s'} on ${date}, but all are outside the ${_editWindowLabel()} edit window and can no longer be deleted.` };
-  const totalQty = editable.reduce((a,b)=>a+Number(b.received||0),0);
-  const batches = [...new Set(editable.map(r=>r.batchName))];
-  const linkNote = _linkedStockNote('received',editable,com.id);
-  return {
-    description: `Permanently delete ${editable.length} ${com.name} receipt${editable.length===1?'':'s'} on ${date} (batches: ${batches.join(', ')}, ${totalQty.toLocaleString()} ${com.unit} total) — this cannot be undone.`+
-      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel()} edit window and will be skipped.)` : '')+
-      (skippedByLimit>0 ? ` (${skippedByLimit} more matched the filter but were beyond the requested limit of ${limit}.)` : '')+
-      (linkNote ? ' '+linkNote : '')+
-      ` You'll be asked to confirm your admin password next. Delete these?`,
-    action: { cid:com.id, ids: editable.map(r=>r.id) }
-  };
-}, function executeBulkDeleteRec(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  if(!isAdmin()) return { ok:false, msg:'Admin access is required to delete received records.' };
-  const idSet = new Set((action.ids||[]).map(String));
-  const all = cRec(action.cid);
-  const toDelete = all.filter(r=>idSet.has(String(r.id)) && isWithin24h(r));
-  if(toDelete.length===0) return { ok:false, msg:'None of those records could be deleted — they may have fallen outside the edit window while waiting for confirmation.' };
-  const com = getCom(action.cid);
-  toDelete.forEach(r=>{
-    logAuditEvent('DELETE',`${com.name} Received`,`ID:${r.id} · Batch:${r.batchName} · Qty:${r.received} · via Depot Assistant`, r);
-  });
-  const deletedIds = new Set(toDelete.map(r=>String(r.id)));
-  updateData(d=>{ const cr={...(d.commodityReceived||{})}; cr[action.cid]=(cr[action.cid]||[]).filter(r=>!deletedIds.has(String(r.id))); return {...d, commodityReceived:cr}; });
-  return { ok:true, msg:`Deleted ${toDelete.length} ${com.name} receipt${toDelete.length===1?'':'s'}.` };
-}, true);
-
-// ═══ 13. Bulk-edit commodity issued dates ══════════════════════════════
-_registerAIAction('bulk_edit_commodity_issued_date', {
-  type: 'function',
-  name: 'bulk_edit_commodity_issued_date',
-  description: 'Move a group of existing commodity ISSUED entries from one '+
-    'date to another. Matches by date, optionally narrowed by commodity '+
-    'and/or batch name. Only call this when the user has clearly given '+
-    'both dates — never guess.',
-  parameters: { type:'object', properties: {
-    commodityName: { type:'string', description:'Optional commodity name. Leave blank if the depot only tracks one.' },
-    batchName: { type:'string', description:'Optional batch name to filter by.' },
-    fromDate: { type:'string', description:'Current date of the entries to move, YYYY-MM-DD.' },
-    toDate: { type:'string', description:'New date to move them to, YYYY-MM-DD.' }
-  }, required:['fromDate','toDate'] }
-}, function resolveBulkEditIssDate(args){
-  if(!isAdmin()) return { error:'Editing issued records needs Admin access — this account can\'t do that.' };
-  const comMatches = _findCommodityByName(args.commodityName);
-  if(comMatches.length===0){ const names=(DATA.commodities||[]).map(c=>c.name).join(', ')||'none defined yet'; return { error:`I couldn't tell which commodity — this depot tracks: ${names}. Which one?` }; }
-  if(comMatches.length>1) return { error:`A few commodities match: ${comMatches.map(c=>c.name).join(', ')}. Which one?` };
-  const com = comMatches[0];
-  const fromDate = _YMD_RE.test(args.fromDate||'') ? args.fromDate : '';
-  const toDate = _YMD_RE.test(args.toDate||'') ? args.toDate : '';
-  if(!fromDate || !toDate) return { error:'I need both dates in YYYY-MM-DD format — which date should I move issues from, and which to?' };
-  if(fromDate===toDate) return { error:'The "from" and "to" dates are the same — there\'s nothing to move.' };
-  const batchQ = (args.batchName||'').trim().toLowerCase();
-  const candidates = cIss(com.id).filter(i=>i.date===fromDate && (!batchQ || (i.batchName||'').toLowerCase().includes(batchQ)));
-  if(candidates.length===0) return { error:`I couldn't find any ${com.name} issues${args.batchName?' for batch "'+args.batchName+'"':''} on ${fromDate} to move.` };
-  const editable = candidates.filter(i=>isWithin24h(i));
-  const blocked = candidates.length - editable.length;
-  if(editable.length===0) return { error:`Found ${candidates.length} matching issue${candidates.length===1?'':'s'} on ${fromDate}, but all are outside the ${_editWindowLabel()} edit window.` };
-  const batches = [...new Set(editable.map(i=>i.batchName))];
-  return {
-    description: `Move ${editable.length} ${com.name} issue${editable.length===1?'':'s'} (batches: ${batches.join(', ')}) from ${fromDate} to ${toDate}?`+
-      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel()} edit window and will be skipped.)` : '')+
-      ` You'll be asked to confirm your admin password next. Save this?`,
-    action: { cid:com.id, ids: editable.map(i=>i.id), toDate }
-  };
-}, function executeBulkEditIssDate(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  if(!isAdmin()) return { ok:false, msg:'Admin access is required to edit issued records.' };
-  const idSet = new Set((action.ids||[]).map(String));
-  let moved = 0;
-  updateData(d=>{ const ci={...(d.commodityIssued||{})}; ci[action.cid]=(ci[action.cid]||[]).map(i=>{
-    if(idSet.has(String(i.id)) && isWithin24h(i)){ moved++; return {...i, date:action.toDate}; }
-    return i;
-  }); return {...d, commodityIssued:ci}; });
-  if(moved===0) return { ok:false, msg:'None of those issues could be moved — they may have fallen outside the edit window.' };
-  logAuditEvent('EDIT',`${getCom(action.cid).name} Issued (Bulk Date Change)`,`${moved} record(s) moved to ${action.toDate} · via Depot Assistant`);
-  return { ok:true, msg:`Moved ${moved} issue${moved===1?'':'s'} to ${action.toDate}.` };
-}, true);
-
-// ═══ 14. Bulk-delete commodity issued entries ══════════════════════════
-_registerAIAction('bulk_delete_commodity_issued', {
-  type: 'function',
-  name: 'bulk_delete_commodity_issued',
-  description: 'Delete a group of existing commodity ISSUED entries. Matches '+
-    'by date, optionally narrowed by commodity, batch name, and/or a limit '+
-    '("the first N"). Only call this when the user has clearly asked to '+
-    'delete and given at least a date. This permanently removes the '+
-    'record(s) and cannot be undone.',
-  parameters: { type:'object', properties: {
-    commodityName: { type:'string', description:'Optional commodity name. Leave blank if the depot only tracks one.' },
-    batchName: { type:'string', description:'Optional batch name to filter by.' },
-    date: { type:'string', description:'The date of the issues to delete, YYYY-MM-DD.' },
-    limit: { type:'number', description:'Optional — only delete the first N matches. Leave blank to delete all matches.' }
-  }, required:['date'] }
-}, function resolveBulkDeleteIss(args){
-  if(!isAdmin()) return { error:'Deleting issued records needs Admin access — this account can\'t do that.' };
-  const comMatches = _findCommodityByName(args.commodityName);
-  if(comMatches.length===0){ const names=(DATA.commodities||[]).map(c=>c.name).join(', ')||'none defined yet'; return { error:`I couldn't tell which commodity — this depot tracks: ${names}. Which one?` }; }
-  if(comMatches.length>1) return { error:`A few commodities match: ${comMatches.map(c=>c.name).join(', ')}. Which one?` };
-  const com = comMatches[0];
-  const date = _YMD_RE.test(args.date||'') ? args.date : '';
-  if(!date) return { error:'I need a date in YYYY-MM-DD format — which date\'s issues should I delete?' };
-  const batchQ = (args.batchName||'').trim().toLowerCase();
-  let candidates = cIss(com.id).filter(i=>i.date===date && (!batchQ || (i.batchName||'').toLowerCase().includes(batchQ)));
-  if(candidates.length===0) return { error:`I couldn't find any ${com.name} issues${args.batchName?' for batch "'+args.batchName+'"':''} on ${date} to delete.` };
-  const limit = Number(args.limit||0);
-  const capped = (limit>0) ? candidates.slice(0, limit) : candidates;
-  const skippedByLimit = candidates.length - capped.length;
-  const editable = capped.filter(i=>isWithin24h(i));
-  const blocked = capped.length - editable.length;
-  if(editable.length===0) return { error:`Found ${capped.length} matching issue${capped.length===1?'':'s'} on ${date}, but all are outside the ${_editWindowLabel()} edit window and can no longer be deleted.` };
-  const totalQty = editable.reduce((a,b)=>a+Number(b.issued||0),0);
-  const batches = [...new Set(editable.map(i=>i.batchName))];
-  const linkNote = _linkedStockNote('issued',editable,com.id);
-  return {
-    description: `Permanently delete ${editable.length} ${com.name} issue${editable.length===1?'':'s'} on ${date} (batches: ${batches.join(', ')}, ${totalQty.toLocaleString()} ${com.unit} total) — this cannot be undone.`+
-      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel()} edit window and will be skipped.)` : '')+
-      (skippedByLimit>0 ? ` (${skippedByLimit} more matched the filter but were beyond the requested limit of ${limit}.)` : '')+
-      (linkNote ? ' '+linkNote : '')+
-      ` You'll be asked to confirm your admin password next. Delete these?`,
-    action: { cid:com.id, ids: editable.map(i=>i.id) }
-  };
-}, function executeBulkDeleteIss(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  if(!isAdmin()) return { ok:false, msg:'Admin access is required to delete issued records.' };
-  const idSet = new Set((action.ids||[]).map(String));
-  const all = cIss(action.cid);
-  const toDelete = all.filter(i=>idSet.has(String(i.id)) && isWithin24h(i));
-  if(toDelete.length===0) return { ok:false, msg:'None of those records could be deleted — they may have fallen outside the edit window while waiting for confirmation.' };
-  const com = getCom(action.cid);
-  toDelete.forEach(i=>{
-    logAuditEvent('DELETE',`${com.name} Issued`,`ID:${i.id} · Batch:${i.batchName} · Qty:${i.issued} · via Depot Assistant`, i);
-  });
-  const deletedIds = new Set(toDelete.map(i=>String(i.id)));
-  updateData(d=>{ const ci={...(d.commodityIssued||{})}; ci[action.cid]=(ci[action.cid]||[]).filter(i=>!deletedIds.has(String(i.id))); return {...d, commodityIssued:ci}; });
-  return { ok:true, msg:`Deleted ${toDelete.length} ${com.name} issue${toDelete.length===1?'':'s'}.` };
-}, true);
-
-// ═══ 15. Bulk-edit transport log dates ═════════════════════════════════
-_registerAIAction('bulk_edit_transport_date', {
-  type: 'function',
-  name: 'bulk_edit_transport_date',
-  description: 'Move a group of existing transport log entries from one date '+
-    'to another. Matches by date, optionally narrowed by vehicle registration '+
-    'and/or driver name. Only call this when the user has clearly given '+
-    'both dates — never guess.',
-  parameters: { type:'object', properties: {
-    vehicleReg: { type:'string', description:'Optional vehicle registration to filter by.' },
-    driverName: { type:'string', description:'Optional driver name to filter by.' },
-    fromDate: { type:'string', description:'Current date of the entries to move, YYYY-MM-DD.' },
-    toDate: { type:'string', description:'New date to move them to, YYYY-MM-DD.' }
-  }, required:['fromDate','toDate'] }
-}, function resolveBulkEditTransDate(args){
-  if(!isAdmin()) return { error:'Editing transport records needs Admin access — this account can\'t do that.' };
-  const fromDate = _YMD_RE.test(args.fromDate||'') ? args.fromDate : '';
-  const toDate = _YMD_RE.test(args.toDate||'') ? args.toDate : '';
-  if(!fromDate || !toDate) return { error:'I need both dates in YYYY-MM-DD format — which date should I move transport entries from, and which to?' };
-  if(fromDate===toDate) return { error:'The "from" and "to" dates are the same — there\'s nothing to move.' };
-  const vehQ = (args.vehicleReg||'').trim().toLowerCase();
-  const drvQ = (args.driverName||'').trim().toLowerCase();
-  const candidates = (DATA.transportLog||[]).filter(t=>t.date===fromDate &&
-    (!vehQ || (t.vehicleReg||'').toLowerCase().includes(vehQ)) &&
-    (!drvQ || (t.driverName||'').toLowerCase().includes(drvQ)));
-  if(candidates.length===0) return { error:`I couldn't find any transport entries matching those filters on ${fromDate} to move.` };
-  const editable = candidates.filter(t=>isWithin24h(t));
-  const blocked = candidates.length - editable.length;
-  if(editable.length===0) return { error:`Found ${candidates.length} matching entr${candidates.length===1?'y':'ies'} on ${fromDate}, but all are outside the ${_editWindowLabel()} edit window.` };
-  const vehicles = [...new Set(editable.map(t=>t.vehicleReg))];
-  return {
-    description: `Move ${editable.length} transport entr${editable.length===1?'y':'ies'} (${vehicles.join(', ')}) from ${fromDate} to ${toDate}?`+
-      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel()} edit window and will be skipped.)` : '')+
-      ` You'll be asked to confirm your admin password next. Save this?`,
-    action: { ids: editable.map(t=>t.id), toDate }
-  };
-}, function executeBulkEditTransDate(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  if(!isAdmin()) return { ok:false, msg:'Admin access is required to edit transport records.' };
-  const idSet = new Set((action.ids||[]).map(String));
-  let moved = 0;
-  updateData(d=>({...d, transportLog:(d.transportLog||[]).map(t=>{
-    if(idSet.has(String(t.id)) && isWithin24h(t)){ moved++; return {...t, date:action.toDate}; }
-    return t;
-  })}));
-  if(moved===0) return { ok:false, msg:'None of those entries could be moved — they may have fallen outside the edit window.' };
-  logAuditEvent('EDIT','Transport Log (Bulk Date Change)',`${moved} record(s) moved to ${action.toDate} · via Depot Assistant`);
-  return { ok:true, msg:`Moved ${moved} transport entr${moved===1?'y':'ies'} to ${action.toDate}.` };
-}, true);
-
-// ═══ 16. Bulk-delete transport log entries ═════════════════════════════
-_registerAIAction('bulk_delete_transport_logs', {
-  type: 'function',
-  name: 'bulk_delete_transport_logs',
-  description: 'Delete a group of existing transport log entries. Matches by '+
-    'date, optionally narrowed by vehicle registration, driver name, and/or '+
-    'a limit ("the first N"). Only call this when the user has clearly '+
-    'asked to delete and given at least a date. This permanently removes '+
-    'the record(s) and cannot be undone.',
-  parameters: { type:'object', properties: {
-    vehicleReg: { type:'string', description:'Optional vehicle registration to filter by.' },
-    driverName: { type:'string', description:'Optional driver name to filter by.' },
-    date: { type:'string', description:'The date of the entries to delete, YYYY-MM-DD.' },
-    limit: { type:'number', description:'Optional — only delete the first N matches. Leave blank to delete all matches.' }
-  }, required:['date'] }
-}, function resolveBulkDeleteTrans(args){
-  if(!isAdmin()) return { error:'Deleting transport records needs Admin access — this account can\'t do that.' };
-  const date = _YMD_RE.test(args.date||'') ? args.date : '';
-  if(!date) return { error:'I need a date in YYYY-MM-DD format — which date\'s transport entries should I delete?' };
-  const vehQ = (args.vehicleReg||'').trim().toLowerCase();
-  const drvQ = (args.driverName||'').trim().toLowerCase();
-  let candidates = (DATA.transportLog||[]).filter(t=>t.date===date &&
-    (!vehQ || (t.vehicleReg||'').toLowerCase().includes(vehQ)) &&
-    (!drvQ || (t.driverName||'').toLowerCase().includes(drvQ)));
-  if(candidates.length===0) return { error:`I couldn't find any transport entries matching those filters on ${date} to delete.` };
-  const limit = Number(args.limit||0);
-  const capped = (limit>0) ? candidates.slice(0, limit) : candidates;
-  const skippedByLimit = candidates.length - capped.length;
-  const editable = capped.filter(t=>isWithin24h(t));
-  const blocked = capped.length - editable.length;
-  if(editable.length===0) return { error:`Found ${capped.length} matching entr${capped.length===1?'y':'ies'} on ${date}, but all are outside the ${_editWindowLabel()} edit window and can no longer be deleted.` };
-  const vehicles = [...new Set(editable.map(t=>t.vehicleReg))];
-  return {
-    description: `Permanently delete ${editable.length} transport entr${editable.length===1?'y':'ies'} on ${date} (${vehicles.join(', ')}) — this cannot be undone.`+
-      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel()} edit window and will be skipped.)` : '')+
-      (skippedByLimit>0 ? ` (${skippedByLimit} more matched the filter but were beyond the requested limit of ${limit}.)` : '')+
-      ` You'll be asked to confirm your admin password next. Delete these?`,
-    action: { ids: editable.map(t=>t.id) }
-  };
-}, function executeBulkDeleteTrans(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  if(!isAdmin()) return { ok:false, msg:'Admin access is required to delete transport records.' };
-  const idSet = new Set((action.ids||[]).map(String));
-  const toDelete = (DATA.transportLog||[]).filter(t=>idSet.has(String(t.id)) && isWithin24h(t));
-  if(toDelete.length===0) return { ok:false, msg:'None of those entries could be deleted — they may have fallen outside the edit window while waiting for confirmation.' };
-  toDelete.forEach(t=>{
-    logAuditEvent('DELETE','Transport Log',`ID:${t.id} · Vehicle:${t.vehicleReg||''} · Batch:${t.batchName||''} · via Depot Assistant`, t);
-  });
-  const deletedIds = new Set(toDelete.map(t=>String(t.id)));
-  updateData(d=>({...d, transportLog:(d.transportLog||[]).filter(t=>!deletedIds.has(String(t.id)))}));
-  return { ok:true, msg:`Deleted ${toDelete.length} transport entr${toDelete.length===1?'y':'ies'}.` };
-}, true);
-
-// ═══ 17. Bulk-delete staff payments ════════════════════════════════════
-// Deletes money-movement records, so this is doubly sensitive: Admin-only
-// AND the `sensitive` flag re-checks the admin password before execute()
-// runs, exactly like record_staff_payment above.
-_registerAIAction('bulk_delete_staff_payments', {
-  type: 'function',
-  name: 'bulk_delete_staff_payments',
-  description: 'Delete a group of existing staff payment records — e.g. '+
-    '"delete the payment I recorded for John today". Matches by date, '+
-    'optionally narrowed by staff name and/or a limit ("the first N"). '+
-    'Only call this when the user has clearly asked to delete a payment '+
-    'and given at least a date. This permanently removes the record(s) '+
-    'and cannot be undone.',
-  parameters: { type:'object', properties: {
-    staffName: { type:'string', description:'Optional staff member name to filter by.' },
-    date: { type:'string', description:'The date of the payments to delete, YYYY-MM-DD.' },
-    limit: { type:'number', description:'Optional — only delete the first N matches. Leave blank to delete all matches.' }
-  }, required:['date'] }
-}, function resolveBulkDeletePayments(args){
-  if(!isAdmin()) return { error:'Deleting payment records needs Admin access — this account can\'t do that.' };
-  const date = _YMD_RE.test(args.date||'') ? args.date : '';
-  if(!date) return { error:'I need a date in YYYY-MM-DD format — which date\'s payments should I delete?' };
-  let staffFilter = null;
-  if(args.staffName){
-    const matches = _findActiveStaffByName(args.staffName);
-    if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
-    if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
-    staffFilter = matches[0].id;
-  }
-  let candidates = (DATA.staffPayments||[]).filter(p=>p.date===date && (!staffFilter || String(p.staffId)===String(staffFilter)));
-  if(candidates.length===0) return { error:`I couldn't find any payments${args.staffName?' for '+args.staffName:''} on ${date} to delete.` };
-  const limit = Number(args.limit||0);
-  const capped = (limit>0) ? candidates.slice(0, limit) : candidates;
-  const skippedByLimit = candidates.length - capped.length;
-  const editable = capped.filter(p=>isWithin24h(p,true));
-  const blocked = capped.length - editable.length;
-  if(editable.length===0) return { error:`Found ${capped.length} matching payment${capped.length===1?'':'s'} on ${date}, but all are outside the ${_editWindowLabel(true)} edit window and can no longer be deleted.` };
-  const names = [...new Set(editable.map(p=>{ const st=DATA.staff.find(x=>String(x.id)===String(p.staffId)); return st?st.name:'Unknown'; }))];
-  const namesStr = names.length<=4 ? names.join(', ') : `${names.slice(0,4).join(', ')} and ${names.length-4} more`;
-  const totalAmt = editable.reduce((a,b)=>a+Number(b.amount||0),0);
-  return {
-    description: `Permanently delete ${editable.length} payment${editable.length===1?'':'s'} on ${date} (${namesStr}, K${totalAmt.toFixed(2)} total) — this cannot be undone.`+
-      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel(true)} edit window and will be skipped.)` : '')+
-      (skippedByLimit>0 ? ` (${skippedByLimit} more matched the filter but were beyond the requested limit of ${limit}.)` : '')+
-      ` You'll be asked to confirm your admin password next. Delete these?`,
-    action: { ids: editable.map(p=>p.id) }
-  };
-}, function executeBulkDeletePayments(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  if(!isAdmin()) return { ok:false, msg:'Admin access is required to delete payment records.' };
-  const idSet = new Set((action.ids||[]).map(String));
-  const toDelete = (DATA.staffPayments||[]).filter(p=>idSet.has(String(p.id)) && isWithin24h(p,true));
-  if(toDelete.length===0) return { ok:false, msg:'None of those payments could be deleted — they may have fallen outside the edit window while waiting for confirmation.' };
-  toDelete.forEach(p=>{
-    logAuditEvent('DELETE','Staff Payment',`ID:${p.id} · Amount:${p.amount} · Staff:${p.staffId} · via Depot Assistant`, p);
-  });
-  const deletedIds = new Set(toDelete.map(p=>String(p.id)));
-  updateData(d=>({...d, staffPayments:(d.staffPayments||[]).filter(p=>!deletedIds.has(String(p.id)))}));
-  return { ok:true, msg:`Deleted ${toDelete.length} payment${toDelete.length===1?'':'s'}.` };
-}, true);
-
-// ═══ 18. Bulk-edit work log quantity ═══════════════════════════════════
-// Sets a group of existing work logs to the SAME new quantity — e.g. "edit
-// 20 August stacking logs to 77 bags each". Matches logs the same way
-// bulk_edit_log_date does (date + optional task/staff filters, same
-// isWithin24h edit-window gate). Unlike the date tool, quantity is not
-// unaffected here: earnings must be recalculated per log using getEarnings(),
-// exactly the way the manual "Edit Work Log" modal's saveEditLog() does —
-// each log's OWN role/task decides its rate, not the filter args, so mixed
-// filters (e.g. no task filter) still price correctly per log. rateUnit/bags
-// are also recomputed per log the same way saveEditLog() does, in case a
-// task's configured rate unit has changed since the log was created.
-_registerAIAction('bulk_edit_log_quantity', {
-  type: 'function',
-  name: 'bulk_edit_log_quantity',
-  description: 'Set a group of existing work logs to the SAME new quantity — '+
-    'e.g. "edit 20 August stacking logs to 77 bags each" or "change John\'s '+
-    'loading logs on 22 Aug to 50 each". Matches logs by date, optionally '+
-    'narrowed by task name and/or staff name. Only call this when the user '+
-    'has clearly given the date AND the single new quantity to set every '+
-    'matched log to — never guess either. Earnings are recalculated for each '+
-    'log from its own task rate; this is not for changing individual logs to '+
-    'DIFFERENT quantities each — for that, ask the user to edit them one at '+
-    'a time in the app instead.',
-  parameters: { type:'object', properties: {
-    task: { type:'string', description:'Optional task name to filter by (e.g. "Stacking"). Leave blank to match logs for any task.' },
-    staffName: { type:'string', description:'Optional staff member name to filter by. Leave blank to match all staff.' },
-    date: { type:'string', description:'The date of the logs to edit, in YYYY-MM-DD format.' },
-    qty: { type:'number', description:'The new quantity to set every matched log to (e.g. 77). Must be a positive number.' }
-  }, required:['date','qty'] }
-}, function resolveBulkEditLogQty(args){
-  if(!isAdmin()) return { error:'Editing existing work logs needs Admin access — this account can\'t do that.' };
-  const date = _YMD_RE.test(args.date||'') ? args.date : '';
-  if(!date) return { error:'I need a date in YYYY-MM-DD format — which date\'s logs should I edit?' };
-  const qty = Number(args.qty);
-  if(!qty || qty<=0) return { error:'I need a positive quantity to set these logs to — what should the new quantity be?' };
-  let staffFilter = null;
-  if(args.staffName){
-    const matches = _findActiveStaffByName(args.staffName);
-    if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
-    if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
-    staffFilter = matches[0].id;
-  }
-  const taskQ = (args.task||'').trim().toLowerCase();
-  const candidates = (DATA.staffLogs||[]).filter(l=>
-    l.date===date &&
-    (!staffFilter || String(l.staffId)===String(staffFilter)) &&
-    (!taskQ || (l.task||'').toLowerCase()===taskQ || (l.task||'').toLowerCase().includes(taskQ))
-  );
-  if(candidates.length===0) return { error:`I couldn't find any${args.task?' "'+args.task+'"':''} work logs on ${date}${args.staffName?' for '+args.staffName:''} to edit.` };
-  const editable = candidates.filter(l=>isWithin24h(l,true));
-  const blocked = candidates.length - editable.length;
-  if(editable.length===0) return { error:`Found ${candidates.length} matching log${candidates.length===1?'':'s'} on ${date}, but all of them are outside the ${_editWindowLabel(true)} edit window and can no longer be edited.` };
-  const names = [...new Set(editable.map(l=>{
-    const st = DATA.staff.find(x=>String(x.id)===String(l.staffId));
-    return st ? st.name : 'Unknown';
-  }))];
-  const namesStr = names.length<=4 ? names.join(', ') : `${names.slice(0,4).join(', ')} and ${names.length-4} more`;
-  // Preview the recalculated total so Admin can sanity-check before confirming.
-  const newTotal = editable.reduce((a,l)=>a+getEarnings(qty, l.role||'', l.task||''), 0);
-  const unitLabels = [...new Set(editable.map(l=>taskRateUnitLabel(l.role||'', l.task||'')))];
-  const unitStr = unitLabels.length===1 ? unitLabels[0]+(qty!==1?'s':'') : 'unit(s)';
-  return {
-    description: `Set ${editable.length} work log${editable.length===1?'':'s'}${args.task?' ("'+args.task+'")':''} on ${date} to ${qty} ${unitStr} each — ${namesStr}? `+
-      `Earnings will be recalculated from each log's task rate (new total: K${newTotal.toFixed(2)} gross, before deductions).`+
-      (blocked>0 ? ` (${blocked} more matched but ${blocked===1?'is':'are'} outside the ${_editWindowLabel(true)} edit window and will be skipped.)` : '')+
-      ` You'll be asked to confirm your admin password next. Save this?`,
-    action: { logIds: editable.map(l=>l.id), qty }
-  };
-}, function executeBulkEditLogQty(action){
-  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
-  if(!isAdmin()) return { ok:false, msg:'Admin access is required to edit work logs.' };
-  const idSet = new Set((action.logIds||[]).map(String));
-  const qty = Number(action.qty);
-  let edited = 0;
-  updateData(d=>({...d, staffLogs:d.staffLogs.map(l=>{
-    if(idSet.has(String(l.id)) && isWithin24h(l,true)){
-      edited++;
-      const ru = taskRateUnit(l.role||'', l.task||'');
-      const earnings = getEarnings(qty, l.role||'', l.task||'');
-      const bagsVal = ru==='bag' ? qty : 0;
-      return {...l, qty, bags:bagsVal, rateUnit:ru, earnings};
-    }
-    return l;
-  })}));
-  if(edited===0) return { ok:false, msg:'None of those logs could be edited — they may have fallen outside the edit window while waiting for confirmation.' };
-  logAuditEvent('EDIT','Work Log (Bulk Quantity Change)',`${edited} log(s) set to ${qty} each · via Depot Assistant`);
-  return { ok:true, msg:`Updated ${edited} work log${edited===1?'':'s'} to ${qty} each — earnings recalculated.` };
-}, true);
-
-// ── Client-side rate limiter ────────────────────────────────────────────────
-// Google's free tier for gemini-3.5-flash allows only 5 requests/minute,
-// shared across every depot using this app (one API key behind the proxy
-// worker). We can't raise that ceiling from here — only enabling billing on
-// the Google Cloud project the key belongs to does that. What we CAN do is
-// stay safely under it so users get a clear "please wait" instead of a raw
-// quota error, and avoid making the shared quota problem worse by retrying
-// into it. Sliding 60s window, capped just under Google's limit.
-const COPILOT_RATE_LIMIT_MAX = 4;      // requests per rolling window (Google's cap is 5/min)
-const COPILOT_RATE_LIMIT_WINDOW_MS = 60000;
-let _copilotRequestTimestamps = [];
-
-function _copilotRateLimitWaitMs(){
-  const now = Date.now();
-  _copilotRequestTimestamps = _copilotRequestTimestamps.filter(t => now - t < COPILOT_RATE_LIMIT_WINDOW_MS);
-  if(_copilotRequestTimestamps.length < COPILOT_RATE_LIMIT_MAX) return 0;
-  const oldest = _copilotRequestTimestamps[0];
-  return Math.max(0, COPILOT_RATE_LIMIT_WINDOW_MS - (now - oldest));
-}
-
-function _copilotRecordRequest(){
-  _copilotRequestTimestamps.push(Date.now());
-}
-
-// Pulls Google's suggested wait time out of a 429 quota-exceeded error body,
-// e.g. error.details[].retryDelay = "56s". Falls back to null if not present.
-function _parseGoogleRetryDelaySeconds(body){
-  try{
-    const parsed = JSON.parse(body);
-    const details = parsed?.error?.details || [];
-    for(const d of details){
-      if(d.retryDelay){
-        const m = /^(\d+(?:\.\d+)?)s$/.exec(d.retryDelay);
-        if(m) return Math.ceil(parseFloat(m[1]));
-      }
-    }
-  }catch{ /* not JSON or no RetryInfo — caller falls back */ }
-  return null;
-}
-
-async function _callCopilot(mode, userText, context, priorTurns){
-  if(!navigator.onLine){ showToast('❌ Depot Assistant needs an internet connection'); return null; }
-  if(_copilotUsageToday() >= COPILOT_DAILY_SOFT_CAP){ showToast('⚠️ Daily Assistant limit reached — resets tomorrow'); return null; }
-  // Proactive throttle — stops us from firing straight into Google's shared
-  // 5/min free-tier cap in the first place.
-  const waitMs = _copilotRateLimitWaitMs();
-  if(waitMs > 0){
-    throw new Error(`Depot Assistant is getting a lot of use right now — please wait ${Math.ceil(waitMs/1000)}s and try again.`);
-  }
-  // Each call is otherwise stateless (no server-side session) — this app is
-  // what gives the model dialogue memory, by replaying the last few turns as
-  // plain text ahead of the new question. The depot data below is always the
-  // CURRENT snapshot, not a historical one from when an earlier turn was asked.
-  const transcriptBlock = (priorTurns && priorTurns.length)
-    ? 'Recent conversation so far (oldest first — for context on follow-up '+
-      'questions like "what about last week?" or "and for X?"; the depot data '+
-      'below is the current snapshot, not from when those turns were asked):\n'+
-      priorTurns.join('\n') + '\n\n'
-    : '';
-  const promptText = transcriptBlock
-    + (userText?('Question: '+userText+'\n\n'):'Run the reconciliation described above.\n\n')
-    + 'Depot data (JSON):\n' + JSON.stringify(context);
-  // Actions (tool calling) are only offered in normal chat mode — the
-  // reconciliation job is read-only analysis and shouldn't be able to
-  // trigger writes. Additionally, a 'staff' login is view-only everywhere
-  // else in the app (see isStaffRole()/renderStaffDash) and must stay
-  // view-only here too — handing it data-entry tools would let it write
-  // records through chat that the manual UI never lets it write directly.
-  const bodyObj = {
-    model: GEMINI_MODEL,
-    input: promptText,
-    system_instruction: _copilotSystemPrompt(mode)
-  };
-  if(mode!=='reconciliation' && !isStaffRole()) bodyObj.tools = Object.values(AI_ACTIONS).map(a=>a.tool);
-  const reqBody = JSON.stringify(bodyObj);
-  const timeoutMs = 45000; // generous fixed timeout for both chat and reconciliation
-  // No API key here — the worker attaches it server-side. See the setup
-  // comment near COPILOT_PROXY_ENDPOINT above.
-  const doFetch = ()=> {
-    _copilotRecordRequest();
-    return _fetchWithTimeout(COPILOT_PROXY_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json' },
-      body: reqBody
-    }, timeoutMs);
-  };
-  let res = await doFetch();
-  // A 429 here is one of two very different things:
-  //  - Transient overload (Google's model is momentarily busy) — usually
-  //    clears within a couple of seconds, safe to retry once.
-  //  - Genuine quota exhaustion (RESOURCE_EXHAUSTED, "you exceeded your
-  //    quota") — this is a hard per-minute ceiling on the shared free-tier
-  //    key. Retrying immediately just wastes another slot of that same
-  //    quota and makes it worse for the next person. We detect this case
-  //    by body content and skip straight to a clear wait-and-try-again
-  //    message instead of silently retrying.
-  if(!res.ok && [500,503].includes(res.status)){
-    await new Promise(r=>setTimeout(r, 2000));
-    res = await doFetch();
-  } else if(!res.ok && res.status===429){
-    const peekBody = await res.text().catch(()=>'');
-    const isQuota = /quota|RESOURCE_EXHAUSTED/i.test(peekBody);
-    if(!isQuota){
-      // Genuinely transient 429 (rare) — one quick retry as before.
-      await new Promise(r=>setTimeout(r, 2000));
-      res = await doFetch();
-    } else {
-      const retrySecs = _parseGoogleRetryDelaySeconds(peekBody);
-      throw new Error(retrySecs
-        ? `Depot Assistant has hit its usage limit for the moment — please try again in about ${retrySecs}s.`
-        : `Depot Assistant has hit its usage limit for the moment — please try again in about a minute.`);
-    }
-  }
-  if(!res.ok){
-    const body = await res.text().catch(()=>'');
-    let friendly = '';
-    try {
-      const parsed = JSON.parse(body);
-      friendly = parsed?.error?.message || parsed?.message || '';
-    } catch { /* not JSON, fall back to raw text below */ }
-    throw new Error(friendly || ('HTTP '+res.status+(body?': '+body.slice(0,150):'')));
-  }
-  const data = await res.json();
-  _copilotBumpUsage();
-  const steps = data?.steps||[];
-  const reply = steps
-    .filter(s=>s.type==='model_output')
-    .flatMap(s=>s.content||[])
-
-    .filter(c=>c.type==='text')
-    .map(c=>c.text||'')
-    .join('');
-  const functionCalls = steps
-    .filter(s=>s.type==='function_call')
-    .map(s=>({ name:s.name, arguments:s.arguments||{}, id:s.id }));
-  return { reply: reply || '', functionCalls };
-}
-
-async function askCopilot(question){
-  question = (question||'').trim();
-  if(!question || _copilotBusy) return;
-  _copilotBusy = true;
-  // Snapshot recent turns BEFORE this question is added to the log — the
-  // current question is sent separately as `userText`, so it shouldn't also
-  // appear inside the transcript block.
-  const priorTurns = _copilotRecentTurns(COPILOT_CONTEXT_TURNS);
-  _copilotAppend('user', question);
-  _copilotAppend('assistant', '…thinking');
-  try {
-    // No date keyword in the question → don't guess a window; send the full
-    // history for date-stamped arrays (still hard-capped at 1000 records per
-    // array by buildCopilotContext for payload safety). Only a recognized
-    // keyword narrows the window. Same pattern for topics: only send the
-    // data groups the question's keywords actually touch — falls back to
-    // everything if nothing matches, so open-ended questions still work.
-    const range = _inferContextRange(question);
-    const context = buildCopilotContext(range ? range.days : 3650, false, range ? range.fromDate : null, question);
-    const data = await _callCopilot('chat', question, context, priorTurns);
-    _copilotHistory.pop(); // remove the "…thinking" placeholder
-    if(data){
-      const call = (data.functionCalls||[])[0];
-      if(call && AI_ACTIONS[call.name]){
-        _handleAIActionCall(call.name, call.arguments||{});
-      } else {
-        _copilotAppend('assistant', data.reply || '(no response)');
-      }
-    } else _copilotHistory.pop();
-  } catch(e){
-    _copilotHistory.pop();
-    const msg = (e && e.name === 'AbortError')
-      ? 'Request timed out — check your connection and try again'
-      : (e.message||'Something went wrong');
-    _copilotAppend('assistant', '❌ '+msg);
-  } finally {
-    _copilotBusy = false;
-    const log = document.getElementById('cop-log'); if(log){ log.innerHTML=_renderCopilotLog(); log.scrollTop=log.scrollHeight; }
-  }
-}
-
-// Runs the matching AI_ACTIONS[name].resolve() against real data and either
-// shows a Confirm/Cancel action card (clean, unambiguous match) or a plain
-// clarifying message (error) — never writes directly. actionType is stashed
-// on the card so confirmCopilotAction() knows which action to execute.
-function _handleAIActionCall(name, args){
-  const def = AI_ACTIONS[name];
-  if(!def) return;
-  // Defense-in-depth: tools aren't sent to the model for a 'staff' login (see
-  // _callCopilot), but never trust that alone — if a call still arrives
-  // (stale history, future refactor, model misbehaving), block it here too
-  // rather than silently resolving/executing a write a view-only account
-  // isn't allowed to make anywhere else in the app.
-  if(isStaffRole()){
-    _copilotAppend('assistant', '⛔ Your account is view-only and can\'t make changes — ask your Admin or Manager to do this.');
-    return;
-  }
-  const res = def.resolve(args);
-  if(res.error){
-    _copilotAppend('assistant', res.error);
-    return;
-  }
-  _copilotAppendAction(res.description, { actionType:name, ...res.action });
-}
-
-// Adds an actionable message the user must explicitly Confirm or Cancel —
-// nothing in DATA changes until they tap Confirm.
-function _copilotAppendAction(description, action){
-  const actionId = 'act_'+Date.now()+'_'+Math.floor(Math.random()*1000);
-  _copilotHistory.push({ role:'assistant', type:'action', content:description, actionId, action });
-  _copilotTrimHistory();
-  const log = document.getElementById('cop-log');
-  if(log){ log.innerHTML=_renderCopilotLog(); log.scrollTop=log.scrollHeight; }
-}
-
-function confirmCopilotAction(actionId){
-  const idx = _copilotHistory.findIndex(m=>m.actionId===actionId);
-  if(idx===-1) return;
-  const action = _copilotHistory[idx].action || {};
-  const def = AI_ACTIONS[action.actionType];
-  if(!def){
-    _copilotHistory[idx] = { role:'assistant', type:'text', content:'❌ Unknown action — nothing was done.' };
-    const log0 = document.getElementById('cop-log');
-    if(log0){ log0.innerHTML=_renderCopilotLog(); log0.scrollTop=log0.scrollHeight; }
-    return;
-  }
-  const finish = (result)=>{
-    _copilotHistory[idx] = { role:'assistant', type:'text', content:(result.ok?'✅ ':'❌ ')+result.msg };
-    const log = document.getElementById('cop-log');
-    if(log){ log.innerHTML=_renderCopilotLog(); log.scrollTop=log.scrollHeight; }
-  };
-  if(def.sensitive){
-    // Money-moving actions (e.g. payments) get the same admin-password
-    // re-check as the manual form. This opens its own modal on top of the
-    // Assistant modal — reopen the Assistant afterwards so the result is
-    // visible in the chat instead of leaving the person on a closed modal.
-    requireAdminPassword('save this entry', ()=>{
-      const result = def.execute(action);
-      finish(result);
-      openCopilot();
-    });
-  } else {
-    finish(def.execute(action));
-  }
-}
-
-function cancelCopilotAction(actionId){
-  const idx = _copilotHistory.findIndex(m=>m.actionId===actionId);
-  if(idx===-1) return;
-  _copilotHistory[idx] = { role:'assistant', type:'text', content:'Cancelled — no changes made.' };
-  const log = document.getElementById('cop-log');
-  if(log){ log.innerHTML=_renderCopilotLog(); log.scrollTop=log.scrollHeight; }
-}
-
-// Heavier job — reasons over 30 days of movements + shift logs at once and
-// is asked to self-check its own arithmetic rather than one-shot it.
-async function runReconciliation(){
-  if(_copilotBusy) return;
-  _copilotBusy = true;
-  _copilotAppend('user', 'Run end-of-day reconciliation');
-  _copilotAppend('assistant', '…running full reconciliation, this can take up to a minute');
-  try {
-    const context = buildCopilotContext(30, true); // wider window + full data for a real reconciliation
-    const data = await _callCopilot('reconciliation', '', context);
-    _copilotHistory.pop();
-    if(data) _copilotAppend('assistant', data.reply || '(no response)');
-  } catch(e){
-    _copilotHistory.pop();
-    const msg = (e && e.name === 'AbortError')
-      ? 'Reconciliation timed out — check your connection and try again'
-      : (e.message||'Reconciliation failed');
-    _copilotAppend('assistant', '❌ '+msg);
-  } finally {
-    _copilotBusy = false;
-    const log = document.getElementById('cop-log'); if(log){ log.innerHTML=_renderCopilotLog(); log.scrollTop=log.scrollHeight; }
-  }
-}
-
-// Show/hide the Assistant FAB the same way the search FAB is toggled, and
-// respect the Pro-tier gate so Free/Growth users don't see a dead button.
-function _copilotFabSync(){
-  const fab = document.getElementById('copilot-fab');
-  if(!fab) return;
-  fab.style.display = hasFeature('ai_copilot') ? 'flex' : 'none';
-}
-
-// ══ END DEPOT ASSISTANT ════════════════════════════════════
-
-// ══ END CSV EXPORT ════════════════════════════════════════
-</script>
-</body>
-</html>
+    quantity: { type:                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
