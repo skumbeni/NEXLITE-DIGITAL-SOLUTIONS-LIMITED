@@ -11721,11 +11721,13 @@ function renderStaff(){
 
 function setStaffLogTaskFilter(t){STAFF_LOG_TASK_FILTER=t;render();}
 
-// ── Work Logs: subtotal row for one date + role ──────────────────────────────
+// ── Work Logs: subtotal rows for one date + role ─────────────────────────────
 // Closes each date/role block in the Work Logs table. Counts the same logs as the
 // "Total Qty / Net (Period)" cards (approved, completed work logs) and shows:
 //   • quantity per unit — bags, hours, days… never added across different units
 //   • gross, deductions and net money
+// When the role did more than one task that day, a smaller row per task follows
+// the overall row, with the same figures for that task alone.
 // Shown only when the block has 2+ counted logs. Pending, rejected and still-open
 // logs are left out and noted on the row. Display only: nothing is saved.
 function _staffLogSubRow(date,role,items){
@@ -11733,25 +11735,46 @@ function _staffLogSubRow(date,role,items){
   const counted=items.filter(l=>isWork(l)&&l.status!=='open'&&isApproved(l));
   if(counted.length<2)return'';
   const skipped=items.filter(isWork).length-counted.length;
-  let gross=0,ded=0;const qty={},units=[];
-  counted.forEach(l=>{
-    gross+=Number(l.earnings||0);ded+=Number(l.deduction||0);
-    const u=taskRateUnitLabel(l.role||'',l.task||'')||'bag';
-    if(!(u in qty)){qty[u]=0;units.push(u);}
-    qty[u]+=Number(l.qty!=null?l.qty:l.bags||0);
-  });
-  const net=gross-ded,adm=USER.role==='admin';
+  const adm=USER.role==='admin';
   const fq=v=>(Math.round(v*100)/100).toLocaleString();
-  const qtyHtml=units.map(u=>`<div>${fq(qty[u])} <span style="font-size:14px;color:var(--muted);font-weight:400">${esc(u)}</span></div>`).join('');
-  const note=skipped>0?` · ${skipped} pending/open not counted`:'';
-  return `<tr class="sl-sub" style="background:var(--surface2);border-top:1px solid var(--border);border-bottom:2px solid var(--border);font-weight:700">
-      <td colspan="${adm?5:4}" style="white-space:normal"><div style="font-size:16px">\u03A3 ${fmtDate(date)} \u00B7 ${esc(role||'\u2014')}</div><div style="font-size:14px;color:var(--muted);font-weight:400">${counted.length} logs${note}</div></td>
-      <td style="text-align:right">${qtyHtml}</td>
-      <td style="color:var(--green);text-align:right">${zm(gross)}</td>
-      <td style="color:${ded>0?'var(--red)':'var(--muted)'};text-align:right">-${zm(ded)}</td>
-      <td style="color:var(--green);text-align:right">${zm(net)}</td>
+  // gross / deductions / net and quantity per unit for a set of logs
+  const sum=ls=>{
+    const o={gross:0,ded:0,qty:{},units:[]};
+    ls.forEach(l=>{
+      o.gross+=Number(l.earnings||0);o.ded+=Number(l.deduction||0);
+      const u=taskRateUnitLabel(l.role||'',l.task||'')||'bag';
+      if(!(u in o.qty)){o.qty[u]=0;o.units.push(u);}
+      o.qty[u]+=Number(l.qty!=null?l.qty:l.bags||0);
+    });
+    o.net=o.gross-o.ded;
+    return o;
+  };
+  const qtyHtml=(o,fs)=>o.units.map(u=>`<div>${fq(o.qty[u])} <span style="font-size:${fs}px;color:var(--muted);font-weight:400">${esc(u)}</span></div>`).join('');
+  // one table row; label spans checkbox/Date/Staff/Role/Task, the tail spans Time/Cum/actions
+  const row=(labelHtml,o,opt)=>`<tr class="sl-sub" style="background:var(--surface2);border-top:${opt.top};border-bottom:${opt.bottom};font-weight:${opt.fw}">
+      <td colspan="${adm?5:4}" style="white-space:normal">${labelHtml}</td>
+      <td style="text-align:right;font-size:${opt.fs}px">${qtyHtml(o,opt.fs-2)}</td>
+      <td style="color:var(--green);text-align:right;font-size:${opt.fs}px">${zm(o.gross)}</td>
+      <td style="color:${o.ded>0?'var(--red)':'var(--muted)'};text-align:right;font-size:${opt.fs}px">-${zm(o.ded)}</td>
+      <td style="color:var(--green);text-align:right;font-size:${opt.fs}px">${zm(o.net)}</td>
       <td colspan="${adm?4:3}"></td>
     </tr>`;
+  // tasks in the block (counted logs only), alphabetical
+  const byTask={};
+  counted.forEach(l=>{const t=l.task||'\u2014';(byTask[t]=byTask[t]||[]).push(l);});
+  const tasks=Object.keys(byTask).sort((a,b)=>a.localeCompare(b));
+  const split=tasks.length>1;
+  const note=skipped>0?` \u00B7 ${skipped} pending/open not counted`:'';
+  let html=row(`<div style="font-size:16px">\u03A3 ${fmtDate(date)} \u00B7 ${esc(role||'\u2014')}</div><div style="font-size:14px;color:var(--muted);font-weight:400">${counted.length} logs${note}</div>`,
+    sum(counted),{top:'1px solid var(--border)',bottom:split?'0':'2px solid var(--border)',fw:700,fs:17});
+  if(split){
+    tasks.forEach((t,i)=>{
+      const ls=byTask[t];
+      html+=row(`<div style="font-size:15px;padding-left:14px;color:var(--text)">\u21B3 ${esc(t)} <span style="font-size:14px;color:var(--muted)">\u00B7 ${ls.length} log${ls.length===1?'':'s'}</span></div>`,
+        sum(ls),{top:'1px dashed var(--border)',bottom:i===tasks.length-1?'2px solid var(--border)':'0',fw:600,fs:15});
+    });
+  }
+  return html;
 }
 
 function renderStaffLogs(){

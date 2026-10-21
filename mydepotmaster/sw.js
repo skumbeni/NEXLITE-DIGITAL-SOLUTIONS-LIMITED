@@ -34,6 +34,8 @@
 //     cards); pending / open logs are noted on the row. Shown when a block has 2+ logs.
 //   - Subtotal rows are hidden while the search box is in use (they would not match
 //     the filtered rows). Display only — no data, pay or export changes.
+//   - When a date + role block has more than one task, a smaller row per task (same
+//     quantity / gross / deduct / net columns) follows the overall subtotal.
 //   - No sw.js fetch/cache logic changes — bump only.
 //
 // v0.3.7 changes (2026-10-21) — Data-entry parity: every Edit form now matches its Add form:
