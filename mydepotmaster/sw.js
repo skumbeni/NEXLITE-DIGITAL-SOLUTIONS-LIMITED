@@ -25,7 +25,35 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.5 (2026-10-20)
+// Current version: v0.3.7 (2026-10-21)
+//
+// v0.3.7 changes (2026-10-21) — Data-entry parity: every Edit form now matches its Add form:
+//   - Edit Work Log: Role dropdown (multi-role staff) and Task list follow the chosen
+//     staff/role, so a log can be moved to a task under another role; stock tag follows
+//     the task; Overtime multiplier (was silently dropped on edit — OT logs lost their
+//     OT pay when edited) and Notes are now editable. Priced-task check on save.
+//   - Deduction lines (l.deductions[]) are kept in step with the edited total/reason.
+//     Payslips read the lines first, so editing only the total used to be ignored.
+//     Untouched multi-line deductions are preserved exactly (reason text no longer wiped).
+//   - Attendance entries (absent / leave / sick) can now be edited (type, staff, date,
+//     note); the matching leave-balance entry is updated with it.
+//   - Bulk Edit Work Logs: "Task (same for all)" tick plus a Task dropdown on every row.
+//     Quantity kept, earnings/rate unit recalculated at the new rate; logs whose role
+//     has no such task keep theirs and are counted. Bulk edit now keeps OT pay, rate
+//     unit and deduction lines consistent, and blocks attendance entries.
+//   - Edit Issued Item: Customer. Edit Commodity Received: Supplier. Edit Commodity
+//     Issued: Source Receive Record (traceability). Edit Staff: Date Joined.
+//   - No sw.js fetch/cache logic changes — bump only.
+//
+// v0.3.6 changes (2026-10-21) — Work log editing: tasks (Depot Assistant):
+//   - Depot Assistant can now change the TASK on existing work logs in bulk
+//     (new action bulk_edit_log_task), alongside bulk date and bulk quantity.
+//     e.g. "change 20 August loading logs to stacking". Same date / task / staff
+//     filters and the same edit-window + admin-password gates as the other bulk
+//     edits. Quantity is kept; task, rate unit and earnings are recalculated from
+//     the new task's rate. Logs whose role has no such task priced are skipped and
+//     reported; the confirmation shows gross before → after.
+//   - No sw.js fetch/cache logic changes — bump only.
 //
 // v0.3.5 changes (2026-10-20) — Edit staff payments (single + bulk):
 //   - Payments tab: ✏️ Edit beside 🗑 on every PAID row (admin only). Same guards as
@@ -1733,7 +1761,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.5';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.7';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

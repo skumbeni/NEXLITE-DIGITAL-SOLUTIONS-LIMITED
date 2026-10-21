@@ -4165,7 +4165,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.5';
+const SW_VERSION  = 'v0.3.7';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -9380,14 +9380,23 @@ function openBulkEditStaffLog(){
   if(locked.length){alert(`🔒 ${locked.length} of the selected record(s) are older than the ${_editWindowLabel(true)} edit window and cannot be edited. Deselect them and try again.`);return;}
   const open=recs.filter(r=>r.status==='open'&&!isRejected(r));
   if(open.length){alert(`🟢 ${open.length} of the selected record(s) are active/open shifts and must be clocked out before editing. Deselect them and try again.`);return;}
+  const att=recs.filter(r=>r.entryType&&r.entryType!=='work');
+  if(att.length){alert(`${att.length} of the selected record(s) are attendance entries (absent / leave / sick). Edit those one at a time — deselect them and try again.`);return;}
   requireAdminPassword(`edit ${ids.length} work log(s)`,()=>_doOpenBulkEditStaffLog(recs));
+}
+function _belTaskOpts(log){
+  const tasks=tasksForRole(log.role||'');
+  let h=tasks.map(t=>`<option value="${esc(t.name)}"${t.name===log.task?' selected':''}>${esc(t.name)}</option>`).join('');
+  if(log.task&&!tasks.some(t=>t.name===log.task))h=`<option value="${esc(log.task)}" selected>${esc(log.task)} (not priced)</option>`+h;
+  return h;
 }
 function _staffLogRowHtml(log){
   const staff=DATA.staff.find(s=>String(s.id)===String(log.staffId));
   const qty=log.qty!=null?log.qty:log.bags;
-  const reasonOpts=`<option value="">None</option>`+DATA.deductionReasons.map(r=>`<option${r===log.deductionReason?' selected':''}>${r}</option>`).join('');
+  const reasonOpts=`<option value="">None</option>`+_dedReasonOpts(log);
   return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
-    <div style="font-weight:700;margin-bottom:8px">${esc(staff?staff.name:'Unknown')} · ${esc(log.task||'')} · ${fmtDate(log.date)}</div>
+    <div style="font-weight:700;margin-bottom:8px">${esc(staff?staff.name:'Unknown')} · ${esc(log.role||'')} · ${fmtDate(log.date)}</div>
+    <div class="fw"><div class="fl">Task</div><select class="fi bel-task" data-id="${log.id}">${_belTaskOpts(log)}</select></div>
     <div class="twobox">
       <div class="fw"><div class="fl">Date</div><input class="fi bel-date" type="date" data-id="${log.id}" value="${log.date||''}"/></div>
       <div class="fw"><div class="fl">Qty</div><input class="fi bel-qty" type="number" data-id="${log.id}" value="${qty!=null?qty:''}" inputmode="decimal" step="0.01"/></div>
@@ -9403,9 +9412,13 @@ function _doOpenBulkEditStaffLog(recs){
   const n=recs.length;
   window._bulkEditStaffLogIds=recs.map(r=>String(r.id));
   const rowsHtml=recs.map(_staffLogRowHtml).join('');
+  // One "same task for all" list: every task name priced for any selected log's role.
+  const names=[];recs.forEach(r=>tasksForRole(r.role||'').forEach(t=>{if(!names.includes(t.name))names.push(t.name);}));
+  const taskSel=`<select class="fi" id="bulkedit-stafflog-task" disabled>${names.map(t=>`<option value="${esc(t)}">${esc(t)}</option>`).join('')||'<option value="">No tasks defined</option>'}</select>`;
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Work Logs (${n})</div>
     <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick a field to set the SAME value on all ${n} record(s) — or leave it unticked and edit each record's own row below.</div>
+    ${_bulkOverrideFieldHtml('stafflog','task',`Task ${mdmTip('Applies only to logs whose role has this task priced — any other log keeps its task. Quantity stays; earnings are recalculated at the new task\'s rate.')}`,taskSel)}
     ${_bulkOverrideFieldHtml('stafflog','date','Date',`<input class="fi" type="date" id="bulkedit-stafflog-date" disabled/>`)}
     ${_bulkOverrideFieldHtml('stafflog','qty',`Quantity ${mdmTip('Earnings are recalculated for each record using its own task rate.')}`,`<input class="fi" type="number" id="bulkedit-stafflog-qty" inputmode="decimal" step="0.01" disabled/>`)}
     ${_bulkOverrideFieldHtml('stafflog','deduction',`Deduction (${cur()})`,`<input class="fi" type="number" id="bulkedit-stafflog-deduction" inputmode="decimal" disabled/>`)}
@@ -9418,36 +9431,46 @@ function _doOpenBulkEditStaffLog(recs){
 function saveBulkEditStaffLog(){
   const ids=window._bulkEditStaffLogIds||[...bulkSet('staff-log-table')];
   if(!ids.length)return;
-  const chkDate=document.getElementById('bulkedit-stafflog-chk-date')?.checked;
-  const chkQty=document.getElementById('bulkedit-stafflog-chk-qty')?.checked;
-  const chkDed=document.getElementById('bulkedit-stafflog-chk-deduction')?.checked;
-  const chkReason=document.getElementById('bulkedit-stafflog-chk-deductionReason')?.checked;
-  const chkNotes=document.getElementById('bulkedit-stafflog-chk-notes')?.checked;
+  const chk=k=>document.getElementById('bulkedit-stafflog-chk-'+k)?.checked;
+  const chkDate=chk('date'),chkQty=chk('qty'),chkDed=chk('deduction'),chkReason=chk('deductionReason'),chkNotes=chk('notes'),chkTask=chk('task');
   const bulkDate=document.getElementById('bulkedit-stafflog-date')?.value;
   const bulkQty=Number(document.getElementById('bulkedit-stafflog-qty')?.value||0);
   const bulkDed=Number(document.getElementById('bulkedit-stafflog-deduction')?.value||0);
   const bulkReason=document.getElementById('bulkedit-stafflog-deductionReason')?.value||'';
   const bulkNotes=document.getElementById('bulkedit-stafflog-notes')?.value||'';
+  const bulkTask=document.getElementById('bulkedit-stafflog-task')?.value||'';
   if(chkQty&&!(bulkQty>0)){alert('Enter a quantity greater than zero to apply to all.');return;}
+  if(chkTask&&!bulkTask){alert('Choose the task to apply to all.');return;}
   const recs=(DATA.staffLogs||[]).filter(l=>ids.includes(String(l.id)));
   if(!recs.length)return;
-  recs.forEach(r=>logAuditEvent('EDIT','Work Log',`ID:${r.id} · Staff:${r.staffId} · Bulk edit`,r));
-  updateData(d=>({...d,staffLogs:d.staffLogs.map(l=>{
+  const kept=[];   // logs whose role has no such task: they keep their own
+  const plan=new Map();
+  recs.forEach(l=>{
     const id=String(l.id);
-    if(!ids.includes(id))return l;
     const date=chkDate?bulkDate:(_bulkRowVal('bel-date',id)||l.date);
     const qtyRow=Number(_bulkRowVal('bel-qty',id));
     const qty=chkQty?bulkQty:(qtyRow>0?qtyRow:(l.qty!=null?l.qty:l.bags));
     const deduction=chkDed?bulkDed:Number(_bulkRowVal('bel-deduction',id)||0);
     const deductionReason=chkReason?bulkReason:(_bulkRowVal('bel-deductionReason',id)||'');
     const notes=chkNotes?bulkNotes:(_bulkRowVal('bel-notes',id)||'');
-    const earnings=getEarnings(qty,l.role,l.task);
-    return{...l,date,qty,bags:l.rateUnit==='bag'?qty:0,deduction,deductionReason,notes,earnings};
-  })}));
+    let task=_bulkRowVal('bel-task',id)||l.task;
+    if(chkTask){
+      if(tasksForRole(l.role||'').some(t=>t.name===bulkTask))task=bulkTask;
+      else kept.push(l);
+    }
+    const ru=taskRateUnit(l.role||'',task);
+    const ot=Number(l.overtimeMultiplier)>1?Number(l.overtimeMultiplier):1;
+    const n={...l,date,task,qty,bags:ru==='bag'?qty:0,rateUnit:ru,deduction,deductions:_logDedSync(l,deduction,deductionReason),deductionReason,notes,earnings:getEarnings(qty,l.role,task)*ot};
+    if(task!==l.task)_logRetag(n,l,l.role,task);
+    plan.set(id,n);
+  });
+  recs.forEach(r=>{const n=plan.get(String(r.id));logAuditEvent('EDIT','Work Log',`ID:${r.id} · Staff:${r.staffId} · Bulk edit${n&&n.task!==r.task?` · Task:${r.task}→${n.task}`:''}`,r);});
+  updateData(d=>({...d,staffLogs:d.staffLogs.map(l=>plan.get(String(l.id))||l)}));
   bulkClear('staff-log-table');
   window._bulkEditStaffLogIds=null;
   closeModal();
-  showToast(`✏️ Updated ${ids.length} record(s)`);
+  const moved=[...plan.values()].filter(n=>{const o=recs.find(r=>String(r.id)===String(n.id));return o&&o.task!==n.task;}).length;
+  showToast(`✏️ Updated ${ids.length} record(s)${moved?` · ${moved} task change${moved===1?'':'s'}`:''}${kept.length?` · ${kept.length} kept their task (role has no "${bulkTask}")`:''}`);
 }
 
 // ── Bulk tag stock on work logs ─────────────────────────────────────────────
@@ -10006,12 +10029,15 @@ function _doOpenEditGenIss(id){
   const fromData=[...new Set(DATA.generalInventory.map(x=>x.itemName))];
   const allNames=[...new Set([...defined,...fromData])].sort();
   const opts=allNames.map(n=>`<option value="${n}"${n===iss.itemName?' selected':''}>${n}</option>`).join('');
+  const _custs=(DATA.contacts||[]).filter(c=>c.type==='customer').sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const custOpts=`<option value="">— Walk-in / No customer —</option>`+(iss.customerId&&!_custs.some(c=>c.id===iss.customerId)?`<option value="${esc(iss.customerId)}" selected>${esc(iss.customerName||'Former customer')}</option>`:'')+_custs.map(c=>`<option value="${c.id}"${c.id===iss.customerId?' selected':''}>${esc(c.name)}${c.phone?' · '+esc(c.phone):''}</option>`).join('');
   openModal(`
     <div class="mtitle">✏️ Edit Issued Item</div>
     <div class="warn">⏰ Editing is only allowed within ${_editWindowLabel()} of entry.</div>
     <div class="fw"><div class="fl">Item Name</div><select class="fi" id="egei-name">${opts}</select></div>
     <div class="fw"><div class="fl">Qty Issued</div><input class="fi" type="number" id="egei-qty" value="${iss.issued}" inputmode="numeric"/></div>
     <div class="fw"><div class="fl">Selling Price (${cur()} per unit)</div><input class="fi" type="number" id="egei-sprice" value="${iss.sellingPrice||0}" step="0.01" inputmode="decimal"/></div>
+    <div class="fw"><div class="fl">Customer (optional)</div><select class="fi" id="egei-customer" style="text-transform:none">${custOpts}</select></div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="egei-date" value="${iss.date}"/></div>
     <div class="fw"><div class="fl">Notes</div><input class="fi" id="egei-notes" value="${iss.notes||''}" oninput="this.value=this.value.toUpperCase()"/></div>
     <div class="fw"><div class="fl">Payment Status</div><select class="fi" id="egei-credit" onchange="document.getElementById('egei-partial-wrap').style.display=this.value==='partial'?'':'none'">
@@ -10030,11 +10056,13 @@ function saveEditGenIss(id){
   const sprice=Number(document.getElementById('egei-sprice')?.value||0);
   if(!name||!qty){alert('Select item and enter quantity.');return;}
   const before=DATA.generalIssued.find(x=>String(x.id)===String(id));
+  const _cs=document.getElementById('egei-customer');
+  const custFields=_cs?{customerId:_cs.value,customerName:(()=>{const c=(DATA.contacts||[]).find(c=>c.id===_cs.value);return c?c.name:(_cs.value&&before&&before.customerId===_cs.value?(before.customerName||''):'');})()}:{};
   updateData(d=>{
     const prices={...(d.inventoryPrices||{})};
     if(sprice>0)prices[name]={...(prices[name]||{}),sellingPrice:sprice};
     return{...d,
-      generalIssued:d.generalIssued.map(x=>String(x.id)===String(id)?{...x,itemName:name,issued:qty,date:document.getElementById('egei-date').value,notes:uc(document.getElementById('egei-notes').value),sellingPrice:sprice,creditStatus:document.getElementById('egei-credit')?.value||'paid',partialPaid:Number(document.getElementById('egei-partial-amt')?.value||0)}:x),
+      generalIssued:d.generalIssued.map(x=>String(x.id)===String(id)?{...x,itemName:name,issued:qty,date:document.getElementById('egei-date').value,notes:uc(document.getElementById('egei-notes').value),...custFields,sellingPrice:sprice,creditStatus:document.getElementById('egei-credit')?.value||'paid',partialPaid:Number(document.getElementById('egei-partial-amt')?.value||0)}:x),
       inventoryPrices:prices
     };
   });
@@ -11257,6 +11285,7 @@ function _doOpenEditMaizeRec(id){
     <div class="fw"><div class="fl">${com.unit.charAt(0).toUpperCase()+com.unit.slice(1)} Received</div><input class="fi" type="number" id="emr-rec" value="${rec.received}" inputmode="numeric"/></div>
     <div class="fw"><div class="fl">Unit Price (${cur()} per ${com.unit.slice(0,-1)||com.unit})</div><input class="fi" type="number" id="emr-uprice" value="${rec.unitPrice||0}" step="0.01" inputmode="decimal"/></div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="emr-date" value="${rec.date}"/></div>
+    <div class="fw"><div class="fl">Supplier <span style="font-size:15px;color:var(--muted)">(optional)</span></div>${(()=>{const sups=(DATA.contacts||[]).filter(c=>c.type==='supplier');return sups.length>0?`<select class="fi" id="emr-supplier"><option value="">— None / Unknown —</option>${rec.supplierId&&!sups.some(c=>c.id===rec.supplierId)?`<option value="${esc(rec.supplierId)}" selected>${esc(rec.supplierName||'Former supplier')}</option>`:''}${sups.map(c=>`<option value="${c.id}"${c.id===rec.supplierId?' selected':''}>${esc(c.name)}</option>`).join('')}</select>`:`<input class="fi" id="emr-supplier-name" value="${esc(rec.supplierName||'')}" placeholder="SUPPLIER NAME (optional)" oninput="this.value=this.value.toUpperCase()"/>`;})()}</div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveEditMaizeRec('${id}')">✓ Save Changes</button></div>`);
 }
 function saveEditMaizeRec(id){
@@ -11268,7 +11297,9 @@ function saveEditMaizeRec(id){
   const unitPrice=Number(document.getElementById('emr-uprice').value||0);
   const cid=CCOM;
   const before=cRec(cid).find(x=>String(x.id)===String(id));
-  updateData(d=>{const cr={...(d.commodityReceived||{})};cr[cid]=(cr[cid]||[]).map(x=>String(x.id)===String(id)?{...x,batchName:batch,received:qty,unitPrice,date:document.getElementById('emr-date').value}:x);return{...d,commodityReceived:cr};});
+  const _sSel=document.getElementById('emr-supplier'),_sIn=document.getElementById('emr-supplier-name');
+  const supFields=_sSel?{supplierId:_sSel.value,supplierName:(()=>{const c=(DATA.contacts||[]).find(c=>c.id===_sSel.value);return c?c.name:(_sSel.value&&before&&before.supplierId===_sSel.value?(before.supplierName||''):'');})()}:(_sIn?{supplierName:_sIn.value.trim().toUpperCase()}:{});
+  updateData(d=>{const cr={...(d.commodityReceived||{})};cr[cid]=(cr[cid]||[]).map(x=>String(x.id)===String(id)?{...x,batchName:batch,received:qty,unitPrice,date:document.getElementById('emr-date').value,...supFields}:x);return{...d,commodityReceived:cr};});
   logAuditEvent('EDIT',`${getCom(cid).name} Received`,`ID:${id} · Batch: ${batch} · Qty: ${qty}`,before);
   closeModal();
 }
@@ -11288,10 +11319,13 @@ function _doOpenEditMaizeIss(id){
   if(!iss){alert('Record not found.');return;}
   const batches=[...new Set(cRec(CCOM).map(x=>x.batchName))];
   const opts=batches.map(b=>`<option value="${b}"${b===iss.batchName?' selected':''}>${b}</option>`).join('');
+  const _allRec=cRec(CCOM).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  const srcOpts=`<option value="">— None / Unknown —</option>`+_allRec.map(r=>`<option value="${r.id}"${String(r.id)===String(iss.sourceReceiveId||'')?' selected':''}>${r.batchName} · ${fmtDate(r.date)} · ${Number(r.received||0).toLocaleString()} ${com.unit}</option>`).join('');
   openModal(`
     <div class="mtitle">✏️ Edit ${esc(com.name)} Issued</div>
     <div class="warn">⏰ Editing is only allowed within ${_editWindowLabel()} of entry.</div>
     <div class="fw"><div class="fl">Batch</div><select class="fi" id="emi-batch">${opts}</select></div>
+    <div class="fw"><div class="fl">Source Receive Record <span style="font-size:15px;color:var(--muted)">— for traceability (optional)</span></div><select class="fi" id="emi-src-rec">${srcOpts}</select></div>
     <div class="fw"><div class="fl">Transporter</div><input class="fi" id="emi-trans" value="${iss.transporter||''}" oninput="this.value=this.value.toUpperCase()"/></div>
     <div class="fw"><div class="fl">${com.unit.charAt(0).toUpperCase()+com.unit.slice(1)} Issued</div><input class="fi" type="number" id="emi-qty" value="${iss.issued}" inputmode="numeric"/></div>
     <div class="fw"><div class="fl">Sale Price (${cur()} per ${com.unit.slice(0,-1)||com.unit})</div><input class="fi" type="number" id="emi-sprice" value="${iss.salePrice||0}" step="0.01" inputmode="decimal"/></div>
@@ -11313,7 +11347,7 @@ function saveEditMaizeIss(id){
   const emiPartialPaid=emiCredit==='partial'?Number(document.getElementById('emi-partial-amt')?.value||0):0;
   const cid=CCOM;
   const before2=cIss(cid).find(x=>String(x.id)===String(id));
-  updateData(d=>{const ci={...(d.commodityIssued||{})};ci[cid]=(ci[cid]||[]).map(x=>String(x.id)===String(id)?{...x,batchName:batch,transporter:trans,issued:qty,salePrice,date:document.getElementById('emi-date').value,creditStatus:emiCredit,partialPaid:emiPartialPaid}:x);return{...d,commodityIssued:ci};});
+  updateData(d=>{const ci={...(d.commodityIssued||{})};ci[cid]=(ci[cid]||[]).map(x=>String(x.id)===String(id)?{...x,batchName:batch,transporter:trans,issued:qty,salePrice,date:document.getElementById('emi-date').value,sourceReceiveId:document.getElementById('emi-src-rec')?document.getElementById('emi-src-rec').value:(x.sourceReceiveId||''),creditStatus:emiCredit,partialPaid:emiPartialPaid}:x);return{...d,commodityIssued:ci};});
   logAuditEvent('EDIT',`${getCom(cid).name} Issued`,`ID:${id} · Batch: ${batch} · Qty: ${qty}`,before2);
   closeModal();
 }
@@ -13785,6 +13819,7 @@ function _openEditStaffDetails(id){
     <div class="fw" id="esd-salary-wrap" style="display:${s.payType==='salary'?'block':'none'}"><div class="fl">Monthly Salary (K)</div><input class="fi" type="number" min="0" step="0.01" id="esd-salary" value="${Number(s.monthlySalary||0)||''}" placeholder="E.G. 3500"/></div>
     ${_stSwitchHtml('esd',s)}
     <div class="fw"><div class="fl">Phone</div><input class="fi" id="esd-phone" value="${esc(s.phone||'')}" placeholder="0977 000 000" inputmode="tel" style="text-transform:none"/></div>
+    <div class="fw"><div class="fl">Date Joined</div><input class="fi" type="date" id="esd-joined" value="${esc(s.dateJoined||'')}"/></div>
     <div class="fw"><div class="fl">Date of Birth</div><input class="fi" type="date" id="esd-dob" value="${esc(s.dateOfBirth||'')}" max="${today()}"/></div>
     <div class="fw"><div class="fl">Employee ID / NRC Number</div><input class="fi" id="esd-empid" value="${esc(s.employeeId||'')}" placeholder="E.G. NRC 123456/10/1" style="text-transform:none"/></div>
     <div class="fw"><div class="fl">Emergency Contact Name</div><input class="fi" id="esd-ecname" value="${esc(s.emergencyContactName||'')}" placeholder="E.G. MARY BANDA"/></div>
@@ -13811,7 +13846,7 @@ function saveEditStaffDetails(id){
   const emergencyContactPhone=(document.getElementById('esd-ecphone').value||'').trim();
   const notes=uc(document.getElementById('esd-notes').value);
   const _stv=_stRead('esd');
-  updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,name,role,roles,contractType,payType,monthlySalary,..._stv,phone,dateOfBirth,employeeId,emergencyContactName,emergencyContactPhone,notes}:s)}));
+  updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,name,role,roles,contractType,payType,monthlySalary,..._stv,dateJoined:document.getElementById('esd-joined')?.value||s.dateJoined,phone,dateOfBirth,employeeId,emergencyContactName,emergencyContactPhone,notes}:s)}));
   closeModal();
   showToast('✅ Staff details updated.');
 }
@@ -17946,6 +17981,32 @@ function openEditLog(id){
   if(!isWithin24h(log,true)){alert('⏰ Editing is only allowed within '+_editWindowLabel(true)+' of entry.');return;}
   requireAdminPassword('edit this record', ()=>_doOpenEditLog(id));
 }
+// Reason dropdown for an existing log. A log with several deduction lines stores a
+// combined reason ("A; B") that is not one of the list items — keep it as its own
+// selected option so saving without touching it never wipes the reasons.
+function _dedReasonOpts(l){
+  const cur=l.deductionReason||'';
+  return DATA.deductionReasons.map(r=>`<option${r===cur?' selected':''}>${r}</option>`).join('')
+    +(cur&&!DATA.deductionReasons.includes(cur)?`<option selected>${esc(cur)}</option>`:'');
+}
+// Deduction lines stay in step with the single total + reason this form edits.
+// Untouched total/reason → the original lines are kept; changed → one line.
+// (Payslips read l.deductions first, so a stale array would ignore the edit.)
+function _logDedSync(l,ded,reason){
+  ded=Number(ded)||0;reason=reason||'';
+  const arr=Array.isArray(l.deductions)?l.deductions:[];
+  const sum=arr.reduce((a,d)=>a+Number(d.amount||0),0);
+  const joined=arr.map(d=>d.reason).filter(Boolean).join('; ');
+  if(arr.length&&Math.abs(sum-ded)<0.005&&(reason===joined||reason===(l.deductionReason||'')))return arr;
+  return (ded>0||reason)?[{reason,amount:ded}]:[];
+}
+// After a role/task change: keep a stock tag only if it is still valid for the new task.
+function _logRetag(n,l,role,task){
+  if(!l.stockRef)return;
+  const dir=taskStockLink(taskObjFor(role,task));
+  if(dir==='none'||!stockTagChoices(role,task).some(c=>c.key===l.stockRef)){delete n.stockRef;delete n.stockDir;delete n.batch;}
+  else n.stockDir=dir;
+}
 function _doOpenEditLog(id){
   const log=DATA.staffLogs.find(x=>String(x.id)===String(id));
   if(!log){alert('Record not found.');return;}
@@ -17959,74 +18020,166 @@ function _doOpenEditLog(id){
   const currentInactive=staffRec0&&staffRec0.status&&staffRec0.status!=='active';
   const staffOpts=activeStaff.map(s=>`<option value="${s.id}"${String(s.id)===String(log.staffId)?' selected':''}>${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('')
     + (currentInactive?`<option value="${staffRec0.id}" selected>${esc(staffRec0.name)} (${esc(staffRoleLabel(staffRec0))} — ${staffRec0.status.toUpperCase()})</option>`:'');
-  const staffRec=DATA.staff.find(s=>String(s.id)===String(log.staffId));
+  if(log.entryType&&log.entryType!=='work'){_openEditAbsence(log,staffOpts);return;}
   // Preserve the role the log was actually recorded under — a multi-role
   // staff member's current primary role may differ from the role used here.
-  const staffRole=log.role||staffRec?.role||'';
-  const tasks=tasksForRole(staffRole);
-  const taskOpts=tasks.length>0?tasks.map(t=>{
-    const u=t.rateUnit||'bag';const ul=u==='custom'?(t.customUnit||'unit'):u;
-    return`<option value="${esc(t.name)}"${t.name===log.task?' selected':''}>${esc(t.name)} — K${Number(t.rate||0).toFixed(2)}/${ul}</option>`;
-  }).join(''):`<option>${log.task||'Unknown'}</option>`;
+  const staffRole=log.role||staffRec0?.role||'';
   const logQty=log.qty!=null?log.qty:log.bags; // support both old and new records
-  const qtyLbl=qtyLabelForTask(staffRole,log.task||'');
+  const otCur=Number(log.overtimeMultiplier)>1?Number(log.overtimeMultiplier):1;
+  const otVals=[1,1.25,1.5,2];if(!otVals.includes(otCur))otVals.push(otCur);
+  const otLbl={1:'× 1.0 — No extra OT pay',1.25:'× 1.25 — Time & quarter',1.5:'× 1.5 — Time & a half',2:'× 2.0 — Double time'};
+  const nDed=Array.isArray(log.deductions)?log.deductions.filter(d=>d&&(Number(d.amount)>0||d.reason)).length:0;
   openModal(`
     <div class="mtitle">✏️ Edit Work Log</div>
     <div class="warn">⏰ Editing is only allowed within ${_editWindowLabel(true)} of entry.</div>
-    <div class="fw"><div class="fl">Staff Member</div><select class="fi" id="elg-staff">${staffOpts}</select></div>
-    <div class="fw"><div class="fl">Task</div><select class="fi" id="elg-task" onchange="calcEditGross()">${taskOpts}</select></div>
-    <div class="fw"><div class="fl" id="elg-qty-label">${qtyLbl}</div><input class="fi" type="number" id="elg-bags" value="${logQty}" inputmode="decimal" step="0.01" oninput="calcEditGross()"/></div>
+    <div class="fw"><div class="fl">Staff Member</div><select class="fi" id="elg-staff" onchange="_elgStaffChange()">${staffOpts}</select></div>
+    <div class="fw"><div class="fl">Role</div><div id="elg-role-field"></div></div>
+    <div class="fw"><div class="fl">Task</div><select class="fi" id="elg-task" onchange="_elgTaskChange()"></select></div>
+    <div id="elg-stock-slot"></div>
+    <div class="fw"><div class="fl" id="elg-qty-label">${qtyLabelForTask(staffRole,log.task||'')}</div><input class="fi" type="number" id="elg-bags" value="${logQty}" inputmode="decimal" step="0.01" oninput="calcEditGross()"/></div>
     <div id="edit-gross-hint"></div>
-    <div class="fw"><div class="fl">Deduction (${cur()}) ${mdmTip('Amount deducted from this worker\'s gross earnings for this shift (e.g. damage penalty, advance repayment). Net pay = Gross Earnings minus Deduction.')}</div><input class="fi" type="number" id="elg-ded" value="${log.deduction||0}" inputmode="decimal" oninput="calcEditGross()"/></div>
-    <div class="fw"><div class="fl">Deduction Reason</div><select class="fi" id="elg-dr" onchange="_elgDedRef('${log.id}')"><option value="">None</option>${DATA.deductionReasons.map(r=>`<option${r===log.deductionReason?' selected':''}>${r}</option>`).join('')}</select></div>
+    <div class="fw"><div class="fl">⚡ Overtime Multiplier</div><select class="fi" id="elg-ot" onchange="calcEditGross()">${otVals.map(v=>`<option value="${v}"${v===otCur?' selected':''}>${otLbl[v]||('× '+v)}</option>`).join('')}</select></div>
+    <div class="fw"><div class="fl">Deduction (${cur()}) ${mdmTip('Amount deducted from this worker\'s gross earnings for this shift (e.g. damage penalty, advance repayment). Net pay = Gross Earnings minus Deduction.')}</div><input class="fi" type="number" id="elg-ded" value="${log.deduction||0}" inputmode="decimal" oninput="calcEditGross()"/>${nDed>1?`<div class="hint">This log has ${nDed} deduction lines. Changing the total or reason replaces them with one line.</div>`:''}</div>
+    <div class="fw"><div class="fl">Deduction Reason</div><select class="fi" id="elg-dr" onchange="_elgDedRef('${log.id}')"><option value="">None</option>${_dedReasonOpts(log)}</select></div>
     <div id="elg-dedref">${_dedRefBlock(log,log.deductionReason)}</div>
     <div class="twobox">
       <div class="fw"><div class="fl">Time In</div><input class="fi" type="time" id="elg-in" value="${log.timeIn||''}"/></div>
       <div class="fw"><div class="fl">Time Out</div><input class="fi" type="time" id="elg-out" value="${log.timeOut||''}"/></div>
     </div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="elg-date" value="${log.date}"/></div>
+    <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="elg-notes" value="${esc(log.notes||'')}" placeholder="Notes…"/></div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveEditLog('${id}')">✓ Save Changes</button></div>`);
   const m=document.querySelector('.modal');if(m)m.dataset.elgRole=staffRole;
+  _elgBuildRole(staffRec0,staffRole);
+  _elgBuildTasks(staffRole,log.task||'');
+  _elgStock(staffRole,log.task||'',log);
   calcEditGross();
 }
 function _elgRole(){
-  const m=document.querySelector('.modal');return m?.dataset.elgRole||'';
+  return document.getElementById('elg-role')?.value||document.querySelector('.modal')?.dataset.elgRole||'';
+}
+// Role: a dropdown for multi-role staff (plus the role the log was recorded under), fixed otherwise.
+function _elgBuildRole(s,want){
+  const f=document.getElementById('elg-role-field');if(!f)return;
+  const roles=staffRoleList(s).slice();
+  if(want&&!roles.includes(want))roles.unshift(want);
+  if(roles.length>1)f.innerHTML=`<select class="fi" id="elg-role" onchange="_elgRoleChange()">${roles.map(r=>`<option value="${esc(r)}"${r===want?' selected':''}>${esc(r)}</option>`).join('')}</select>`;
+  else f.innerHTML=`<div class="fi" style="background:var(--surface);padding:12px 14px;border-radius:10px;border:1.5px solid var(--border);font-weight:700;color:var(--green)">${esc((roles[0]||'—').toUpperCase())}</div><input type="hidden" id="elg-role" value="${esc(roles[0]||'')}"/>`;
+  const m=document.querySelector('.modal');if(m)m.dataset.elgRole=document.getElementById('elg-role')?.value||want||'';
+}
+// Tasks priced for that role; the log's current task is always kept as an option.
+function _elgBuildTasks(role,want){
+  const el=document.getElementById('elg-task');if(!el)return;
+  const tasks=tasksForRole(role);
+  let h=tasks.map(t=>{
+    const u=t.rateUnit||'bag';const ul=u==='custom'?(t.customUnit||'unit'):u;
+    return`<option value="${esc(t.name)}"${t.name===want?' selected':''}>${esc(t.name)} — K${Number(t.rate||0).toFixed(2)}/${ul}</option>`;
+  }).join('');
+  if(want&&!tasks.some(t=>t.name===want))h=`<option value="${esc(want)}" selected>${esc(want)} — (not priced for ${esc(role)})</option>`+h;
+  if(!h)h='<option value="">No tasks defined</option>';
+  el.innerHTML=h;
+  if(want&&[...el.options].some(o=>o.value===want))el.value=want;
+}
+function _elgStock(role,task,log){
+  refreshStockTag('elg',role,task);
+  if(log&&log.stockRef){
+    const sel=document.getElementById('elg-stock-ref');
+    if(sel&&[...sel.options].some(o=>o.value===log.stockRef)){
+      sel.value=log.stockRef;onStockRefChange('elg');
+      const b=document.getElementById('elg-stock-batch');if(b&&log.batch)b.value=log.batch;
+    }
+  }
+}
+function _elgStaffChange(){
+  const s=DATA.staff.find(x=>String(x.id)===String(document.getElementById('elg-staff')?.value));
+  const cur=_elgRole(),roles=staffRoleList(s);
+  _elgBuildRole(s,roles.includes(cur)?cur:(roles[0]||cur));
+  _elgRoleChange();
+}
+function _elgRoleChange(){
+  const role=_elgRole(),tasks=tasksForRole(role),curT=document.getElementById('elg-task')?.value||'';
+  _elgBuildTasks(role,tasks.some(t=>t.name===curT)?curT:(tasks[0]?.name||''));
+  _elgTaskChange();
+}
+function _elgTaskChange(){
+  _elgStock(_elgRole(),document.getElementById('elg-task')?.value||'',null);
+  calcEditGross();
 }
 function calcEditGross(){
-  const staffId=document.getElementById('elg-staff')?.value;
   const role=_elgRole();
   const task=document.getElementById('elg-task')?.value;
   const qty=document.getElementById('elg-bags')?.value;
   const ded=Number(document.getElementById('elg-ded')?.value||0);
+  const ot=Number(document.getElementById('elg-ot')?.value||1);
   const hint=document.getElementById('edit-gross-hint');
-  // Update qty label
   const lbl=document.getElementById('elg-qty-label');
   if(lbl&&role&&task)lbl.textContent=qtyLabelForTask(role,task);
   if(qty&&hint){
-    const g=getEarnings(qty,role,task);const net=Math.max(0,g-ded);
+    const g=getEarnings(qty,role,task)*(ot>1?ot:1);const net=Math.max(0,g-ded);
     const ul=role&&task?taskRateUnitLabel(role,task):'unit';
     const rate=(()=>{const ro=DATA.staffRoles.find(r=>r.name===role);const to=(ro?.tasks||[]).find(t=>t.name===task);return Number(to?.rate||0);})();
-    hint.innerHTML=`<div class="hint">${Number(qty).toLocaleString()} ${ul}${Number(qty)!==1?'s':''} × K${rate.toFixed(2)}/${ul} = <strong>K${g.toFixed(2)}</strong> · Net: K${net.toFixed(2)}</div>`;
+    hint.innerHTML=`<div class="hint">${Number(qty).toLocaleString()} ${ul}${Number(qty)!==1?'s':''} × K${rate.toFixed(2)}/${ul}${ot>1?` × ${ot} OT`:''} = <strong>K${g.toFixed(2)}</strong> · Net: K${net.toFixed(2)}${rate===0?' <span style="color:var(--amber)">⚠ task not priced for this role</span>':''}</div>`;
   }
+}
+// Attendance entries (absent / leave / sick) — same fields as the Add form.
+function _openEditAbsence(log,staffOpts){
+  const t=log.entryType;
+  openModal(`
+    <div class="mtitle">✏️ Edit Attendance Entry</div>
+    <div class="warn">⏰ Editing is only allowed within ${_editWindowLabel(true)} of entry.</div>
+    <div class="fw"><div class="fl">Entry Type</div><select class="fi" id="elg-type"><option value="absent"${t==='absent'?' selected':''}>Absent (Unexcused)</option><option value="leave"${t==='leave'?' selected':''}>On Leave</option><option value="sick"${t==='sick'?' selected':''}>Sick Day</option></select></div>
+    <div class="fw"><div class="fl">Staff Member</div><select class="fi" id="elg-staff">${staffOpts}</select></div>
+    <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="elg-date" value="${log.date||''}"/></div>
+    <div class="fw"><div class="fl">Note (optional)</div><input class="fi" id="elg-note" value="${esc(log.absenceNote||'')}" placeholder="E.G. FAMILY EMERGENCY" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveEditLog('${log.id}')">✓ Save Changes</button></div>`);
+}
+function _saveEditAbsence(id){
+  const before=DATA.staffLogs.find(l=>String(l.id)===String(id));
+  if(!before){alert('Record not found.');return;}
+  const type=document.getElementById('elg-type').value,sid=document.getElementById('elg-staff').value,date=document.getElementById('elg-date').value;
+  const note=uc(document.getElementById('elg-note')?.value||'');
+  if(!sid||!date){alert('Choose the staff member and date.');return;}
+  updateData(d=>({...d,
+    staffLogs:d.staffLogs.map(l=>String(l.id)===String(id)?{...l,staffId:sid,date,entryType:type,absenceNote:note}:l),
+    leaveLog:(d.leaveLog||[]).map(e=>String(e._fromLog)===String(id)?{...e,staffId:sid,date,type,note}:e)}));
+  logAuditEvent('EDIT','Work Log (Attendance)',`ID:${id} · Staff:${sid} · ${before.entryType}→${type} · ${date}`,before);
+  closeModal();
 }
 function saveEditLog(id){
   if(!requireAdmin('edit work logs'))return;
   if(isReadOnly()){alert('🔒 This account is in read-only mode.');return;}
+  if(document.getElementById('elg-type'))return _saveEditAbsence(id);
   const sid=document.getElementById('elg-staff').value;
   const qty=Number(document.getElementById('elg-bags').value||0);
   if(!sid||!qty){alert('Select staff and enter a quantity.');return;}
   const s=DATA.staff.find(x=>String(x.id)===String(sid));
   const role=_elgRole()||s?.role||'';
   const task=document.getElementById('elg-task').value;
-  const ru=taskRateUnit(role,task);
-  const earnings=getEarnings(qty,role,task);
-  const ded=Number(document.getElementById('elg-ded').value||0);
-  const bagsVal=ru==='bag'?qty:0;
   const before=DATA.staffLogs.find(l=>String(l.id)===String(id));
+  if(!task){alert('Choose a task.');return;}
+  if(before&&(task!==before.task||role!==before.role)&&!tasksForRole(role).some(t=>t.name===task)){alert(`"${task}" is not priced for ${role}. Choose a priced task.`);return;}
+  const ru=taskRateUnit(role,task);
+  const ot=Number(document.getElementById('elg-ot')?.value||1);
+  const earnings=getEarnings(qty,role,task)*(ot>1?ot:1);
+  const ded=Number(document.getElementById('elg-ded').value||0);
+  const reason=document.getElementById('elg-dr').value;
+  const bagsVal=ru==='bag'?qty:0;
+  const notes=(document.getElementById('elg-notes')?.value||'').trim();
+  const tag=qty>0?stockTagFields(readStockTagRaw('elg'),role,task):null;
   // Preserve timeOutTs (edit window anchor); if missing set to now for legacy records
   const timeOutTs=before?.timeOutTs||Date.now();
-  updateData(d=>({...d,staffLogs:d.staffLogs.map(l=>String(l.id)===String(id)?{...l,staffId:sid,role,task,bags:bagsVal,qty,rateUnit:ru,earnings,deduction:ded,deductionReason:document.getElementById('elg-dr').value,timeIn:document.getElementById('elg-in').value,timeOut:document.getElementById('elg-out').value,date:document.getElementById('elg-date').value,timeOutTs,status:'completed'}:l)}));
-  logAuditEvent('EDIT','Work Log',`ID:${id} · Staff:${sid} · Task:${task} · Qty:${qty}`,before);
+  updateData(d=>({...d,staffLogs:d.staffLogs.map(l=>{
+    if(String(l.id)!==String(id))return l;
+    const n={...l,staffId:sid,role,task,bags:bagsVal,qty,rateUnit:ru,earnings,deduction:ded,deductions:_logDedSync(l,ded,reason),deductionReason:reason,notes,timeIn:document.getElementById('elg-in').value,timeOut:document.getElementById('elg-out').value,date:document.getElementById('elg-date').value,timeOutTs,status:'completed'};
+    if(ot>1)n.overtimeMultiplier=ot;else delete n.overtimeMultiplier;
+    if(l.stockRef){delete n.stockRef;delete n.stockDir;delete n.batch;}   // replaced by whatever the form now says
+    if(tag){Object.assign(n,tag);rememberStockTag(role,task,tag);}
+    return n;
+  })}));
+  const chg=[];
+  if(before&&before.task!==task)chg.push(`Task:${before.task}→${task}`);
+  if(before&&before.role!==role)chg.push(`Role:${before.role}→${role}`);
+  logAuditEvent('EDIT','Work Log',`ID:${id} · Staff:${sid} · Task:${task} · Qty:${qty}${ot>1?' · OT×'+ot:''}${chg.length?' · '+chg.join(' · '):''}`,before);
   closeModal();
 }
 // NOTE: native window.confirm()/prompt() are unreliable inside the Median.co
@@ -26043,6 +26196,111 @@ _registerAIAction('bulk_edit_log_quantity', {
   if(edited===0) return { ok:false, msg:'None of those logs could be edited — they may have fallen outside the edit window while waiting for confirmation.' };
   logAuditEvent('EDIT','Work Log (Bulk Quantity Change)',`${edited} log(s) set to ${qty} each · via Depot Assistant`);
   return { ok:true, msg:`Updated ${edited} work log${edited===1?'':'s'} to ${qty} each — earnings recalculated.` };
+}, true);
+
+// ═══ Bulk-edit the TASK on existing work logs ═════════════════════════════
+// Companion to bulk_edit_log_date / bulk_edit_log_quantity: move a group of
+// existing logs onto a different task — e.g. "change 20 August loading logs to
+// stacking" or "put John's 22 Aug logs under Stacking". Same match rules
+// (date + optional current-task / staff filters) and the same isWithin24h
+// edit-window gate. Each log's quantity stays as recorded; task, rateUnit,
+// bags and earnings are recomputed from the NEW task's rate for that log's own
+// role, exactly the way the manual "Edit Work Log" modal's saveEditLog() does.
+// A log whose role doesn't have the new task priced is skipped and reported,
+// never guessed at (that would silently pay it at K0).
+_registerAIAction('bulk_edit_log_task', {
+  type: 'function',
+  name: 'bulk_edit_log_task',
+  description: 'Change the TASK on a group of existing work logs — e.g. '+
+    '"change 20 August loading logs to stacking" or "move John\'s logs on '+
+    '22 Aug to Stacking". Matches logs by date, optionally narrowed by their '+
+    'current task name and/or staff name. Only call this when the user has '+
+    'clearly given the date AND the new task name — never guess either. '+
+    'Quantities stay the same; earnings are recalculated from the new '+
+    'task\'s rate. Logs whose role has no such task are skipped.',
+  parameters: { type:'object', properties: {
+    task: { type:'string', description:'Optional CURRENT task name to filter by (e.g. "Loading"). Leave blank to match logs for any task.' },
+    newTask: { type:'string', description:'The task to move the matched logs to (e.g. "Stacking").' },
+    staffName: { type:'string', description:'Optional staff member name to filter by. Leave blank to match all staff.' },
+    date: { type:'string', description:'The date of the logs to edit, in YYYY-MM-DD format.' }
+  }, required:['date','newTask'] }
+}, function resolveBulkEditLogTask(args){
+  if(!isAdmin()) return { error:'Editing existing work logs needs Admin access — this account can\'t do that.' };
+  const date = _YMD_RE.test(args.date||'') ? args.date : '';
+  if(!date) return { error:'I need a date in YYYY-MM-DD format — which date\'s logs should I edit?' };
+  const newQ = (args.newTask||'').trim();
+  if(!newQ) return { error:'Which task should these logs be changed to?' };
+  let staffFilter = null;
+  if(args.staffName){
+    const matches = _findActiveStaffByName(args.staffName);
+    if(matches.length===0) return { error:`I couldn't find an active staff member matching "${args.staffName}".` };
+    if(matches.length>1) return { error:`A few staff match "${args.staffName}": ${matches.map(s=>s.name).join(', ')}. Which one did you mean?` };
+    staffFilter = matches[0].id;
+  }
+  const taskQ = (args.task||'').trim().toLowerCase();
+  const candidates = (DATA.staffLogs||[]).filter(l=>
+    l.date===date &&
+    (!staffFilter || String(l.staffId)===String(staffFilter)) &&
+    (!taskQ || (l.task||'').toLowerCase()===taskQ || (l.task||'').toLowerCase().includes(taskQ))
+  );
+  if(candidates.length===0) return { error:`I couldn't find any${args.task?' "'+args.task+'"':''} work logs on ${date}${args.staffName?' for '+args.staffName:''} to edit.` };
+  const editable = candidates.filter(l=>isWithin24h(l,true));
+  const blocked = candidates.length - editable.length;
+  if(editable.length===0) return { error:`Found ${candidates.length} matching log${candidates.length===1?'':'s'} on ${date}, but all of them are outside the ${_editWindowLabel(true)} edit window and can no longer be edited.` };
+  const changes = [], noTask = [], same = [];
+  for(const l of editable){
+    const m = _findTaskForRole(l.role||'', newQ);
+    if(m.length>1) return { error:`"${newQ}" matches several tasks for ${l.role||'this role'} (${m.map(t=>t.name).join(', ')}). Which exact task do you mean?` };
+    if(m.length===0){ noTask.push(l); continue; }
+    if(m[0].name===l.task){ same.push(l); continue; }
+    changes.push({ log:l, task:m[0].name });
+  }
+  if(changes.length===0){
+    if(noTask.length) return { error:`None of the ${editable.length} matching log${editable.length===1?'':'s'} can move to "${newQ}" — ${[...new Set(noTask.map(l=>l.role||'this role'))].join(', ')} ${noTask.length&&new Set(noTask.map(l=>l.role)).size===1?'has':'have'} no task by that name priced. Add the task under that role in Settings first.` };
+    return { error:(editable.length===1?'The matching log is':`All ${editable.length} matching logs are`)+` already on "${newQ}" — nothing to change.` };
+  }
+  const qtyOf = l => l.qty!=null ? l.qty : l.bags;
+  const oldTotal = changes.reduce((a,c)=>a+Number(c.log.earnings||0),0);
+  const newTotal = changes.reduce((a,c)=>a+getEarnings(qtyOf(c.log), c.log.role||'', c.task),0);
+  const names = [...new Set(changes.map(c=>{
+    const st = DATA.staff.find(x=>String(x.id)===String(c.log.staffId));
+    return st ? st.name : 'Unknown';
+  }))];
+  const namesStr = names.length<=4 ? names.join(', ') : `${names.slice(0,4).join(', ')} and ${names.length-4} more`;
+  const toNames = [...new Set(changes.map(c=>c.task))].join(' / ');
+  const units = new Set(); changes.forEach(c=>{units.add(taskRateUnitLabel(c.log.role||'',c.log.task||'')+'→'+taskRateUnitLabel(c.log.role||'',c.task));});
+  const unitFlip = [...units].filter(u=>{const [a,b]=u.split('→');return a!==b;});
+  const skips = [];
+  if(noTask.length) skips.push(`${noTask.length} skipped — their role has no "${newQ}" task priced`);
+  if(same.length) skips.push(`${same.length} already on that task`);
+  if(blocked>0) skips.push(`${blocked} outside the ${_editWindowLabel(true)} edit window`);
+  return {
+    description: `Change the task on ${changes.length} work log${changes.length===1?'':'s'} on ${date} to "${toNames}" — ${namesStr}? `+
+      `Quantities stay the same and earnings are recalculated at the new task's rate (gross K${oldTotal.toFixed(2)} → K${newTotal.toFixed(2)}).`+
+      (unitFlip.length?` Note the unit changes (${unitFlip.join(', ')}) — check the quantities still make sense.`:'')+
+      (skips.length?` (${skips.join('; ')}.)`:'')+
+      ` You'll be asked to confirm your admin password next. Save this?`,
+    action: { changes: changes.map(c=>({ id:c.log.id, task:c.task })) }
+  };
+}, function executeBulkEditLogTask(action){
+  if(isReadOnly()) return { ok:false, msg:'This account is in read-only mode.' };
+  if(!isAdmin()) return { ok:false, msg:'Admin access is required to edit work logs.' };
+  const byId = new Map((action.changes||[]).map(c=>[String(c.id),c.task]));
+  let edited = 0; const done = [];
+  updateData(d=>({...d, staffLogs:d.staffLogs.map(l=>{
+    const nt = byId.get(String(l.id));
+    if(nt && isWithin24h(l,true) && tasksForRole(l.role||'').some(t=>t.name===nt)){
+      edited++; done.push(l.id);
+      const qty = l.qty!=null ? l.qty : l.bags;
+      const ru = taskRateUnit(l.role||'', nt);
+      return {...l, task:nt, qty, bags:ru==='bag'?qty:0, rateUnit:ru, earnings:getEarnings(qty, l.role||'', nt)};
+    }
+    return l;
+  })}));
+  if(edited===0) return { ok:false, msg:'None of those logs could be changed — they may have fallen outside the edit window while waiting for confirmation.' };
+  const toNames = [...new Set((action.changes||[]).map(c=>c.task))].join(' / ');
+  logAuditEvent('EDIT','Work Log (Bulk Task Change)',`${edited} log(s) changed to ${toNames} · IDs:${done.slice(0,40).join(',')} · via Depot Assistant`);
+  return { ok:true, msg:`Changed ${edited} work log${edited===1?'':'s'} to ${toNames} — earnings recalculated.` };
 }, true);
 
 // ── Client-side rate limiter ────────────────────────────────────────────────
