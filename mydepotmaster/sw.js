@@ -25,7 +25,18 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.8 (2026-10-21)
+// Current version: v0.3.9 (2026-10-21)
+//
+// v0.3.9 changes (2026-10-21) — Staff card: full work-log history:
+//   - The staff card still opens with the 5 latest sessions; a "View all N sessions"
+//     button swaps in every log for that staff member (date, task, quantity, net, paid
+//     status, time in/out, deductions, notes, pending badge, edit button). Absence /
+//     leave / sick entries and active shifts are labelled instead of showing 0 bags.
+//     The list is built on first tap, so opening the card is no slower.
+//   - Multi-role staff: each role box in "Work history by role" has its own
+//     "View all N sessions as <role>" button (replaces the static "+N more" text).
+//   - Display only — no data, pay or export changes.
+//   - No sw.js fetch/cache logic changes — bump only.
 //
 // v0.3.8 changes (2026-10-21) — Work Logs: subtotals per date and role:
 //   - Work Logs table is grouped by date, then role. Each date + role block ends with a
@@ -1772,7 +1783,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.8';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.9';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

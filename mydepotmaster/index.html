@@ -4165,7 +4165,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.8';
+const SW_VERSION  = 'v0.3.9';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -13687,6 +13687,77 @@ function toggleStaffModalPin(id,checked){
   const ovl=document.getElementById('modal-ovl');
   if(ovl)ovl.onclick=checked?null:e=>{if(e.target===ovl)closeModal();};
 }
+// ── Staff card: full work-log list ───────────────────────────────────────────
+// The staff card shows the 5 latest sessions; "View all" swaps in every log for
+// that staff member (built on first tap, so opening the card stays fast).
+function _staffLogsSorted(id){
+  return DATA.staffLogs.filter(l=>String(l.staffId)===String(id))
+    .sort((a,b)=>b.date.localeCompare(a.date)||String(b.time||'').localeCompare(String(a.time||''))||String(b.id).localeCompare(String(a.id)));
+}
+function _staffSessionRowFull(l,payMap,showRole){
+  const isWork=!l.entryType||l.entryType==='work';
+  const isOpen=l.status==='open'&&!isRejected(l);
+  const editable=isWithin24h(l,true);
+  const editBtn=USER.role==='admin'?`<button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`closeModal();setTimeout(()=>openEditLog('${l.id}'),50)`:''}" title="${editable?'Edit':'Edit window closed (>'+_editWindowLabel(true)+')'}">\u270F\uFE0F</button>`:'';
+  let line2;
+  if(!isWork){
+    const lab={absent:['ABSENT','var(--red)'],leave:['ON LEAVE','var(--blue)'],sick:['SICK DAY','var(--amber)']}[l.entryType]||[String(l.entryType).toUpperCase(),'var(--muted)'];
+    line2=`<span style="color:${lab[1]};font-weight:700">${lab[0]}</span>${l.absenceNote?' \u00B7 '+esc(l.absenceNote):''}`;
+  }else if(isOpen){
+    line2=`<span style="color:var(--green);font-weight:700">\u{1F7E2} ACTIVE shift</span>`;
+  }else{
+    const q=Number(l.qty!=null?l.qty:l.bags||0);
+    const ul=taskRateUnitLabel(l.role||'',l.task||'')||'bag';
+    line2=`${(Math.round(q*100)/100).toLocaleString()} ${esc(ul)}${q===1?'':'s'} \u00B7 ${zm(Number(l.earnings||0)-Number(l.deduction||0))} net ${_payBadge(payMap.get(String(l.id)),true)}`;
+  }
+  const bits=[];
+  if(l.timeIn)bits.push(`${esc(l.timeIn)}\u2013${isOpen?'\u2026':esc(l.timeOut||'\u2014')}`);
+  if(isWork&&!isOpen&&Number(l.deduction||0)>0)bits.push(`gross ${zm(l.earnings)} \u00B7 deduct <span style="color:var(--red)">-${zm(l.deduction)}</span>`);
+  if(l.notes)bits.push(`\u{1F4DD} ${esc(l.notes)}`);
+  return `<div style="padding:8px 0;border-bottom:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <div style="min-width:0">
+          <div style="font-size:17px;font-weight:700">${fmtDate(l.date)} <span style="color:var(--muted);font-weight:400;font-size:16px">${esc(l.task||'')}${showRole&&l.role?' \u00B7 '+esc(l.role):''}</span>${_approvalStatusBadge(l)}</div>
+          <div style="font-size:16px;color:var(--muted)">${line2}</div>
+          ${bits.length?`<div style="font-size:14px;color:var(--muted)">${bits.join(' \u00B7 ')}</div>`:''}
+        </div>
+        ${editBtn}
+      </div>
+    </div>`;
+}
+function _staffSessionsHtml(logs,payMap,showRole){
+  return logs.map(l=>_staffSessionRowFull(l,payMap,showRole)).join('');
+}
+function toggleStaffAllSessions(id){
+  const rec=document.getElementById('staff-sess-recent'),full=document.getElementById('staff-sess-full'),btn=document.getElementById('staff-sess-btn'),ttl=document.getElementById('staff-sess-title');
+  if(!rec||!full||!btn)return;
+  const s=DATA.staff.find(x=>String(x.id)===String(id));
+  if(!s)return;
+  const show=full.style.display==='none';
+  if(show&&!full.dataset.built){
+    full.innerHTML=_staffSessionsHtml(_staffLogsSorted(id),_payAllocMap(s.id),staffRoleList(s).length>1);
+    full.dataset.built='1';
+  }
+  full.style.display=show?'':'none';
+  rec.style.display=show?'none':'';
+  btn.textContent=show?'\u25B4 Show recent 5 only':`\u25BE View all ${btn.dataset.n} sessions`;
+  if(ttl)ttl.textContent=show?`ALL SESSIONS (${btn.dataset.n})`:'RECENT SESSIONS';
+}
+function toggleStaffRoleSessions(id,ri){
+  const s=DATA.staff.find(x=>String(x.id)===String(id));
+  if(!s)return;
+  const r=staffRoleList(s)[ri];
+  const rec=document.getElementById('staff-rrec-'+ri),full=document.getElementById('staff-rfull-'+ri),btn=document.getElementById('staff-rsess-btn-'+ri);
+  if(!rec||!full||!btn)return;
+  const show=full.style.display==='none';
+  if(show&&!full.dataset.built){
+    full.innerHTML=_staffSessionsHtml(_staffLogsSorted(id).filter(l=>l.role===r&&l.entryType==='work'),_payAllocMap(s.id),false);
+    full.dataset.built='1';
+  }
+  full.style.display=show?'':'none';
+  rec.style.display=show?'none':'';
+  btn.textContent=show?'\u25B4 Show recent 5 only':`\u25BE View all ${btn.dataset.n} sessions as ${r}`;
+}
 function openStaffDetail(id){
   const s=DATA.staff.find(x=>String(x.id)===String(id));
   if(!s)return;
@@ -13740,7 +13811,7 @@ function openStaffDetail(id){
   // Loader+Stacking staff member can see each role's totals and sessions
   // separately instead of them being merged together.
   const staffRoles=staffRoleList(s);
-  const roleHistorySection=staffRoles.length>1?staffRoles.map(r=>{
+  const roleHistorySection=staffRoles.length>1?staffRoles.map((r,ri)=>{
     const rLogs=sLogs.filter(l=>l.role===r&&l.entryType==='work');
     if(rLogs.length===0)return'';
     const rQty=rLogs.reduce((a,b)=>a+Number(b.qty!=null?b.qty:b.bags||0),0);
@@ -13764,14 +13835,14 @@ function openStaffDetail(id){
         <span style="font-size:15px">${Number(q||0).toLocaleString()} ${ul} · ${zm(Number(l.earnings||0)-Number(l.deduction||0))}</span>
       </div>`;
     }).join('');
-    const rMore=rLogs.length>5?`<div style="font-size:14px;color:var(--muted);padding:4px 0 0 10px">+${rLogs.length-5} more session${rLogs.length-5===1?'':'s'} as ${r}</div>`:'';
+    const rMore=rLogs.length>5?`<button id="staff-rsess-btn-${ri}" class="btn bo bsm" data-n="${rLogs.length}" style="width:calc(100% - 10px);margin:6px 0 0 10px;padding:8px;font-size:15px" onclick="toggleStaffRoleSessions('${s.id}',${ri})">\u25BE View all ${rLogs.length} sessions as ${esc(r)}</button>`:'';
     return`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
         <span class="tag" style="font-size:15px">${esc(r)}</span>
         <span style="font-size:15px;color:var(--muted)">${rLogs.length} session${rLogs.length===1?'':'s'} · ${rQty.toLocaleString()} total · ${zm(rNet)}</span>
       </div>
       ${rTaskRows}
-      ${rRecent}
+      <div id="staff-rrec-${ri}">${rRecent}</div><div id="staff-rfull-${ri}" style="display:none;padding-left:10px"></div>
       ${rMore}
     </div>`;
   }).join(''):'';
@@ -13846,7 +13917,7 @@ function openStaffDetail(id){
       <div class="sbox"><div class="sv" style="font-size:23px">${sLogs.length}</div><div class="sl">Sessions</div></div>
     </div>
     ${taskBreakdown?`<div style="margin-bottom:14px"><div style="font-size:16px;font-weight:700;color:var(--muted);letter-spacing:.8px;margin-bottom:4px">TASK BREAKDOWN</div>${taskBreakdown}</div>`:''}
-    ${recentLogs?`<div style="margin-bottom:14px"><div style="font-size:16px;font-weight:700;color:var(--muted);letter-spacing:.8px;margin-bottom:4px">RECENT SESSIONS</div>${recentLogs}</div>`:''}
+    ${recentLogs?`<div style="margin-bottom:14px"><div id="staff-sess-title" style="font-size:16px;font-weight:700;color:var(--muted);letter-spacing:.8px;margin-bottom:4px">RECENT SESSIONS</div><div id="staff-sess-recent">${recentLogs}</div><div id="staff-sess-full" style="display:none"></div>${sLogs.length>5?`<button id="staff-sess-btn" class="btn bo bsm" data-n="${sLogs.length}" style="width:100%;margin-top:8px" onclick="toggleStaffAllSessions('${s.id}')">\u25BE View all ${sLogs.length} sessions</button>`:''}</div>`:''}
     ${roleHistorySection?`<div style="margin-bottom:14px"><div style="font-size:16px;font-weight:700;color:var(--muted);letter-spacing:.8px;margin-bottom:4px">WORK HISTORY BY ROLE</div>${roleHistorySection}</div>`:''}
     <div style="margin-bottom:14px"><div style="font-size:16px;font-weight:700;color:var(--muted);letter-spacing:.8px;margin-bottom:4px">EMPLOYMENT CONTRACT</div>${renderContractCard(s,true)}</div>
     ${editDetailsBtn}
