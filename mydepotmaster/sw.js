@@ -25,7 +25,16 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.7 (2026-10-21)
+// Current version: v0.3.8 (2026-10-21)
+//
+// v0.3.8 changes (2026-10-21) — Work Logs: subtotals per date and role:
+//   - Work Logs table is grouped by date, then role. Each date + role block ends with a
+//     Σ subtotal row: quantity per unit (bags / hours / days… never mixed), gross,
+//     deductions and net. Counts approved, completed work logs only (same as the period
+//     cards); pending / open logs are noted on the row. Shown when a block has 2+ logs.
+//   - Subtotal rows are hidden while the search box is in use (they would not match
+//     the filtered rows). Display only — no data, pay or export changes.
+//   - No sw.js fetch/cache logic changes — bump only.
 //
 // v0.3.7 changes (2026-10-21) — Data-entry parity: every Edit form now matches its Add form:
 //   - Edit Work Log: Role dropdown (multi-role staff) and Task list follow the chosen
@@ -1761,7 +1770,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.7';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.8';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

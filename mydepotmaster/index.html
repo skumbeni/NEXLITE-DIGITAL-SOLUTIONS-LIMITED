@@ -4165,7 +4165,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.7';
+const SW_VERSION  = 'v0.3.8';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -11721,6 +11721,39 @@ function renderStaff(){
 
 function setStaffLogTaskFilter(t){STAFF_LOG_TASK_FILTER=t;render();}
 
+// ── Work Logs: subtotal row for one date + role ──────────────────────────────
+// Closes each date/role block in the Work Logs table. Counts the same logs as the
+// "Total Qty / Net (Period)" cards (approved, completed work logs) and shows:
+//   • quantity per unit — bags, hours, days… never added across different units
+//   • gross, deductions and net money
+// Shown only when the block has 2+ counted logs. Pending, rejected and still-open
+// logs are left out and noted on the row. Display only: nothing is saved.
+function _staffLogSubRow(date,role,items){
+  const isWork=l=>!l.entryType||l.entryType==='work';
+  const counted=items.filter(l=>isWork(l)&&l.status!=='open'&&isApproved(l));
+  if(counted.length<2)return'';
+  const skipped=items.filter(isWork).length-counted.length;
+  let gross=0,ded=0;const qty={},units=[];
+  counted.forEach(l=>{
+    gross+=Number(l.earnings||0);ded+=Number(l.deduction||0);
+    const u=taskRateUnitLabel(l.role||'',l.task||'')||'bag';
+    if(!(u in qty)){qty[u]=0;units.push(u);}
+    qty[u]+=Number(l.qty!=null?l.qty:l.bags||0);
+  });
+  const net=gross-ded,adm=USER.role==='admin';
+  const fq=v=>(Math.round(v*100)/100).toLocaleString();
+  const qtyHtml=units.map(u=>`<div>${fq(qty[u])} <span style="font-size:14px;color:var(--muted);font-weight:400">${esc(u)}</span></div>`).join('');
+  const note=skipped>0?` · ${skipped} pending/open not counted`:'';
+  return `<tr class="sl-sub" style="background:var(--surface2);border-top:1px solid var(--border);border-bottom:2px solid var(--border);font-weight:700">
+      <td colspan="${adm?5:4}" style="white-space:normal"><div style="font-size:16px">\u03A3 ${fmtDate(date)} \u00B7 ${esc(role||'\u2014')}</div><div style="font-size:14px;color:var(--muted);font-weight:400">${counted.length} logs${note}</div></td>
+      <td style="text-align:right">${qtyHtml}</td>
+      <td style="color:var(--green);text-align:right">${zm(gross)}</td>
+      <td style="color:${ded>0?'var(--red)':'var(--muted)'};text-align:right">-${zm(ded)}</td>
+      <td style="color:var(--green);text-align:right">${zm(net)}</td>
+      <td colspan="${adm?4:3}"></td>
+    </tr>`;
+}
+
 function renderStaffLogs(){
   const _sIds=scopedStaffIds();
   const logs=filterPeriod(DATA.staffLogs.filter(l=>_sIds.has(String(l.staffId))), PERIOD.staff, 'date', 'staff');
@@ -11756,7 +11789,9 @@ function renderStaffLogs(){
     cumMap[log.id]={cumQty:runQty[key], cumNet:runNet[key], cumUnit:logUnit};
   });
 
-  const rows=taskFilteredLogs.slice().sort((a,b)=>b.date.localeCompare(a.date)||String(b.id).localeCompare(String(a.id))).map(log=>{
+  const _roleOf=l=>l.role||(staffById[l.staffId]||{}).role||'';
+  const _sortedLogs=taskFilteredLogs.slice().sort((a,b)=>b.date.localeCompare(a.date)||_roleOf(a).localeCompare(_roleOf(b))||String(b.id).localeCompare(String(a.id)));
+  const _rowHtml=_sortedLogs.map(log=>{
     const s=staffById[log.staffId];
     // Absence / leave entries
     if(log.entryType&&log.entryType!=='work'){
@@ -11806,7 +11841,16 @@ function renderStaffLogs(){
       <td style="color:var(--blue);font-weight:700;text-align:right;border-left:2px solid var(--border)">${isOpen?'—':cum.cumQty.toLocaleString()}<br><span style="font-size:14px;color:var(--muted);font-weight:400">${cum.cumUnit}</span></td>
       <td style="color:var(--purple);font-weight:700;text-align:right">${isOpen?'—':zm(cum.cumNet)}</td>
       ${USER.role==='admin'?`<td style="white-space:nowrap"><button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`openEditLog('${log.id}')`:''}" title="${editable?'Edit':'Edit window closed (>'+_editWindowLabel(true)+')'}">✏️</button> <button class="delbtn" onclick="delLog('${log.id}')">🗑</button></td>`:''}
-    </tr>`;}).join('');
+    </tr>`;});
+  // Rows are grouped by date + role; a subtotal row closes each block.
+  let rows='';
+  for(let i=0;i<_sortedLogs.length;){
+    const d=_sortedLogs[i].date,r=_roleOf(_sortedLogs[i]);
+    let j=i;
+    while(j<_sortedLogs.length&&_sortedLogs[j].date===d&&_roleOf(_sortedLogs[j])===r)j++;
+    rows+=_rowHtml.slice(i,j).join('')+_staffLogSubRow(d,r,_sortedLogs.slice(i,j));
+    i=j;
+  }
   bulkClear('staff-log-table');
 
   return `
@@ -11854,6 +11898,7 @@ function filterStaffLogTable(q){
   const tbody=document.querySelector('#staff-log-table tbody');
   if(!tbody)return;
   tbody.querySelectorAll('tr').forEach(row=>{
+    if(row.classList.contains('sl-sub')){row.style.display=term?'none':'';return;}   // subtotals only when not searching
     row.style.display=(!term||row.textContent.toLowerCase().includes(term))?'':'none';
   });
 }
