@@ -748,6 +748,18 @@
         </div>
     </div>
 
+    <div id="modal-reorder" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width:460px;">
+            <h3>📲 Reorder list</h3>
+            <p style="color:var(--text-muted);font-size:.88rem;margin:.75rem 0;">Products below their reorder level. Add quantities or edit the message if you like, then send it on WhatsApp.</p>
+            <label style="font-size:.82rem;font-weight:600;">Send to</label>
+            <select id="reorder-supplier" onchange="refreshReorderText()" style="width:100%;margin:.3rem 0 .8rem;"></select>
+            <textarea id="reorder-text" rows="10" style="width:100%;font-size:.88rem;margin-bottom:.8rem;"></textarea>
+            <button type="button" class="btn btn-primary" style="width:100%;margin-bottom:.5rem;" onclick="sendReorderWA()">💬 Send on WhatsApp</button>
+            <button type="button" class="btn" style="width:100%;" onclick="closeModal('modal-reorder')">Close</button>
+        </div>
+    </div>
+
     <!-- --- LICENSE EXPIRED OVERLAY --- -->
     <div id="license-expired-overlay" class="hidden">
         <div class="license-expired-box">
@@ -911,6 +923,7 @@
                 <li><a href="#" onclick="nav('fisp')" id="nav-fisp">FISP Tracker</a></li>
                 <li><a href="#" onclick="nav('credit')" id="nav-credit">Credit Tracker</a></li>
                 <li><a href="#" onclick="nav('customers')" id="nav-customers">👤 Customers</a></li>
+                <li class="admin-only"><a href="#" onclick="nav('assistant')" id="nav-assistant">🤖 WhatsApp Assistant</a></li>
                 <li><a href="#" onclick="nav('reports')" id="nav-reports">Reports (P&L)</a></li>
                 <li class="admin-only"><a href="#" onclick="nav('settings')" id="nav-settings" style="color: var(--secondary)">⚙️ Settings</a></li>
                 <li class="admin-only"><a href="#" onclick="nav('activitylog')" id="nav-activitylog" style="color:var(--accent);">📋 Activity Log</a></li>
@@ -995,10 +1008,11 @@
                     </div>
                     <div id="cf-credit-note" style="margin-top:0.75rem; font-size:0.8rem; color:var(--text-muted);"></div>
                     <div id="cf-overdue-line" style="margin-top:0.4rem; font-size:0.82rem; font-weight:600; color:var(--danger);"></div>
+                    <button type="button" class="btn btn-sm btn-primary admin-only" style="margin-top:0.75rem;" onclick="sendDailySummaryWA()">📲 Send today's summary on WhatsApp</button>
                 </div>
 
                 <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 2rem;">
-                    <div class="card"><h3>Alerts</h3><ul id="dashboard-alerts" style="margin-top: 10px; padding-left: 20px;"></ul></div>
+                    <div class="card"><h3>Alerts</h3><ul id="dashboard-alerts" style="margin-top: 10px; padding-left: 20px;"></ul><button type="button" class="btn btn-sm btn-primary" id="btn-reorder-wa" onclick="openReorderModal()" style="margin-top:10px;display:none;">📲 Send reorder list</button></div>
                     <div class="card"><h3>FISP Outstanding</h3><div class="value" id="kpi-fisp" style="margin-top: 10px;">0</div></div>
                 </div>
             </div>
@@ -1261,6 +1275,9 @@
                     </table>
                 </div>
             </div>
+
+            <!-- 7c. WHATSAPP ASSISTANT VIEW -->
+            <div id="view-assistant" class="hidden"></div>
 
             <!-- 8. REPORTS VIEW -->
             <div id="view-reports" class="hidden">
@@ -2469,6 +2486,23 @@
         #invoice-print-body .invoice-notes { margin-top: 10px; font-size: 0.78rem; color: #444; background: #f7f7f7; padding: 6px 8px; border-radius: 4px; }
         #invoice-print-body .invoice-footer { text-align: center; font-size: 0.78rem; margin-top: 12px; color: #555; }
     </style>
+
+    <!-- WhatsApp assistant: generic preview-and-send box (kept last so it sits above other modals) -->
+    <div id="modal-wamsg" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width:480px;">
+            <h3 id="wamsg-title">📲 Message</h3>
+            <p id="wamsg-hint" style="color:var(--text-muted);font-size:.85rem;margin:.6rem 0;"></p>
+            <div id="wamsg-opt-wrap" style="display:none;">
+                <label id="wamsg-opt-label" style="font-size:.82rem;font-weight:600;"></label>
+                <select id="wamsg-opt" onchange="wamsgRefresh()" style="width:100%;margin:.3rem 0 .8rem;"></select>
+            </div>
+            <label style="font-size:.82rem;font-weight:600;">Send to</label>
+            <select id="wamsg-to" onchange="wamsgRefresh()" style="width:100%;margin:.3rem 0 .8rem;"></select>
+            <textarea id="wamsg-text" rows="12" style="width:100%;font-size:.88rem;margin-bottom:.8rem;"></textarea>
+            <button type="button" class="btn btn-primary" style="width:100%;margin-bottom:.5rem;" onclick="wamsgSend()">💬 Send on WhatsApp</button>
+            <button type="button" class="btn" style="width:100%;" onclick="closeModal('modal-wamsg')">Close</button>
+        </div>
+    </div>
 
     <script>
         // Early error capture: buffers anything that breaks before the app has finished loading.
@@ -5390,7 +5424,7 @@
             window.__curView = view;
             closeSidebar();
             // Block client from accessing admin-only views
-            const adminViews = ['settings'];
+            const adminViews = ['settings', 'assistant'];
             if (adminViews.includes(view) && currentUser !== 'admin') {
                 nav('dashboard');
                 return;
@@ -5435,7 +5469,7 @@
             if(activeLink) activeLink.classList.add('active');
 
             // Titles
-            const titles = { dashboard: "Dashboard Overview", inventory: "Inventory Management", sales: "Sales Log", purchases: "Purchases", po: "Purchase Orders", grn: "Goods Received Notes", delivery: "Delivery Notes", cdnotes: "Credit & Debit Notes", returns: "Sales Returns", payables: "Supplier Payables", transfers: "Stock Transfers", suppliers: "Supplier Register", expenses: "Expense Tracking", fisp: "FISP Claims", credit: "Credit Tracker", customers: "Customer Register", reports: "Financial Reports", settings: "System Settings", activitylog: "Staff Activity Log" };
+            const titles = { assistant: "WhatsApp Assistant", dashboard: "Dashboard Overview", inventory: "Inventory Management", sales: "Sales Log", purchases: "Purchases", po: "Purchase Orders", grn: "Goods Received Notes", delivery: "Delivery Notes", cdnotes: "Credit & Debit Notes", returns: "Sales Returns", payables: "Supplier Payables", transfers: "Stock Transfers", suppliers: "Supplier Register", expenses: "Expense Tracking", fisp: "FISP Claims", credit: "Credit Tracker", customers: "Customer Register", reports: "Financial Reports", settings: "System Settings", activitylog: "Staff Activity Log" };
             document.getElementById('page-title').textContent = titles[view] || "ZamAgro Track";
 
             // Pre-select current month on Reports
@@ -5481,6 +5515,443 @@
             if (view === 'activitylog') {
                 renderActivityLog();
             }
+            if (view === 'assistant') {
+                renderAssistantHub();
+            }
+        }
+
+        // ── WHATSAPP ASSISTANT (owner taps Send; no WhatsApp API needed) ───────────
+        function _lowStockItems() {
+            const g = db.settings.lowStockThreshold || 20;
+            return db.inventory.filter(i => i.qty < (i.reorderPt !== undefined ? i.reorderPt : g))
+                .map(i => ({ name: i.name, qty: i.qty, unit: i.unit || '', level: i.reorderPt !== undefined ? i.reorderPt : g }));
+        }
+        function _buildReorderText(supplierName) {
+            const co = getCompanyInfo();
+            const items = _lowStockItems();
+            const L = [supplierName ? `Hello ${supplierName},` : 'Hello,', '', `*${co.name}* would like to reorder stock. We are running low on:`, ''];
+            items.forEach(i => L.push(`• ${i.name} — ${i.qty}${i.unit ? ' ' + i.unit : ''} left (reorder level ${i.level}) — need: ___`));
+            L.push('', 'Please confirm availability and prices.');
+            if (co.phone) L.push(`Call us on ${co.phone}.`);
+            L.push('Thank you. 🙏');
+            return L.join('\n');
+        }
+        function openReorderModal() {
+            if (!_lowStockItems().length) { showToast('Stock levels are healthy — nothing to reorder', 'danger'); return; }
+            const sel = document.getElementById('reorder-supplier');
+            const sups = (db.suppliers || []).filter(x => x.phone);
+            sel.innerHTML = '<option value="">Choose contact in WhatsApp</option>' +
+                sups.map(x => `<option value="${esc(x.id)}">${esc(x.name)} (${esc(x.phone)})</option>`).join('');
+            refreshReorderText();
+            openModal('modal-reorder');
+        }
+        function refreshReorderText() {
+            const id = document.getElementById('reorder-supplier').value;
+            const sup = (db.suppliers || []).find(x => x.id === id);
+            document.getElementById('reorder-text').value = _buildReorderText(sup ? sup.name : '');
+        }
+        function sendReorderWA() {
+            const id = document.getElementById('reorder-supplier').value;
+            const sup = (db.suppliers || []).find(x => x.id === id);
+            const num = sup ? _waNumber(sup.phone) : '';
+            const text = document.getElementById('reorder-text').value;
+            window.open(`https://wa.me/${num}?text=${encodeURIComponent(text)}`, '_blank');
+            closeModal('modal-reorder');
+        }
+        function sendDailySummaryWA() {
+            const co = getCompanyInfo();
+            const cf = computeCashFlow('today');
+            const today = _todayDMY();
+            const agg = {};
+            db.sales.filter(s => s.date === today).forEach(s => {
+                const lines = (s.items && s.items.length) ? s.items : [{ prodName: s.prodName, qty: s.qty, lineTotal: s.total }];
+                lines.forEach(l => {
+                    const k = l.prodName || 'Item';
+                    agg[k] = agg[k] || { qty: 0, val: 0 };
+                    agg[k].qty += Number(l.qty) || 0;
+                    agg[k].val += Number(l.lineTotal) || 0;
+                });
+            });
+            const top = Object.entries(agg).sort((a, b) => b[1].val - a[1].val).slice(0, 3);
+            const L = [`📊 *${co.name}* — Daily summary`, `📅 ${today}`, '─────────────────────',
+                `💰 Cash in: ${formatZMW(cf.cashIn)}`, `💸 Cash out: ${formatZMW(cf.cashOut)}`, `*Net cash: ${formatZMW(cf.net)}*`, `🧾 Transactions: ${cf.txnCount}`];
+            if (cf.creditAmt > 0) L.push(`📒 New credit sales: ${formatZMW(cf.creditAmt)} (${cf.creditCount})`);
+            if (cf.creditCollected > 0) L.push(`✅ Collected on credit: ${formatZMW(cf.creditCollected)}`);
+            if (top.length) { L.push('', '🏆 *Top sellers today*'); top.forEach(([n, v], i) => L.push(`${i + 1}. ${n} — ${v.qty} sold (${formatZMW(v.val)})`)); }
+            const low = _lowStockItems();
+            if (low.length) L.push('', `⚠ Low stock (${low.length}): ${low.slice(0, 5).map(i => i.name).join(', ')}${low.length > 5 ? '…' : ''}`);
+            if (hasFeature('credit')) { const od = _overdueSummary(); if (od.amt > 0) L.push(`⚠ Overdue credit: ${formatZMW(od.amt)} (${od.count})`); }
+            L.push('─────────────────────', '_Powered by ZamAgro Track_');
+            const num = _waNumber(co.phone);
+            window.open(`https://wa.me/${num}?text=${encodeURIComponent(L.join('\n'))}`, '_blank');
+        }
+
+        // ── WHATSAPP ASSISTANT, STAGE 1 (owner taps Send; no WhatsApp API needed) ─────────
+        function _localISO(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+        function _daysBetweenISO(a, b) {
+            const pa = String(a).split('-'), pb = String(b).split('-');
+            return Math.round((new Date(+pb[0], +pb[1] - 1, +pb[2]) - new Date(+pa[0], +pa[1] - 1, +pa[2])) / 86400000);
+        }
+        function _norm(s) { return String(s || '').trim().toLowerCase(); }
+        function _supplierPhone(name) { const s = (db.suppliers || []).find(x => _norm(x.name) === _norm(name) && x.phone); return s ? s.phone : ''; }
+        function _ownerRecipients() {
+            const co = getCompanyInfo();
+            const r = [];
+            if (co.phone) r.push({ label: `My number (${co.phone})`, phone: co.phone });
+            r.push({ label: 'Choose contact in WhatsApp', phone: '' });
+            return r;
+        }
+        function _contactRecipients(name, phone) {
+            if (phone) return [{ label: `${name} (${phone})`, phone: phone, name: name }, { label: 'Choose contact in WhatsApp', phone: '', name: name }];
+            return [{ label: `Choose contact in WhatsApp (no number saved for ${name || 'this contact'})`, phone: '', name: name }];
+        }
+        function _salesAgg(list) {
+            const agg = {};
+            list.forEach(s => {
+                const lines = (s.items && s.items.length) ? s.items : [{ prodName: s.prodName, qty: s.qty, lineTotal: s.total }];
+                lines.forEach(l => {
+                    const k = l.prodName || 'Item';
+                    agg[k] = agg[k] || { qty: 0, val: 0 };
+                    agg[k].qty += Number(l.qty) || 0;
+                    agg[k].val += Number(l.lineTotal) || 0;
+                });
+            });
+            return Object.entries(agg).sort((a, b) => b[1].val - a[1].val);
+        }
+        function _topSellerLines(list, n) {
+            const top = _salesAgg(list).slice(0, n);
+            if (!top.length) return [];
+            const L = ['', '🏆 *Top sellers*'];
+            top.forEach(([name, v], i) => L.push(`${i + 1}. ${name} — ${v.qty} sold (${formatZMW(v.val)})`));
+            return L;
+        }
+
+        // Generic "preview, pick recipient, send" box used by every Stage 1 bot
+        let _wam = null;
+        function openWaMsg(cfg) {
+            _wam = cfg;
+            document.getElementById('wamsg-title').textContent = cfg.title;
+            document.getElementById('wamsg-hint').textContent = cfg.hint || 'Pick who it is for first, then edit the message if you like and send it on WhatsApp.';
+            const ow = document.getElementById('wamsg-opt-wrap');
+            if (cfg.opts && cfg.opts.length) {
+                document.getElementById('wamsg-opt-label').textContent = cfg.optLabel || 'Period';
+                document.getElementById('wamsg-opt').innerHTML = cfg.opts.map((o, i) => `<option value="${i}">${esc(o.label)}</option>`).join('');
+                ow.style.display = '';
+            } else { ow.style.display = 'none'; }
+            document.getElementById('wamsg-to').innerHTML = cfg.recipients.map((r, i) => `<option value="${i}">${esc(r.label)}</option>`).join('');
+            wamsgRefresh();
+            openModal('modal-wamsg');
+        }
+        function wamsgRefresh() {
+            if (!_wam) return;
+            const r = _wam.recipients[+document.getElementById('wamsg-to').value || 0] || {};
+            const hasOpts = _wam.opts && _wam.opts.length;
+            const oi = hasOpts ? (+document.getElementById('wamsg-opt').value || 0) : -1;
+            document.getElementById('wamsg-text').value = _wam.build(r, oi >= 0 ? _wam.opts[oi].value : undefined);
+        }
+        function wamsgSend() {
+            if (!_wam) return;
+            const r = _wam.recipients[+document.getElementById('wamsg-to').value || 0] || {};
+            const text = document.getElementById('wamsg-text').value;
+            window.open(`https://wa.me/${_waNumber(r.phone || '')}?text=${encodeURIComponent(text)}`, '_blank');
+            closeModal('modal-wamsg');
+        }
+
+        // 4. Weekly and monthly summary
+        function _weekRange() {
+            const now = new Date();
+            const st = new Date(now);
+            st.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+            return { from: _localISO(st), to: _localISO(now), label: `${st.toLocaleDateString('en-GB')} – ${now.toLocaleDateString('en-GB')}` };
+        }
+        function _buildWeekly() {
+            const co = getCompanyInfo(), w = _weekRange(), cf = computeCashFlow('week');
+            const inW = x => { const d = _dmyToISO(x.date); return d >= w.from && d <= w.to; };
+            const sales = db.sales.filter(inW);
+            const total = sales.reduce((t, s) => t + (s.total || 0), 0);
+            const rets = db.returns.filter(inW).reduce((t, x) => t + (x.total || 0), 0);
+            const L = [`📊 *${co.name}* — Weekly summary`, `📅 ${w.label}`, '─────────────────────', `🧾 Sales: ${formatZMW(total)} (${sales.length} transaction${sales.length === 1 ? '' : 's'})`];
+            if (rets > 0) L.push(`↩️ Returns: ${formatZMW(rets)}`);
+            L.push(`💰 Cash in: ${formatZMW(cf.cashIn)}`, `💸 Cash out: ${formatZMW(cf.cashOut)} (stock ${formatZMW(cf.cashOutPur)}, expenses ${formatZMW(cf.cashOutExp)})`, `*Net cash: ${formatZMW(cf.net)}*`);
+            if (cf.creditAmt > 0) L.push(`📒 New credit sales: ${formatZMW(cf.creditAmt)} (${cf.creditCount})`);
+            if (cf.creditCollected > 0) L.push(`✅ Collected on credit: ${formatZMW(cf.creditCollected)}`);
+            _topSellerLines(sales, 5).forEach(x => L.push(x));
+            const low = _lowStockItems();
+            if (low.length) L.push('', `⚠ Low stock (${low.length}): ${low.slice(0, 5).map(i => i.name).join(', ')}${low.length > 5 ? '…' : ''}`);
+            if (hasFeature('credit')) { const od = _overdueSummary(); if (od.amt > 0) L.push(`⚠ Overdue credit: ${formatZMW(od.amt)} (${od.count})`); }
+            L.push('─────────────────────', '_Powered by ZamAgro Track_');
+            return L.join('\n');
+        }
+        function _buildMonthly(off) {
+            const co = getCompanyInfo();
+            const now = new Date();
+            const d = new Date(now.getFullYear(), now.getMonth() - (off || 0), 1);
+            const mv = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            const pl = computePL(mv);
+            const sales = db.sales.filter(s => _dmyToISO(s.date).slice(0, 7) === mv);
+            const L = [`📊 *${co.name}* — Monthly summary`, `📅 ${pl.period}`, '─────────────────────', `🧾 Revenue: ${formatZMW(pl.revenue)} (${sales.length} transaction${sales.length === 1 ? '' : 's'})`];
+            if (pl.returnsTotal > 0) L.push(`↩️ Returns: ${formatZMW(pl.returnsTotal)}`);
+            L.push(`📈 Gross profit: ${formatZMW(pl.gross)}`, `💸 Expenses: ${formatZMW(pl.expenses)}`);
+            if (pl.writeoffs > 0) L.push(`🗑 Stock write-offs: ${formatZMW(pl.writeoffs)}`);
+            if (pl.tax && pl.tax.taxDeduction > 0) L.push(`🏛 Tax: ${formatZMW(pl.tax.taxDeduction)}`);
+            L.push(`*Net profit: ${formatZMW(pl.net)}*`);
+            if (!off) { const cf = computeCashFlow('month'); L.push('', `💰 Cash in: ${formatZMW(cf.cashIn)} | Cash out: ${formatZMW(cf.cashOut)}`, `*Net cash: ${formatZMW(cf.net)}*`); }
+            _topSellerLines(sales, 5).forEach(x => L.push(x));
+            if (hasFeature('credit')) { const od = _overdueSummary(); if (od.amt > 0) L.push('', `⚠ Overdue credit: ${formatZMW(od.amt)} (${od.count})`); }
+            if (off) L.push('', '_Profit uses today’s stock value, so a past month is an estimate._');
+            L.push('─────────────────────', '_Powered by ZamAgro Track_');
+            return L.join('\n');
+        }
+        function openWeeklySummary() {
+            openWaMsg({ title: '🗓️ Weekly summary', recipients: _ownerRecipients(), build: () => _buildWeekly() });
+        }
+        function openMonthlySummary() {
+            openWaMsg({ title: '📅 Monthly summary', recipients: _ownerRecipients(), optLabel: 'Month', opts: [{ label: 'This month', value: 0 }, { label: 'Last month', value: 1 }], build: (r, off) => _buildMonthly(off || 0) });
+        }
+
+        // 5. Supplier payables
+        function _buildPayables(r) {
+            const co = getCompanyInfo();
+            const all = supBalances().filter(e => e.bal > 0.001).sort((a, b) => b.bal - a.bal);
+            if (r && r.supplier) {
+                const e = all.find(x => x.name === r.supplier);
+                if (!e) return `Hello ${r.supplier},\n\nOur account with you is fully settled. Thank you. 🙏\n\n*${co.name}*`;
+                const L = [`Hello ${r.supplier},`, '', `This is *${co.name}* confirming our balance with you:`, `• Bought on credit: ${formatZMW(e.credit)}`, `• Paid so far: ${formatZMW(e.paid)}`, `*Balance owing: ${formatZMW(e.bal)}*`];
+                if (e.last) L.push(`Last payment: ${e.last}`);
+                L.push('', 'Please confirm this matches your records. Thank you. 🙏');
+                if (co.phone) L.push(`Call us on ${co.phone}.`);
+                return L.join('\n');
+            }
+            const L = [`💳 *${co.name}* — Supplier payables`, `📅 ${_todayDMY()}`, '─────────────────────'];
+            if (!all.length) L.push('Nothing owed to suppliers. ✅');
+            all.forEach(e => L.push(`• ${e.name} — *${formatZMW(e.bal)}*${e.last ? ` (last paid ${e.last})` : ' (no payment yet)'}`));
+            if (all.length) L.push('─────────────────────', `*Total owed: ${formatZMW(_r2(all.reduce((t, e) => t + e.bal, 0)))}*`);
+            L.push('_Powered by ZamAgro Track_');
+            return L.join('\n');
+        }
+        function openPayablesMsg() {
+            const rec = _ownerRecipients();
+            supBalances().filter(e => e.bal > 0.001).sort((a, b) => b.bal - a.bal).forEach(e => {
+                const ph = _supplierPhone(e.name);
+                rec.push({ label: ph ? `${e.name} (${ph}) — their balance` : `${e.name} — no number saved`, phone: ph, supplier: e.name });
+            });
+            openWaMsg({ title: '💳 Supplier payables', recipients: rec, build: r => _buildPayables(r) });
+        }
+
+        // 6. Purchase order sender
+        function _buildPO(p) {
+            const co = getCompanyInfo();
+            const L = [`📝 *PURCHASE ORDER ${p.id}*`, `From: *${co.name}*`, `Date: ${p.date}`];
+            if (p.expected) L.push(`Expected delivery: ${p.expected}`);
+            L.push('', '*Items*');
+            (p.items || []).forEach(i => L.push(`• ${i.prodName} × ${i.qty} @ ${formatZMW(i.unitCost || 0)} = ${formatZMW((i.qty || 0) * (i.unitCost || 0))}`));
+            L.push('', `*Total order value: ${formatZMW(p.total || 0)}*`);
+            if (p.notes) L.push('', `Notes: ${p.notes}`);
+            L.push('', 'Please confirm availability and delivery date. Thank you. 🙏');
+            if (co.phone) L.push(`Call us on ${co.phone}.`);
+            return L.join('\n');
+        }
+        function waSendPO(id) {
+            const p = db.pos.find(x => x.id === id);
+            if (!p) return;
+            if (p.cancelled) { showToast('This purchase order is cancelled', 'danger'); return; }
+            openWaMsg({ title: '📝 Send purchase order', recipients: _contactRecipients(p.supplier, _supplierPhone(p.supplier)), build: () => _buildPO(p) });
+        }
+
+        // 7. Payment received thank-you
+        function _buildThanks(c, p) {
+            const co = getCompanyInfo();
+            const bal = creditBalance(c);
+            const L = [`Hello ${c.cust || 'valued customer'},`, '', `Thank you! *${co.name}* has received your payment of *${formatZMW(p.amt)}* on ${p.date}${c.prod ? ` for ${c.prod}` : ''}.`, ''];
+            L.push(bal > 0 ? `Your current balance is *${formatZMW(bal)}*.` : 'Your account is now *fully paid*. ✅');
+            L.push('', 'We appreciate your business. 🙏');
+            if (co.phone) L.push(`Questions? Call ${co.phone}.`);
+            return L.join('\n');
+        }
+        function waThanksPayment(creditId, payId) {
+            const c = db.credit.find(x => x.id === creditId);
+            if (!c) return;
+            const p = creditPayments(c).find(x => x.id === payId);
+            if (!p) return;
+            openWaMsg({ title: '💬 Payment thank-you', recipients: _contactRecipients(c.cust, _phoneForCustomer(c.cust)), build: () => _buildThanks(c, p) });
+        }
+
+        // 8. Delivery update
+        function _buildDelivery(d) {
+            const co = getCompanyInfo();
+            const items = (d.items || []).map(i => `• ${i.prodName} × ${i.qty}`);
+            const L = [`Hello ${d.cust || 'valued customer'},`, ''];
+            if (d.status === 'Dispatched') {
+                L.push(`Your order from *${co.name}* (${d.id}) is *on its way* 🚚`);
+                const dv = [d.driver ? `Driver: ${d.driver}` : '', d.vehicle ? `Vehicle: ${d.vehicle}` : ''].filter(Boolean);
+                if (dv.length) L.push(dv.join(' | '));
+                if (d.address) L.push(`Delivering to: ${d.address}`);
+            } else if (d.status === 'Delivered') {
+                L.push(`Your order from *${co.name}* (${d.id}) has been *delivered* ✅${d.receivedBy ? ` — received by ${d.receivedBy}` : ''}${d.deliveredAt ? ` on ${d.deliveredAt}` : ''}.`);
+            } else if (d.status === 'Cancelled') {
+                L.push(`Delivery ${d.id} from *${co.name}* has been cancelled.${co.phone ? ` Please call us on ${co.phone}.` : ''}`);
+            } else {
+                L.push(`Your order from *${co.name}* (${d.id}) is being prepared. We will message you when it is dispatched.`);
+            }
+            if (items.length && d.status !== 'Cancelled') L.push('', '*Items*', ...items);
+            L.push('', 'Thank you. 🙏');
+            if (co.phone && d.status !== 'Cancelled') L.push(`Questions? Call ${co.phone}.`);
+            return L.join('\n');
+        }
+        function waDeliveryUpdate(id) {
+            const d = db.deliveries.find(x => x.id === id);
+            if (!d) return;
+            openWaMsg({ title: '🚚 Delivery update', recipients: _contactRecipients(d.cust, _phoneForCustomer(d.cust)), build: () => _buildDelivery(d) });
+        }
+
+        // 9. Price list
+        function _buildPriceList(r) {
+            const co = getCompanyInfo();
+            const items = db.inventory.filter(i => i.qty > 0 && i.price > 0).sort((a, b) => String(a.cat || '').localeCompare(String(b.cat || '')) || String(a.name).localeCompare(String(b.name)));
+            const MAX = 60;
+            const L = [r && r.name ? `Hello ${r.name},` : 'Hello,', '', `🌱 *${co.name}* — Price list`, `📅 ${_todayDMY()}`, '─────────────────────'];
+            let cat = null;
+            items.slice(0, MAX).forEach(i => {
+                const c = i.cat || 'Other';
+                if (c !== cat) { cat = c; L.push('', `*${c}*`); }
+                L.push(`• ${i.name} — ${formatZMW(i.price)}${i.unit ? ' / ' + i.unit : ''}`);
+            });
+            if (!items.length) L.push('No products in stock right now.');
+            if (items.length > MAX) L.push('', `…and ${items.length - MAX} more items. Ask us for the full list.`);
+            L.push('', '─────────────────────', 'Prices may change. In-stock items only.');
+            if (co.phone) L.push(`Order or enquire: ${co.phone}`);
+            return L.join('\n');
+        }
+        function openPriceListMsg() {
+            const rec = [{ label: 'Choose contact, group or broadcast list in WhatsApp', phone: '' }];
+            (db.customers || []).filter(c => c.phone).sort((a, b) => String(a.name).localeCompare(String(b.name))).forEach(c => rec.push({ label: `${c.name} (${c.phone})`, phone: c.phone, name: c.name }));
+            openWaMsg({ title: '🏷️ Price list', hint: 'To reach many customers, choose a WhatsApp group or broadcast list. Or pick one customer.', recipients: rec, build: r => _buildPriceList(r) });
+        }
+
+        // 10. Slow-moving stock
+        function _buildSlow(days) {
+            const co = getCompanyInfo(), today = _localISO(new Date()), last = {};
+            db.sales.forEach(s => {
+                const iso = _dmyToISO(s.date);
+                if (!iso) return;
+                ((s.items && s.items.length) ? s.items : [{ prodId: s.prodId }]).forEach(l => { if (l.prodId && (!last[l.prodId] || iso > last[l.prodId])) last[l.prodId] = iso; });
+            });
+            const rows = [];
+            db.inventory.forEach(i => {
+                if (!(i.qty > 0)) return;
+                let ref = last[i.id] || '', note;
+                const tied = (i.qty || 0) * (i.cost || 0);
+                if (ref) {
+                    const idle = _daysBetweenISO(ref, today);
+                    if (idle >= days) rows.push({ i, tied, note: `last sold ${idle} days ago` });
+                } else if (i.createdAt) {
+                    const idle = _daysBetweenISO(_localISO(new Date(i.createdAt)), today);
+                    if (idle >= days) rows.push({ i, tied, note: `never sold (added ${idle} days ago)` });
+                } else {
+                    rows.push({ i, tied, note: 'no sales recorded' });
+                }
+            });
+            rows.sort((a, b) => b.tied - a.tied);
+            const L = [`🐢 *${co.name}* — Slow-moving stock`, `📅 Not sold in ${days}+ days · ${_todayDMY()}`, '─────────────────────'];
+            if (!rows.length) L.push(`Nothing has been idle for ${days}+ days. ✅`);
+            rows.slice(0, 15).forEach(x => L.push(`• ${x.i.name} — ${x.i.qty}${x.i.unit ? ' ' + x.i.unit : ''}, ${formatZMW(x.tied)} tied up, ${x.note}`));
+            if (rows.length > 15) L.push(`…and ${rows.length - 15} more`);
+            if (rows.length) L.push('─────────────────────', `*Cash tied up: ${formatZMW(_r2(rows.reduce((t, x) => t + x.tied, 0)))}* (${rows.length} item${rows.length === 1 ? '' : 's'})`, 'Tip: discount or bundle these to free up cash.');
+            L.push('_Powered by ZamAgro Track_');
+            return L.join('\n');
+        }
+        function openSlowStockMsg() {
+            openWaMsg({ title: '🐢 Slow-moving stock', recipients: _ownerRecipients(), optLabel: 'Not sold for', opts: [{ label: '30+ days', value: 30 }, { label: '60+ days', value: 60 }, { label: '90+ days', value: 90 }], build: (r, d) => _buildSlow(d || 30) });
+        }
+
+        // 11. Staff activity check
+        function _buildStaff(days) {
+            const co = getCompanyInfo();
+            const t = new Date(), today = _localISO(t);
+            const f = new Date(); f.setDate(f.getDate() - (days - 1));
+            const from = _localISO(f);
+            const inR = x => { const d = _dmyToISO(x.date); return d >= from && d <= today; };
+            const sales = db.sales.filter(inR), rets = db.returns.filter(inR);
+            const adjs = db.adjustments.filter(a => inR(a) && a.direction === 'down' && a.lossValue > 0);
+            const by = {};
+            const u = n => (by[n || 'unknown'] = by[n || 'unknown'] || { s: 0, sv: 0, r: 0, rv: 0, w: 0, wv: 0 });
+            sales.forEach(s => { const e = u(s.recordedBy); e.s++; e.sv += s.total || 0; });
+            rets.forEach(x => { const e = u(x.recordedBy); e.r++; e.rv += x.total || 0; });
+            adjs.forEach(a => { const e = u(a.recordedBy); e.w++; e.wv += a.lossValue || 0; });
+            const cost = {};
+            db.inventory.forEach(i => { cost[i.id] = i.cost || 0; });
+            const below = [];
+            sales.forEach(s => (s.items || []).forEach(l => {
+                const c = cost[l.prodId];
+                if (c > 0 && l.unitPrice < c) below.push({ who: s.recordedBy || 'unknown', name: l.prodName, price: l.unitPrice, cost: c, loss: (c - l.unitPrice) * (l.qty || 1) });
+            }));
+            below.sort((a, b) => b.loss - a.loss);
+            const label = days === 1 ? `Today (${_todayDMY()})` : `Last ${days} days (${f.toLocaleDateString('en-GB')} – ${t.toLocaleDateString('en-GB')})`;
+            const L = [`🕵️ *${co.name}* — Staff activity`, `📅 ${label}`, '─────────────────────'];
+            const names = Object.keys(by);
+            if (!names.length) L.push('No activity recorded.');
+            names.forEach(n => {
+                const e = by[n];
+                const parts = [`${e.s} sale${e.s === 1 ? '' : 's'} (${formatZMW(e.sv)})`];
+                if (e.r) parts.push(`${e.r} return${e.r === 1 ? '' : 's'} (${formatZMW(e.rv)})`);
+                if (e.w) parts.push(`${e.w} write-off${e.w === 1 ? '' : 's'} (${formatZMW(e.wv)})`);
+                L.push(`• *${n}*: ${parts.join(', ')}`);
+            });
+            if (below.length) {
+                L.push('', `⚠ *Sold below cost (${below.length})*`);
+                below.slice(0, 5).forEach(b => L.push(`• ${b.name} at ${formatZMW(b.price)} (cost ${formatZMW(b.cost)}) — ${b.who}`));
+            }
+            if (adjs.length) {
+                L.push('', '⚠ *Biggest write-offs*');
+                adjs.slice().sort((a, b) => b.lossValue - a.lossValue).slice(0, 5).forEach(a => L.push(`• ${a.prodName} × ${a.qty} — ${formatZMW(a.lossValue)} (${a.reason || a.adjType || 'no reason'}) — ${a.recordedBy || 'unknown'}`));
+            }
+            if (!below.length && !adjs.length && !rets.length) L.push('', '✅ No returns, write-offs or below-cost sales.');
+            L.push('─────────────────────', '_Cost = current cost price. Powered by ZamAgro Track_');
+            return L.join('\n');
+        }
+        function openStaffCheckMsg() {
+            openWaMsg({ title: '🕵️ Staff activity check', recipients: _ownerRecipients(), optLabel: 'Period', opts: [{ label: 'Today', value: 1 }, { label: 'Last 7 days', value: 7 }, { label: 'Last 30 days', value: 30 }], build: (r, d) => _buildStaff(d || 1) });
+        }
+
+        // 12. FISP claims follow-up
+        function _buildFisp(minDays) {
+            const co = getCompanyInfo(), today = _localISO(new Date());
+            const rows = db.fisp.filter(f => f.status !== 'Paid').map(f => { const iso = _dmyToISO(f.date); return { f, age: iso ? _daysBetweenISO(iso, today) : 0 }; })
+                .filter(x => x.age >= minDays).sort((a, b) => b.age - a.age);
+            const L = [`🌾 *${co.name}* — FISP follow-up`, `📅 ${minDays ? `Unpaid for ${minDays}+ days` : 'All unpaid claims'} · ${_todayDMY()}`, '─────────────────────'];
+            if (!rows.length) L.push('No unpaid FISP claims match. ✅');
+            rows.slice(0, 15).forEach(x => L.push(`• ${x.f.farmerName || 'Farmer'}${x.f.voucher ? ` (voucher ${x.f.voucher})` : ''}${x.f.camp ? `, ${x.f.camp}` : ''} — ${formatZMW(x.f.val || 0)}, ${x.age} day${x.age === 1 ? '' : 's'}`));
+            if (rows.length > 15) L.push(`…and ${rows.length - 15} more`);
+            if (rows.length) L.push('─────────────────────', `*Total outstanding: ${formatZMW(_r2(rows.reduce((t, x) => t + (x.f.val || 0), 0)))}* (${rows.length} claim${rows.length === 1 ? '' : 's'})`);
+            L.push('_Powered by ZamAgro Track_');
+            return L.join('\n');
+        }
+        function openFispMsg() {
+            openWaMsg({ title: '🌾 FISP follow-up', recipients: _ownerRecipients(), optLabel: 'Show claims', opts: [{ label: 'All unpaid', value: 0 }, { label: 'Unpaid 30+ days', value: 30 }, { label: 'Unpaid 60+ days', value: 60 }], build: (r, d) => _buildFisp(d || 0) });
+        }
+
+        // WhatsApp Assistant hub screen
+        function renderAssistantHub() {
+            const el = document.getElementById('view-assistant');
+            if (!el) return;
+            const bots = [
+                { i: '📊', t: 'Daily summary', d: 'Today’s cash, sales, top sellers and alerts.', b: [['Send', 'sendDailySummaryWA()']] },
+                { i: '🗓️', t: 'Weekly & monthly summary', d: 'Sales, cash flow, profit and best sellers.', b: [['This week', 'openWeeklySummary()'], ['Monthly', 'openMonthlySummary()']] },
+                { i: '📦', t: 'Reorder list', d: 'Low-stock items, ready to send to a supplier.', b: [['Open', 'openReorderModal()']] },
+                { i: '🐢', t: 'Slow-moving stock', d: 'Products that have not sold for 30, 60 or 90 days.', b: [['Open', 'openSlowStockMsg()']] },
+                { i: '🕵️', t: 'Staff activity check', d: 'Sales, returns, write-offs and below-cost sales by staff.', b: [['Open', 'openStaffCheckMsg()']] },
+                { i: '🏷️', t: 'Price list', d: 'In-stock prices for customers, groups or broadcast lists.', b: [['Open', 'openPriceListMsg()']] },
+                { i: '💳', t: 'Supplier payables', d: 'What you owe suppliers, or send a supplier their balance.', need: 'purchases', b: [['Open', 'openPayablesMsg()']] },
+                { i: '🌾', t: 'FISP follow-up', d: 'Unpaid FISP claims, oldest first.', need: 'fisp', b: [['Open', 'openFispMsg()']] }
+            ].filter(x => !x.need || hasFeature(x.need));
+            const card = x => `<div class="card" style="padding:1rem;"><div style="font-weight:700;margin-bottom:.25rem;">${x.i} ${x.t}</div><div style="font-size:.82rem;color:var(--text-muted);margin-bottom:.6rem;">${x.d}</div><div style="display:flex;gap:.4rem;flex-wrap:wrap;">${x.b.map(b => `<button type="button" class="btn btn-sm btn-primary" onclick="${b[1]}">${b[0]}</button>`).join('')}</div></div>`;
+            el.innerHTML = `<p style="color:var(--text-muted);font-size:.88rem;margin-bottom:1rem;">Each button builds a ready-to-send WhatsApp message. You check it and tap Send.</p>` +
+                `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin-bottom:1.5rem;">${bots.map(card).join('')}</div>` +
+                `<div class="card" style="padding:1rem;"><div style="font-weight:700;margin-bottom:.4rem;">Also built into other screens</div><ul style="padding-left:1.1rem;font-size:.85rem;color:var(--text-muted);line-height:1.6;">` +
+                `<li><strong>Credit Tracker and Customers:</strong> debt reminders and customer statements.</li>` +
+                `<li><strong>Credit payments:</strong> 💬 thank-you after a payment is recorded.</li>` +
+                `<li><strong>Purchase Orders:</strong> 💬 send a PO to the supplier.</li>` +
+                `<li><strong>Delivery Notes:</strong> 💬 order status update to the customer.</li></ul></div>`;
         }
 
         function openModal(id) { document.getElementById(id).classList.remove('hidden'); }
@@ -6172,6 +6643,8 @@
                     return `<li style="color:red"><strong>${esc(i.name)}</strong> — ${i.qty} left (reorder at ${threshold})</li>`;
                 }).join('');
             }
+            const reorderBtn = document.getElementById('btn-reorder-wa');
+            if (reorderBtn) reorderBtn.style.display = lowStockItems.length ? '' : 'none';
 
             const od = _overdueSummary();
             const odCard = document.getElementById('kpi-overdue-card');
@@ -7878,13 +8351,15 @@
             }
 
             const now   = new Date();
-            const todayISO = now.toISOString().slice(0, 10); // YYYY-MM-DD
+            // Local calendar date (Zambia is UTC+2, so toISOString() would show yesterday from 00:00-02:00)
+            const localISO = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+            const todayISO = localISO(now); // YYYY-MM-DD
 
             // Week start = Monday of the current week
             const dayOfWeek = (now.getDay() + 6) % 7; // 0=Mon … 6=Sun
             const weekStart = new Date(now);
             weekStart.setDate(now.getDate() - dayOfWeek);
-            const weekStartISO = weekStart.toISOString().slice(0, 10);
+            const weekStartISO = localISO(weekStart);
 
             // Month start = 1st of current month
             const monthStartISO = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
@@ -8902,6 +9377,7 @@
                 const hasGrn = db.grns.some(g => g.poId === p.id);
                 const isAdmin = currentUser === 'admin';
                 let acts = `<button class="btn btn-sm" style="background:#eee;" onclick="printPO('${esc(p.id)}')">🖨</button>`;
+                acts += `<button class="btn btn-sm" style="background:#eee;" title="Send to supplier on WhatsApp" onclick="waSendPO('${esc(p.id)}')">💬</button>`;
                 if (st === 'Open' || st === 'Partial') acts += `<button class="btn btn-sm btn-primary" title="Receive goods against this PO" onclick="receiveAgainstPO('${esc(p.id)}')">📦</button>`;
                 if (isAdmin) {
                     if (!hasGrn) acts += `<button class="btn btn-sm btn-primary" onclick="openPOModal('${esc(p.id)}')">✏️</button>`;
@@ -9758,6 +10234,7 @@
                 const dv = [d.driver, d.vehicle].filter(Boolean).map(esc).join(' / ') || '—';
                 const eid = esc(d.id);
                 let acts = `<button class="btn btn-sm" style="background:#eee;" onclick="printDN('${eid}')">🖨</button>`;
+                acts += `<button class="btn btn-sm" style="background:#eee;" title="WhatsApp update" onclick="waDeliveryUpdate('${eid}')">💬</button>`;
                 if (d.status === 'Pending') acts += `<button class="btn btn-sm btn-primary" onclick="dnSetStatus('${eid}','Dispatched')">🚚 Dispatch</button>`;
                 if (d.status === 'Dispatched') acts += `<button class="btn btn-sm btn-primary" onclick="dnSetStatus('${eid}','Delivered')">✅ Delivered</button>`;
                 if (d.status === 'Pending' || d.status === 'Dispatched') acts += `<button class="btn btn-sm" style="background:#eee;" onclick="dnSetStatus('${eid}','Cancelled')">✖</button>`;
@@ -10441,7 +10918,7 @@
             pays.slice().reverse().forEach(p => {
                 h += `<div style="display:flex;justify-content:space-between;align-items:center;gap:.5rem;padding:6px 0;border-bottom:1px solid var(--border);font-size:.86rem;">` +
                      `<span>${esc(p.date)}${p.note ? ' · ' + esc(p.note) : ''}<br><small style="color:var(--text-muted);">by ${esc(p.by || '—')}</small></span>` +
-                     `<span style="white-space:nowrap;"><strong>${formatZMW(p.amt)}</strong> ${p.legacy ? '' : `<button class="btn btn-sm" style="background:#eee;" title="Receipt" onclick="printCreditPaymentReceipt('${esc(c.id)}','${esc(p.id)}')">🧾</button>`}${isAdmin ? ` <button class="btn btn-sm btn-danger" onclick="deleteCreditPayment('${esc(c.id)}','${esc(p.id)}')">✕</button>` : ''}</span></div>`;
+                     `<span style="white-space:nowrap;"><strong>${formatZMW(p.amt)}</strong> ${p.legacy ? '' : `<button class="btn btn-sm" style="background:#eee;" title="Receipt" onclick="printCreditPaymentReceipt('${esc(c.id)}','${esc(p.id)}')">🧾</button> <button class="btn btn-sm" style="background:#eee;" title="Thank-you on WhatsApp" onclick="waThanksPayment('${esc(c.id)}','${esc(p.id)}')">💬</button>`}${isAdmin ? ` <button class="btn btn-sm btn-danger" onclick="deleteCreditPayment('${esc(c.id)}','${esc(p.id)}')">✕</button>` : ''}</span></div>`;
             });
             document.getElementById('crd-pay-history').innerHTML = h;
         }
