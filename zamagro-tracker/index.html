@@ -1469,6 +1469,12 @@
                     <button class="btn btn-sm" style="background:var(--danger);color:#fff;" onclick="confirmClearAllData()">🗑 Clear All Data</button>
                 </div>
 
+                <div class="card" style="margin-bottom: 2rem;border:1.5px solid #ffcdd2;">
+                    <h3 style="margin-bottom: 1rem;color:var(--danger);">🗑 Delete Account</h3>
+                    <p style="color:var(--text-muted);font-size:.82rem;margin-bottom:.9rem;">Permanently deletes your business account, login, all records, staff access and cloud backups. This cannot be undone &mdash; download a backup first. Subscription payment records are kept for accounting.</p>
+                    <button class="btn btn-sm" style="background:var(--danger);color:#fff;" onclick="openDeleteAccount()">Delete my account</button>
+                </div>
+
                 <div class="card" style="margin-bottom: 2rem;">
                     <h3 style="margin-bottom: 1rem;">Global Settings</h3>
                     <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;">
@@ -4407,6 +4413,89 @@
         function resetToTrial() {
             // Admin-only: disabled in customer app.
             showToast('License is managed by the ZamAgro administrator.', 'danger');
+        }
+
+        // ── DELETE ACCOUNT (Play requirement: in-app account + data deletion) ──
+        function openDeleteAccount() {
+            if (currentUser !== 'admin') { showToast('Only the admin account can delete the account.', 'danger'); return; }
+            if (cloudAuth && (cloudAuth.staff || (businessUid && businessUid !== cloudAuth.uid))) {
+                showToast('Only the business owner can delete the account.', 'danger'); return;
+            }
+            document.getElementById('delacct-pw').value = '';
+            document.getElementById('delacct-confirm').value = '';
+            document.getElementById('delacct-error').style.display = 'none';
+            openModal('modal-delete-account');
+        }
+
+        async function wipeLocalAppData() {
+            try { clearCloudAuth(); } catch (e) {}
+            try { localStorage.clear(); sessionStorage.clear(); } catch (e) {}
+            try { if (window.caches) { for (const k of await caches.keys()) await caches.delete(k); } } catch (e) {}
+            try { if (indexedDB.databases) { for (const d of await indexedDB.databases()) indexedDB.deleteDatabase(d.name); } } catch (e) {}
+            try { for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister(); } catch (e) {}
+            alert('Your account and data have been deleted.');
+            location.replace(location.pathname);
+        }
+
+        async function confirmDeleteAccount() {
+            const btn = document.getElementById('delacct-btn');
+            const errEl = document.getElementById('delacct-error');
+            const fail = (m) => { errEl.textContent = m; errEl.style.display = 'block'; btn.disabled = false; btn.textContent = 'Delete my account permanently'; };
+            const pw = document.getElementById('delacct-pw').value;
+            if (document.getElementById('delacct-confirm').value.trim() !== 'DELETE') return fail('Type DELETE exactly to confirm.');
+            if (!pw) return fail('Enter your admin password.');
+            btn.disabled = true; btn.textContent = 'Deleting…'; errEl.style.display = 'none';
+            try {
+                const accounts = getAccounts();
+                // Local-only account (never connected to cloud)
+                if (!cloudAuth) {
+                    const ok = accounts && accounts.admin && await pbkdf2Hash(pw, accounts.admin.salt) === accounts.admin.hash;
+                    if (!ok) return fail('Incorrect password.');
+                    return await wipeLocalAppData();
+                }
+                if (typeof navigator !== 'undefined' && navigator.onLine === false) return fail('You are offline. Connect to the internet to delete your cloud data.');
+                const uid = cloudAuth.uid;
+                let t;
+                try {
+                    const a = await cloudSignIn(cloudAuth.email, pw);
+                    if (a.localId !== uid) return fail('This login does not match the signed-in account.');
+                    t = a.idToken;
+                } catch (e) { return fail(e.message || 'Incorrect password.'); }
+
+                // Stop background sync so nothing re-creates data while we delete
+                try { if (sseConn) { sseConn.close(); sseConn = null; } clearTimeout(syncFlushTimer); } catch (e) {}
+                saveSyncQueue([]);
+
+                const DBU = FIREBASE_CONFIG.databaseURL;
+                const del = async (p) => {
+                    const r = await fetch(`${DBU}/${p}.json?auth=${t}`, { method: 'DELETE' });
+                    if (!r.ok) throw new Error('Delete failed (' + r.status + ') at ' + p.split('/')[0]);
+                };
+                const s = db.settings || {};
+                const code = cloudAuth.syncCode || s.syncCode;
+                // 1. public snapshot first (its write rule depends on syncCodes), then the code
+                if (code) { await del('snapshots/' + encodeURIComponent(code)); await del('syncCodes/' + encodeURIComponent(code)); }
+                // 2. business data
+                for (const c of SYNC_COLLECTIONS) await del(`businesses/${uid}/${c}`);
+                await del(`businesses/${uid}/settings`);
+                // 3. staff access + username directory
+                for (const su of Object.keys(s.staffList || {})) { try { await del('staffOf/' + su); } catch (e) {} }
+                if (accounts && accounts.admin && accounts.admin.username) await removeUsernameDirectoryEntry(t, accounts.admin.username, 'admin');
+                for (const c of ((accounts && accounts.clients) || [])) {
+                    if (c && c.username) await removeUsernameDirectoryEntry(t, c.username, 'client', uid);
+                }
+                // 4. the login itself (last — it invalidates the token)
+                const ar = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:delete?key=${FIREBASE_CONFIG.apiKey}`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ idToken: t })
+                });
+                if (!ar.ok) {
+                    const j = await ar.json().catch(() => ({}));
+                    throw new Error('Your data is deleted but the login could not be removed (' + ((j.error && j.error.message) || ar.status) + '). Contact support to finish.');
+                }
+                await wipeLocalAppData();
+            } catch (e) {
+                fail((e && e.message) || 'Deletion failed. Check your connection and try again.');
+            }
         }
 
         // ── DANGER ZONE: wipe all transactional data, keep login/settings/license ──
@@ -12383,7 +12472,7 @@ function appendTPINToPrintDoc(win){
                 <p>We strive for high availability but do not guarantee uninterrupted access. We are not liable for downtime caused by internet connectivity issues, Firebase infrastructure, or scheduled maintenance.</p>
 
                 <h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">7. Termination</h4>
-                <p>We reserve the right to suspend or terminate your account if you violate these Terms or fail to renew an expired subscription. You may stop using the service at any time. Upon termination, you may export your data via the backup feature before your access ends.</p>
+                <p>We reserve the right to suspend or terminate your account if you violate these Terms or fail to renew an expired subscription. You may stop using the service at any time, and you can delete your account in the app (Settings → Delete Account). Upon termination, you may export your data via the backup feature before your access ends.</p>
 
                 <h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">8. Limitation of Liability</h4>
                 <p>To the maximum extent permitted by Zambian law, NEXLITE DIGITAL SOLUTIONS LIMITED shall not be liable for any indirect, incidental, or consequential damages arising from your use of ZamAgro Track, including loss of revenue or data.</p>
@@ -12400,6 +12489,19 @@ function appendTPINToPrintDoc(win){
         </div>
     </div>
 
+    <!-- DELETE ACCOUNT MODAL -->
+    <div id="modal-delete-account" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width:400px;">
+            <h3 style="color:var(--danger);">🗑 Delete Account</h3>
+            <p style="color:var(--text-muted);font-size:.86rem;margin:.75rem 0;">This permanently deletes your account, all business records, staff logins and cloud data. It cannot be undone.</p>
+            <div class="form-group"><label>Admin Password</label><input type="password" id="delacct-pw" placeholder="Admin password" autocomplete="off"></div>
+            <div class="form-group"><label>Type DELETE to confirm</label><input type="text" id="delacct-confirm" placeholder="DELETE" autocomplete="off" autocapitalize="characters"></div>
+            <div id="delacct-error" style="display:none;color:var(--danger);font-size:.82rem;margin-bottom:.75rem;"></div>
+            <button id="delacct-btn" class="btn btn-danger" style="width:100%" onclick="confirmDeleteAccount()">Delete my account permanently</button>
+            <button onclick="closeModal('modal-delete-account')" class="btn btn-sm" style="width:100%;margin-top:.5rem;">Cancel</button>
+        </div>
+    </div>
+
     <!-- PRIVACY POLICY MODAL -->
     <div id="modal-privacy" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem;">
         <div style="background:#fff;border-radius:var(--radius-lg);max-width:640px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:var(--shadow-lg);">
@@ -12413,7 +12515,7 @@ function appendTPINToPrintDoc(win){
                 <p style="margin-bottom:1rem;">NEXLITE DIGITAL SOLUTIONS LIMITED ("we", "us", or "our") is committed to protecting the privacy of users of <strong>ZamAgro Track</strong>. This policy explains what data we collect, how we use it, and your rights.</p>
 
                 <h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">1. Data We Collect</h4>
-                <p>We collect only the data you enter into the application, including: business name, admin and staff usernames (hashed passwords — we never store plain-text passwords), inventory records, sales, purchases, expenses, FISP claims, credit records, and settings. We do not collect names, email addresses, or phone numbers of end users unless you choose to enter them as customer data.</p>
+                <p>We collect only the data you enter into the application, including: business name, admin and staff usernames (hashed passwords — we never store plain-text passwords), inventory records, sales, purchases, expenses, FISP claims, credit records, and settings. We do not collect names, email addresses, or phone numbers of end users unless you choose to enter them as customer data (for example customer names and phone numbers, or farmer NRC numbers for FISP records). We also keep subscription payment requests (phone number, plan, mobile-money transaction ID) and anonymous app error reports (error message, app version, device type, business ID).</p>
 
                 <h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">2. How We Use Your Data</h4>
                 <p>Your data is used solely to operate the ZamAgro Track service — to display your records, sync across your devices, and generate reports. We do not sell, rent, or share your data with third parties for marketing purposes.</p>
@@ -12425,13 +12527,13 @@ function appendTPINToPrintDoc(win){
                 <p>All passwords are hashed using PBKDF2 with SHA-256 (100,000 iterations) before storage — we cannot recover your password. Data in transit is encrypted via HTTPS/TLS. Access to your cloud data requires a valid authenticated session.</p>
 
                 <h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">5. Data Retention</h4>
-                <p>Your data is retained for as long as your account is active. If you choose to stop using ZamAgro Track, you may export a full backup of your data using the built-in backup feature. We do not automatically delete inactive accounts, but reserve the right to do so after 12 months of inactivity with prior notice.</p>
+                <p>Your data is retained for as long as your account is active. If you choose to stop using ZamAgro Track, you may export a full backup of your data using the built-in backup feature. When you delete your account, your business data, staff access and login are permanently removed. Subscription payment records are kept only as long as needed for accounting and legal obligations. We do not automatically delete inactive accounts, but reserve the right to do so after 12 months of inactivity with prior notice.</p>
 
                 <h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">6. Your Rights</h4>
-                <p>You have the right to access, correct, or delete your data at any time. To request deletion of your account and all associated data from our servers, contact us directly via the number below.</p>
+                <p>You have the right to access, correct, or delete your data at any time. You can delete your account and all associated data yourself in the app: Settings → Delete Account. You can also request deletion by contacting us using the details below.</p>
 
                 <h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">7. Third-Party Services</h4>
-                <p>ZamAgro Track uses Google Firebase for authentication and data storage. Firebase's own privacy policy applies to data processed through their infrastructure. We use no advertising networks or analytics trackers.</p>
+                <p>ZamAgro Track uses Google Firebase for authentication and data storage. Firebase's own privacy policy applies to data processed through their infrastructure. We use no advertising networks and no analytics trackers. App error reports are used only to fix bugs.</p>
 
                 <h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">8. Changes to This Policy</h4>
                 <p>We may update this Privacy Policy from time to time. Changes will be reflected in the app with an updated effective date. Continued use of the service after changes constitutes acceptance.</p>
