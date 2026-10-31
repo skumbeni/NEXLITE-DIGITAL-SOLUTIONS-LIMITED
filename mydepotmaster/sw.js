@@ -25,7 +25,13 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.10 (2026-10-31) — removed login debug output
+// Current version: v0.3.13 (2026-10-31) — © Nexlite Digital Solutions Ltd footer links to the company site
+//
+// v0.3.12: photos, logos and contract scans are shrunk before they are stored
+//
+// v0.3.11: contact email is now support@nexlitedigitalsolutionslimited.digital
+//
+// v0.3.10: removed login debug output
 //
 // v0.3.10: removed TEMP DEBUG lines from login errors (they exposed internal depot IDs).
 //
@@ -1785,7 +1791,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.10';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.13';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

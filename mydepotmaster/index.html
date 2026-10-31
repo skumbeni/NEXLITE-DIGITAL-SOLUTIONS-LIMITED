@@ -896,11 +896,11 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
         <div style="display:flex;justify-content:center;gap:12px;flex-wrap:wrap">
           <a href="https://wa.me/260960271128" target="_blank" style="display:inline-flex;align-items:center;gap:5px;background:rgba(0,224,150,.1);border:1px solid rgba(0,224,150,.25);border-radius:10px;padding:8px 14px;color:var(--green);text-decoration:none;font-size:17px;font-weight:700">💬 WhatsApp</a>
           <a href="tel:+260960271128" style="display:inline-flex;align-items:center;gap:5px;background:rgba(96,165,250,.1);border:1px solid rgba(96,165,250,.2);border-radius:10px;padding:8px 14px;color:var(--blue);text-decoration:none;font-size:17px;font-weight:700">📞 Call Us</a>
-          <a href="mailto:mydepotmaster@gmail.com" style="display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:8px 14px;color:#6a88a8;text-decoration:none;font-size:17px;font-weight:600">✉️ Email</a>
+          <a href="mailto:support@nexlitedigitalsolutionslimited.digital" style="display:inline-flex;align-items:center;gap:5px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:8px 14px;color:#6a88a8;text-decoration:none;font-size:17px;font-weight:600">✉️ Email</a>
         </div>
       </div>
     </div>
-  </div>
+  <div style="text-align:center;font-size:14px;color:var(--muted);padding:14px 0 18px"><a href="https://nexlitedigitalsolutionslimited.digital/" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">© Nexlite Digital Solutions Ltd</a></div></div>
 
   <!-- PLANS & PRICING (full detail page) -->
   <div id="pricing-screen" style="display:none">
@@ -1012,7 +1012,7 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
       <button onclick="startSignUp()" style="width:100%;background:none;border:none;color:var(--muted);font-size:17px;font-weight:600;cursor:pointer;padding:6px 0 2px;touch-action:manipulation">New here? <span style="color:var(--green);font-weight:700">Create an account →</span></button>
     </div>
     </div><!-- /.login-pc-wrap -->
-  </div>
+  <div style="text-align:center;font-size:14px;color:var(--muted);padding:14px 0 18px"><a href="https://nexlitedigitalsolutionslimited.digital/" target="_blank" rel="noopener" style="color:inherit;text-decoration:none">© Nexlite Digital Solutions Ltd</a></div></div>
 
   <!-- RECOVERY SCREEN -->
   <div id="recovery-screen" style="display:none">
@@ -3932,7 +3932,7 @@ function printSubscriptionReceipt(payload, ts){
     <tr><td class="muted">Company Key</td><td class="right">${esc(payload.installId||'')}</td></tr>
   </table>
   <div class="pay">⏳ PENDING CONFIRMATION<br><span style="font-weight:500;font-size:11px">Activation within 48 hours of confirmed payment</span></div>
-  <div class="footer">Questions? WhatsApp +260 96 027 1128<br>mydepotmaster@gmail.com</div>
+  <div class="footer">Questions? WhatsApp +260 96 027 1128<br>support@nexlitedigitalsolutionslimited.digital</div>
   </body></html>`;
   const blob = new Blob([html], { type: 'text/html' });
   const blobUrl = URL.createObjectURL(blob);
@@ -4165,7 +4165,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.10';
+const SW_VERSION  = 'v0.3.13';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -12111,8 +12111,8 @@ function saveStaff(){if(isReadOnly()){alert("🔒 This account is in read-only m
     closeModal();
   };
   if(photoFile){
-    if(photoFile.size > STAFF_PHOTO_MAX_BYTES){ alert('Photo too large. Please use an image under 350KB, or add it later from the staff profile.'); finish(null); return; }
-    const reader=new FileReader();
+    if(photoFile.size > STAFF_PHOTO_MAX_BYTES){ alert('Photo too large. Please use an image under 8MB, or add it later from the staff profile.'); finish(null); return; }
+    const reader=_newCompactReader(320, 0.72);
     reader.onload=()=>finish(reader.result);
     reader.onerror=()=>{ alert('Could not read that photo — staff saved without it. You can add it later from the profile.'); finish(null); };
     reader.readAsDataURL(photoFile);
@@ -13991,22 +13991,64 @@ function saveEditStaffDetails(id){
 }
 
 // ── STAFF PROFILE PHOTO ──────────────────────────────────────────────────────
-const STAFF_PHOTO_MAX_BYTES = 350 * 1024; // keep document size reasonable for Firebase/localStorage
+const STAFF_PHOTO_MAX_BYTES = 8 * 1024 * 1024; // size of the picked file; it is shrunk to ~320px before it is stored
 function triggerStaffPhotoUpload(id){
   if(!requireAdmin('change staff photo'))return;
   const input=document.getElementById('staff-photo-input-'+id);
   if(input)input.click();
 }
+// ── IMAGE COMPACTION (keeps the one-document-per-depot sync payload small) ───────────────
+// Photos, logos and contract scans are stored inside the depot document as base64, so every
+// byte is uploaded, downloaded and backed up on every full sync. Images are shrunk here before
+// they are stored. PDFs and anything that can't be decoded are kept exactly as chosen.
+function _fileToCompactDataUrl(file, maxDim, quality, keepPngAlpha){
+  return new Promise((resolve, reject)=>{
+    const fr=new FileReader();
+    fr.onerror=()=>reject(fr.error||new Error('read-failed'));
+    fr.onload=()=>{
+      const raw=fr.result;
+      if(!/^image\/(jpeg|png|webp)$/i.test(file.type||'')) return resolve(raw);
+      const img=new Image();
+      img.onerror=()=>resolve(raw);
+      img.onload=()=>{
+        try{
+          const scale=Math.min(1, maxDim/Math.max(img.width, img.height));
+          const w=Math.max(1, Math.round(img.width*scale)), h=Math.max(1, Math.round(img.height*scale));
+          const c=document.createElement('canvas'); c.width=w; c.height=h;
+          const ctx=c.getContext('2d');
+          const asPng=!!keepPngAlpha && /png/i.test(file.type);
+          if(!asPng){ ctx.fillStyle='#fff'; ctx.fillRect(0,0,w,h); }   // JPEG has no transparency
+          ctx.drawImage(img,0,0,w,h);
+          const out=asPng ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', quality);
+          resolve(out && out.length < raw.length ? out : raw);          // never store something bigger
+        }catch(e){ resolve(raw); }
+      };
+      img.src=raw;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+// Drop-in stand-in for FileReader in the upload handlers: same onload/onerror/result/readAsDataURL surface.
+function _newCompactReader(maxDim, quality, keepPngAlpha){
+  const r={ result:null, onload:null, onerror:null,
+    readAsDataURL(file){
+      _fileToCompactDataUrl(file, maxDim, quality, keepPngAlpha)
+        .then(url=>{ r.result=url; if(r.onload) r.onload(); })
+        .catch(()=>{ if(r.onerror) r.onerror(); });
+    } };
+  return r;
+}
+
 function handleStaffPhotoUpload(id, input){
   if(!requireAdmin('change staff photo'))return;
   const file=input.files && input.files[0];
   if(!file)return;
   if(file.size > STAFF_PHOTO_MAX_BYTES){
-    alert('Image too large. Please use a photo under 350KB (try a smaller export or a compressed JPEG).');
+    alert('Image too large. Please use a photo under 8MB.');
     input.value='';
     return;
   }
-  const reader=new FileReader();
+  const reader=_newCompactReader(320, 0.72);
   reader.onload=()=>{
     updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,photoDataUrl:reader.result}:s)}));
     logAuditEvent('EDIT','Staff Photo',`Staff ID:${id} · Photo updated`);
@@ -14173,12 +14215,12 @@ function handleContractUpload(id, input){
     input.value='';
     return;
   }
-  if(file.size > STAFF_CONTRACT_MAX_BYTES){
-    alert('File too large. Please use a file under 1.5MB (try a compressed scan or photo of the contract).');
+  if(file.size > (file.type==='application/pdf' ? STAFF_CONTRACT_MAX_BYTES : 8*1024*1024)){
+    alert('File too large. PDFs must be under 1.5MB; photos or scans under 8MB.');
     input.value='';
     return;
   }
-  const reader=new FileReader();
+  const reader=_newCompactReader(2000, 0.75);
   reader.onload=()=>{
     const s=(DATA.staff||[]).find(x=>String(x.id)===String(id));
     const isReplace=!!(s&&s.contractDataUrl);
@@ -18920,11 +18962,11 @@ function _renderContactSupportCard(){
     <div class="sh">Contact &amp; Support</div>
     <div class="card">
       <div style="font-size:18px;color:var(--muted);margin-bottom:14px;line-height:1.7">For technical support, licensing enquiries or assistance, reach out to the developer:</div>
-      <a href="mailto:mydepotmaster@gmail.com" style="display:flex;align-items:center;gap:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px;text-decoration:none;color:var(--text)">
+      <a href="mailto:support@nexlitedigitalsolutionslimited.digital" style="display:flex;align-items:center;gap:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px;text-decoration:none;color:var(--text)">
         <span style="font-size:27px">✉️</span>
         <div>
           <div style="font-size:16px;color:var(--muted);margin-bottom:2px">EMAIL</div>
-          <div style="font-weight:700;color:var(--blue)">mydepotmaster@gmail.com</div>
+          <div style="font-weight:700;color:var(--blue)">support@nexlitedigitalsolutionslimited.digital</div>
         </div>
       </a>
       <a href="tel:+260960271128" style="display:flex;align-items:center;gap:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;text-decoration:none;color:var(--text)">
@@ -19021,7 +19063,7 @@ function _renderSettingsMenu(role){
         </div>
         <div style="color:var(--muted);font-size:22px;flex-shrink:0">›</div>
       </div>`).join('')}
-    <div style="text-align:center;padding:12px 0 4px;font-size:16px;color:var(--muted)">Shop Inventory & Sales Manager · © ${new Date().getFullYear()} NEXLITE-DIGITAL-SOLUTIONS-LIMITED · General Purpose Business Management Software</div>
+    <div style="text-align:center;padding:12px 0 4px;font-size:16px;color:var(--muted)">Shop Inventory & Sales Manager · <a href="https://nexlitedigitalsolutionslimited.digital/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">© Nexlite Digital Solutions Ltd</a> · General Purpose Business Management Software</div>
     <div style="height:60px"></div>`;
 }
 
@@ -19125,7 +19167,7 @@ function _renderStaffSettings(){
     ${_renderHelpDocsCard()}
     ${_renderContactSupportCard()}
     ${_renderLegalCard()}
-    <div style="text-align:center;padding:12px 0 4px;font-size:16px;color:var(--muted)">Shop Inventory & Sales Manager · © ${new Date().getFullYear()} NEXLITE-DIGITAL-SOLUTIONS-LIMITED · General Purpose Business Management Software</div>
+    <div style="text-align:center;padding:12px 0 4px;font-size:16px;color:var(--muted)">Shop Inventory & Sales Manager · <a href="https://nexlitedigitalsolutionslimited.digital/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">© Nexlite Digital Solutions Ltd</a> · General Purpose Business Management Software</div>
     <div style="height:60px"></div>`;
 }
 
@@ -19438,11 +19480,11 @@ function _renderAdminSettings(){
     <div class="sh">Contact &amp; Support</div>
     <div class="card">
       <div style="font-size:18px;color:var(--muted);margin-bottom:14px;line-height:1.7">For technical support, licensing enquiries or assistance, reach out to the developer:</div>
-      <a href="mailto:mydepotmaster@gmail.com" style="display:flex;align-items:center;gap:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px;text-decoration:none;color:var(--text)">
+      <a href="mailto:support@nexlitedigitalsolutionslimited.digital" style="display:flex;align-items:center;gap:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:10px;text-decoration:none;color:var(--text)">
         <span style="font-size:27px">✉️</span>
         <div>
           <div style="font-size:16px;color:var(--muted);margin-bottom:2px">EMAIL</div>
-          <div style="font-weight:700;color:var(--blue)">mydepotmaster@gmail.com</div>
+          <div style="font-weight:700;color:var(--blue)">support@nexlitedigitalsolutionslimited.digital</div>
         </div>
       </a>
       <a href="tel:+260960271128" style="display:flex;align-items:center;gap:12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;text-decoration:none;color:var(--text)">
@@ -19496,7 +19538,7 @@ function _renderAdminSettings(){
       </div>
       `}
     </div>
-    <div style="text-align:center;padding:12px 0 4px;font-size:16px;color:var(--muted)">Shop Inventory & Sales Manager · © ${new Date().getFullYear()} NEXLITE-DIGITAL-SOLUTIONS-LIMITED · General Purpose Business Management Software</div>
+    <div style="text-align:center;padding:12px 0 4px;font-size:16px;color:var(--muted)">Shop Inventory & Sales Manager · <a href="https://nexlitedigitalsolutionslimited.digital/" target="_blank" rel="noopener" style="color:inherit;text-decoration:underline">© Nexlite Digital Solutions Ltd</a> · General Purpose Business Management Software</div>
     <div style="height:60px"></div>`;
 }
 
@@ -19527,7 +19569,7 @@ function showPrivacyPolicy(){
   openModal(`<div class="mtitle">🔒 Privacy Policy</div>
     <div style="font-size:17px;color:var(--muted);line-height:1.85;max-height:65vh;overflow-y:auto;padding-right:4px">
       <div style="background:#003d2e;border:1px solid var(--green);border-radius:8px;padding:9px 12px;margin-bottom:12px;color:var(--green);font-weight:700">EFFECTIVE DATE: 1 JANUARY 2025 · LAST UPDATED: ${yr}</div>
-      <b style="color:var(--white)">1. Who We Are</b><p style="margin:4px 0 10px">Shop Inventory & Sales Manager is developed and operated by NEXLITE-DIGITAL-SOLUTIONS-LIMITED, trading as Spike Trading and General Dealers (\u201cthe Developer\u201d), a PACRA-registered software company based in Zambia. Contact: <span style="color:var(--blue)">mydepotmaster@gmail.com</span></p>
+      <b style="color:var(--white)">1. Who We Are</b><p style="margin:4px 0 10px">Shop Inventory & Sales Manager is developed and operated by NEXLITE-DIGITAL-SOLUTIONS-LIMITED, trading as Spike Trading and General Dealers (\u201cthe Developer\u201d), a PACRA-registered software company based in Zambia. Contact: <span style="color:var(--blue)">support@nexlitedigitalsolutionslimited.digital</span></p>
       <b style="color:var(--white)">2. What Data We Collect</b><p style="margin:4px 0 10px">We collect only the data you voluntarily enter into the app. This includes: company name, district, and country; admin username and hashed password; recovery email address; stock, sales, purchase, staff, and financial records; and device/session identifiers stored locally. We do <b style="color:var(--white)">not</b> collect names, ID numbers, or personal data of your end-customers beyond what you choose to record.</p>
       <b style="color:var(--white)">3. How We Use Your Data</b><p style="margin:4px 0 10px">Data you enter is used solely to provide the app\u2019s business management features to you. The Developer does not analyse, profile, sell, rent, or share your data with any third party for marketing or commercial purposes.</p>
       <b style="color:var(--white)">4. Cloud Sync &amp; Third Parties</b><p style="margin:4px 0 10px">If you enable cloud sync, your data is transmitted to and stored on <b style="color:var(--white)">Google Firebase</b>, a secure cloud infrastructure service. This transfer is protected by industry-standard security measures. No other third-party services receive your data. You may disable cloud sync at any time in Settings; your data will remain on-device only.</p>
@@ -19535,7 +19577,7 @@ function showPrivacyPolicy(){
       <b style="color:var(--white)">6. Data Controller vs. Processor</b><p style="margin:4px 0 10px">You (\u201cthe Operator\u201d) are the <b style="color:var(--white)">data controller</b> for all business and personal records you enter. The Developer acts only as a <b style="color:var(--white)">data processor</b> providing the software infrastructure. You are responsible for ensuring your own use of the app complies with the DPA 2021 and any applicable employment, financial, or sector-specific laws.</p>
       <b style="color:var(--white)">7. Data Retention &amp; Deletion</b><p style="margin:4px 0 10px">Data is retained for as long as your account is active. You may delete all local data by clearing the app\u2019s browser storage or uninstalling the app. To request deletion of any Firebase-synced data, contact the Developer at the email above. Requests will be actioned within 30 days.</p>
       <b style="color:var(--white)">8. Security</b><p style="margin:4px 0 10px">Passwords are hashed before storage. Local data is stored in your device\u2019s secure browser storage. Cloud sync uses HTTPS and Firebase\u2019s authentication tokens. No system is 100% secure; you are advised to use a strong password and not share login credentials.</p>
-      <b style="color:var(--white)">9. Your Rights (DPA 2021)</b><p style="margin:4px 0 10px">As a data subject under the DPA 2021 you have the right to: access data held about you; correct inaccurate data; request erasure; restrict or object to processing; and withdraw consent. To exercise any of these rights, contact <span style="color:var(--blue)">mydepotmaster@gmail.com</span>.</p>
+      <b style="color:var(--white)">9. Your Rights (DPA 2021)</b><p style="margin:4px 0 10px">As a data subject under the DPA 2021 you have the right to: access data held about you; correct inaccurate data; request erasure; restrict or object to processing; and withdraw consent. To exercise any of these rights, contact <span style="color:var(--blue)">support@nexlitedigitalsolutionslimited.digital</span>.</p>
       <b style="color:var(--white)">10. Children</b><p style="margin:4px 0 10px">This app is not intended for use by persons under 18 years of age. We do not knowingly collect data from minors.</p>
       <b style="color:var(--white)">11. Changes to This Policy</b><p style="margin:4px 0 10px">We may update this Privacy Policy from time to time. Material changes will be communicated via an in-app notice. Continued use of the app after a change constitutes acceptance of the updated policy.</p>
       <div style="text-align:center;font-size:16px;margin-top:12px">Shop Inventory & Sales Manager \u00b7 \u00a9 ${yr} NEXLITE-DIGITAL-SOLUTIONS-LIMITED \u00b7 All Rights Reserved</div>
@@ -19633,7 +19675,7 @@ function deleteAccountStep2(){
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:14px;font-size:17px;line-height:1.9">
         <div style="font-weight:700;color:var(--white);margin-bottom:4px">Get help before you leave:</div>
         <a href="https://wa.me/260960271128" target="_blank" style="color:var(--green);text-decoration:none">💬 WhatsApp us at +260 960 271 128</a><br>
-        <a href="mailto:mydepotmaster@gmail.com" style="color:var(--blue);text-decoration:none">📧 mydepotmaster@gmail.com</a>
+        <a href="mailto:support@nexlitedigitalsolutionslimited.digital" style="color:var(--blue);text-decoration:none">📧 support@nexlitedigitalsolutionslimited.digital</a>
       </div>
       <div style="background:rgba(220,38,38,.08);border:1px solid rgba(220,38,38,.3);border-radius:10px;padding:10px 14px;font-size:17px;color:#ff8080;line-height:1.7">
         ⚠️ <strong>Deletion is permanent and irreversible.</strong> There is no grace period. No recovery. No undo. Your data will be wiped from this device and from cloud storage immediately.
@@ -21265,19 +21307,19 @@ function saveShiftHours(){
 // Pro-tier feature. The Shop Inventory & Sales Manager mark on the ID card template is always
 // rendered from a hardcoded constant — never from depotInfo — so nothing
 // uploaded or chosen here can ever replace or hide it.
-const BRAND_LOGO_MAX_BYTES = 350 * 1024; // ~350KB keeps localStorage/Firebase doc size sane
+const BRAND_LOGO_MAX_BYTES = 8 * 1024 * 1024; // size of the picked file; it is shrunk to ~400px before it is stored
 function handleBrandLogoUpload(input){
   if(!requireAdmin('change company logo'))return;
   const msg=document.getElementById('brand-logo-msg');
   const file=input.files && input.files[0];
   if(!file)return;
   if(file.size > BRAND_LOGO_MAX_BYTES){
-    if(msg)msg.innerHTML='<div class="err-box">Image too large. Please use an image under 350KB (try a smaller PNG/JPEG export).</div>';
+    if(msg)msg.innerHTML='<div class="err-box">Image too large. Please use an image under 8MB.</div>';
     input.value='';
     return;
   }
   requireAdminPassword('change company logo', ()=>{
-    const reader=new FileReader();
+    const reader=_newCompactReader(400, 0.85, true);
     reader.onload=()=>{
       updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),logoDataUrl:reader.result}}));
       if(msg)msg.innerHTML='<div class="ok-msg">✅ Logo updated.</div>';
