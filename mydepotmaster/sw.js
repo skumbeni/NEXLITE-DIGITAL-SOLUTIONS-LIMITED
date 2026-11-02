@@ -25,9 +25,14 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.14 (2026-11-01) — security hardening: contact details moved to a private node, depot
+// Current version: v0.3.15 (2026-11-02) — Play app (?src=play) consumption-only wording and screens; privacy policy and
+//   terms brought in line with what the app actually sends to third parties. No sw.js fetch/cache logic changes — bump only.
+//
+// v0.3.14 (2026-11-01) — security hardening: contact details moved to a private node, depot
 //   passwords no longer public for migrated depots, staff/admin roles, shared login lockout removed (Firebase
 //   Auth throttles instead), App Check token on licence fetch. Needs the matching database.rules.json.
+//   Play mode: the Google Play app opens /?src=play, which hides prices, payment screens and
+//   payment links there (consumption-only); the website is unchanged.
 //   No sw.js fetch/cache logic changes — bump only.
 //
 // v0.3.13: © Nexlite Digital Solutions Ltd footer links to the company site
@@ -1796,7 +1801,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.14';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.15';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
