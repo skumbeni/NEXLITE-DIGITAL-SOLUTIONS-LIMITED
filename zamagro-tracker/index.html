@@ -405,12 +405,23 @@
         /* --- LICENSE / TIER --- */
         .nav-locked { opacity: .4; pointer-events: none; position: relative; }
         .nav-locked::after { content: '🔒'; font-size: .65rem; margin-left: 6px; }
-        /* Read-only mode (expired licence): data stays visible, writes are switched off */
-        .ro-banner { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; background: #FDECEA; color: #8a1f17; border-bottom: 1px solid #f3b8b2; font-size: .82rem; padding: 8px 1.25rem; }
-        .ro-banner .ro-text { flex: 1; min-width: 200px; }
-        .ro-banner button { border: none; cursor: pointer; font-family: inherit; font-size: .78rem; font-weight: 700; border-radius: 6px; padding: 6px 12px; background: var(--primary); color: #fff; }
-        #license-expired-overlay { position: fixed; inset: 0; background: rgba(5,15,5,.88); z-index: 9999; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
-        .license-expired-box { background: white; border-radius: var(--radius-lg); padding: 2.5rem; max-width: 420px; width: 90%; text-align: center; box-shadow: var(--shadow-lg); }
+        /* --- READ-ONLY MODE (licence expired: view + export only, no lock-out) --- */
+        #ro-banner { display: none; align-items: center; gap: .6rem; flex-wrap: wrap; background: #fdecea; color: #8a1c13; border-bottom: 1px solid #f3b9b3; font-size: .82rem; padding: 8px 1.25rem; }
+        #app-layout.ro-mode #ro-banner { display: flex; }
+        #ro-banner .ro-text { flex: 1; min-width: 200px; line-height: 1.45; }
+        #ro-banner .ro-btn { border: none; cursor: pointer; font-family: inherit; font-size: .78rem; font-weight: 700; border-radius: 6px; padding: 6px 12px; background: var(--danger); color: #fff; }
+        /* Play Store build (?app=play): no in-app payment prompts, prices or "contact us to pay" text.
+           Google Play requires Play Billing for in-app subscription purchases and bans steering users
+           to other payment methods from inside the app. Renewals are done outside the app. */
+        html.play-build .pay-ui,
+        html.play-build .contact-box,
+        html.play-build .pricing-section > h2,
+        html.play-build .pricing-section > .subtitle,
+        html.play-build .pricing-section > .pricing-grid,
+        html.play-build .pricing-section > .pricing-card { display: none !important; }
+        /* Legal text: .web-only shows in the normal build, .play-only in the Play build (?app=play). */
+        html:not(.play-build) .play-only { display: none !important; }
+        html.play-build .web-only { display: none !important; }
         .license-badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: .72rem; font-weight: 700; letter-spacing: .5px; margin-left: 8px; }
         .badge-trial    { background: #fff3e0; color: #c45800; }
         .badge-starter  { background: #e6f4ea; color: #1E6B35; }
@@ -764,21 +775,6 @@
         </div>
     </div>
 
-    <!-- --- LICENSE EXPIRED OVERLAY --- -->
-    <div id="license-expired-overlay" class="hidden">
-        <div class="license-expired-box">
-            <div style="font-size:3rem;margin-bottom:1rem;">🔒</div>
-            <h2 style="color:var(--danger);margin-bottom:.75rem;">License Expired</h2>
-            <p style="color:#555;margin-bottom:1.5rem;">Your ZamAgro Track license has expired. The app is now in <strong>read-only mode</strong>: you can still view your records and reports and export your data, but adding or changing anything is switched off until you renew.</p>
-            <div style="background:#f9f9f9;border-radius:8px;padding:1rem;margin-bottom:1.5rem;font-size:.9rem;color:#333;">
-                📞 Contact: <strong id="expired-phone">0977 638 790 / 0960 271 128</strong><br>
-                <span style="color:#888;font-size:.82rem;">WhatsApp or Call to renew your plan</span>
-            </div>
-            <button onclick="openSubRequest(null, true)" class="btn btn-primary" style="width:100%;margin-bottom:.75rem;">📨 Request Renewal</button>
-            <button onclick="document.getElementById('license-expired-overlay').classList.add('hidden')" class="btn" style="width:100%;background:#f0f0f0;color:#555;">👁 Continue in Read-Only Mode</button>
-        </div>
-    </div>
-
     <!-- ── SUBSCRIPTION REQUEST MODAL ── -->
     <div id="modal-feedback" class="modal-overlay hidden" onclick="if(event.target===this)closeModal('modal-feedback')">
         <div class="modal" style="max-width:440px;width:92%;max-height:92vh;overflow-y:auto;background:#fff;border-radius:var(--radius-lg);padding:2rem;box-shadow:var(--shadow-lg);position:relative;">
@@ -947,13 +943,13 @@
                 <button type="button" class="rb-x" onclick="dismissRecoveryNudge()" aria-label="Dismiss">×</button>
             </div>
             <div id="license-bar">
-                <span><span class="brand-emoji">🌱</span> <span class="brand-name-text">ZamAgro Track</span> &nbsp;|&nbsp; Plan: <strong id="lb-tier">—</strong> <span id="lb-badge"></span></span>
+                <span><span class="brand-emoji">🌱</span> <span class="brand-name-text">ZamAgro Track</span> &nbsp;|&nbsp; Plan: <strong id="lb-tier">—</strong> <span id="lb-badge" class="pay-ui"></span></span>
                 <button id="sync-pill" class="hidden" onclick="openSyncDetails()" aria-label="Sync status"></button>
                 <span id="lb-expiry"></span>
             </div>
-            <div id="ro-banner" class="ro-banner hidden">
-                <span class="ro-text">🔒 <strong>Read-only mode</strong> — your licence has expired. You can view and export your data, but you can't add or change anything until you renew.</span>
-                <button type="button" onclick="openSubRequest(null, true)">Renew</button>
+            <div id="ro-banner" role="status">
+                <span class="ro-text">🔒 <strong>View-only mode.</strong> <span id="ro-msg">Your licence has expired. You can still view and export your records, but you can't add or change anything.</span><span class="pay-ui"> Renew: <strong>0977 638 790 / 0960 271 128</strong> (WhatsApp / Call)</span></span>
+                <button type="button" class="ro-btn pay-ui" onclick="openSubRequest(null, true)">📨 Request Renewal</button>
             </div>
             <div class="content-inner">
             <div class="header-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
@@ -1554,8 +1550,8 @@
                 <div class="card" style="margin-top:2rem;border-left-color:#6A1B9A;">
                     <h3 style="margin-bottom:1rem;color:#6A1B9A;">🔑 License Management</h3>
                     <div id="license-info-box" style="background:#f9f9f9;border-radius:8px;padding:1rem;margin-bottom:1rem;font-size:.9rem;"></div>
-                    <button class="btn btn-primary" style="margin-top:.5rem;" onclick="openSubRequest(null)">📨 Request / Upgrade Plan</button>
-                    <p style="color:var(--gray);font-size:.78rem;margin-top:.6rem;">Pay via Mobile Money first, then submit your transaction ID to activate.</p>
+                    <button class="btn btn-primary pay-ui" style="margin-top:.5rem;" onclick="openSubRequest(null)">📨 Request / Upgrade Plan</button>
+                    <p class="pay-ui" style="color:var(--gray);font-size:.78rem;margin-top:.6rem;">Pay via Mobile Money first, then submit your transaction ID to activate.</p>
                 </div>
             </div>
 
@@ -2776,6 +2772,9 @@
         // never a full-array overwrite, so two staff editing different records offline can't
         // clobber each other when they both come back online.
         function writeCollection(key, newVal) {
+            // View-only mode (expired licence): refuse every data write, local and cloud.
+            // Cloud pulls (__applyingRemoteSync) are exempt so a renewal and fresh data still arrive.
+            if (!window.__applyingRemoteSync && isReadOnly()) { roBlocked(); return; }
             const oldVal = dbLoad(key);
             kvSet(KEYS[key], JSON.stringify(newVal));
             if (!window.__applyingRemoteSync) {
@@ -4224,6 +4223,93 @@
         // ── LICENSE SYSTEM ────────────────────────────────────────────────
         const LICENSE_KEY = 'za_license';
 
+        // ── PLAY STORE BUILD FLAG ─────────────────────────────────────────
+        // The Android app (Median) opens index.html?app=play — the flag then sticks on that device.
+        // In that build the app shows NO payment prompts, prices or "contact us to pay" text.
+        // (Open ?app=web once to clear it.) Everything else behaves identically.
+        const IS_PLAY_BUILD = (function () {
+            try {
+                const q = new URLSearchParams(location.search).get('app');
+                if (q === 'play') localStorage.setItem('za_play_build', '1');
+                else if (q === 'web') localStorage.removeItem('za_play_build');
+                return localStorage.getItem('za_play_build') === '1';
+            } catch (e) { return false; }
+        })();
+        if (IS_PLAY_BUILD) document.documentElement.classList.add('play-build');
+
+        // ── VIEW-ONLY MODE (expired licence) ──────────────────────────────
+        // Expired = the user can still log in, browse every module their plan includes, print and
+        // export. Nothing can be added, edited or deleted. Enforced in two layers:
+        //   1. clicks/submits on write actions are stopped with a message (list below)
+        //   2. writeCollection() refuses any write that slips past layer 1
+        function isReadOnly() {
+            try {
+                const layout = document.getElementById('app-layout');
+                if (!layout || layout.classList.contains('hidden')) return false; // not logged in yet
+                return !isLicenseActive();
+            } catch (e) { return false; }
+        }
+
+        let _roToastAt = 0;
+        function roBlocked() {
+            const now = Date.now();
+            if (now - _roToastAt < 3000) return;
+            _roToastAt = now;
+            showToast('🔒 View-only mode: your licence has expired, so records can\'t be added or changed.' + (IS_PLAY_BUILD ? '' : ' Renew to continue.'), 'danger');
+        }
+
+        // Functions that create, change or delete data/settings. Viewing, printing, exporting,
+        // sharing, backup download, logout and account deletion are deliberately NOT here.
+        const RO_BLOCKED_FNS = [
+            // add / edit / delete records
+            'deleteRecord','deleteProduct','deleteCustomer','deleteSupplier','deleteCreditPayment',
+            'handleAddInventory','handleAddPurchase','handleAddFISP','handleAddExpense','handleAddCustomer','handleAddSupplier','handleAddAdjustment',
+            'handleEditSave','handleEditSale','handleEditPurchase','handleEditFISP','handleEditExpense','handleEditCustomer','handleEditSupplier','handleEditCredit',
+            'submitMultiSale','convertQuotationToSale','handleCreditPayment','applyLumpSumPayment','payFISP','payCredit',
+            'savePO','saveGRN','saveDN','saveCD','saveRET','saveTRF','saveSupPay','receiveAgainstPO','togglePOCancel','dnSetStatus','grnSaveNewProduct',
+            'saveCreditPromise','saveCreditTerm',
+            // forms that open an "add/edit" screen
+            'openAddStockModal','openAddCustomerModal','openAddSupplierModal','openAdjustmentModal',
+            'openEditModal','openEditSaleModal','openEditPurchaseModal','openEditFISPModal','openEditExpenseModal','openEditCustomerModal','openEditSupplierModal','openEditCreditModal',
+            'openPOModal','openGRNModal','openDNModal','openCDModal','openRETModal','openTRFModal','openSupPayModal',
+            'prepareSaleModal','preparePurchaseModal','prepareFISPModal',
+            // settings, staff, branding, bulk data actions
+            'saveThreshold','saveThermalCols','saveTaxRegime','savePodSetting','saveCompanyInfo','handleLogoUpload','removeLogo',
+            'addStockCategory','removeStockCategory','addExpenseCategory','removeExpenseCategory',
+            'saveStaffAccount','removeStaffAccount','addStaffSlot','addEmailStaff','removeEmailStaff','grantCoAdminAccess','revokeCoAdminAccess','handleRegenerateSyncCode',
+            'restoreJSON','confirmClearAllData','cloudUploadData'
+        ];
+
+        (function installReadOnlyGuard() {
+            const blocked = new Set(RO_BLOCKED_FNS);
+            function attrBlocked(code) {
+                if (!code) return false;
+                const re = /([A-Za-z_$][\w$]*)\s*\(/g; let m;
+                while ((m = re.exec(code))) if (blocked.has(m[1])) return true;
+                return false;
+            }
+            // Capture phase: runs before the button's own inline handler, then cancels it.
+            document.addEventListener('click', function (ev) {
+                if (!isReadOnly()) return;
+                for (let el = ev.target; el && el !== document; el = el.parentElement) {
+                    if (el.getAttribute && attrBlocked(el.getAttribute('onclick'))) {
+                        ev.preventDefault(); ev.stopImmediatePropagation(); roBlocked(); return;
+                    }
+                }
+            }, true);
+            document.addEventListener('submit', function (ev) {
+                if (!isReadOnly()) return;
+                const f = ev.target;
+                if (f && f.getAttribute && attrBlocked(f.getAttribute('onsubmit'))) {
+                    ev.preventDefault(); ev.stopImmediatePropagation(); roBlocked();
+                }
+            }, true);
+            // Visual cue: write buttons look dimmed in view-only mode (tapping them explains why).
+            const st = document.createElement('style');
+            st.textContent = RO_BLOCKED_FNS.map(n => '#app-layout.ro-mode [onclick*="' + n + '("]').join(',') + '{opacity:.45;}';
+            document.head.appendChild(st);
+        })();
+
         // Feature access per tier
         const TIER_FEATURES = {
             trial:    ['dashboard','inventory','sales','expenses','reports','purchases','fisp','credit'],
@@ -4349,8 +4435,7 @@
         }
 
         function hasFeature(feature) {
-            // Expired licences keep VIEW access to the modules their plan included (read-only mode,
-            // see the READ-ONLY MODE block at the end of this script); writes are blocked there.
+            // Plan modules stay visible after expiry (view-only mode); writes are blocked separately.
             const lic = getLicense();
             const allowed = TIER_FEATURES[lic.tier] || TIER_FEATURES['trial'];
             return allowed.includes(feature);
@@ -4360,19 +4445,9 @@
             const lic = getLicense();
             const active = isLicenseActive();
 
-            // Expired licence => READ-ONLY mode (not a lock-out): everything stays viewable,
-            // writes are blocked by the guard block at the end of the script.
-            const expiredOverlay = document.getElementById('license-expired-overlay');
-            const roBanner = document.getElementById('ro-banner');
-            document.body.classList.toggle('ro-mode', !active);
-            if (roBanner) roBanner.classList.toggle('hidden', active);
-            if (!active) {
-                // Explain it once per login; after that the banner is enough.
-                if (!window.__roNoticeShown) { window.__roNoticeShown = true; expiredOverlay.classList.remove('hidden'); }
-            } else {
-                window.__roNoticeShown = false;
-                expiredOverlay.classList.add('hidden');
-            }
+            // Expired licence = view-only mode, not a lock-out.
+            const appLayout = document.getElementById('app-layout');
+            if (appLayout) appLayout.classList.toggle('ro-mode', !active);
 
             // Update license bar
             const tierLabel = TIER_LABELS[lic.tier] || lic.tier;
@@ -4384,15 +4459,17 @@
             expiryEl.style.color = '';
             if (lic.tier === 'lifetime') {
                 expiryEl.textContent = '✔ Lifetime Access';
-            } else if (!active) {
-                expiryEl.textContent = `⛔ Expired ${new Date(lic.expiry).toLocaleDateString('en-ZM')} — read-only`;
-                expiryEl.style.color = '#FF6B6B';
             } else {
                 const days = Math.ceil((lic.expiry - Date.now()) / (24*60*60*1000));
                 const expiryDate = new Date(lic.expiry).toLocaleDateString('en-ZM');
-                expiryEl.textContent = `Expires: ${expiryDate} (${days} day${days!==1?'s':''} left)`;
-                if (days <= 7) expiryEl.style.color = '#FFCC02';
-                if (days <= 3) expiryEl.style.color = '#FF6B6B';
+                if (!active) {
+                    expiryEl.textContent = `Expired: ${expiryDate} · view-only`;
+                    expiryEl.style.color = '#FF6B6B';
+                } else {
+                    expiryEl.textContent = `Expires: ${expiryDate} (${days} day${days!==1?'s':''} left)`;
+                    if (days <= 7) expiryEl.style.color = '#FFCC02';
+                    if (days <= 3) expiryEl.style.color = '#FF6B6B';
+                }
             }
 
             // Lock/unlock nav items
@@ -4410,6 +4487,15 @@
             renderLicenseInfoBox();
         }
 
+        // Re-check every few minutes so a licence that runs out mid-session switches to view-only
+        // (and a renewal that arrives by sync switches back) without needing a reload.
+        setInterval(function () {
+            try {
+                const l = document.getElementById('app-layout');
+                if (l && !l.classList.contains('hidden')) applyLicenseUI();
+            } catch (e) {}
+        }, 5 * 60 * 1000);
+
         function renderLicenseInfoBox() {
             const box = document.getElementById('license-info-box');
             if (!box) return;
@@ -4418,13 +4504,13 @@
             const tierLabel = TIER_LABELS[lic.tier] || lic.tier;
             const expiryDate = lic.tier === 'lifetime' ? '—' : new Date(lic.expiry).toLocaleDateString('en-ZM');
             const trialInfo = lic.status === 'trial' ? `<div style="grid-column:1/-1;"><strong>Trial window:</strong> ${new Date(lic.trialStart||lic.activatedAt).toLocaleDateString('en-ZM')} → ${new Date(lic.trialEnd||lic.expiry).toLocaleDateString('en-ZM')}</div>` : '';
-            const status = active ? `<span style="color:var(--success);font-weight:700;">✔ Active</span>` : `<span style="color:var(--danger);font-weight:700;">✘ Expired</span>`;
+            const status = active ? `<span style="color:var(--success);font-weight:700;">✔ Active</span>` : `<span style="color:var(--danger);font-weight:700;">✘ Expired · view-only</span>`;
             const features = (TIER_FEATURES[lic.tier]||[]).filter(f=>f!=='dashboard').join(', ');
             box.innerHTML = `
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem 1.5rem;font-size:.88rem;">
                     <div><strong>Plan:</strong> ${tierLabel}</div>
                     <div><strong>Status:</strong> ${status}</div>
-                    <div><strong>Price:</strong> ${TIER_PRICES[lic.tier]||'Free'}</div>
+                    ${IS_PLAY_BUILD ? '' : `<div><strong>Price:</strong> ${TIER_PRICES[lic.tier]||'Free'}</div>`}
                     <div><strong>Expiry:</strong> ${expiryDate}</div>
                     ${trialInfo}<div style="grid-column:1/-1;"><strong>Modules included:</strong> ${features}</div>
                 </div>`;
@@ -6451,6 +6537,7 @@
 
         // ── SUBSCRIPTION REQUEST ─────────────────────────────────────────
         function openSubRequest(tier, isRenewal) {
+            if (IS_PLAY_BUILD) return; // Play Store build: no in-app payment flow
             // Reset form state
             ['subreq-err','subreq-success'].forEach(id => {
                 const el = document.getElementById(id);
@@ -12433,117 +12520,6 @@ function appendTPINToPrintDoc(win){
     }catch(e){}
 }
 
-
-// ════════════════════════════════════════════════════════════════
-// READ-ONLY MODE (expired licence)
-// An expired licence no longer locks the app. The user can still log in, view every record
-// and report, print, share and export/back up their data — but nothing can be added, edited,
-// deleted or saved until the licence is renewed. Three layers:
-//   1. every write action (save / edit / delete / pay / receive …) is wrapped and refuses;
-//   2. modals that only exist for entering data refuse to open;
-//   3. writeCollection() refuses as a safety net for anything missed above.
-// Cloud sync pulls (__applyingRemoteSync) and licence refreshes still work, so a renewal made
-// by the admin takes effect as soon as the app syncs.
-// ════════════════════════════════════════════════════════════════
-function isReadOnly() { try { return !isLicenseActive(); } catch (e) { return false; } }
-
-let _roLastToast = 0;
-function roBlocked() {
-    const now = Date.now();
-    if (now - _roLastToast < 1500) return;
-    _roLastToast = now;
-    showToast('🔒 Read-only mode — your licence has expired. Renew to add or change records.', 'danger');
-}
-
-(function installReadOnlyGuard() {
-    // Actions that change data, settings or accounts.
-    const WRITE_FNS = [
-        // stock
-        'handleAddInventory', 'handleEditSave', 'deleteProduct', 'handleAddAdjustment', 'openAddStockModal', 'openEditModal', 'openAdjustmentModal',
-        // sales
-        'submitMultiSale', 'handleAddSale', 'handleEditSale', 'openEditSaleModal', 'prepareSaleModal', 'convertQuotationToSale',
-        // purchases, expenses, FISP
-        'handleAddPurchase', 'handleEditPurchase', 'openEditPurchaseModal', 'preparePurchaseModal',
-        'handleAddExpense', 'handleEditExpense', 'openEditExpenseModal',
-        'handleAddFISP', 'handleEditFISP', 'payFISP', 'openEditFISPModal', 'prepareFISPModal',
-        // customers, suppliers
-        'handleAddCustomer', 'handleEditCustomer', 'deleteCustomer', 'openAddCustomerModal', 'openEditCustomerModal',
-        'handleAddSupplier', 'handleEditSupplier', 'deleteSupplier', 'openAddSupplierModal', 'openEditSupplierModal',
-        // credit
-        'handleEditCredit', 'handleCreditPayment', 'deleteCreditPayment', 'applyLumpSumPayment', 'saveCreditPromise', 'payCredit', 'openEditCreditModal', 'openCreditPayModal',
-        // POs, GRNs, delivery / credit notes, transfers, returns, supplier payments
-        'savePO', 'receiveAgainstPO', 'togglePOCancel', 'openPOModal', 'saveGRN', 'grnSaveNewProduct', 'openGRNModal',
-        'saveDN', 'dnSetStatus', 'openDNModal', 'saveCD', 'openCDModal', 'saveTRF', 'openTRFModal',
-        'saveRET', 'openRETModal', 'saveSupPay', 'openSupPayModal',
-        // deleting
-        'deleteRecord', 'confirmReauthDelete',
-        // settings, staff, data management
-        'saveCompanyInfo', 'handleLogoUpload', 'removeLogo', 'saveThreshold', 'saveCreditTerm', 'saveTaxRegime',
-        'saveThermalCols', 'savePodSetting', 'addExpenseCategory', 'removeExpenseCategory', 'addStockCategory', 'removeStockCategory',
-        'addStaffSlot', 'saveStaffAccount', 'removeStaffAccount', 'addEmailStaff', 'removeEmailStaff',
-        'grantCoAdminAccess', 'revokeCoAdminAccess', 'handleRegenerateSyncCode',
-        'restoreJSON', 'confirmClearAllData', 'cloudUploadData', 'openInvoiceBuilder'
-    ];
-    // Modals that only exist for entering / changing data. (Print, receipt, statement, reorder,
-    // sync, renewal, feedback, delete-account, terms… stay available.)
-    const WRITE_MODALS = [
-        'modal-inv', 'modal-sale', 'modal-purchase', 'modal-trf', 'modal-suppay', 'modal-ret', 'modal-cd', 'modal-dn',
-        'modal-grn', 'modal-po', 'modal-grn-newprod', 'modal-exp', 'modal-fisp', 'modal-edit-sale', 'modal-edit-purchase',
-        'modal-edit-expense', 'modal-edit-fisp', 'modal-edit-credit', 'modal-credit-pay', 'modal-add-supplier',
-        'modal-edit-supplier', 'modal-add-customer', 'modal-edit-customer', 'modal-adjustment', 'modal-edit-product',
-        'modal-invoice-builder', 'modal-admin-reauth'
-    ];
-
-    const missing = [];
-    WRITE_FNS.forEach(function (name) {
-        const orig = window[name];
-        if (typeof orig !== 'function') { missing.push(name); return; }
-        window[name] = function () {
-            if (isReadOnly()) {
-                const a = arguments[0];
-                if (a && typeof a.preventDefault === 'function') a.preventDefault(); // stop form submits
-                roBlocked();
-                return;
-            }
-            return orig.apply(this, arguments);
-        };
-    });
-    if (missing.length) console.warn('Read-only guard: functions not found:', missing.join(', '));
-
-    const _openModal = window.openModal;
-    window.openModal = function (id) {
-        if (isReadOnly() && WRITE_MODALS.indexOf(id) !== -1) { roBlocked(); return; }
-        return _openModal.apply(this, arguments);
-    };
-
-    // Safety net: any collection write that slipped past the wrappers is refused.
-    const _writeCollection = window.writeCollection;
-    window.writeCollection = function () {
-        if (!window.__applyingRemoteSync && isReadOnly()) { roBlocked(); return; }
-        return _writeCollection.apply(this, arguments);
-    };
-
-    // Logging out starts a fresh session: explain read-only mode again on the next login.
-    const _confirmLogout = window.confirmLogout;
-    if (typeof _confirmLogout === 'function') {
-        window.confirmLogout = function () {
-            window.__roNoticeShown = false;
-            document.body.classList.remove('ro-mode');
-            const b = document.getElementById('ro-banner'); if (b) b.classList.add('hidden');
-            return _confirmLogout.apply(this, arguments);
-        };
-    }
-
-    // Dim every data-entry button so it is obvious why tapping it does nothing.
-    const sel = [];
-    WRITE_FNS.forEach(function (n) { sel.push('body.ro-mode [onclick*="' + n + '("]', 'body.ro-mode [onsubmit*="' + n + '("]'); });
-    WRITE_MODALS.forEach(function (m) { sel.push('body.ro-mode [onclick*="openModal(\'' + m + '\')"]'); });
-    const st = document.createElement('style');
-    st.id = 'ro-style';
-    st.textContent = sel.join(',\n') + ' { opacity: .45; cursor: not-allowed; }';
-    document.head.appendChild(st);
-})();
-
 </script>
 
             <!-- 10. ACTIVITY LOG VIEW -->
@@ -12584,7 +12560,7 @@ function roBlocked() {
                 <h2 style="font-size:1.1rem;font-weight:800;color:var(--primary-dark);">📄 Terms of Service</h2>
                 <button onclick="closeModal('modal-tos')" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--text-muted);">&times;</button>
             </div>
-            <div style="overflow-y:auto;padding:1.5rem;font-size:.875rem;line-height:1.75;color:var(--text);">
+            <div style="overflow-y:auto;padding:1.5rem;font-size:.875rem;line-height:1.75;color:var(--text);"><div class="web-only">
                 <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:1.25rem;">Effective Date: 1 July 2025 &nbsp;|&nbsp; NEXLITE DIGITAL SOLUTIONS LIMITED</p>
 
                 <p style="margin-bottom:1rem;">By accessing or using <strong>ZamAgro Track</strong>, you agree to be bound by these Terms of Service. Please read them carefully before creating an account.</p>
@@ -12619,6 +12595,36 @@ function roBlocked() {
                 <h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">10. Contact</h4>
                 <p>For questions about these Terms, contact us at <strong>0977 638 790 / 0960 271 128</strong> (WhatsApp / Call).</p>
             </div>
+<div class="play-only">
+<p style="font-size:.78rem;color:var(--text-muted);margin-bottom:1.25rem;">Effective Date: 2 November 2026 &nbsp;|&nbsp; NEXLITE DIGITAL SOLUTIONS LIMITED &nbsp;|&nbsp; Android (Google Play) version</p>
+<div style="margin-bottom:1rem;"><p>By downloading or using the <strong>ZamAgro Track</strong> Android app, or the ZamAgro Track web app it displays, you agree to be bound by these Terms of Service. Please read them before creating an account.</p></div>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">1. Service description</h4>
+<p>ZamAgro Track is a cloud-based agro shop management system provided by NEXLITE DIGITAL SOLUTIONS LIMITED (“we”, “us”, “our”). It is business software for adults, designed for agro retailers, distributors and related businesses operating in Zambia.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">2. Accounts and staff</h4>
+<p>You must provide accurate and complete information when creating an account. You are responsible for keeping your admin credentials and your Staff Access Link confidential, for the staff accounts you create and what they do, and you may not share your account with any unauthorised person. Tell us promptly if you suspect unauthorised use.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">3. Free trial and licence</h4>
+<p>New accounts start with a free trial. After the trial, full use requires an active licence issued by us. Licences, plans and their terms are arranged and managed directly with us outside the app. The app does not sell licences, take payments or show prices, and nothing is purchased through Google Play.</p>
+<p>When no licence is active, the app switches to view-only mode: you can still sign in, view, print and export your records, but you cannot add, change or delete them until a licence is active again.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">4. Acceptable use</h4>
+<p>You agree not to use ZamAgro Track to store false, misleading or fraudulent business records; to attempt to reverse-engineer, copy or redistribute the software; or to engage in any activity that disrupts the service for other users.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">5. Your data and your responsibilities</h4>
+<p>All business data you enter (inventory, sales, customers, etc.) remains your property. We do not claim ownership of it. You allow us to store and process it on your behalf, using Google Firebase (Google Cloud) infrastructure, to provide the service. You are responsible for having the right to record any customer or farmer details you enter (such as phone numbers and NRC numbers) and for keeping them accurate. Use the backup feature regularly to keep your own copy. How we handle personal data is described in our <a target="_blank" rel="noopener" style="color:var(--primary);font-weight:600;" href="privacy-play.html">Privacy Policy</a>.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">6. Availability and updates</h4>
+<p>We aim for high availability but do not guarantee uninterrupted access. We are not liable for downtime caused by internet connectivity, Firebase infrastructure or scheduled maintenance. The app keeps working offline using the copy stored on your device and syncs when you are back online; signing in on a new device and cloud sync need an internet connection. We may release updates, and you may need to install them for the app to work correctly.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">7. Termination and account deletion</h4>
+<p>We may suspend or terminate your account if you violate these Terms or if your licence is not renewed. You may stop using the service at any time, and you can delete your account in the app (Settings → Delete Account) or via our <a target="_blank" rel="noopener" style="color:var(--primary);font-weight:600;" href="delete-account.html">deletion page</a>. Deletion is permanent. Before access ends you may export your data using the backup feature.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">8. Google Play</h4>
+<p>The Android app is distributed through Google Play. These Terms are an agreement between you and us only. Google is not a party to them and is not responsible for the app, its content, support or maintenance. Your use of Google Play itself is governed by Google’s terms.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">9. Limitation of liability</h4>
+<p>To the maximum extent permitted by Zambian law, NEXLITE DIGITAL SOLUTIONS LIMITED is not liable for any indirect, incidental or consequential damages arising from your use of ZamAgro Track, including loss of revenue or data.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">10. Changes to these Terms</h4>
+<p>We may update these Terms. The updated version and date will be shown on this page; continued use after a change means you accept it.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">11. Governing law</h4>
+<p>These Terms are governed by the laws of the Republic of Zambia. Disputes will be resolved through good-faith negotiation or, if necessary, the courts of Zambia.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">12. Contact</h4>
+<p>NEXLITE DIGITAL SOLUTIONS LIMITED · Email: <strong>support@nexlitedigitalsolutionslimited.digital</strong> · WhatsApp/Call: 0977 638 790 / 0960 271 128</p>
+<p style="margin-top:1rem;font-size:.8rem;color:var(--text-muted);">Full version online: <a target="_blank" rel="noopener" style="color:var(--primary);font-weight:600;" href="terms-play.html">terms-play.html</a></p>
+</div></div>
             <div style="padding:1rem 1.5rem;border-top:1px solid var(--border);flex-shrink:0;">
                 <button onclick="closeModal('modal-tos')" class="btn btn-primary btn-sm">Close</button>
             </div>
@@ -12645,7 +12651,7 @@ function roBlocked() {
                 <h2 style="font-size:1.1rem;font-weight:800;color:var(--primary-dark);">🔒 Privacy Policy</h2>
                 <button onclick="closeModal('modal-privacy')" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--text-muted);">&times;</button>
             </div>
-            <div style="overflow-y:auto;padding:1.5rem;font-size:.875rem;line-height:1.75;color:var(--text);">
+            <div style="overflow-y:auto;padding:1.5rem;font-size:.875rem;line-height:1.75;color:var(--text);"><div class="web-only">
                 <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:1.25rem;">Effective Date: 1 July 2025 &nbsp;|&nbsp; NEXLITE DIGITAL SOLUTIONS LIMITED</p>
 
                 <p style="margin-bottom:1rem;">NEXLITE DIGITAL SOLUTIONS LIMITED ("we", "us", or "our") is committed to protecting the privacy of users of <strong>ZamAgro Track</strong>. This policy explains what data we collect, how we use it, and your rights.</p>
@@ -12677,6 +12683,89 @@ function roBlocked() {
                 <h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">9. Contact</h4>
                 <p>For privacy concerns or data deletion requests, contact us at <strong>0977 638 790 / 0960 271 128</strong> (WhatsApp / Call).</p>
             </div>
+<div class="play-only">
+<p style="font-size:.78rem;color:var(--text-muted);margin-bottom:1.25rem;">Effective Date: 2 November 2026 &nbsp;|&nbsp; NEXLITE DIGITAL SOLUTIONS LIMITED &nbsp;|&nbsp; Android (Google Play) version</p>
+<div style="margin-bottom:1rem;"><p>NEXLITE DIGITAL SOLUTIONS LIMITED (“we”, “us”) publishes <strong>ZamAgro Track</strong>, agro-shop management software for businesses in Zambia. This policy covers the <strong>ZamAgro Track Android app on Google Play</strong>. The app opens the ZamAgro Track web app, so the same data practices apply in both. It explains what we collect, why, who receives it, how long we keep it, and how you can delete it.</p></div>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">1. Who is responsible for your data</h4>
+<p>For your account, recovery email, feedback and error reports, we decide why and how the data is used. For the records a shop keeps about its own customers, suppliers and farmers (such as names, phone numbers and NRC numbers), the shop decides what to record, and we store and process that data only on the shop’s behalf to run the service. Shops should record only the customer and farmer details they are allowed to collect.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">2. Data we collect</h4>
+<ul style="list-style:disc;margin:.2rem 0 .6rem 1.2rem;padding:0;">
+<li style="margin-bottom:.3rem;"><strong>Account details (required).</strong> Business name, your admin username, any staff usernames and roles, and your password. Passwords are hashed (PBKDF2-SHA-256); we never store them in plain text. Sign-in is provided by Google Firebase Authentication.</li>
+<li style="margin-bottom:.3rem;"><strong>Business records you enter (required to use the app).</strong> Inventory, sales, purchases, expenses, FISP claims, credit records, suppliers, customers (names and phone numbers), farmer NRC numbers if you choose to enter them, business settings, and a business logo if you upload one.</li>
+<li style="margin-bottom:.3rem;"><strong>Licence information.</strong> Your free-trial or licence status and its start and end dates. Where a licence was arranged with us outside the app, we also hold the payment reference needed for our accounting.</li>
+<li style="margin-bottom:.3rem;"><strong>Recovery email (optional).</strong> If you add one, we store it so you can reset the owner password with a 6-digit code sent to that address.</li>
+<li style="margin-bottom:.3rem;"><strong>Feedback (optional).</strong> If you submit feedback: your name, optional business or location, the gender option you pick, a star rating and your comment. Once we approve it, it is shown publicly on the app’s landing page. Please do not include phone numbers or other private details.</li>
+<li style="margin-bottom:.3rem;"><strong>Error reports (automatic).</strong> If the app hits an error it sends a small technical report: the error message, a cleaned technical trace, app version, screen name, your role (admin or staff), device or browser type, whether you were online, how many changes were waiting to sync, and your business ID. Reports are scrubbed of email addresses and long numbers and are designed not to include record contents, names, amounts or phone numbers.</li>
+<li style="margin-bottom:.3rem;"><strong>Data on your device.</strong> The app keeps a copy of your records on your device, in the storage of the browser that displays it, so it works offline. It also keeps a queue of changes waiting to sync.</li>
+<li style="margin-bottom:.3rem;"><strong>Standard technical data.</strong> As with any online service, the servers we use see your IP address and basic request details when the app connects.</li>
+</ul>
+<p>We do not collect your location, contacts, microphone, SMS or call logs, or your advertising ID. We do not use advertising or analytics services.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">3. How we use your data</h4>
+<ul style="list-style:disc;margin:.2rem 0 .6rem 1.2rem;padding:0;">
+<li style="margin-bottom:.3rem;">To run the service: sign you in, show your records, sync them across your devices and your staff’s devices, and produce reports, prints and exports.</li>
+<li style="margin-bottom:.3rem;">To keep accounts secure, recover owner access, and manage your trial or licence status.</li>
+<li style="margin-bottom:.3rem;">To find and fix bugs, using error reports.</li>
+<li style="margin-bottom:.3rem;">To show feedback you chose to submit, after approval.</li>
+<li style="margin-bottom:.3rem;">To answer your requests and meet our legal and accounting obligations.</li>
+</ul>
+<p>We do not sell or rent your data, do not use it for advertising, and do not use it to profile you or make automated decisions about you.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">4. Who we share data with</h4>
+<p>We share data only with the service providers needed to run the app:</p>
+<ul style="list-style:disc;margin:.2rem 0 .6rem 1.2rem;padding:0;">
+<li style="margin-bottom:.3rem;"><strong>Google</strong> (Firebase Authentication and Realtime Database on Google Cloud) hosts sign-in and your data. The app also loads the Inter font from Google Fonts, so Google sees your IP address and device details when the font loads.</li>
+<li style="margin-bottom:.3rem;"><strong>Cloudflare</strong> runs our account-recovery service, and an <strong>email-delivery service</strong> sends the recovery verification code on its behalf.</li>
+<li style="margin-bottom:.3rem;"><strong>Code-delivery networks</strong> (cdnjs by Cloudflare, and unpkg) deliver the open-source libraries used to create PDF, Excel and Word exports. They see your IP address when they serve those files.</li>
+</ul>
+<p>Other sharing happens only when you choose it or the law requires it:</p>
+<ul style="list-style:disc;margin:.2rem 0 .6rem 1.2rem;padding:0;">
+<li style="margin-bottom:.3rem;">When you tap WhatsApp, Share or Print, the content you chose (for example a receipt, statement or app link) is handed to that app, such as WhatsApp or the RawBT printing app. Those apps have their own privacy policies, and we do not receive that content.</li>
+<li style="margin-bottom:.3rem;">Staff accounts you create can see the business records their role allows.</li>
+<li style="margin-bottom:.3rem;">Feedback you submit and we approve is public.</li>
+<li style="margin-bottom:.3rem;">We may disclose data when required by Zambian law or to protect rights and safety.</li>
+</ul>
+<p>We do not sell personal data and do not share it for advertising.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">5. Where your data is stored</h4>
+<p>Your data is stored on Google Cloud infrastructure through Firebase. Google’s data centres can be outside Zambia, including in the United States, so your data may be processed outside Zambia.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">6. Security</h4>
+<ul style="list-style:disc;margin:.2rem 0 .6rem 1.2rem;padding:0;">
+<li style="margin-bottom:.3rem;">Data is encrypted in transit (HTTPS/TLS).</li>
+<li style="margin-bottom:.3rem;">Passwords are hashed with PBKDF2-SHA-256 before storage.</li>
+<li style="margin-bottom:.3rem;">Each business’s records are stored separately under its own account and protected by database access rules.</li>
+<li style="margin-bottom:.3rem;">Staff devices connect through a private <strong>Staff Access Link</strong>. Anyone who holds it can view that business’s synced records, so keep it private. The owner can regenerate it any time in Settings.</li>
+<li style="margin-bottom:.3rem;">We keep nightly backups for up to 30 days for disaster recovery.</li>
+</ul>
+<p>No system is perfectly secure. Protect your password, do not share admin credentials, and sign out on shared devices.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">7. How long we keep data</h4>
+<ul style="list-style:disc;margin:.2rem 0 .6rem 1.2rem;padding:0;">
+<li style="margin-bottom:.3rem;">Your account and business records are kept while your account is active, until you delete it.</li>
+<li style="margin-bottom:.3rem;">Error reports are kept only as long as needed to diagnose and fix bugs.</li>
+<li style="margin-bottom:.3rem;">Licence and accounting records are kept only as long as needed for accounting and legal obligations.</li>
+<li style="margin-bottom:.3rem;">Backups expire within 30 days.</li>
+</ul>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">8. Deleting your account and data</h4>
+<p><strong>In the app:</strong> sign in as the admin, open <strong>Settings → Delete Account</strong>, enter your admin password and type DELETE to confirm.</p>
+<p><strong>Without the app:</strong> use <a target="_blank" rel="noopener" style="color:var(--primary);font-weight:600;" href="delete-account.html">our account deletion page</a>, or contact us (see Contact below) with your business name and admin username. We may ask you to confirm that you own the account.</p>
+<p><strong>Deleted straight away:</strong> your business records and settings, your staff accounts and staff access (including the Staff Access Link), your username directory entries, and your sign-in account. The copy on the device you used is also cleared; copies on other devices stay until you clear that app’s or browser’s site data.</p>
+<p><strong>What we may keep, and for how long:</strong></p>
+<ul style="list-style:disc;margin:.2rem 0 .6rem 1.2rem;padding:0;">
+<li style="margin-bottom:.3rem;">Backups that contain your data expire within 30 days.</li>
+<li style="margin-bottom:.3rem;">Your recovery email, any feedback you submitted, and technical error reports linked to your account are not removed automatically. We delete them within 30 days of your deletion request.</li>
+<li style="margin-bottom:.3rem;">Licence and accounting records are kept only as long as accounting and legal obligations require.</li>
+</ul>
+<p>Uninstalling the app does not delete your account or your cloud data.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">9. Your rights</h4>
+<p>Under Zambia’s Data Protection Act, 2021 you may ask to access your personal data, have it corrected or erased, object to or restrict how it is used, and receive it in a portable form. You can view and edit your records in the app, download a full backup at any time, and delete your account as described above. You can also contact us about anything else. If your details were entered by a shop (for example as a customer or farmer), please contact that shop first; we will help the shop respond.</p>
+<p>If you are unhappy with how your data is handled, you can complain to the Office of the Data Protection Commissioner of Zambia.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">10. Children</h4>
+<p>ZamAgro Track is business software for adults and is not directed at children. We do not knowingly collect data from children.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">11. Android permissions and device features</h4>
+<p>The Android app displays our web app through a browser on your device (usually Google Chrome), which stores the local copy; that browser’s own privacy policy applies to the browser itself. The app uses internet access to sign in and sync. If you upload a business logo or restore a backup, Android’s own file or photo picker opens and the app receives only the file you pick. If you print a receipt, the app hands it to the RawBT printing app. The app does not use your location, contacts, calendar, microphone, SMS or call log.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">12. Changes to this policy</h4>
+<p>We will update this page and the date above when this policy changes. The same text is available inside the app from the Privacy Policy link.</p>
+<h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">13. Contact</h4>
+<p>NEXLITE DIGITAL SOLUTIONS LIMITED · Mansa, Luapula Province, Zambia<br>Email: <strong>support@nexlitedigitalsolutionslimited.digital</strong><br>WhatsApp/Call: 0977 638 790 / 0960 271 128</p>
+<p style="margin-top:1rem;font-size:.8rem;color:var(--text-muted);">Full version online: <a target="_blank" rel="noopener" style="color:var(--primary);font-weight:600;" href="privacy-play.html">privacy-play.html</a></p>
+</div></div>
             <div style="padding:1rem 1.5rem;border-top:1px solid var(--border);flex-shrink:0;">
                 <button onclick="closeModal('modal-privacy')" class="btn btn-primary btn-sm">Close</button>
             </div>
