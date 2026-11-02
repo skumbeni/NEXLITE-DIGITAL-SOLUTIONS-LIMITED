@@ -405,6 +405,10 @@
         /* --- LICENSE / TIER --- */
         .nav-locked { opacity: .4; pointer-events: none; position: relative; }
         .nav-locked::after { content: '🔒'; font-size: .65rem; margin-left: 6px; }
+        /* Read-only mode (expired licence): data stays visible, writes are switched off */
+        .ro-banner { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; background: #FDECEA; color: #8a1f17; border-bottom: 1px solid #f3b8b2; font-size: .82rem; padding: 8px 1.25rem; }
+        .ro-banner .ro-text { flex: 1; min-width: 200px; }
+        .ro-banner button { border: none; cursor: pointer; font-family: inherit; font-size: .78rem; font-weight: 700; border-radius: 6px; padding: 6px 12px; background: var(--primary); color: #fff; }
         #license-expired-overlay { position: fixed; inset: 0; background: rgba(5,15,5,.88); z-index: 9999; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
         .license-expired-box { background: white; border-radius: var(--radius-lg); padding: 2.5rem; max-width: 420px; width: 90%; text-align: center; box-shadow: var(--shadow-lg); }
         .license-badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: .72rem; font-weight: 700; letter-spacing: .5px; margin-left: 8px; }
@@ -765,13 +769,13 @@
         <div class="license-expired-box">
             <div style="font-size:3rem;margin-bottom:1rem;">🔒</div>
             <h2 style="color:var(--danger);margin-bottom:.75rem;">License Expired</h2>
-            <p style="color:#555;margin-bottom:1.5rem;">Your ZamAgro Track license has expired. Please renew to continue using the system.</p>
+            <p style="color:#555;margin-bottom:1.5rem;">Your ZamAgro Track license has expired. The app is now in <strong>read-only mode</strong>: you can still view your records and reports and export your data, but adding or changing anything is switched off until you renew.</p>
             <div style="background:#f9f9f9;border-radius:8px;padding:1rem;margin-bottom:1.5rem;font-size:.9rem;color:#333;">
                 📞 Contact: <strong id="expired-phone">0977 638 790 / 0960 271 128</strong><br>
                 <span style="color:#888;font-size:.82rem;">WhatsApp or Call to renew your plan</span>
             </div>
             <button onclick="openSubRequest(null, true)" class="btn btn-primary" style="width:100%;margin-bottom:.75rem;">📨 Request Renewal</button>
-            <button onclick="logout()" class="btn" style="width:100%;background:#f0f0f0;color:#555;">Back to Home</button>
+            <button onclick="document.getElementById('license-expired-overlay').classList.add('hidden')" class="btn" style="width:100%;background:#f0f0f0;color:#555;">👁 Continue in Read-Only Mode</button>
         </div>
     </div>
 
@@ -946,6 +950,10 @@
                 <span><span class="brand-emoji">🌱</span> <span class="brand-name-text">ZamAgro Track</span> &nbsp;|&nbsp; Plan: <strong id="lb-tier">—</strong> <span id="lb-badge"></span></span>
                 <button id="sync-pill" class="hidden" onclick="openSyncDetails()" aria-label="Sync status"></button>
                 <span id="lb-expiry"></span>
+            </div>
+            <div id="ro-banner" class="ro-banner hidden">
+                <span class="ro-text">🔒 <strong>Read-only mode</strong> — your licence has expired. You can view and export your data, but you can't add or change anything until you renew.</span>
+                <button type="button" onclick="openSubRequest(null, true)">Renew</button>
             </div>
             <div class="content-inner">
             <div class="header-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
@@ -4341,7 +4349,8 @@
         }
 
         function hasFeature(feature) {
-            if (!isLicenseActive()) return false;
+            // Expired licences keep VIEW access to the modules their plan included (read-only mode,
+            // see the READ-ONLY MODE block at the end of this script); writes are blocked there.
             const lic = getLicense();
             const allowed = TIER_FEATURES[lic.tier] || TIER_FEATURES['trial'];
             return allowed.includes(feature);
@@ -4351,12 +4360,17 @@
             const lic = getLicense();
             const active = isLicenseActive();
 
-            // Show expired overlay if license is dead
+            // Expired licence => READ-ONLY mode (not a lock-out): everything stays viewable,
+            // writes are blocked by the guard block at the end of the script.
             const expiredOverlay = document.getElementById('license-expired-overlay');
+            const roBanner = document.getElementById('ro-banner');
+            document.body.classList.toggle('ro-mode', !active);
+            if (roBanner) roBanner.classList.toggle('hidden', active);
             if (!active) {
-                expiredOverlay.classList.remove('hidden');
-                return;
+                // Explain it once per login; after that the banner is enough.
+                if (!window.__roNoticeShown) { window.__roNoticeShown = true; expiredOverlay.classList.remove('hidden'); }
             } else {
+                window.__roNoticeShown = false;
                 expiredOverlay.classList.add('hidden');
             }
 
@@ -4367,8 +4381,12 @@
             badge.innerHTML = `<span class="license-badge badge-${lic.tier}">${TIER_PRICES[lic.tier] || ''}</span>`;
 
             const expiryEl = document.getElementById('lb-expiry');
+            expiryEl.style.color = '';
             if (lic.tier === 'lifetime') {
                 expiryEl.textContent = '✔ Lifetime Access';
+            } else if (!active) {
+                expiryEl.textContent = `⛔ Expired ${new Date(lic.expiry).toLocaleDateString('en-ZM')} — read-only`;
+                expiryEl.style.color = '#FF6B6B';
             } else {
                 const days = Math.ceil((lic.expiry - Date.now()) / (24*60*60*1000));
                 const expiryDate = new Date(lic.expiry).toLocaleDateString('en-ZM');
@@ -12414,6 +12432,117 @@ function appendTPINToPrintDoc(win){
         win.document.body.appendChild(div);
     }catch(e){}
 }
+
+
+// ════════════════════════════════════════════════════════════════
+// READ-ONLY MODE (expired licence)
+// An expired licence no longer locks the app. The user can still log in, view every record
+// and report, print, share and export/back up their data — but nothing can be added, edited,
+// deleted or saved until the licence is renewed. Three layers:
+//   1. every write action (save / edit / delete / pay / receive …) is wrapped and refuses;
+//   2. modals that only exist for entering data refuse to open;
+//   3. writeCollection() refuses as a safety net for anything missed above.
+// Cloud sync pulls (__applyingRemoteSync) and licence refreshes still work, so a renewal made
+// by the admin takes effect as soon as the app syncs.
+// ════════════════════════════════════════════════════════════════
+function isReadOnly() { try { return !isLicenseActive(); } catch (e) { return false; } }
+
+let _roLastToast = 0;
+function roBlocked() {
+    const now = Date.now();
+    if (now - _roLastToast < 1500) return;
+    _roLastToast = now;
+    showToast('🔒 Read-only mode — your licence has expired. Renew to add or change records.', 'danger');
+}
+
+(function installReadOnlyGuard() {
+    // Actions that change data, settings or accounts.
+    const WRITE_FNS = [
+        // stock
+        'handleAddInventory', 'handleEditSave', 'deleteProduct', 'handleAddAdjustment', 'openAddStockModal', 'openEditModal', 'openAdjustmentModal',
+        // sales
+        'submitMultiSale', 'handleAddSale', 'handleEditSale', 'openEditSaleModal', 'prepareSaleModal', 'convertQuotationToSale',
+        // purchases, expenses, FISP
+        'handleAddPurchase', 'handleEditPurchase', 'openEditPurchaseModal', 'preparePurchaseModal',
+        'handleAddExpense', 'handleEditExpense', 'openEditExpenseModal',
+        'handleAddFISP', 'handleEditFISP', 'payFISP', 'openEditFISPModal', 'prepareFISPModal',
+        // customers, suppliers
+        'handleAddCustomer', 'handleEditCustomer', 'deleteCustomer', 'openAddCustomerModal', 'openEditCustomerModal',
+        'handleAddSupplier', 'handleEditSupplier', 'deleteSupplier', 'openAddSupplierModal', 'openEditSupplierModal',
+        // credit
+        'handleEditCredit', 'handleCreditPayment', 'deleteCreditPayment', 'applyLumpSumPayment', 'saveCreditPromise', 'payCredit', 'openEditCreditModal', 'openCreditPayModal',
+        // POs, GRNs, delivery / credit notes, transfers, returns, supplier payments
+        'savePO', 'receiveAgainstPO', 'togglePOCancel', 'openPOModal', 'saveGRN', 'grnSaveNewProduct', 'openGRNModal',
+        'saveDN', 'dnSetStatus', 'openDNModal', 'saveCD', 'openCDModal', 'saveTRF', 'openTRFModal',
+        'saveRET', 'openRETModal', 'saveSupPay', 'openSupPayModal',
+        // deleting
+        'deleteRecord', 'confirmReauthDelete',
+        // settings, staff, data management
+        'saveCompanyInfo', 'handleLogoUpload', 'removeLogo', 'saveThreshold', 'saveCreditTerm', 'saveTaxRegime',
+        'saveThermalCols', 'savePodSetting', 'addExpenseCategory', 'removeExpenseCategory', 'addStockCategory', 'removeStockCategory',
+        'addStaffSlot', 'saveStaffAccount', 'removeStaffAccount', 'addEmailStaff', 'removeEmailStaff',
+        'grantCoAdminAccess', 'revokeCoAdminAccess', 'handleRegenerateSyncCode',
+        'restoreJSON', 'confirmClearAllData', 'cloudUploadData', 'openInvoiceBuilder'
+    ];
+    // Modals that only exist for entering / changing data. (Print, receipt, statement, reorder,
+    // sync, renewal, feedback, delete-account, terms… stay available.)
+    const WRITE_MODALS = [
+        'modal-inv', 'modal-sale', 'modal-purchase', 'modal-trf', 'modal-suppay', 'modal-ret', 'modal-cd', 'modal-dn',
+        'modal-grn', 'modal-po', 'modal-grn-newprod', 'modal-exp', 'modal-fisp', 'modal-edit-sale', 'modal-edit-purchase',
+        'modal-edit-expense', 'modal-edit-fisp', 'modal-edit-credit', 'modal-credit-pay', 'modal-add-supplier',
+        'modal-edit-supplier', 'modal-add-customer', 'modal-edit-customer', 'modal-adjustment', 'modal-edit-product',
+        'modal-invoice-builder', 'modal-admin-reauth'
+    ];
+
+    const missing = [];
+    WRITE_FNS.forEach(function (name) {
+        const orig = window[name];
+        if (typeof orig !== 'function') { missing.push(name); return; }
+        window[name] = function () {
+            if (isReadOnly()) {
+                const a = arguments[0];
+                if (a && typeof a.preventDefault === 'function') a.preventDefault(); // stop form submits
+                roBlocked();
+                return;
+            }
+            return orig.apply(this, arguments);
+        };
+    });
+    if (missing.length) console.warn('Read-only guard: functions not found:', missing.join(', '));
+
+    const _openModal = window.openModal;
+    window.openModal = function (id) {
+        if (isReadOnly() && WRITE_MODALS.indexOf(id) !== -1) { roBlocked(); return; }
+        return _openModal.apply(this, arguments);
+    };
+
+    // Safety net: any collection write that slipped past the wrappers is refused.
+    const _writeCollection = window.writeCollection;
+    window.writeCollection = function () {
+        if (!window.__applyingRemoteSync && isReadOnly()) { roBlocked(); return; }
+        return _writeCollection.apply(this, arguments);
+    };
+
+    // Logging out starts a fresh session: explain read-only mode again on the next login.
+    const _confirmLogout = window.confirmLogout;
+    if (typeof _confirmLogout === 'function') {
+        window.confirmLogout = function () {
+            window.__roNoticeShown = false;
+            document.body.classList.remove('ro-mode');
+            const b = document.getElementById('ro-banner'); if (b) b.classList.add('hidden');
+            return _confirmLogout.apply(this, arguments);
+        };
+    }
+
+    // Dim every data-entry button so it is obvious why tapping it does nothing.
+    const sel = [];
+    WRITE_FNS.forEach(function (n) { sel.push('body.ro-mode [onclick*="' + n + '("]', 'body.ro-mode [onsubmit*="' + n + '("]'); });
+    WRITE_MODALS.forEach(function (m) { sel.push('body.ro-mode [onclick*="openModal(\'' + m + '\')"]'); });
+    const st = document.createElement('style');
+    st.id = 'ro-style';
+    st.textContent = sel.join(',\n') + ' { opacity: .45; cursor: not-allowed; }';
+    document.head.appendChild(st);
+})();
 
 </script>
 
