@@ -7,6 +7,8 @@
 // Bump CACHE_VERSION any time index.html / sme-admin.html / icons change,
 // so returning users get the new shell instead of a stale cached one.
 //
+// v3: app.apk downloads bypass the worker (see shouldBypass).
+//
 // Changes from v1:
 //  - Precache no longer fails as a whole if one optional file is missing
 //    (v1 used cache.addAll on everything, so a single 404 — e.g. a
@@ -19,7 +21,7 @@
 //    offline (that throws inside respondWith).
 //  - Firebase SDK modules precached; analytics/auth/RTDB traffic and
 //    /.well-known/ (Play's Digital Asset Links check) bypass the worker.
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const CACHE_NAME = `smeap-shell-${CACHE_VERSION}`;
 
 // How long a page navigation waits for the network before we serve the
@@ -93,6 +95,10 @@ const BYPASS_HOSTS = [
 function shouldBypass(url) {
   if (!url.protocol.startsWith('http')) return true;
   if (url.pathname.startsWith('/.well-known/')) return true;
+  // The downloadable Android app (app.apk) must always come straight from the
+  // network. Otherwise a slow connection could make the worker answer the
+  // download with the cached index.html, saving a broken .apk file.
+  if (url.pathname.toLowerCase().endsWith('.apk')) return true;
   return BYPASS_HOSTS.some((h) => url.hostname === h || url.hostname.endsWith('.' + h));
 }
 
