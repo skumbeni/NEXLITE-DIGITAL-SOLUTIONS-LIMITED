@@ -3,7 +3,7 @@
 // Bump CACHE_VERSION on every deploy so users get the new app shell instead
 // of a stale cached copy forever.
 // ─────────────────────────────────────────────────────────────────────────
-const CACHE_VERSION   = 'v63';
+const CACHE_VERSION   = 'v65';
 const APP_SHELL_CACHE = `school-pro-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE   = `school-pro-runtime-${CACHE_VERSION}`;
 
@@ -89,7 +89,10 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
 
   // 1) Never touch Firebase data/auth traffic — always network, always live.
-  if (hostMatches(url, NEVER_CACHE_HOSTS)) {
+  //    Exception: fonts.googleapis.com also ends in "googleapis.com", but it
+  //    only serves the Google Fonts stylesheet (not an API), so it must fall
+  //    through to the runtime cache in step 4 or fonts break when offline.
+  if (url.hostname !== 'fonts.googleapis.com' && hostMatches(url, NEVER_CACHE_HOSTS)) {
     return; // let the browser handle it untouched
   }
 
@@ -99,27 +102,40 @@ self.addEventListener('fetch', (event) => {
     return; // let the browser handle the download untouched
   }
 
-  // 2) Navigations (loading/refreshing the app itself): network-first,
-  //    falling back to the cached shell when offline.
-  if (request.mode === 'navigate' && /\/owners\.html$/.test(url.pathname)) {
-    // Separate owners/pricing page: cached under its own key, never over the app shell.
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(APP_SHELL_CACHE).then((cache) => cache.put(request, copy));
-          return response;
-        })
-        .catch(() => caches.match(request).then((c) => c || caches.match('./index.html')))
-    );
-    return;
-  }
+  // 2) Navigations (loading/refreshing a page): network-first, falling back
+  //    to the cache when offline.
   if (request.mode === 'navigate') {
+    // Any .html page other than index.html (owners, terms, privacy, broadcast…)
+    // is cached under its OWN URL. It must never be written over the cached
+    // './index.html', or the app would open as that page the next time the
+    // user launches it offline.
+    const isOtherPage = /\.html$/.test(url.pathname) && !/\/index\.html$/.test(url.pathname);
+    if (isOtherPage) {
+      event.respondWith(
+        fetch(request)
+          .then((response) => {
+            if (response.ok) {
+              const copy = response.clone();
+              caches.open(APP_SHELL_CACHE).then((cache) => cache.put(request, copy));
+            }
+            return response;
+          })
+          .catch(() =>
+            caches.match(request, { ignoreSearch: true })
+              .then((c) => c || caches.match('./index.html'))
+          )
+      );
+      return;
+    }
+
+    // The app itself ("/" or "/index.html"): keep the shell copy fresh.
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone();
-          caches.open(APP_SHELL_CACHE).then((cache) => cache.put('./index.html', copy));
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(APP_SHELL_CACHE).then((cache) => cache.put('./index.html', copy));
+          }
           return response;
         })
         .catch(() => caches.match('./index.html'))
