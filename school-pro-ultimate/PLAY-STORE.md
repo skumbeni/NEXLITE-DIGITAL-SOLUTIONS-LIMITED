@@ -3,11 +3,14 @@
 Do not upload this file to your host.
 
 ## How the app knows it is the Play build
-A PWABuilder app is a Trusted Web Activity: it runs in Chrome, so there is no special user-agent. The app is told by its **Start URL**:
+A PWABuilder app is a Trusted Web Activity: it runs in Chrome, so there is no special user-agent. The page recognises the Play app two ways, and either one is enough:
 
-`https://nexlitedigitalsolutionslimited.digital/school-pro-ultimate/index.html?app=play`
+1. **Start URL:** `https://nexlitedigitalsolutionslimited.digital/school-pro-ultimate/index.html?app=play`
+2. **Launched by the Play app:** Chrome tells the page which app opened it (`android-app://<package>`). The code checks for the package ID `digital.nexlitedigitalsolutionslimited.schoolpro`. This covers links that open inside the app without `?app=play`, for example a shared link to the pricing page.
 
-`index.html` sees `?app=play` and sets `SP_PLAY` for that tab only (session storage). Your normal website and the installed PWA are unaffected, even on the same phone. If the Start URL has no `?app=play`, the app will show pricing and signup and Play will reject it.
+`index.html`, `terms.html` and `owners.html` set `SP_PLAY` for that tab only (session storage). Your normal website and the installed PWA are unaffected, even on the same phone. In the Play app, `owners.html` (pricing) sends the visitor back to the app.
+
+**The package ID is part of the code.** If you ever use a different one, change `PKG` near the top of `index.html`, `terms.html` and `owners.html` to match. A separate non-Play APK needs its own package ID (for example `...schoolpro.web`) and no `?app=play`.
 
 ## What is hidden or changed when SP_PLAY is on
 - Hidden: Sign Up, "Set Up Your School", "New school?", the closing sign-up banner, plans and pricing links, "No card required".
@@ -18,14 +21,14 @@ A PWABuilder app is a Trusted Web Activity: it runs in Chrome, so there is no sp
 - Kept: parents submitting school fee payments (a real-world service, not a digital good).
 
 ## 1. Upload to your host
-- `school-pro-ultimate/`: `index.html`, `sw.js` (v67), `manifest.json`, `terms.html`, `privacy.html`, `delete-account.html`
+- `school-pro-ultimate/`: `index.html`, `sw.js` (v68), `manifest.json`, `terms.html`, `owners.html`, `privacy.html`, `delete-account.html`
 - Domain root (not the subfolder): `/.well-known/assetlinks.json` (see step 4). In Namecheap File Manager, show hidden files and create the `.well-known` folder in `public_html`.
 
 ## 2. Check at pwabuilder.com
 Enter `https://nexlitedigitalsolutionslimited.digital/school-pro-ultimate/index.html`. Manifest, service worker and icons should pass. Optional but helpful: add 2 or more phone screenshots to the manifest.
 
 ## 3. Package for Android
-- Package ID: choose once, never change it (for example `digital.nexlitedigitalsolutionslimited.schoolpro`).
+- Package ID: `digital.nexlitedigitalsolutionslimited.schoolpro`. Never change it after the first upload (the page code also checks for it, see the first section).
 - **Start URL:** the `?app=play` URL above.
 - Host: `nexlitedigitalsolutionslimited.digital`. Display: standalone.
 - Signing key: choose **Generate new** and keep the downloaded keystore and passwords safe. Losing them blocks future updates. Or use Play App Signing and upload the generated AAB.
