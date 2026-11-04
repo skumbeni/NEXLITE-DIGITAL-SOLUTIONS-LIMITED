@@ -18,7 +18,7 @@ A PWABuilder app is a Trusted Web Activity: it runs in Chrome, so there is no sp
 - Kept: parents submitting school fee payments (a real-world service, not a digital good).
 
 ## 1. Upload to your host
-- `school-pro-ultimate/`: `index.html`, `sw.js` (v66), `manifest.json`, `terms.html`, `privacy.html`, `delete-account.html`
+- `school-pro-ultimate/`: `index.html`, `sw.js` (v67), `manifest.json`, `terms.html`, `privacy.html`, `delete-account.html`
 - Domain root (not the subfolder): `/.well-known/assetlinks.json` (see step 4). In Namecheap File Manager, show hidden files and create the `.well-known` folder in `public_html`.
 
 ## 2. Check at pwabuilder.com
