@@ -570,6 +570,12 @@
                         <button class="btn btn-sm btn-secondary" style="width:100%;margin-top:.9rem;border-color:#6A1B9A;color:#6A1B9A;" onclick="openSubRequest('lifetime')">Request Plan →</button>
                     </div>
                 </div>
+                <div class="pricing-card" id="extra-shop-card" style="max-width:none;border-top:4px solid #1E6B35;margin-top:1.5rem;text-align:left;display:none;">
+                    <div class="plan-label" style="color:#1E6B35;">Extra Shops</div>
+                    <p id="extra-shop-intro" style="font-size:.85rem;color:var(--text-muted);margin:-.2rem 0 .9rem;"></p>
+                    <div id="extra-shop-grid" style="display:flex;flex-wrap:wrap;gap:.75rem;"></div>
+                    <div class="plan-note" id="extra-shop-note"></div>
+                </div>
                 <div class="pricing-card" style="max-width:none;border-top:4px solid #2E8B47;background:linear-gradient(160deg,#eefbf1,#fff);margin-top:1.5rem;text-align:left;">
                     <div class="pricing-pill" style="background:#2E8B47;color:#fff;">For Owners With Several Shops</div>
                     <div class="plan-label" style="color:#2E8B47;">Multi-Shop Points Bundle</div>
@@ -767,6 +773,10 @@
         <div class="modal-content" style="max-width:460px;">
             <h3>📲 Reorder list</h3>
             <p style="color:var(--text-muted);font-size:.88rem;margin:.75rem 0;">Products below their reorder level. Add quantities or edit the message if you like, then send it on WhatsApp.</p>
+            <div id="reorder-shop-wrap" style="display:none;">
+                <label style="font-size:.82rem;font-weight:600;">Shop</label>
+                <select id="reorder-shop" onchange="refreshReorderText()" style="width:100%;margin:.3rem 0 .8rem;"></select>
+            </div>
             <label style="font-size:.82rem;font-weight:600;">Send to</label>
             <select id="reorder-supplier" onchange="refreshReorderText()" style="width:100%;margin:.3rem 0 .8rem;"></select>
             <textarea id="reorder-text" rows="10" style="width:100%;font-size:.88rem;margin-bottom:.8rem;"></textarea>
@@ -839,6 +849,11 @@
                     <option value="lifetime">Lifetime — K2,500 once-off</option>
                     <option value="bundle">Multi-Shop Points Bundle</option>
                 </select>
+            </div>
+            <div id="subreq-extra-wrap" style="margin-bottom:1rem;">
+                <label style="font-size:.8rem;font-weight:600;color:var(--text-muted);display:block;margin-bottom:.35rem;">EXTRA SHOPS <span style="font-weight:400;">(besides your first shop)</span></label>
+                <input type="number" id="subreq-extra-shops" min="0" max="50" step="1" value="0" inputmode="numeric" oninput="updateSubReqQuote()" style="width:100%;padding:.6rem .9rem;border:1.5px solid var(--border);border-radius:var(--radius);font-size:.9rem;"/>
+                <div id="subreq-quote" style="margin-top:.45rem;font-size:.85rem;font-weight:700;color:#1E6B35;"></div>
             </div>
             <div id="subreq-bundle-fields" class="hidden" style="margin-bottom:1rem;background:#f6fbf7;border:1px solid #d8ecdc;border-radius:var(--radius);padding:.85rem .9rem;">
                 <div style="display:flex;gap:.75rem;flex-wrap:wrap;">
@@ -958,6 +973,7 @@
                     <h2 id="page-title">Dashboard</h2>
                 </div>
                 <div style="display:flex;align-items:center;gap:.7rem;">
+                    <select id="shop-switcher" class="hidden" onchange="switchShop(this.value)" aria-label="Switch shop" style="max-width:170px;padding:6px 10px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:.85rem;font-weight:600;background:#fff;"></select>
                     <button id="install-btn-app" class="btn btn-sm install-app-btn hidden" onclick="installApp()" style="background:var(--accent);color:#fff;">⬇️ Install App</button>
                     <div id="date-display" style="color: var(--gray);"></div>
                 </div>
@@ -967,7 +983,7 @@
             <div id="view-dashboard">
                 <!-- KPI Period Toggle -->
                 <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.5rem;margin-bottom:1rem;">
-                    <span style="font-size:.82rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">KPI Period</span>
+                    <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;"><span style="font-size:.82rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;">KPI Period</span><select id="dash-scope" style="display:none;padding:6px 10px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:.82rem;" onchange="setGroupScope(this.value==='all')"></select></div>
                     <div style="display:flex;gap:.4rem;">
                         <button class="btn btn-sm" id="kpi-btn-alltime" onclick="setKpiPeriod('alltime')" style="background:var(--primary);color:white;">All Time</button>
                         <button class="btn btn-sm" id="kpi-btn-month"   onclick="setKpiPeriod('month')"   style="background:#eee;">This Month</button>
@@ -981,6 +997,8 @@
                     <div class="card warning"><h3>Net P/L</h3><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.2rem;" id="kpi-pl-label">All Time</div><div class="value" id="kpi-pl">0</div></div>
                     <div class="card danger" id="kpi-overdue-card" style="cursor:pointer;" onclick="nav('credit');setCreditFilter('overdue')"><h3>Overdue Credit</h3><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.2rem;" id="kpi-overdue-sub">Past due date</div><div class="value" id="kpi-overdue">0</div></div>
                 </div>
+
+                <div id="dash-shops"></div>
 
                 <!-- CASH FLOW SUMMARY PANEL -->
                 <div class="card" style="margin-bottom: 2rem; border-left-color: var(--accent);">
@@ -1115,6 +1133,7 @@
                 <div class="view-toolbar">
                     <button class="btn btn-primary" onclick="openTRFModal('out')">+ Send Stock</button>
                     <button class="btn btn-primary" onclick="openTRFModal('in')">+ Receive Stock</button>
+                    <button id="trf-recv-internal-btn" class="btn btn-primary hidden" onclick="openTRFRecvModal()">&#128229; Receive from my shops</button>
                     <input type="text" id="search-trf" placeholder="Search transfers..." onkeyup="renderTRFs()">
                     <select id="trf-filter" onchange="renderTRFs()"><option value="">Sent &amp; received</option><option value="out">Sent</option><option value="in">Received</option></select>
                 </div>
@@ -1290,6 +1309,7 @@
                         <h3 style="font-weight:700;color:var(--dark);font-size:1rem;">Profit &amp; Loss</h3>
                         <input type="month" id="pl-month" style="padding:7px 10px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:0.875rem;outline:none;" onchange="renderPL()">
                         <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="document.getElementById('pl-month').value=''; renderPL();">All Time</button>
+                        <select id="pl-scope" style="display:none;padding:6px 10px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:.82rem;" onchange="setGroupScope(this.value==='all')"></select>
                         <button class="btn btn-sm btn-primary" onclick="exportPLpdf()">⬇ P&amp;L PDF</button>
                         <button class="btn btn-sm btn-primary" onclick="exportPLword()">⬇ P&amp;L Word</button>
                         <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="exportPLcsv()">⬇ P&amp;L CSV</button>
@@ -1356,6 +1376,22 @@
                         <div>
                             <button class="btn btn-primary btn-sm" onclick="saveCompanyInfo()">Save Company Info</button>
                         </div>
+                    </div>
+                </div>
+                <!-- MY SHOPS CARD -->
+                <div class="card" id="shops-card" style="margin-bottom: 2rem; border-left-color: var(--accent);">
+                    <h3 style="margin-bottom:.5rem;">&#127980; My Shops</h3>
+                    <p style="color:var(--text-muted);font-size:.85rem;margin-bottom:1rem;">Run more than one shop from this account. Add each shop by name. Your existing records stay under the Main shop.</p>
+                    <div id="shops-price-note" style="display:none;font-size:.82rem;line-height:1.55;background:#f1f8f3;border:1px solid #d8ecdc;border-radius:8px;padding:.65rem .85rem;margin-bottom:1rem;max-width:480px;"></div>
+                    <div id="shops-list" style="margin-bottom:1rem;"></div>
+                    <div style="border:1.5px dashed var(--border);border-radius:8px;padding:1rem;max-width:480px;">
+                        <div id="shop-form-title" style="font-weight:700;font-size:.85rem;color:var(--primary-dark);margin-bottom:.65rem;">&#43; Add a shop</div>
+                        <div class="form-group"><label>Shop name</label><input type="text" id="shop-name" maxlength="60" placeholder="e.g. Chanda Agro - Kasama branch" autocomplete="off"/></div>
+                        <div class="form-group"><label>Phone <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label><input type="text" id="shop-phone" maxlength="30" placeholder="e.g. +260 97X XXX XXX" autocomplete="off"/></div>
+                        <div class="form-group"><label>Address / Town <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label><input type="text" id="shop-address" maxlength="100" placeholder="e.g. Kasama, Northern Province" autocomplete="off"/></div>
+                        <div id="shop-form-error" style="display:none;color:var(--danger);font-size:.82rem;margin-bottom:.5rem;"></div>
+                        <button class="btn btn-primary btn-sm" id="shop-save-btn" onclick="saveShop()">Add shop</button>
+                        <button class="btn btn-sm" id="shop-cancel-btn" style="display:none;" onclick="cancelShopEdit()">Cancel</button>
                     </div>
                 </div>
                 <!-- ACCOUNT RECOVERY CARD -->
@@ -1672,7 +1708,8 @@
         <div class="modal-content" style="max-width:560px;max-height:92vh;overflow-y:auto;">
             <h3 id="trf-title">🔁 Send Stock</h3><br>
             <form onsubmit="saveTRF(event)">
-                <div class="form-group"><input type="text" id="trf-shop" maxlength="200" required></div>
+                <div class="form-group hidden" id="trf-to-row"><select id="trf-to-shop" onchange="trfToChanged()"></select></div>
+                <div class="form-group" id="trf-shop-row"><input type="text" id="trf-shop" maxlength="200" required></div>
                 <div class="form-group" id="trf-ref-row"><input type="text" id="trf-ref" placeholder="Transfer note no. from the sending shop" maxlength="100"></div>
                 <div class="form-group"><input type="text" id="trf-person" maxlength="100" required></div>
                 <div style="font-weight:700;font-size:.85rem;margin:.4rem 0;">Items</div>
@@ -1683,6 +1720,18 @@
                 <button type="submit" id="trf-btn" class="btn btn-primary" style="width:100%">Send Stock</button>
             </form>
             <button onclick="closeModal('modal-trf')" class="btn btn-sm" style="margin-top:10px;width:100%">Cancel</button>
+        </div>
+    </div>
+
+    <div id="modal-trf-recv" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width:560px;max-height:92vh;overflow-y:auto;">
+            <h3>&#128229; Receive from my shops</h3><br>
+            <div class="form-group"><select id="trfr-pick" onchange="trfRecvPick(this.value)"></select></div>
+            <div id="trfr-body"></div>
+            <div class="form-group"><input type="text" id="trfr-person" maxlength="100" placeholder="Received by"></div>
+            <div class="form-group"><input type="text" id="trfr-notes" placeholder="Notes (condition, shortages...)" maxlength="1000"></div>
+            <button class="btn btn-primary" id="trfr-btn" style="width:100%" onclick="trfRecvConfirm()">Confirm received (adds to my stock)</button>
+            <button onclick="closeModal('modal-trf-recv')" class="btn btn-sm" style="margin-top:10px;width:100%">Cancel</button>
         </div>
     </div>
 
@@ -2506,6 +2555,10 @@
                 <label id="wamsg-opt-label" style="font-size:.82rem;font-weight:600;"></label>
                 <select id="wamsg-opt" onchange="wamsgRefresh()" style="width:100%;margin:.3rem 0 .8rem;"></select>
             </div>
+            <div id="wamsg-shop-wrap" style="display:none;">
+                <label style="font-size:.82rem;font-weight:600;">Shop</label>
+                <select id="wamsg-shop" onchange="wamsgRefresh()" style="width:100%;margin:.3rem 0 .8rem;"></select>
+            </div>
             <label style="font-size:.82rem;font-weight:600;">Send to</label>
             <select id="wamsg-to" onchange="wamsgRefresh()" style="width:100%;margin:.3rem 0 .8rem;"></select>
             <textarea id="wamsg-text" rows="12" style="width:100%;font-size:.88rem;margin-bottom:.8rem;"></textarea>
@@ -2541,6 +2594,11 @@
         function uid(prefix) {
             return prefix + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2,5).toUpperCase();
         }
+
+        // --- SHOPS: id of the always-present Main shop. Records with no shopId belong to it. ---
+        const MAIN_SHOP_ID = 'main';
+        let _activeShopCache = null; let _waAll = false; let _groupTax = false;
+        let _groupScope = (function () { try { return localStorage.getItem('za_group_scope') === '1'; } catch (e) { return false; } })(); // dashboard + P&L show all shops // _waAll: false | 'group' | 'plain' while a WhatsApp message is built for All shops // active shop id for this device; cleared whenever settings change
 
         // --- PERSISTENCE HELPERS ---
         const KEYS = {
@@ -2695,7 +2753,8 @@
             }
             return { init, get, set, mode: () => mode };
         })();
-        const kvGet = KV.get, kvSet = KV.set;
+        const kvGet = KV.get;
+        const kvSet = function (k, v) { if (k === KEYS.settings) _activeShopCache = null; return KV.set(k, v); };
         window.__zaStoreReady = KV.init();
         // Runs fn once the page AND the local store are both ready.
         function whenAppReady(fn) {
@@ -2728,41 +2787,41 @@
         // Every write passes through writeCollection()/writeSettings() below, which is the
         // single chokepoint used to diff changes and queue them for Firebase sync.
         const db = {
-            get inventory() { return dbLoad('inventory'); },
-            set inventory(v) { writeCollection('inventory', v); },
-            get sales()     { return dbLoad('sales'); },
-            set sales(v)    { writeCollection('sales', v); },
-            get purchases() { return dbLoad('purchases'); },
-            set purchases(v){ writeCollection('purchases', v); },
-            get expenses()  { return dbLoad('expenses'); },
-            set expenses(v) { writeCollection('expenses', v); },
-            get fisp()      { return dbLoad('fisp'); },
-            set fisp(v)     { writeCollection('fisp', v); },
+            get inventory() { return shopGet('inventory'); },
+            set inventory(v) { shopSet('inventory', v); },
+            get sales() { return shopGet('sales'); },
+            set sales(v) { shopSet('sales', v); },
+            get purchases() { return shopGet('purchases'); },
+            set purchases(v) { shopSet('purchases', v); },
+            get expenses() { return shopGet('expenses'); },
+            set expenses(v) { shopSet('expenses', v); },
+            get fisp() { return shopGet('fisp'); },
+            set fisp(v) { shopSet('fisp', v); },
             // Audit entries (type:'audit') live in the same cloud collection so no rules change is needed,
             // but are hidden from db.credit and preserved whenever db.credit is written.
-            get credit()    { return dbLoad('credit').filter(r => !(r && r.type === 'audit')); },
-            set credit(v)   { writeCollection('credit', v.concat(dbLoad('credit').filter(r => r && r.type === 'audit'))); },
+            get credit()    { return shopView(dbLoad('credit').filter(r => !(r && r.type === 'audit'))); },
+            set credit(v)   { const raw = dbLoad('credit'); writeCollection('credit', shopMerge(raw.filter(r => !(r && r.type === 'audit')), v).concat(raw.filter(r => r && r.type === 'audit'))); },
             get creditAudit() { return dbLoad('credit').filter(r => r && r.type === 'audit'); },
             get customers()    { return dbLoad('customers'); },
             set customers(v)   { writeCollection('customers', v); },
             get suppliers()    { return dbLoad('suppliers'); },
             set suppliers(v)   { writeCollection('suppliers', v); },
-            get adjustments()  { return dbLoad('adjustments'); },
-            set adjustments(v) { writeCollection('adjustments', v); },
-            get grns()         { return dbLoad('grns'); },
-            set grns(v)        { writeCollection('grns', v); },
-            get pos()          { return dbLoad('pos'); },
-            set pos(v)         { writeCollection('pos', v); },
-            get deliveries()   { return dbLoad('deliveries'); },
-            set deliveries(v)  { writeCollection('deliveries', v); },
-            get cdnotes()      { return dbLoad('cdnotes'); },
-            set cdnotes(v)     { writeCollection('cdnotes', v); },
-            get returns()      { return dbLoad('returns'); },
-            set returns(v)     { writeCollection('returns', v); },
-            get suppayments()  { return dbLoad('suppayments'); },
-            set suppayments(v) { writeCollection('suppayments', v); },
-            get transfers()    { return dbLoad('transfers'); },
-            set transfers(v)   { writeCollection('transfers', v); },
+            get adjustments() { return shopGet('adjustments'); },
+            set adjustments(v) { shopSet('adjustments', v); },
+            get grns() { return shopGet('grns'); },
+            set grns(v) { shopSet('grns', v); },
+            get pos() { return shopGet('pos'); },
+            set pos(v) { shopSet('pos', v); },
+            get deliveries() { return shopGet('deliveries'); },
+            set deliveries(v) { shopSet('deliveries', v); },
+            get cdnotes() { return shopGet('cdnotes'); },
+            set cdnotes(v) { shopSet('cdnotes', v); },
+            get returns() { return shopGet('returns'); },
+            set returns(v) { shopSet('returns', v); },
+            get suppayments() { return shopGet('suppayments'); },
+            set suppayments(v) { shopSet('suppayments', v); },
+            get transfers() { return shopGet('transfers'); },
+            set transfers(v) { shopSet('transfers', v); },
             get settings()     { return dbLoad('settings'); },
             set settings(v) { writeSettings(v); }
         };
@@ -2776,6 +2835,7 @@
             // Cloud pulls (__applyingRemoteSync) are exempt so a renewal and fresh data still arrive.
             if (!window.__applyingRemoteSync && isReadOnly()) { roBlocked(); return; }
             const oldVal = dbLoad(key);
+            stampNewRecordsShop(oldVal, newVal);
             kvSet(KEYS[key], JSON.stringify(newVal));
             if (!window.__applyingRemoteSync) {
                 queueCollectionDiff(key, oldVal, newVal);
@@ -3293,6 +3353,28 @@
         }
 
         // -- outbox flush: sends queued ops in order, stops at first failure so nothing is lost or reordered --
+        // The admin writes licenseData (the plan AND each shop's paid-until date) straight into the cloud
+        // without touching this device or settings.updatedAt, so this device can be holding an older copy.
+        // Settings go up as ONE whole object, so an unrelated settings change (adding a shop, a threshold...)
+        // would put that old copy back. Re-read the cloud licence just before pushing and keep it instead.
+        // If the read fails for any reason other than being offline, push as before; offline just retries.
+        async function _settingsKeepCloudLicense(data) {
+            if (!data || typeof data !== 'object' || (cloudAuth && cloudAuth.staff)) return data;
+            let cur;
+            try { cur = await firebaseGet('settings/licenseData'); }
+            catch (e) { if (/failed: \d+/.test(String((e && e.message) || e))) return data; throw e; }
+            if (!cur || typeof cur !== 'object' || !cur.tier) return data;
+            if (JSON.stringify(cur) !== JSON.stringify(data.licenseData || null)) {
+                try {
+                    const s = dbLoad('settings'); s.licenseData = cur;
+                    window.__applyingRemoteSync = true;
+                    kvSet(KEYS.settings, JSON.stringify(s));
+                } catch (e) {} finally { window.__applyingRemoteSync = false; }
+                try { if (typeof applyLicenseUI === 'function') applyLicenseUI(); } catch (e) {}
+            }
+            return Object.assign({}, data, { licenseData: cur });
+        }
+
         async function flushSyncQueue() {
             if (!cloudAuth || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
             let q = loadSyncQueue();
@@ -3302,7 +3384,7 @@
                 try {
                     const path = op.collection === 'settings' ? 'settings' : `${op.collection}/${op.recordId}`;
                     if (op.method === 'DELETE') await firebaseRequest('DELETE', path, null);
-                    else await firebaseRequest('PUT', path, op.data);
+                    else await firebaseRequest('PUT', path, op.collection === 'settings' ? await _settingsKeepCloudLicense(op.data) : op.data);
                     q = q.filter(o => o.opId !== op.opId);
                     saveSyncQueue(q);
                     updateSyncBadge();
@@ -3968,6 +4050,9 @@
             flushErrorReports();
             setInterval(() => { if (cloudAuth) flushSyncQueue(); }, 20000);
             updateBundlePrice();
+            try { applyCachedPricing(); } catch (e) {}
+            try { renderExtraShopPrices(); } catch (e) {}
+            fetchPublicPricing(); fetchOwnerPricing(true);
         });
 
         let currentUser = null;
@@ -4246,7 +4331,8 @@
             try {
                 const layout = document.getElementById('app-layout');
                 if (!layout || layout.classList.contains('hidden')) return false; // not logged in yet
-                return !isLicenseActive();
+                // Account licence expired, OR the shop being worked in has lapsed (other shops keep running).
+                return !isLicenseActive() || !shopLicense(getActiveShopId()).active;
             } catch (e) { return false; }
         }
 
@@ -4353,6 +4439,154 @@
 
         function fmtK(n) { return 'K' + n.toLocaleString('en-US'); }
 
+        // ── EXTRA SHOP PRICING ────────────────────────────────────────────
+        // A plan covers the first shop (the Main shop). Every extra ACTIVE shop costs a percentage of
+        // the plan's monthly price, rounded to the nearest K5. On Lifetime, an extra shop is a flat
+        // once-off price. Extra shops are free during the free trial. The admin panel's Pricing page
+        // publishes the live percentage and Lifetime price (and any special price for one owner);
+        // everything here reads them through getPricing(). The numbers below are only the built-in
+        // fallback for when nothing has loaded yet and nothing is cached on this phone.
+        const EXTRA_SHOP_PRICING = { pct: 50, roundTo: 5, lifetimePrice: 1250 };
+        const LIFETIME_PLAN_PRICE = 2500;
+        const PLAN_MONTHLY_PRICE = { starter: 200, standard: 300, pro: 399 };
+
+        function roundToStep(n, step) { return step > 0 ? Math.round(n / step) * step : Math.round(n); }
+
+        // ── LIVE PRICING (published from the admin panel) ──────────────────
+        // pricing/default   : public, read without signing in (landing page).
+        // pricing/owners/{uid}: this owner's special price, readable by them and their staff only.
+        // Both are cached on the phone so the app still quotes correctly offline.
+        const PRICING_CACHE_KEY = 'za_pricing_v1';
+        let _pricingPublic = null;     // { pct?, lifetimePrice? }
+        let _pricingOwner = null;      // { pct?, lifetimePrice? }, only valid for _pricingOwnerFor
+        let _pricingOwnerFor = '';
+        let _pricingOwnerFetchedAt = 0;
+        function _okNum(v, max) { return typeof v === 'number' && isFinite(v) && v >= 0 && v <= max; }
+        function _cleanPricing(raw) {
+            if (!raw || typeof raw !== 'object') return null;
+            const o = {};
+            if (_okNum(raw.extraShopPct, 100)) o.pct = raw.extraShopPct;
+            if (_okNum(raw.extraShopLifetime, 100000)) o.lifetimePrice = raw.extraShopLifetime;
+            return Object.keys(o).length ? o : null;
+        }
+        function _pricingOwnerKey() {
+            try { return cloudAuth ? (cloudAuth.staff ? (cloudAuth.businessUid || '') : (cloudAuth.uid || '')) : ''; } catch (e) { return ''; }
+        }
+        // publicOnly = the prices anyone sees (landing page). Otherwise this owner's own prices.
+        function getPricing(publicOnly) {
+            const out = { pct: EXTRA_SHOP_PRICING.pct, lifetimePrice: EXTRA_SHOP_PRICING.lifetimePrice, roundTo: EXTRA_SHOP_PRICING.roundTo, source: 'builtin' };
+            if (_pricingPublic) { Object.assign(out, _pricingPublic); out.source = 'default'; }
+            if (!publicOnly && _pricingOwner && _pricingOwnerFor && _pricingOwnerFor === _pricingOwnerKey()) { Object.assign(out, _pricingOwner); out.source = 'owner'; }
+            return out;
+        }
+        function _readPricingCache() { try { return JSON.parse(localStorage.getItem(PRICING_CACHE_KEY) || 'null') || {}; } catch (e) { return {}; } }
+        function _writePricingCache(c) { try { localStorage.setItem(PRICING_CACHE_KEY, JSON.stringify(c)); } catch (e) {} }
+        function applyCachedPricing() {
+            const c = _readPricingCache();
+            _pricingPublic = _cleanPricing(c.pub);
+            const k = _pricingOwnerKey();
+            _pricingOwnerFor = k;
+            _pricingOwner = k ? _cleanPricing((c.owners || {})[k]) : null;
+        }
+        function _repriceScreens() {
+            try { renderExtraShopPrices(); } catch (e) {}
+            try { renderShopsPriceNote(); } catch (e) {}
+            try { updateSubReqQuote(); } catch (e) {}
+        }
+        async function fetchPublicPricing() {
+            if (IS_PLAY_BUILD) return;
+            try {
+                const r = await fetch(FIREBASE_CONFIG.databaseURL + '/pricing/default.json');
+                if (!r.ok) return;
+                const raw = await r.json();            // null until the admin has published
+                const c = _readPricingCache(); c.pub = raw || null; _writePricingCache(c);
+                _pricingPublic = _cleanPricing(raw);
+                _repriceScreens();
+            } catch (e) { /* offline: keep what is cached */ }
+        }
+        async function fetchOwnerPricing(force) {
+            if (IS_PLAY_BUILD) return;
+            const k = _pricingOwnerKey(); if (!k) return;
+            if (!force && Date.now() - _pricingOwnerFetchedAt < 10 * 60 * 1000) return;
+            try {
+                const tok = await getFreshIdToken(); if (!tok) return;
+                const r = await fetch(FIREBASE_CONFIG.databaseURL + '/pricing/owners/' + encodeURIComponent(k) + '.json?auth=' + encodeURIComponent(tok));
+                if (!r.ok) return;
+                const raw = await r.json();            // null = no special price for this owner
+                _pricingOwnerFetchedAt = Date.now();
+                const c = _readPricingCache(); c.owners = c.owners || {};
+                if (raw) c.owners[k] = raw; else delete c.owners[k];
+                _writePricingCache(c);
+                _pricingOwnerFor = k;
+                _pricingOwner = _cleanPricing(raw);
+                _repriceScreens();
+            } catch (e) { /* offline: keep what is cached */ }
+        }
+
+        // Price of ONE extra shop on a tier (starter | standard | pro | lifetime | trial).
+        // Returns { kind: 'monthly' | 'once' | 'free', amount }, or null for an unknown tier.
+        function extraShopPrice(tier, publicOnly) {
+            const c = getPricing(publicOnly);
+            if (tier === 'trial') return { kind: 'free', amount: 0 };
+            if (tier === 'lifetime') return { kind: 'once', amount: c.lifetimePrice };
+            const base = PLAN_MONTHLY_PRICE[tier];
+            if (!base) return null;
+            return { kind: 'monthly', amount: roundToStep(base * c.pct / 100, c.roundTo) };
+        }
+        function extraShopPriceText(tier) {
+            const p = extraShopPrice(tier);
+            if (!p) return '';
+            return p.kind === 'free' ? 'free' : fmtK(p.amount) + (p.kind === 'monthly' ? '/month' : ' once-off');
+        }
+
+        // Landing page "Extra Shops" card. Hidden in the Play build by CSS (no prices there).
+        function renderExtraShopPrices() {
+            const card = document.getElementById('extra-shop-card'); if (!card) return;
+            const c = getPricing(true);   // the public prices; a special owner price is never shown here
+            document.getElementById('extra-shop-intro').textContent =
+                'Your plan covers your first shop. Each extra shop costs ' + c.pct + '% of your plan price per month, or ' +
+                fmtK(c.lifetimePrice) + ' once on Lifetime. Extra shops are free during your 1-month trial.';
+            const tiers = [['starter', 'Starter', '#2E8B47'], ['standard', 'Standard', '#c07a10'], ['pro', 'Pro', '#1A7FB5'], ['lifetime', 'Lifetime', '#6A1B9A']];
+            document.getElementById('extra-shop-grid').innerHTML = tiers.map(t => {
+                const p = extraShopPrice(t[0], true);
+                return '<div style="flex:1;min-width:110px;border:1.5px solid ' + t[2] + '55;border-radius:var(--radius);padding:.6rem .8rem;background:#fff;">' +
+                    '<div style="font-size:.7rem;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:' + t[2] + ';">' + t[1] + '</div>' +
+                    '<div style="font-size:1.25rem;font-weight:800;color:' + t[2] + ';">' + fmtK(p.amount) + '</div>' +
+                    '<div style="font-size:.72rem;color:var(--text-muted);">' + (p.kind === 'once' ? 'once, per extra shop' : 'per month, per extra shop') + '</div></div>';
+            }).join('');
+            const std = extraShopPrice('standard', true).amount;
+            document.getElementById('extra-shop-note').textContent =
+                'Example: Standard plan with 2 extra shops = ' + fmtK(PLAN_MONTHLY_PRICE.standard) + ' + 2 × ' + fmtK(std) + ' = ' + fmtK(PLAN_MONTHLY_PRICE.standard + 2 * std) + ' per month.';
+            card.style.display = '';
+        }
+
+        // Settings → My Shops: what extra shops cost on this account's plan. Not shown in the Play build.
+        function renderShopsPriceNote() {
+            const el = document.getElementById('shops-price-note'); if (!el) return;
+            if (IS_PLAY_BUILD) { el.style.display = 'none'; return; }
+            const lic = getLicense() || {};
+            const tier = lic.tier || 'trial';
+            const p = extraShopPrice(tier);
+            if (!p) { el.style.display = 'none'; return; }
+            const n = Math.max(0, getShops(false).length - 1);
+            const plural = n === 1 ? '1 extra shop' : n + ' extra shops';
+            let html;
+            if (p.kind === 'free') {
+                html = '<strong>Free during your trial.</strong> Add as many shops as you need at no cost. After the trial, each extra shop costs ' +
+                    ['starter', 'standard', 'pro'].map(t => TIER_LABELS[t] + ' ' + fmtK(extraShopPrice(t).amount)).join(' · ') +
+                    ' per month, or ' + fmtK(getPricing().lifetimePrice) + ' once on Lifetime.' +
+                    (n ? ' You have ' + plural + '.' : '');
+            } else if (p.kind === 'monthly') {
+                html = 'Your ' + (TIER_LABELS[tier] || tier) + ' plan covers your first shop. Each extra shop costs <strong>' + fmtK(p.amount) + '/month</strong>. ' +
+                    (n ? 'You have ' + plural + ': <strong>' + fmtK(n * p.amount) + '/month</strong> on top of your plan.' : 'You have no extra shops yet.');
+            } else {
+                html = 'Lifetime covers your first shop. Each extra shop costs <strong>' + fmtK(p.amount) + ' once</strong>. ' +
+                    (n ? 'You have ' + plural + ': <strong>' + fmtK(n * p.amount) + '</strong> once-off in total.' : 'You have no extra shops yet.');
+            }
+            el.innerHTML = html;
+            el.style.display = '';
+        }
+
         function updateBundlePrice() {
             const tierEl = document.getElementById('bundle-tier');
             const pointsEl = document.getElementById('bundle-points');
@@ -4434,6 +4668,44 @@
             return lic.expiry > Date.now();
         }
 
+        // ── PER-SHOP PAID-UNTIL (multi-shop) ──────────────────────────────
+        // The plan covers the Main shop. Every EXTRA shop has its own paid-until date, set only by the admin
+        // (zamagro-admin.html) inside the licence: licenseData.shops = { [shopId]: { expiry: ms } | { lifetime: true } }.
+        // A shop whose date has passed, or that was never paid for, is view-only. The other shops keep working.
+        // Extra shops are free during the trial. If the whole account licence has expired, everything is
+        // view-only regardless (see isReadOnly), so this only describes the shop itself.
+        function shopLicense(shopId) {
+            const id = shopId || MAIN_SHOP_ID;
+            const lic = getLicense() || {};
+            if (id === MAIN_SHOP_ID) return { active: true, kind: 'main', expiry: lic.tier === 'lifetime' ? null : (lic.expiry || null) };
+            if (lic.tier === 'trial') return { active: true, kind: 'trial', expiry: lic.expiry || null };
+            const e = (lic.shops && typeof lic.shops === 'object') ? lic.shops[id] : null;
+            if (e && e.lifetime === true) return { active: true, kind: 'lifetime', expiry: null };
+            if (e && typeof e.expiry === 'number' && isFinite(e.expiry)) {
+                const on = e.expiry > Date.now();
+                return { active: on, kind: on ? 'paid' : 'lapsed', expiry: e.expiry };
+            }
+            return { active: false, kind: 'unpaid', expiry: null };
+        }
+        function shopLicenseText(sl) {
+            const d = sl.expiry ? new Date(sl.expiry).toLocaleDateString('en-ZM') : '';
+            const days = sl.expiry ? Math.ceil((sl.expiry - Date.now()) / 86400000) : 0;
+            switch (sl.kind) {
+                case 'trial': return 'Free during trial';
+                case 'lifetime': return 'Lifetime';
+                case 'paid': return (IS_PLAY_BUILD ? 'Active until ' : 'Paid until ') + d + ' (' + days + ' day' + (days !== 1 ? 's' : '') + ' left)';
+                case 'lapsed': return (IS_PLAY_BUILD ? 'Expired ' : 'Lapsed ') + d + ' · view-only';
+                case 'unpaid': return (IS_PLAY_BUILD ? 'Not activated' : 'Not paid yet') + ' · view-only';
+                default: return '';
+            }
+        }
+        // Colour for a shop's status text on the dark licence bar (false = default colour).
+        function shopLicenseColor(sl) {
+            if (!sl.active) return '#FF6B6B';
+            if (sl.kind === 'paid') { const days = Math.ceil((sl.expiry - Date.now()) / 86400000); if (days <= 3) return '#FF6B6B'; if (days <= 7) return '#FFCC02'; }
+            return '';
+        }
+
         function hasFeature(feature) {
             // Plan modules stay visible after expiry (view-only mode); writes are blocked separately.
             const lic = getLicense();
@@ -4444,10 +4716,22 @@
         function applyLicenseUI() {
             const lic = getLicense();
             const active = isLicenseActive();
+            // A shop can lapse on its own while the account licence is fine.
+            const _shopId = getActiveShopId();
+            const _shopSL = shopLicense(_shopId);
+            const _shopLapsed = active && !_shopSL.active;
+            const _extraShop = _shopId !== MAIN_SHOP_ID;
 
-            // Expired licence = view-only mode, not a lock-out.
+            // Expired licence (or a lapsed shop) = view-only mode, not a lock-out.
             const appLayout = document.getElementById('app-layout');
-            if (appLayout) appLayout.classList.toggle('ro-mode', !active);
+            if (appLayout) appLayout.classList.toggle('ro-mode', !active || _shopLapsed);
+            const _roMsg = document.getElementById('ro-msg');
+            if (_roMsg) {
+                _roMsg.textContent = _shopLapsed
+                    ? getShopName(_shopId) + (_shopSL.kind === 'unpaid' ? (IS_PLAY_BUILD ? ' is not activated yet.' : ' has not been paid for yet.') : (IS_PLAY_BUILD ? ' has expired.' : ' has lapsed.')) +
+                      ' You can still view and export its records, but you can\'t add or change anything here. Your other shops are not affected.'
+                    : 'Your licence has expired. You can still view and export your records, but you can\'t add or change anything.';
+            }
 
             // Update license bar
             const tierLabel = TIER_LABELS[lic.tier] || lic.tier;
@@ -4457,7 +4741,11 @@
 
             const expiryEl = document.getElementById('lb-expiry');
             expiryEl.style.color = '';
-            if (lic.tier === 'lifetime') {
+            if (_extraShop && active) {
+                // Working in an extra shop: show that shop's own paid-until date (the plan date is in Settings).
+                expiryEl.textContent = getShopName(_shopId) + ': ' + shopLicenseText(_shopSL);
+                expiryEl.style.color = shopLicenseColor(_shopSL);
+            } else if (lic.tier === 'lifetime') {
                 expiryEl.textContent = '✔ Lifetime Access';
             } else {
                 const days = Math.ceil((lic.expiry - Date.now()) / (24*60*60*1000));
@@ -4506,6 +4794,11 @@
             const trialInfo = lic.status === 'trial' ? `<div style="grid-column:1/-1;"><strong>Trial window:</strong> ${new Date(lic.trialStart||lic.activatedAt).toLocaleDateString('en-ZM')} → ${new Date(lic.trialEnd||lic.expiry).toLocaleDateString('en-ZM')}</div>` : '';
             const status = active ? `<span style="color:var(--success);font-weight:700;">✔ Active</span>` : `<span style="color:var(--danger);font-weight:700;">✘ Expired · view-only</span>`;
             const features = (TIER_FEATURES[lic.tier]||[]).filter(f=>f!=='dashboard').join(', ');
+            const _xs = getShops(false).filter(x => x.id !== MAIN_SHOP_ID);
+            const shopsBlock = _xs.length ? `<div style="grid-column:1/-1;"><strong>Extra shops:</strong>` + _xs.map(x => {
+                const sl = shopLicense(x.id);
+                return `<div style="display:flex;justify-content:space-between;gap:.6rem;flex-wrap:wrap;padding:.15rem 0;"><span>${esc(x.name)}</span><span style="color:${sl.active ? 'var(--success)' : 'var(--danger)'};font-weight:600;">${esc(shopLicenseText(sl))}</span></div>`;
+            }).join('') + `</div>` : '';
             box.innerHTML = `
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem 1.5rem;font-size:.88rem;">
                     <div><strong>Plan:</strong> ${tierLabel}</div>
@@ -4513,6 +4806,7 @@
                     ${IS_PLAY_BUILD ? '' : `<div><strong>Price:</strong> ${TIER_PRICES[lic.tier]||'Free'}</div>`}
                     <div><strong>Expiry:</strong> ${expiryDate}</div>
                     ${trialInfo}<div style="grid-column:1/-1;"><strong>Modules included:</strong> ${features}</div>
+                    ${shopsBlock}
                 </div>`;
         }
 
@@ -4626,7 +4920,7 @@
         function clearAllData() {
             const collections = ['inventory','sales','purchases','expenses','fisp','credit','customers','suppliers','adjustments','grns','pos','deliveries','cdnotes','returns','suppayments','transfers'];
             writeCollection('credit', []); // also removes the credit audit entries stored alongside
-            collections.forEach(key => { db[key] = []; }); // routes through writeCollection -> local + cloud sync
+            collections.forEach(key => { dbSetAll(key, []); }); // routes through writeCollection -> local + cloud sync
             refreshAll();
             showToast('All data cleared.', 'success');
         }
@@ -4832,7 +5126,7 @@
                     <div id="staff-slot-card-${slot}" style="border:1.5px solid var(--border);border-radius:8px;padding:1rem;margin-bottom:1rem;">
                         <div style="font-weight:700;font-size:.85rem;color:var(--primary-dark);margin-bottom:.65rem;">Staff Account ${slot}</div>
                         <div id="staff-account-display-${slot}" style="display:none;background:var(--surface-2);border-radius:6px;padding:.7rem .9rem;margin-bottom:.65rem;font-size:.9rem;align-items:center;flex-wrap:wrap;">
-                            <span>Username: <strong id="staff-username-display-${slot}"></strong></span>
+                            <span>Username: <strong id="staff-username-display-${slot}"></strong></span><span id="staff-shop-${slot}"></span>
                             <button class="btn btn-sm btn-danger" style="margin-left:auto;" onclick="removeStaffAccount(${slot})">Remove</button>
                         </div>
                         <div id="staff-account-form-${slot}">
@@ -4872,6 +5166,7 @@
                 if (!displayEl || !formEl) continue;
                 if (c) {
                     if (nameEl) nameEl.textContent = c.username;
+                    const _sw = document.getElementById('staff-shop-' + slot); if (_sw) _sw.innerHTML = staffShopSelectHTML(staffKeyForUsername(c.username));
                     displayEl.style.display = 'flex';
                     formEl.style.display = 'none';
                 } else {
@@ -5060,6 +5355,7 @@
                 document.getElementById('app-layout').classList.remove('hidden');
                 document.getElementById('user-display-name').textContent = displayName;
                 // Gate admin-only elements via a class on the layout root
+                _activeShopCache = null;
                 document.getElementById('app-layout').dataset.role = role;
                 applyLicenseUI();
                 renderCloudSyncUI();
@@ -5538,7 +5834,7 @@
             el.innerHTML = ids.map(id => `
                 <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;background:var(--surface-2);border-radius:6px;padding:.6rem .9rem;margin-bottom:.5rem;">
                     <div style="min-width:0;"><strong>${esc(sl[id].name || 'Staff')}</strong><div style="font-size:.8rem;color:var(--text-muted);word-break:break-all;">${esc(sl[id].email || '')}</div></div>
-                    <button class="btn btn-sm btn-danger" style="margin-left:auto;" onclick="removeEmailStaff('${esc(id)}')">Remove</button>
+                    ${staffShopSelectHTML(id)}<button class="btn btn-sm btn-danger" style="margin-left:auto;" onclick="removeEmailStaff('${esc(id)}')">Remove</button>
                 </div>`).join('');
         }
 
@@ -5606,6 +5902,7 @@
             currentUser = null;
             currentDisplayName = null;
             localStorage.removeItem(LOCAL_SESSION_KEY);
+            _activeShopCache = null;
             delete document.getElementById('app-layout').dataset.role;
             showLanding();
         }
@@ -5711,6 +6008,7 @@
             if (view === 'settings') {
                 renderExpCatTags();
                 renderCoAdminUI();
+                renderShopsUI();
             }
             if (view === 'activitylog') {
                 renderActivityLog();
@@ -5720,15 +6018,80 @@
             }
         }
 
+        // ── WHATSAPP ASSISTANT: SHOP PICKER ───────────────────────────────
+        // Every message can be built for one shop or for All shops. db.* only ever shows the active shop,
+        // so a message is built by pointing that view at each shop in turn, then putting it back.
+        const WA_ALL = '__all__';
+        function _asShop(sid, fn) {
+            const prev = _activeShopCache;
+            _activeShopCache = sid;
+            try { return fn(); } finally { _activeShopCache = prev; }
+        }
+        // Build one message in one shop's view. WA_ALL only sets the "All shops" label (plain = no label, for supplier-facing text).
+        function _waRun(sid, fn, i, plain) {
+            if (getShops(false).length < 2) return fn(i || 0);
+            if (sid === WA_ALL) { const p = _waAll; _waAll = plain ? 'plain' : 'group'; try { return fn(i || 0); } finally { _waAll = p; } }
+            return _asShop(sid || getActiveShopId(), () => fn(i || 0));
+        }
+        // One shop -> that shop's message. All shops -> one section per shop, one footer.
+        function _waScoped(sid, fn) {
+            const shops = getShops(false);
+            if (shops.length < 2 || sid !== WA_ALL) return _waRun(sid, fn, 0);
+            const parts = shops.map((sh, i) => String(_asShop(sh.id, () => fn(i))).replace(/\n_Powered by ZamAgro Track_\s*$/, ''));
+            return parts.join('\n\n═════════════════════\n\n') + '\n\n_Powered by ZamAgro Track_';
+        }
+        function _waFillShopSelect(selId, wrapId) {
+            const shops = getShops(false), wrap = document.getElementById(wrapId), sel = document.getElementById(selId);
+            if (!wrap || !sel) return;
+            if (shops.length < 2) { wrap.style.display = 'none'; sel.innerHTML = ''; return; }
+            const a = getActiveShopId();
+            sel.innerHTML = shops.map(x => `<option value="${esc(x.id)}"${x.id === a ? ' selected' : ''}>${esc(x.name)}</option>`).join('') + `<option value="${WA_ALL}">🏪 All shops</option>`;
+            wrap.style.display = '';
+        }
+        function _waPickedShop(selId) { const el = document.getElementById(selId); return (getShops(false).length > 1 && el && el.value) ? el.value : getActiveShopId(); }
+        function _sumKeys(rows, keys) { const o = {}; keys.forEach(k => { o[k] = _r2(rows.reduce((t, r) => t + (Number(r && r[k]) || 0), 0)); }); return o; }
+        // Group totals shown above the shop-by-shop sections of the summaries. Stock moved between your own shops
+        // nets out because the Send and Receive sides are both in the sum.
+        function _waGroupHead(kind, off) {
+            const shops = getShops(false), co = _waRun(WA_ALL, getCompanyInfo);
+            const per = fn => shops.map(sh => _asShop(sh.id, fn));
+            let L;
+            if (kind === 'month') {
+                const n = new Date(), d = new Date(n.getFullYear(), n.getMonth() - (off || 0), 1);
+                const mv = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                const rows = per(() => computePL(mv)), t = _sumKeys(rows, ['revenue', 'gross', 'expenses', 'net']);
+                L = [`📊 *${co.name}* — Monthly summary`, `📅 ${rows[0].period}`, '─────────────────────', `🏪 ${shops.length} shops combined`, `🧾 Revenue: ${formatZMW(t.revenue)}`, `📈 Gross profit: ${formatZMW(t.gross)}`, `💸 Expenses: ${formatZMW(t.expenses)}`, `*Net profit: ${formatZMW(t.net)}*`];
+            } else {
+                const wk = kind === 'week';
+                const rows = per(() => computeCashFlow(wk ? 'week' : 'today')), t = _sumKeys(rows, ['cashIn', 'cashOut', 'net', 'txnCount']);
+                L = [`📊 *${co.name}* — ${wk ? 'Weekly' : 'Daily'} summary`, `📅 ${wk ? _weekRange().label : _todayDMY()}`, '─────────────────────', `🏪 ${shops.length} shops combined`, `💰 Cash in: ${formatZMW(t.cashIn)}`, `💸 Cash out: ${formatZMW(t.cashOut)}`, `*Net cash: ${formatZMW(t.net)}*`, `🧾 Transactions: ${t.txnCount}`];
+            }
+            L.push('', '👇 *Shop by shop*', '═════════════════════');
+            return L.join('\n');
+        }
+        // Suppliers are shared by all shops, so "All shops" adds a supplier's balance up across them.
+        function _supBalancesAll() {
+            const shops = getShops(false);
+            if (shops.length < 2) return supBalances();
+            const m = {};
+            shops.forEach(sh => _asShop(sh.id, supBalances).forEach(e => {
+                const x = (m[e.name] = m[e.name] || { name: e.name, credit: 0, paid: 0, last: '' });
+                x.credit += e.credit; x.paid += e.paid;
+                if (e.last && (!x.last || (parseDate(e.last) || '') > (parseDate(x.last) || ''))) x.last = e.last;
+            }));
+            return Object.values(m).map(e => Object.assign(e, { credit: _r2(e.credit), paid: _r2(e.paid), bal: _r2(e.credit - e.paid) }));
+        }
+
         // ── WHATSAPP ASSISTANT (owner taps Send; no WhatsApp API needed) ───────────
         function _lowStockItems() {
             const g = db.settings.lowStockThreshold || 20;
             return db.inventory.filter(i => i.qty < (i.reorderPt !== undefined ? i.reorderPt : g))
                 .map(i => ({ name: i.name, qty: i.qty, unit: i.unit || '', level: i.reorderPt !== undefined ? i.reorderPt : g }));
         }
-        function _buildReorderText(supplierName) {
+        function _reorderOne(supplierName) {
             const co = getCompanyInfo();
             const items = _lowStockItems();
+            if (!items.length) return `Nothing is below its reorder level at ${co.name}.`;
             const L = [supplierName ? `Hello ${supplierName},` : 'Hello,', '', `*${co.name}* would like to reorder stock. We are running low on:`, ''];
             items.forEach(i => L.push(`• ${i.name} — ${i.qty}${i.unit ? ' ' + i.unit : ''} left (reorder level ${i.level}) — need: ___`));
             L.push('', 'Please confirm availability and prices.');
@@ -5736,19 +6099,37 @@
             L.push('Thank you. 🙏');
             return L.join('\n');
         }
+        // All shops = ONE message to the supplier, with the low items grouped under each shop.
+        function _buildReorderText(supplierName, sid) {
+            const shops = getShops(false);
+            if (shops.length < 2 || sid !== WA_ALL) return _waRun(sid, () => _reorderOne(supplierName));
+            const co = _waRun(WA_ALL, getCompanyInfo, 0, true);
+            const L = [supplierName ? `Hello ${supplierName},` : 'Hello,', '', `*${co.name}* would like to reorder stock for our shops. We are running low on:`];
+            shops.forEach(sh => {
+                const items = _asShop(sh.id, _lowStockItems);
+                if (!items.length) return;
+                L.push('', `🏬 *${sh.name}*`);
+                items.forEach(i => L.push(`• ${i.name} — ${i.qty}${i.unit ? ' ' + i.unit : ''} left (reorder level ${i.level}) — need: ___`));
+            });
+            L.push('', 'Please confirm availability and prices.');
+            if (co.phone) L.push(`Call us on ${co.phone}.`);
+            L.push('Thank you. 🙏');
+            return L.join('\n');
+        }
         function openReorderModal() {
-            if (!_lowStockItems().length) { showToast('Stock levels are healthy — nothing to reorder', 'danger'); return; }
+            if (!getShops(false).some(sh => _asShop(sh.id, _lowStockItems).length)) { showToast('Stock levels are healthy — nothing to reorder', 'danger'); return; }
             const sel = document.getElementById('reorder-supplier');
             const sups = (db.suppliers || []).filter(x => x.phone);
             sel.innerHTML = '<option value="">Choose contact in WhatsApp</option>' +
                 sups.map(x => `<option value="${esc(x.id)}">${esc(x.name)} (${esc(x.phone)})</option>`).join('');
+            _waFillShopSelect('reorder-shop', 'reorder-shop-wrap');
             refreshReorderText();
             openModal('modal-reorder');
         }
         function refreshReorderText() {
             const id = document.getElementById('reorder-supplier').value;
             const sup = (db.suppliers || []).find(x => x.id === id);
-            document.getElementById('reorder-text').value = _buildReorderText(sup ? sup.name : '');
+            document.getElementById('reorder-text').value = _buildReorderText(sup ? sup.name : '', _waPickedShop('reorder-shop'));
         }
         function sendReorderWA() {
             const id = document.getElementById('reorder-supplier').value;
@@ -5758,7 +6139,7 @@
             window.open(`https://wa.me/${num}?text=${encodeURIComponent(text)}`, '_blank');
             closeModal('modal-reorder');
         }
-        function sendDailySummaryWA() {
+        function _buildDaily() {
             const co = getCompanyInfo();
             const cf = computeCashFlow('today');
             const today = _todayDMY();
@@ -5782,8 +6163,10 @@
             if (low.length) L.push('', `⚠ Low stock (${low.length}): ${low.slice(0, 5).map(i => i.name).join(', ')}${low.length > 5 ? '…' : ''}`);
             if (hasFeature('credit')) { const od = _overdueSummary(); if (od.amt > 0) L.push(`⚠ Overdue credit: ${formatZMW(od.amt)} (${od.count})`); }
             L.push('─────────────────────', '_Powered by ZamAgro Track_');
-            const num = _waNumber(co.phone);
-            window.open(`https://wa.me/${num}?text=${encodeURIComponent(L.join('\n'))}`, '_blank');
+            return L.join('\n');
+        }
+        function sendDailySummaryWA() {
+            openWaMsg({ title: '📊 Daily summary', recipients: _ownerRecipients(), build: () => _buildDaily(), groupHead: () => _waGroupHead('day') });
         }
 
         // ── WHATSAPP ASSISTANT, STAGE 1 (owner taps Send; no WhatsApp API needed) ─────────
@@ -5838,16 +6221,28 @@
                 document.getElementById('wamsg-opt').innerHTML = cfg.opts.map((o, i) => `<option value="${i}">${esc(o.label)}</option>`).join('');
                 ow.style.display = '';
             } else { ow.style.display = 'none'; }
+            if (cfg.noShop) { const w = document.getElementById('wamsg-shop-wrap'); if (w) w.style.display = 'none'; }
+            else _waFillShopSelect('wamsg-shop', 'wamsg-shop-wrap');
             document.getElementById('wamsg-to').innerHTML = cfg.recipients.map((r, i) => `<option value="${i}">${esc(r.label)}</option>`).join('');
             wamsgRefresh();
             openModal('modal-wamsg');
         }
+        // Builds the text for the shop picked in the box. A builder gets (recipient, option, shopIndex).
         function wamsgRefresh() {
             if (!_wam) return;
             const r = _wam.recipients[+document.getElementById('wamsg-to').value || 0] || {};
             const hasOpts = _wam.opts && _wam.opts.length;
             const oi = hasOpts ? (+document.getElementById('wamsg-opt').value || 0) : -1;
-            document.getElementById('wamsg-text').value = _wam.build(r, oi >= 0 ? _wam.opts[oi].value : undefined);
+            const o = oi >= 0 ? _wam.opts[oi].value : undefined;
+            const sid = (_wam.noShop || getShops(false).length < 2) ? null : _waPickedShop('wamsg-shop');
+            let t;
+            if (!sid) t = _wam.build(r, o, 0);
+            else if (sid === WA_ALL && _wam.buildAll) t = _wam.buildAll(r, o);
+            else {
+                t = _waScoped(sid, i => _wam.build(r, o, i));
+                if (sid === WA_ALL && _wam.groupHead) t = _wam.groupHead(o) + '\n\n' + t;
+            }
+            document.getElementById('wamsg-text').value = t;
         }
         function wamsgSend() {
             if (!_wam) return;
@@ -5903,16 +6298,16 @@
             return L.join('\n');
         }
         function openWeeklySummary() {
-            openWaMsg({ title: '🗓️ Weekly summary', recipients: _ownerRecipients(), build: () => _buildWeekly() });
+            openWaMsg({ title: '🗓️ Weekly summary', recipients: _ownerRecipients(), build: () => _buildWeekly(), groupHead: () => _waGroupHead('week') });
         }
         function openMonthlySummary() {
-            openWaMsg({ title: '📅 Monthly summary', recipients: _ownerRecipients(), optLabel: 'Month', opts: [{ label: 'This month', value: 0 }, { label: 'Last month', value: 1 }], build: (r, off) => _buildMonthly(off || 0) });
+            openWaMsg({ title: '📅 Monthly summary', recipients: _ownerRecipients(), optLabel: 'Month', opts: [{ label: 'This month', value: 0 }, { label: 'Last month', value: 1 }], build: (r, off) => _buildMonthly(off || 0), groupHead: off => _waGroupHead('month', off) });
         }
 
         // 5. Supplier payables
-        function _buildPayables(r) {
+        function _buildPayables(r, bal) {
             const co = getCompanyInfo();
-            const all = supBalances().filter(e => e.bal > 0.001).sort((a, b) => b.bal - a.bal);
+            const all = (bal || supBalances()).filter(e => e.bal > 0.001).sort((a, b) => b.bal - a.bal);
             if (r && r.supplier) {
                 const e = all.find(x => x.name === r.supplier);
                 if (!e) return `Hello ${r.supplier},\n\nOur account with you is fully settled. Thank you. 🙏\n\n*${co.name}*`;
@@ -5931,11 +6326,11 @@
         }
         function openPayablesMsg() {
             const rec = _ownerRecipients();
-            supBalances().filter(e => e.bal > 0.001).sort((a, b) => b.bal - a.bal).forEach(e => {
+            _supBalancesAll().filter(e => e.bal > 0.001).sort((a, b) => b.bal - a.bal).forEach(e => {
                 const ph = _supplierPhone(e.name);
                 rec.push({ label: ph ? `${e.name} (${ph}) — their balance` : `${e.name} — no number saved`, phone: ph, supplier: e.name });
             });
-            openWaMsg({ title: '💳 Supplier payables', recipients: rec, build: r => _buildPayables(r) });
+            openWaMsg({ title: '💳 Supplier payables', recipients: rec, build: r => _buildPayables(r), buildAll: r => _waRun(WA_ALL, () => _buildPayables(r, _supBalancesAll()), 0, !!(r && r.supplier)) });
         }
 
         // 6. Purchase order sender
@@ -5955,7 +6350,7 @@
             const p = db.pos.find(x => x.id === id);
             if (!p) return;
             if (p.cancelled) { showToast('This purchase order is cancelled', 'danger'); return; }
-            openWaMsg({ title: '📝 Send purchase order', recipients: _contactRecipients(p.supplier, _supplierPhone(p.supplier)), build: () => _buildPO(p) });
+            openWaMsg({ noShop: true, title: '📝 Send purchase order', recipients: _contactRecipients(p.supplier, _supplierPhone(p.supplier)), build: () => _buildPO(p) });
         }
 
         // 7. Payment received thank-you
@@ -5973,7 +6368,7 @@
             if (!c) return;
             const p = creditPayments(c).find(x => x.id === payId);
             if (!p) return;
-            openWaMsg({ title: '💬 Payment thank-you', recipients: _contactRecipients(c.cust, _phoneForCustomer(c.cust)), build: () => _buildThanks(c, p) });
+            openWaMsg({ noShop: true, title: '💬 Payment thank-you', recipients: _contactRecipients(c.cust, _phoneForCustomer(c.cust)), build: () => _buildThanks(c, p) });
         }
 
         // 8. Delivery update
@@ -6001,7 +6396,7 @@
         function waDeliveryUpdate(id) {
             const d = db.deliveries.find(x => x.id === id);
             if (!d) return;
-            openWaMsg({ title: '🚚 Delivery update', recipients: _contactRecipients(d.cust, _phoneForCustomer(d.cust)), build: () => _buildDelivery(d) });
+            openWaMsg({ noShop: true, title: '🚚 Delivery update', recipients: _contactRecipients(d.cust, _phoneForCustomer(d.cust)), build: () => _buildDelivery(d) });
         }
 
         // 9. Price list
@@ -6025,7 +6420,7 @@
         function openPriceListMsg() {
             const rec = [{ label: 'Choose contact, group or broadcast list in WhatsApp', phone: '' }];
             (db.customers || []).filter(c => c.phone).sort((a, b) => String(a.name).localeCompare(String(b.name))).forEach(c => rec.push({ label: `${c.name} (${c.phone})`, phone: c.phone, name: c.name }));
-            openWaMsg({ title: '🏷️ Price list', hint: 'To reach many customers, choose a WhatsApp group or broadcast list. Or pick one customer.', recipients: rec, build: r => _buildPriceList(r) });
+            openWaMsg({ title: '🏷️ Price list', hint: 'To reach many customers, choose a WhatsApp group or broadcast list. Or pick one customer.', recipients: rec, build: (r, o, i) => { const t = _buildPriceList(r); return i ? t.replace(/^Hello[^\n]*\n\n/, '') : t; } });
         }
 
         // 10. Slow-moving stock
@@ -6145,7 +6540,7 @@
                 { i: '🌾', t: 'FISP follow-up', d: 'Unpaid FISP claims, oldest first.', need: 'fisp', b: [['Open', 'openFispMsg()']] }
             ].filter(x => !x.need || hasFeature(x.need));
             const card = x => `<div class="card" style="padding:1rem;"><div style="font-weight:700;margin-bottom:.25rem;">${x.i} ${x.t}</div><div style="font-size:.82rem;color:var(--text-muted);margin-bottom:.6rem;">${x.d}</div><div style="display:flex;gap:.4rem;flex-wrap:wrap;">${x.b.map(b => `<button type="button" class="btn btn-sm btn-primary" onclick="${b[1]}">${b[0]}</button>`).join('')}</div></div>`;
-            el.innerHTML = `<p style="color:var(--text-muted);font-size:.88rem;margin-bottom:1rem;">Each button builds a ready-to-send WhatsApp message. You check it and tap Send.</p>` +
+            el.innerHTML = `<p style="color:var(--text-muted);font-size:.88rem;margin-bottom:1rem;">Each button builds a ready-to-send WhatsApp message. You check it and tap Send.${getShops(false).length > 1 ? ' With more than one shop, you pick the shop, or All shops, in the box that opens.' : ''}</p>` +
                 `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin-bottom:1.5rem;">${bots.map(card).join('')}</div>` +
                 `<div class="card" style="padding:1rem;"><div style="font-weight:700;margin-bottom:.4rem;">Also built into other screens</div><ul style="padding-left:1.1rem;font-size:.85rem;color:var(--text-muted);line-height:1.6;">` +
                 `<li><strong>Credit Tracker and Customers:</strong> debt reminders and customer statements.</li>` +
@@ -6557,12 +6952,46 @@
                 const sel = document.getElementById('subreq-tier');
                 if (sel) sel.value = tier;
             }
+            // Start the extra-shops count at the shops they already run, then refresh today's prices.
+            let _exN = 0; try { _exN = Math.max(0, getShops(false).length - 1); } catch (e) {}
+            const _exEl = document.getElementById('subreq-extra-shops'); if (_exEl) _exEl.value = String(_exN);
+            fetchPublicPricing(); fetchOwnerPricing(true);
             onSubReqTierChange();
             openModal('modal-sub-request');
         }
 
+        // What this request costs at today's prices. It is saved on the request, so the admin can
+        // see exactly what was quoted even if prices change later.
+        function buildPlanQuote(tier, extraCount) {
+            const isLife = tier === 'lifetime';
+            const planPrice = isLife ? LIFETIME_PLAN_PRICE : PLAN_MONTHLY_PRICE[tier];
+            if (!planPrice) return null;
+            const x = extraShopPrice(tier);
+            if (!x || x.kind === 'free') return null;
+            const n = Math.max(0, Math.min(50, parseInt(extraCount, 10) || 0));
+            const pr = getPricing();
+            return { planPrice, planKind: isLife ? 'once' : 'monthly', extraShops: n, extraShopUnit: x.amount, extraShopsTotal: n * x.amount,
+                     total: planPrice + n * x.amount, pct: pr.pct, lifetimePrice: pr.lifetimePrice, priceSource: pr.source, quotedAt: Date.now() };
+        }
+        function updateSubReqQuote() {
+            const wrap = document.getElementById('subreq-extra-wrap'), el = document.getElementById('subreq-quote');
+            const tierEl = document.getElementById('subreq-tier'), cntEl = document.getElementById('subreq-extra-shops');
+            if (!wrap || !el || !tierEl || !cntEl) return;
+            const tier = tierEl.value;
+            wrap.style.display = tier === 'bundle' ? 'none' : '';
+            el.textContent = '';
+            if (tier === 'bundle') return;
+            const q = buildPlanQuote(tier, cntEl.value);
+            if (!q) return;
+            const per = q.planKind === 'once' ? ' once-off' : '/month', label = TIER_LABELS[tier] || tier;
+            el.textContent = q.extraShops
+                ? label + ' ' + fmtK(q.planPrice) + ' + ' + q.extraShops + ' × ' + fmtK(q.extraShopUnit) + ' = ' + fmtK(q.total) + per
+                : label + ' ' + fmtK(q.planPrice) + per;
+        }
+
         function onSubReqTierChange() {
             const tier = document.getElementById('subreq-tier').value;
+            try { updateSubReqQuote(); } catch (e) {}
             const bundleFields = document.getElementById('subreq-bundle-fields');
             if (!bundleFields) return;
             if (tier === 'bundle') {
@@ -6673,6 +7102,12 @@
                     };
                 }
 
+                // Save the price quoted right now (plan + extra shops) so it can be checked against the payment.
+                if (tier !== 'bundle') {
+                    const _q = buildPlanQuote(tier, document.getElementById('subreq-extra-shops').value);
+                    if (_q) payload.quote = _q;
+                }
+
                 // Write to root-level subscriptionRequests/{uid} using user's auth token
                 const idToken = await getFreshIdToken();
                 if (!idToken) throw new Error('No valid cloud session. Please sign in again.');
@@ -6704,6 +7139,8 @@
         // --- CORE LOGIC ---
 
         function refreshAll() {
+            try { renderShopSwitcher(); } catch (e) {}
+            try { renderScopeSelects(); } catch (e) {}
             try { upgradeCreditRecords(); } catch (e) { console.warn('Credit upgrade failed', e); }
     try{ renderLicenseStatusCard(); }catch(e){}
             renderDashboard();
@@ -6801,6 +7238,8 @@
                 if (el) el.textContent = periodLabel;
             });
 
+            if (groupOn()) { _renderGroupDashboard(filterFn, periodLabel); return; }
+            { const _ds = document.getElementById('dash-shops'); if (_ds) _ds.innerHTML = ''; }
             const revenue  = db.sales.filter(s => filterFn(s.date)).reduce((sum, s) => sum + s.total, 0) - db.returns.filter(r => filterFn(r.date)).reduce((sum, r) => sum + (r.total || 0), 0);
             const expenses = db.expenses.filter(e => filterFn(e.date)).reduce((sum, e) => sum + e.amt, 0);
             document.getElementById('kpi-revenue').textContent  = formatZMW(revenue);
@@ -7014,10 +7453,10 @@
         }
 
         // --- COMPANY INFO ---
-        function getCompanyInfo() {
+        function getCompanyInfo(allShops) {
             const s = db.settings;
             return {
-                name:    s.companyName    || 'ZamAgro Track',
+                name:    (s.companyName || 'ZamAgro Track') + (allShops === true ? ' - All shops' : _shopSuffix()),
                 tpin:    s.companyTPIN    || '',
                 phone:   s.companyPhone   || '',
                 address: s.companyAddress || '',
@@ -7044,6 +7483,205 @@
             db.settings = s;
             updateBrand();
             showToast('Company info saved');
+        }
+
+        // ── MY SHOPS (multi-shop, step 1) ──────────────────────────────────
+        // Shops live inside this one account: settings.shops = { [shopId]: { id, name, phone, address, active, createdAt } }.
+        // The Main shop (id 'main') always exists. It stands for the existing business and for every
+        // record that has no shopId, so only its optional name/phone/address overrides are stored.
+        let editingShopId = null;
+        function getShops(includeInactive) {
+            const st = (db.settings.shops && typeof db.settings.shops === 'object') ? db.settings.shops : {};
+            const main = Object.assign({ name: 'Main shop', phone: '', address: '', createdAt: 0 }, st[MAIN_SHOP_ID] || {}, { id: MAIN_SHOP_ID, active: true });
+            if (!main.name) main.name = 'Main shop';
+            const others = Object.keys(st).map(k => st[k]).filter(x => x && x.id && x.id !== MAIN_SHOP_ID && x.name)
+                .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+            const all = [main].concat(others);
+            return includeInactive ? all : all.filter(x => x.active !== false);
+        }
+        function getShopName(id) { const sh = getShops(true).find(x => x.id === (id || MAIN_SHOP_ID)); return sh ? sh.name : 'Main shop'; }
+        // Active shop = the shop this device is working in (Main shop by default).
+        // ── STAFF PER SHOP ────────────────────────────────────────────────
+        // settings.staffShops = { [staffKey]: shopId }. No entry = All shops, which is how staff worked before.
+        // This limits what a staff login sees in the app. It is not a security wall: Firebase rules still let a
+        // staff login read the whole business through the API, and their device holds a copy of every shop.
+        function staffKeyForUsername(u) { return 'u_' + String(u || '').toLowerCase().replace(/[^a-z0-9_-]/g, c => '~' + c.charCodeAt(0).toString(16)); }
+        function staffKeyNow() {
+            try {
+                const layout = document.getElementById('app-layout');
+                if (!layout || layout.dataset.role !== 'client') return '';
+                if (cloudAuth && cloudAuth.staff && cloudAuth.uid) return cloudAuth.uid;
+                return currentDisplayName ? staffKeyForUsername(currentDisplayName) : '';
+            } catch (e) { return ''; }
+        }
+        // The one shop this staff session is limited to, or '' for no limit (owner, co-admin, or staff set to All shops).
+        function staffShopLock() {
+            const k = staffKeyNow(); if (!k) return '';
+            const m = (db.settings && db.settings.staffShops) || {};
+            return (typeof m[k] === 'string' && m[k]) ? m[k] : '';
+        }
+        function staffShopSelectHTML(key) {
+            const cur = ((db.settings && db.settings.staffShops) || {})[key] || '*';
+            const shops = getShops(true).filter(x => x.active !== false || x.id === cur);
+            if (getShops(false).length < 2 && cur === '*') return '';
+            return `<label style="font-size:.78rem;color:var(--text-muted);display:flex;align-items:center;gap:.4rem;">Works in <select onchange="setStaffShop('${esc(key)}', this.value)" style="max-width:170px;"><option value="*"${cur === '*' ? ' selected' : ''}>All shops</option>` +
+                shops.map(x => `<option value="${esc(x.id)}"${cur === x.id ? ' selected' : ''}>${esc(x.name)}${x.active === false ? ' (inactive)' : ''}</option>`).join('') + '</select></label>';
+        }
+        function setStaffShop(key, val) {
+            if (currentUser !== 'admin') { showToast('Only admins can change this', 'danger'); return; }
+            const st = db.settings;
+            st.staffShops = (st.staffShops && typeof st.staffShops === 'object') ? st.staffShops : {};
+            if (!val || val === '*') delete st.staffShops[key]; else st.staffShops[key] = val;
+            db.settings = st;
+            showToast(val && val !== '*' ? 'Saved. They will only see ' + getShopName(val) + '.' : 'Saved. They can work in all shops.');
+        }
+        function getActiveShopId() {
+            if (_activeShopCache !== null) return _activeShopCache;
+            const _lock = staffShopLock();
+            if (_lock) return (_activeShopCache = _lock);
+            let id = MAIN_SHOP_ID;
+            try { id = localStorage.getItem('za_active_shop') || MAIN_SHOP_ID; } catch (e) {}
+            if (id !== MAIN_SHOP_ID && !getShops(false).some(x => x.id === id)) id = MAIN_SHOP_ID;
+            return (_activeShopCache = id);
+        }
+        function setActiveShopId(id) { try { localStorage.setItem('za_active_shop', id); } catch (e) {} _activeShopCache = null; }
+        // ── PER-SHOP DATA VIEW ──────────────────────────────────────────
+        // db.<collection> now returns only the ACTIVE shop's records, so every existing screen, report
+        // and stock calculation works on one shop at a time. Writing back merges the edited view into
+        // the full list, so other shops' records are never touched. Customers and suppliers are shared
+        // by all shops. Sync, backup and restore use dbLoad/dbAll/dbSetAll (all shops).
+        function shopView(list) { const a = getActiveShopId(); return list.filter(r => recShopId(r) === a); }
+        function shopMerge(full, view) {
+            const a = getActiveShopId();
+            const byId = new Map(); view.forEach(r => { if (r) byId.set(r.id, r); });
+            const used = new Set(), out = [];
+            full.forEach(r => {
+                if (recShopId(r) !== a) { out.push(r); return; }
+                if (byId.has(r.id)) { out.push(byId.get(r.id)); used.add(r.id); }
+            });
+            view.forEach(r => { if (r && !used.has(r.id)) out.push(r); });
+            return out;
+        }
+        function shopGet(key) { return shopView(dbLoad(key)); }
+        function shopSet(key, v) { writeCollection(key, shopMerge(dbLoad(key), v)); }
+        // All shops, for backup / restore / clear-all. Credit audit entries stay hidden, as in db.credit.
+        function dbAll(k) { const a = dbLoad(k); return k === 'credit' ? a.filter(r => !(r && r.type === 'audit')) : a; }
+        function dbSetAll(k, v) { writeCollection(k, k === 'credit' ? v.concat(dbLoad('credit').filter(r => r && r.type === 'audit')) : v); }
+        // ── SHOP SWITCHER (header) ─────────────────────────────────────
+        function renderShopSwitcher() {
+            const sel = document.getElementById('shop-switcher'); if (!sel) return;
+            const shops = getShops(false);
+            if (shops.length < 2 || staffShopLock()) { sel.classList.add('hidden'); return; }
+            const a = getActiveShopId();
+            sel.innerHTML = shops.map(sh => `<option value="${esc(sh.id)}"${sh.id === a ? ' selected' : ''}>&#127980; ${esc(sh.name)}</option>`).join('');
+            sel.classList.remove('hidden');
+        }
+        function switchShop(id) {
+            if (staffShopLock() && id !== staffShopLock()) return;
+            if (!getShops(false).some(x => x.id === id)) return;
+            setActiveShopId(id);
+            try { updateBrand(); } catch (e) {}
+            try { applyLicenseUI(); } catch (e) {}
+            refreshAll();
+            renderShopSwitcher();
+            const _n = _pendingInternalTRFs().length;
+            showToast('Now working in ' + getShopName(id) + (_n ? ' - ' + _n + ' transfer' + (_n > 1 ? 's' : '') + ' waiting to be received' : ''));
+        }
+        // Printed documents and WhatsApp messages carry the shop name once an account has 2+ active shops.
+        function _shopSuffix() { if (_waAll) return _waAll === 'plain' ? '' : ' - All shops'; return getShops(false).length > 1 ? ' - ' + getShopName(getActiveShopId()) : ''; }
+        // Which shop a record belongs to. No shopId means the Main shop.
+        function recShopId(r) { return (r && r.shopId) || MAIN_SHOP_ID; }
+        // Called by writeCollection: stamps NEW records created while a non-Main shop is active.
+        // Main shop records are left untagged on purpose, so single-shop accounts are unaffected
+        // and existing records need no migration. Cloud pulls and backup restores are never stamped.
+        function stampNewRecordsShop(oldVal, newVal) {
+            try {
+                if (window.__applyingRemoteSync || window.__skipShopStamp || !Array.isArray(newVal)) return;
+                const sid = getActiveShopId();
+                if (sid === MAIN_SHOP_ID) return;
+                const seen = new Set((oldVal || []).map(r => r && r.id));
+                newVal.forEach(r => { if (r && typeof r === 'object' && !r.shopId && !seen.has(r.id)) r.shopId = sid; });
+            } catch (e) { console.warn('Shop stamp failed', e); }
+        }
+        function renderShopsUI() {
+            const el = document.getElementById('shops-list'); if (!el) return;
+            try { renderShopsPriceNote(); } catch (e) {}
+            try { fetchOwnerPricing(); } catch (e) {}
+            el.innerHTML = getShops(true).map(sh => {
+                const isMain = sh.id === MAIN_SHOP_ID, off = sh.active === false;
+                const meta = [sh.phone, sh.address].filter(Boolean).map(esc).join(' &middot; ');
+                const badge = isMain ? '<span style="font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:99px;background:#e6f4ea;color:#1E6B35;">Main</span>'
+                    : off ? '<span style="font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:99px;background:#eee;color:#666;">Inactive</span>' : '';
+                return `<div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;padding:.6rem 0;border-bottom:1px solid var(--border);${off ? 'opacity:.65;' : ''}">
+                    <div style="flex:1;min-width:160px;"><div style="font-weight:700;">${esc(sh.name)} ${badge}</div>${meta ? `<div style="font-size:.78rem;color:var(--text-muted);">${meta}</div>` : ''}${(isMain || off) ? '' : (sl => `<div style="font-size:.78rem;font-weight:600;color:${sl.active ? 'var(--success)' : 'var(--danger)'};">${esc(shopLicenseText(sl))}</div>`)(shopLicense(sh.id))}</div>
+                    <button class="btn btn-sm" onclick="editShop('${esc(sh.id)}')">Edit</button>
+                    ${isMain ? '' : `<button class="btn btn-sm ${off ? 'btn-primary' : 'btn-danger'}" onclick="toggleShopActive('${esc(sh.id)}')">${off ? 'Activate' : 'Deactivate'}</button>`}
+                </div>`;
+            }).join('');
+        }
+        function editShop(id) {
+            const sh = getShops(true).find(x => x.id === id); if (!sh) return;
+            editingShopId = id;
+            document.getElementById('shop-name').value = sh.name || '';
+            document.getElementById('shop-phone').value = sh.phone || '';
+            document.getElementById('shop-address').value = sh.address || '';
+            document.getElementById('shop-form-title').textContent = 'Edit shop';
+            document.getElementById('shop-save-btn').textContent = 'Save changes';
+            document.getElementById('shop-cancel-btn').style.display = '';
+            document.getElementById('shop-form-error').style.display = 'none';
+            document.getElementById('shop-name').scrollIntoView({ behavior: 'smooth', block: 'center' });
+            document.getElementById('shop-name').focus();
+        }
+        function cancelShopEdit() {
+            editingShopId = null;
+            ['shop-name', 'shop-phone', 'shop-address'].forEach(i => { document.getElementById(i).value = ''; });
+            document.getElementById('shop-form-title').innerHTML = '&#43; Add a shop';
+            document.getElementById('shop-save-btn').textContent = 'Add shop';
+            document.getElementById('shop-cancel-btn').style.display = 'none';
+            document.getElementById('shop-form-error').style.display = 'none';
+        }
+        function saveShop() {
+            const name = document.getElementById('shop-name').value.trim();
+            const phone = document.getElementById('shop-phone').value.trim().slice(0, 30);
+            const address = document.getElementById('shop-address').value.trim().slice(0, 100);
+            const err = document.getElementById('shop-form-error');
+            const fail = m => { err.textContent = m; err.style.display = 'block'; };
+            err.style.display = 'none';
+            if (!name) return fail('Enter the shop name.');
+            if (name.length > 60) return fail('Shop name is too long (max 60 characters).');
+            const dup = getShops(true).find(x => x.id !== editingShopId && String(x.name).trim().toLowerCase() === name.toLowerCase());
+            if (dup) return fail('You already have a shop called "' + dup.name + '".');
+            const s = db.settings;
+            s.shops = (s.shops && typeof s.shops === 'object') ? s.shops : {};
+            if (editingShopId) {
+                const cur = s.shops[editingShopId] || { id: editingShopId, active: true, createdAt: Date.now() };
+                s.shops[editingShopId] = Object.assign({}, cur, { id: editingShopId, name: name, phone: phone, address: address, updatedAt: Date.now() });
+                showToast('Shop updated');
+            } else {
+                const id = uid('SHP');
+                s.shops[id] = { id: id, name: name, phone: phone, address: address, active: true, createdAt: Date.now() };
+                const _xp = IS_PLAY_BUILD ? null : extraShopPrice((getLicense() || {}).tier || 'trial');
+                showToast(name + ' added' + (!_xp ? '' : _xp.kind === 'free' ? ' (free during your trial)' : '. Extra shop: ' + extraShopPriceText((getLicense() || {}).tier)));
+            }
+            db.settings = s;
+            cancelShopEdit();
+            renderShopsUI();
+            renderShopSwitcher();
+            try { updateBrand(); } catch (e) {}
+        }
+        function toggleShopActive(id) {
+            if (id === MAIN_SHOP_ID) return;
+            const s = db.settings;
+            if (!s.shops || !s.shops[id]) return;
+            if (s.shops[id].active !== false && dbLoad('transfers').some(t => t && t.internal && t.status === 'in_transit' && t.toShopId === id)) { showToast('Stock is still in transit to this shop. Receive it first.', 'danger'); return; }
+            s.shops[id].active = s.shops[id].active === false;
+            s.shops[id].updatedAt = Date.now();
+            db.settings = s;
+            renderShopsUI();
+            renderShopSwitcher();
+            try { updateBrand(); } catch (e) {}
+            refreshAll();
+            showToast(s.shops[id].active ? 'Shop activated' : 'Shop deactivated. Its records are kept.');
         }
 
         // --- COMPANY LOGO ---
@@ -7397,7 +8035,7 @@
                 if (monthVal) {
                     // Find this charge year's cumulative revenue up to and including this month
                     const [yr, mon] = monthVal.split('-');
-                    const yearRevenueUpToMonth = db.sales
+                    const yearRevenueUpToMonth = (_groupTax ? dbLoad('sales') : db.sales)
                         .filter(s => {
                             const [, m, y] = s.date.split('/');
                             return y === yr && parseInt(m) <= parseInt(mon);
@@ -7430,6 +8068,106 @@
         // Single source of truth for all profit/loss figures. The Dashboard "Net P/L" KPI,
         // the Reports (P&L) tab, and the P&L CSV export all call this — so they can never
         // drift out of sync with each other again.
+        // ── ALL-SHOPS (GROUP) VIEW: dashboard and P&L ─────────────────────
+        // db.* shows one shop, so the group is built by adding the shops up. Deactivated shops stay in: their history still
+        // counts. Stock moved between your own shops is left out of purchases and sales, and stock still in transit counts
+        // as stock until it is received, so a transfer nets out. If a shipment arrives short, the missing stock is not in
+        // closing stock, so the shortage shows up as cost of goods sold.
+        function canGroupView() { return currentUser === 'admin' && !staffShopLock() && getShops(true).length > 1; }
+        function groupOn() { return _groupScope && canGroupView(); }
+        function setGroupScope(on) { _groupScope = !!on; try { localStorage.setItem('za_group_scope', on ? '1' : '0'); } catch (e) {} refreshAll(); }
+        function renderScopeSelects() {
+            const can = canGroupView(), on = groupOn();
+            ['dash-scope', 'pl-scope'].forEach(id => {
+                const el = document.getElementById(id); if (!el) return;
+                el.style.display = can ? '' : 'none';
+                el.innerHTML = `<option value="one"${on ? '' : ' selected'}>This shop: ${esc(getShopName(getActiveShopId()))}</option><option value="all"${on ? ' selected' : ''}>All shops (group)</option>`;
+            });
+        }
+        function _groupSums(pred) {
+            const g = { grossSales: 0, returnsTotal: 0, purchasesRaw: 0, extIn: 0, extOut: 0, expenses: 0, writeoffs: 0, closingShops: 0, rows: [] };
+            const add = (list, f) => list.reduce((t, x) => t + (f(x) || 0), 0);
+            getShops(true).forEach(sh => {
+                const r = _asShop(sh.id, () => ({
+                    sales: add(db.sales.filter(x => pred(x.date)), x => x.total),
+                    rets: add(db.returns.filter(x => pred(x.date)), x => x.total),
+                    pur: add(db.purchases.filter(x => pred(x.date)), x => x.total),
+                    tin: add(db.transfers.filter(x => x.direction === 'in' && !x.internal && pred(x.date)), x => x.total),
+                    tout: add(db.transfers.filter(x => x.direction === 'out' && !x.internal && pred(x.date)), x => x.total),
+                    exp: add(db.expenses.filter(x => pred(x.date)), x => x.amt),
+                    wo: add(db.adjustments.filter(x => pred(x.date) && x.direction === 'down' && x.lossValue > 0), x => x.lossValue),
+                    stock: add(db.inventory, i => i.qty * i.cost)
+                }));
+                g.rows.push(Object.assign({ id: sh.id, name: sh.name, active: sh.active !== false }, r));
+                g.grossSales += r.sales; g.returnsTotal += r.rets; g.purchasesRaw += r.pur; g.extIn += r.tin; g.extOut += r.tout;
+                g.expenses += r.exp; g.writeoffs += r.wo; g.closingShops += r.stock;
+            });
+            const out = dbLoad('transfers').filter(t => t && t.internal && t.direction === 'out');
+            g.inTransit = _r2(add(out.filter(t => t.status === 'in_transit'), t => t.total));
+            g.lostInTransit = _r2(add(out.filter(t => t.status === 'received' && t.shortQty > 0 && pred(t.date)),
+                t => add(t.items || [], it => Math.max(0, (it.qty || 0) - (it.recvQty != null ? it.recvQty : it.qty || 0)) * (it.unitCost || 0))));
+            g.closing = _r2(g.closingShops + g.inTransit);
+            g.revenue = g.grossSales - g.returnsTotal;
+            g.purchases = g.purchasesRaw + g.extIn - g.extOut;
+            g.cogs = Math.max(0, g.purchases - g.closing);
+            return g;
+        }
+        function computeGroupPL(monthVal) {
+            const inM = d => { if (!monthVal) return true; const p = String(d).split('/'); return `${p[2]}-${p[1]}` === monthVal; };
+            const g = _groupSums(inM);
+            let tax; _groupTax = true;
+            try { tax = calcTaxLines(g.revenue, g.cogs, monthVal); } finally { _groupTax = false; }
+            const gross = g.revenue - g.cogs;
+            const net = gross - g.expenses - g.writeoffs - tax.taxDeduction;
+            const period = monthVal ? new Date(monthVal + '-01').toLocaleString('default', { month: 'long', year: 'numeric' }) : 'All Time';
+            return { monthVal, period, grossSales: g.grossSales, returnsTotal: g.returnsTotal, revenue: g.revenue, purchases: g.purchases, purchasesRaw: g.purchasesRaw,
+                transfersIn: g.extIn, transfersOut: g.extOut, expenses: g.expenses, writeoffs: g.writeoffs, closingStock: g.closing, cogs: g.cogs, gross, tax, net,
+                group: true, inTransit: g.inTransit, lostInTransit: g.lostInTransit, shops: g.rows };
+        }
+        function getPL(monthVal) { return groupOn() ? computeGroupPL(monthVal) : computePL(monthVal); }
+        function _groupCashFlow(period) {
+            const rows = getShops(true).map(sh => _asShop(sh.id, () => computeCashFlow(period)));
+            const t = _sumKeys(rows, ['cashIn', 'cashOutPur', 'cashOutExp', 'cashOut', 'net', 'txnCount', 'creditAmt', 'creditCount', 'creditCollected']);
+            t.period = period; return t;
+        }
+        function _groupOverdue() {
+            const rows = getShops(true).map(sh => _asShop(sh.id, _overdueSummary));
+            return { amt: _r2(rows.reduce((t, x) => t + x.amt, 0)), count: rows.reduce((t, x) => t + x.count, 0), oldest: rows.reduce((m, x) => Math.max(m, x.oldest), 0) };
+        }
+        function _renderGroupDashboard(filterFn, periodLabel) {
+            const g = _groupSums(filterFn);
+            const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+            set('kpi-stock', formatZMW(g.closing));
+            set('kpi-revenue', formatZMW(g.revenue));
+            set('kpi-expenses', formatZMW(g.expenses));
+            let plNet;
+            if (_kpiPeriod === 'season') plNet = g.revenue - g.cogs - g.expenses - g.writeoffs;
+            else { const n = new Date(); plNet = computeGroupPL(_kpiPeriod === 'month' ? `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}` : '').net; }
+            set('kpi-pl', formatZMW(plNet));
+            document.getElementById('kpi-pl').className = plNet >= 0 ? 'value text-success' : 'value text-danger';
+            set('kpi-fisp', formatZMW(getShops(true).reduce((t, sh) => t + _asShop(sh.id, () => db.fisp.filter(f => f.status !== 'Paid').reduce((a, f) => a + f.val, 0)), 0)));
+            const gt = db.settings.lowStockThreshold || 20, low = [];
+            getShops(false).forEach(sh => _asShop(sh.id, () => db.inventory.forEach(i => { const th = i.reorderPt !== undefined ? i.reorderPt : gt; if (i.qty < th) low.push({ shop: sh.name, i, th }); })));
+            document.getElementById('dashboard-alerts').innerHTML = low.length
+                ? low.map(x => `<li style="color:red"><strong>${esc(x.i.name)}</strong> (${esc(x.shop)}) — ${x.i.qty} left (reorder at ${x.th})</li>`).join('')
+                : '<li style="color:green">Stock levels healthy.</li>';
+            const rb = document.getElementById('btn-reorder-wa'); if (rb) rb.style.display = low.length ? '' : 'none';
+            const od = _groupOverdue(), odCard = document.getElementById('kpi-overdue-card');
+            if (odCard) {
+                odCard.style.display = hasFeature('credit') ? '' : 'none';
+                set('kpi-overdue', formatZMW(od.amt));
+                set('kpi-overdue-sub', od.count ? `${od.count} credit${od.count > 1 ? 's' : ''} · oldest ${od.oldest}d` : 'Nothing overdue');
+            }
+            const td = 'style="text-align:right;"';
+            const body = g.rows.map(x => `<tr><td>${esc(x.name)}${x.active ? '' : ' <span style="font-size:.7rem;color:var(--text-muted);">(inactive)</span>'}</td><td ${td}>${formatZMW(x.sales - x.rets)}</td><td ${td}>${formatZMW(x.exp)}</td><td ${td}>${formatZMW(x.stock)}</td></tr>`).join('') +
+                (g.inTransit > 0 ? `<tr><td>In transit between shops</td><td ${td}>-</td><td ${td}>-</td><td ${td}>${formatZMW(g.inTransit)}</td></tr>` : '') +
+                `<tr style="font-weight:800;border-top:2px solid var(--border);"><td>All shops</td><td ${td}>${formatZMW(g.revenue)}</td><td ${td}>${formatZMW(g.expenses)}</td><td ${td}>${formatZMW(g.closing)}</td></tr>`;
+            const box = document.getElementById('dash-shops');
+            if (box) box.innerHTML = `<div class="card" style="margin-bottom:1.5rem;"><h3 style="font-size:1rem;margin-bottom:.6rem;">🏪 By shop · ${esc(periodLabel)}</h3><div style="overflow-x:auto;"><table style="width:100%;"><thead><tr><th style="text-align:left;">Shop</th><th ${td}>Revenue</th><th ${td}>Expenses</th><th ${td}>Stock value</th></tr></thead><tbody>${body}</tbody></table></div>` +
+                `<div style="font-size:.76rem;color:var(--text-muted);margin-top:.6rem;">Stock moved between your own shops is not counted as a purchase or a sale. Stock in transit counts as stock until it is received; a shortage shows up as cost of goods sold${g.lostInTransit > 0 ? ' (' + formatZMW(g.lostInTransit) + ' lost in transit this period)' : ''}.</div></div>`;
+            renderCashFlow();
+        }
+
         function computePL(monthVal) {
             // Records use DD/MM/YYYY — matches month as "MM/YYYY" when monthVal = "YYYY-MM"
             function matchesMonth(dateStr) {
@@ -7470,10 +8208,11 @@
             tbody.innerHTML = '';
 
             const monthVal = document.getElementById('pl-month')?.value; // "YYYY-MM" or ""
-            const pl = computePL(monthVal);
+            const pl = getPL(monthVal);
 
             const colHeader = document.getElementById('pl-col-header');
             colHeader.textContent = monthVal ? `${pl.period} (ZMW)` : 'All Time (ZMW)';
+            if (pl.group) colHeader.textContent += ' · All shops';
 
             function divRow(label) {
                 tbody.innerHTML += `<tr style="background:var(--surface-2);"><td colspan="2" style="font-size:.72rem;font-weight:700;letter-spacing:.8px;color:var(--text-muted);text-transform:uppercase;padding:6px 14px;">${label}</td></tr>`;
@@ -7492,6 +8231,8 @@
             if (pl.transfersOut > 0) row('Less: Stock Transferred Out', pl.transfersOut, 'text-success', true);
             row('Less: Closing Stock Value (Inventory)', pl.closingStock, 'text-success', true);
             row('Net COGS', pl.cogs, 'text-danger');
+            if (pl.group && pl.inTransit > 0) row('Closing stock includes stock in transit between your shops', pl.inTransit, 'text-success', true);
+            if (pl.group && pl.lostInTransit > 0) row('Net COGS includes stock lost in transit between your shops', pl.lostInTransit, 'text-danger', true);
 
             divRow('Gross Profit');
             row('Gross Profit  (Revenue minus COGS)', pl.gross, pl.gross >= 0 ? 'text-success' : 'text-danger');
@@ -7503,6 +8244,10 @@
 
             divRow('Net Result');
             tbody.innerHTML += `<tr style="border-top:2px solid var(--border);"><td style="font-weight:800;font-size:1rem;">NET PROFIT / LOSS</td><td class="${pl.net >= 0 ? 'text-success' : 'text-danger'}" style="font-weight:800;font-size:1rem;">${formatZMW(pl.net)}</td></tr>`;
+            if (pl.group) {
+                divRow('By shop (each shop on its own)');
+                pl.shops.forEach(x => { tbody.innerHTML += `<tr><td style="padding-left:1.8rem;color:var(--text-muted);font-weight:500;">${esc(x.name)}${x.active ? '' : ' (inactive)'}<div style="font-size:.74rem;">Expenses ${formatZMW(x.exp)} · Stock ${formatZMW(x.stock)}</div></td><td class="font-bold">${formatZMW(x.sales - x.rets)}</td></tr>`; });
+            }
         }
 
         // --- CSV EXPORT ---
@@ -7622,8 +8367,8 @@
 
         function exportPLpdf() {
             const monthVal = document.getElementById('pl-month')?.value;
-            const pl = computePL(monthVal);
-            const co = getCompanyInfo();
+            const pl = getPL(monthVal);
+            const co = getCompanyInfo(pl.group);
             const { jsPDF } = window.jspdf;
             if (!jsPDF) { showToast('PDF library not loaded yet — try again in a moment', 'danger'); return; }
             const doc = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -7762,8 +8507,8 @@
             const docxLib = window.docx;
             if (!docxLib) { showToast('Word library not loaded yet — try again in a moment', 'danger'); return; }
             const monthVal = document.getElementById('pl-month')?.value;
-            const pl = computePL(monthVal);
-            const co = getCompanyInfo();
+            const pl = getPL(monthVal);
+            const co = getCompanyInfo(pl.group);
             const { Document, Packer, Paragraph, Table, TableRow, TableCell, TextRun, HeadingLevel, AlignmentType, WidthType, BorderStyle } = docxLib;
             const green = '1E6B35';
             const summaryRows = [
@@ -7896,8 +8641,8 @@
 
         function exportPLcsv() {
             const monthVal = document.getElementById('pl-month')?.value;
-            const pl = computePL(monthVal);
-            const coName = getCompanyInfo().name;
+            const pl = getPL(monthVal);
+            const coName = getCompanyInfo(pl.group).name;
 
             function matchesMonth(dateStr) {
                 if (!monthVal) return true;
@@ -7922,6 +8667,15 @@
                 ...pl.tax.lines.map(l => [l.label, l.val.toFixed(2)]),
                 ['NET PROFIT / LOSS',                     pl.net.toFixed(2)],
             ];
+
+            if (pl.group) {
+                rows.push([], ['BY SHOP (each shop on its own)', 'Revenue (ZMW)', 'Expenses (ZMW)', 'Stock value (ZMW)']);
+                pl.shops.forEach(x => rows.push([x.name + (x.active ? '' : ' (inactive)'), (x.sales - x.rets).toFixed(2), x.exp.toFixed(2), x.stock.toFixed(2)]));
+                if (pl.inTransit > 0) rows.push(['In transit between shops', '', '', pl.inTransit.toFixed(2)]);
+                rows.push([], ['Purchase, expense and write-off detail is per shop. Switch to one shop to export it.']);
+                downloadCSV(`ZamAgro_PL_AllShops_${pl.period.replace(/\s/g,'_')}.csv`, rows);
+                return;
+            }
 
             // Purchase detail section
             const periodPurchases = db.purchases.filter(p => matchesMonth(p.date));
@@ -8596,7 +9350,7 @@
         }
 
         function renderCashFlow() {
-            const cf = computeCashFlow(cashFlowPeriod);
+            const cf = groupOn() ? _groupCashFlow(cashFlowPeriod) : computeCashFlow(cashFlowPeriod);
 
             document.getElementById('cf-cash-in').textContent  = formatZMW(cf.cashIn);
             document.getElementById('cf-cash-out').textContent = formatZMW(cf.cashOut);
@@ -8616,7 +9370,7 @@
             // Overdue line (as of today, regardless of the selected period)
             const odLine = document.getElementById('cf-overdue-line');
             if (odLine) {
-                const od = _overdueSummary();
+                const od = groupOn() ? _groupOverdue() : _overdueSummary();
                 odLine.textContent = (hasFeature('credit') && od.amt > 0)
                     ? `⚠ Overdue credit still to collect: ${formatZMW(od.amt)} (${od.count} credit${od.count > 1 ? 's' : ''}, oldest ${od.oldest}d overdue)` : '';
             }
@@ -8642,7 +9396,7 @@
 
         function _buildSnapshot() {
             const data = {};
-            BACKUP_COLLECTIONS.forEach(k => { data[k] = db[k]; });
+            BACKUP_COLLECTIONS.forEach(k => { data[k] = dbAll(k); });
             data.settings = db.settings;
             const counts = {};
             BACKUP_COLLECTIONS.forEach(k => { counts[k] = data[k].length; });
@@ -8696,7 +9450,7 @@
             try {
                 if (stale && _isAdminSession() && localStorage.getItem(LOCAL_SESSION_KEY)) {
                     const today = new Date().toISOString().slice(0, 10);
-                    const hasData = BACKUP_COLLECTIONS.some(k => db[k].length > 0);
+                    const hasData = BACKUP_COLLECTIONS.some(k => dbAll(k).length > 0);
                     if (hasData && localStorage.getItem(BACKUP_NAG_DAY_KEY) !== today) {
                         localStorage.setItem(BACKUP_NAG_DAY_KEY, today);
                         showToast('Reminder: download a backup in Settings → Backup & Restore.', 'danger');
@@ -8815,7 +9569,7 @@
                         if (!confirm('⚠️ This backup was made from a DIFFERENT business account.\n\nRestoring it will replace this business\'s data with that business\'s data.\n\nContinue only if you are sure.')) return;
                     }
                     const lines = BACKUP_COLLECTIONS.filter(k => k in data)
-                        .map(k => `${k}: ${db[k].length} now → ${data[k].length} in backup`);
+                        .map(k => `${k}: ${dbAll(k).length} now → ${data[k].length} in backup`);
                     const missing = BACKUP_COLLECTIONS.filter(k => !(k in data));
                     const msg = `⚠️ Restore backup from ${(meta.exportedAt || '').slice(0, 10) || 'unknown date'}?\n\n` + lines.join('\n') +
                         (missing.length ? `\n\nNot in this file (left unchanged): ${missing.join(', ')}` : '') +
@@ -8825,7 +9579,7 @@
                     backupJSON({ safety: true });   // safety copy of what is about to be replaced
 
                     // Route through the db setters so every restored change is diffed and queued for cloud upload.
-                    BACKUP_COLLECTIONS.forEach(k => { if (k in data) db[k] = data[k]; });
+                    window.__skipShopStamp = true; try { BACKUP_COLLECTIONS.forEach(k => { if (k in data) dbSetAll(k, data[k]); }); } finally { window.__skipShopStamp = false; }
                     if ('settings' in data) db.settings = data.settings;
                     refreshAll();
                     showToast('Data restored — syncing to cloud...');
@@ -9730,6 +10484,7 @@
             document.getElementById('trf-person').value = getGeneratedByLabel();
             ['trf-shop', 'trf-ref', 'trf-notes'].forEach(i => { document.getElementById(i).value = ''; });
             document.getElementById('trf-ref-row').classList.toggle('hidden', out);
+            trfSetupDest(out);
             document.getElementById('trf-title').textContent = out ? '🔁 Send Stock to Another Shop' : '📥 Receive Stock from Another Shop';
             document.getElementById('trf-btn').textContent = out ? 'Send Stock (reduces my stock)' : 'Receive Stock (adds to my stock)';
             renderTRFLines();
@@ -9773,9 +10528,13 @@
                 const p = inv.find(x => x.id === l.prodId);
                 if (!p) { showToast('Product not found in Inventory', 'danger'); return; }
                 if (trfDir === 'out' && q > p.qty) { showToast(`Only ${p.qty} of ${p.name} in stock`, 'danger'); return; }
-                items.push({ prodId: p.id, prodName: p.name, qty: q, unitCost: _r2(trfLineCost(l, p)) });
+                items.push({ prodId: p.id, prodName: p.name, qty: q, unitCost: _r2(trfLineCost(l, p)), unit: p.unit || '', cat: p.cat || '', price: p.price || 0 });
             }
             if (!items.length) { showToast('Add at least one item with a quantity', 'danger'); return; }
+            // A view-only shop can't receive stock, so don't let it get stuck in transit.
+            const _destRow = document.getElementById('trf-to-row');
+            const _dest = (trfDir === 'out' && _destRow && !_destRow.classList.contains('hidden')) ? document.getElementById('trf-to-shop').value : '';
+            if (_dest && !shopLicense(_dest).active) { showToast(getShopName(_dest) + ' is view-only right now, so it can\'t receive stock.' + (IS_PLAY_BUILD ? '' : ' Pay for that shop first.'), 'danger'); return; }
             const id = uid('TRF');
             items.forEach(it => {
                 const p = inv.find(x => x.id === it.prodId);
@@ -9784,19 +10543,21 @@
             });
             db.inventory = inv;
             const total = _r2(items.reduce((s, i) => s + i.qty * i.unitCost, 0));
+            const toRow = document.getElementById('trf-to-row');
+            const toId = (trfDir === 'out' && toRow && !toRow.classList.contains('hidden')) ? document.getElementById('trf-to-shop').value : '';
             const list = db.transfers;
-            list.push({
+            list.push(Object.assign({
                 id: id, direction: trfDir, date: new Date().toLocaleDateString('en-GB'),
-                shop: document.getElementById('trf-shop').value.trim(),
+                shop: toId ? getShopName(toId) : document.getElementById('trf-shop').value.trim(),
                 ref: trfDir === 'in' ? document.getElementById('trf-ref').value.trim() : '',
                 person: document.getElementById('trf-person').value.trim(),
                 notes: document.getElementById('trf-notes').value.trim(),
                 items: items, total: total, recordedBy: currentUser || 'unknown'
-            });
+            }, toId ? { internal: true, toShopId: toId, status: 'in_transit' } : {}));
             db.transfers = list;
             closeModal('modal-trf');
             refreshAll();
-            showToast(trfDir === 'out' ? 'Stock sent. Your stock was reduced.' : 'Stock received. Your stock was increased.');
+            showToast(trfDir === 'out' ? (toId ? 'Stock sent to ' + getShopName(toId) + '. It shows as In transit until they receive it.' : 'Stock sent. Your stock was reduced.') : 'Stock received. Your stock was increased.');
             printTRF(id);
         }
 
@@ -9804,6 +10565,7 @@
         function trfDelete(id) {
             const t = db.transfers.find(x => x.id === id);
             if (!t) return true;
+            if (t.internal && t.direction === 'out' && t.status === 'received') { showToast('Already received by ' + t.shop + '. Delete the receiving record in that shop first.', 'danger'); return false; }
             if (!confirm(`Delete ${t.id}?\n\nYour stock will go ${t.direction === 'out' ? 'back up' : 'back down'} by the quantities on it.`)) return false;
             const inv = db.inventory;
             (t.items || []).forEach(it => {
@@ -9814,12 +10576,23 @@
             });
             db.inventory = inv;
             db.transfers = db.transfers.filter(x => x.id !== id);
+            if (t.internal && t.direction === 'in' && t.outId) {
+                // Undo a receipt: the sending shop's note goes back to "In transit" so it can be received again.
+                const full = dbLoad('transfers');
+                const o = full.find(x => x.id === t.outId);
+                if (o) {
+                    o.status = 'in_transit'; o.receivedAt = 0; o.receivedBy = ''; o.inId = ''; o.shortQty = 0; o.updatedAt = Date.now();
+                    (o.items || []).forEach(i => { i.recvQty = 0; });
+                    writeCollection('transfers', full);
+                }
+            }
             return true;
         }
 
         function renderTRFs() {
             const tbody = document.querySelector('#table-trf tbody');
             if (!tbody) return;
+            renderTRFRecvBtn();
             const all = db.transfers;
             const sum = document.getElementById('trf-summary');
             const tot = d => _r2(all.filter(t => t.direction === d).reduce((s, t) => s + (t.total || 0), 0));
@@ -9837,10 +10610,123 @@
                 const first = its[0];
                 const itemsCell = !first ? '—' : esc(first.prodName) + ' × ' + esc(first.qty) + (its.length > 1 ? ` <span class="badge" style="background:var(--surface-2);color:var(--text-muted);border:1px solid var(--border);">+${its.length - 1} more</span>` : '');
                 const eid = esc(t.id);
-                const badge = `<span class="badge ${t.direction === 'in' ? 'status-ok' : 'status-warn'}">${t.direction === 'in' ? 'Received' : 'Sent'}</span>`;
+                const badge = trfBadge(t);
                 const del = currentUser === 'admin' ? `<button class="btn btn-sm btn-danger" onclick="deleteRecord('transfers','${eid}')">🗑</button>` : '';
                 return `<tr><td>${eid}${t.ref ? `<div style="font-size:.75rem;color:var(--text-muted);">their ref ${esc(t.ref)}</div>` : ''}</td><td>${esc(t.date)}</td><td>${badge}</td><td>${esc(t.shop)}</td><td>${itemsCell}</td><td>${formatZMW(t.total || 0)}</td><td style="white-space:nowrap;display:flex;gap:4px;"><button class="btn btn-sm" style="background:#eee;" onclick="printTRF('${eid}')">🖨</button>${del}</td></tr>`;
             }).join('');
+        }
+
+        // ── TRANSFERS BETWEEN MY OWN SHOPS ─────────────────────────────
+        // Send (shop A): stock goes down and the note shows "In transit". Receive (shop B): pick it from the
+        // pending list, confirm the quantity that actually arrived. Stock goes up (products are created at B
+        // if missing) and any shortage is flagged. Both notes share the transfer number.
+        function trfSetupDest(out) {
+            const row = document.getElementById('trf-to-row'), sel = document.getElementById('trf-to-shop');
+            if (!row || !sel) return;
+            const a = getActiveShopId();
+            const others = getShops(false).filter(x => x.id !== a);
+            if (!out || !others.length) { row.classList.add('hidden'); sel.innerHTML = ''; trfToChanged(); return; }
+            sel.innerHTML = others.map(x => `<option value="${esc(x.id)}">${esc(x.name)}${shopLicense(x.id).active ? '' : ' (view-only)'}</option>`).join('') + '<option value="">Another business (type its name)</option>';
+            sel.value = others[0].id;
+            row.classList.remove('hidden');
+            trfToChanged();
+        }
+        function trfToChanged() {
+            const row = document.getElementById('trf-to-row'), sel = document.getElementById('trf-to-shop');
+            const grp = document.getElementById('trf-shop-row'), inp = document.getElementById('trf-shop');
+            if (!row || !sel || !grp || !inp) return;
+            const internal = !row.classList.contains('hidden') && !!sel.value;
+            grp.classList.toggle('hidden', internal);
+            inp.required = !internal;
+        }
+        function _pendingInternalTRFs() {
+            const a = getActiveShopId();
+            return dbLoad('transfers').filter(t => t && t.direction === 'out' && t.internal && t.status === 'in_transit' && t.toShopId === a);
+        }
+        function renderTRFRecvBtn() {
+            const b = document.getElementById('trf-recv-internal-btn'); if (!b) return;
+            if (getShops(false).length < 2) { b.classList.add('hidden'); return; }
+            const n = _pendingInternalTRFs().length;
+            b.textContent = '\u{1F4E5} Receive from my shops' + (n ? ' (' + n + ' waiting)' : '');
+            b.classList.remove('hidden');
+        }
+        function trfBadge(t) {
+            const out = t.direction === 'out';
+            if (t.internal && out) {
+                if (t.status === 'in_transit') return '<span class="badge status-warn">In transit</span>';
+                return `<span class="badge status-ok">Delivered${t.shortQty > 0 ? ' (short ' + esc(t.shortQty) + ')' : ''}</span>`;
+            }
+            if (t.internal && !out && t.shortQty > 0) return `<span class="badge status-ok">Received (short ${esc(t.shortQty)})</span>`;
+            return `<span class="badge ${out ? 'status-warn' : 'status-ok'}">${out ? 'Sent' : 'Received'}</span>`;
+        }
+        let trfrCur = null, trfrQty = {};
+        function openTRFRecvModal() {
+            const list = _pendingInternalTRFs();
+            if (!list.length) { showToast('Nothing in transit to this shop', 'danger'); return; }
+            document.getElementById('trfr-pick').innerHTML = list.map(t => `<option value="${esc(t.id)}">${esc(t.id)} - from ${esc(getShopName(recShopId(t)))} (${esc(t.date)})</option>`).join('');
+            document.getElementById('trfr-person').value = getGeneratedByLabel();
+            document.getElementById('trfr-notes').value = '';
+            trfRecvPick(list[0].id);
+            openModal('modal-trf-recv');
+        }
+        function trfRecvPick(id) {
+            trfrCur = _pendingInternalTRFs().find(t => t.id === id) || null;
+            trfrQty = {};
+            const el = document.getElementById('trfr-body');
+            if (!trfrCur) { el.innerHTML = ''; return; }
+            trfrCur.items.forEach((it, i) => { trfrQty[i] = it.qty; });
+            el.innerHTML = trfrCur.items.map((it, i) => `<div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+                <div style="flex:1;min-width:0;"><div style="font-weight:600;">${esc(it.prodName)}</div><div style="font-size:.75rem;color:var(--text-muted);">Sent: ${esc(it.qty)}${it.unit ? ' ' + esc(it.unit) : ''} &middot; cost ${formatZMW(it.unitCost || 0)}</div></div>
+                <input type="number" min="0" max="${esc(it.qty)}" step="1" value="${esc(it.qty)}" style="width:90px;" oninput="trfrQty[${i}]=this.value;trfRecvShort()">
+            </div>`).join('') + '<div id="trfr-short" style="font-size:.82rem;margin-bottom:.6rem;"></div>';
+            trfRecvShort();
+        }
+        function trfRecvShort() {
+            const el = document.getElementById('trfr-short'); if (!el || !trfrCur) return;
+            let short = 0;
+            trfrCur.items.forEach((it, i) => { short += Math.max(0, it.qty - (parseInt(trfrQty[i]) || 0)); });
+            el.innerHTML = short > 0 ? `<span style="color:var(--danger);font-weight:700;">Shortage: ${short} not received</span>` : '<span style="color:var(--text-muted);">All items received in full</span>';
+        }
+        function trfRecvConfirm() {
+            if (!trfrCur) return;
+            if (isReadOnly()) { roBlocked(); return; }
+            const full = dbLoad('transfers');
+            const out = full.find(t => t.id === trfrCur.id);
+            const me = getActiveShopId();
+            if (!out || out.status !== 'in_transit' || out.toShopId !== me) { showToast('This transfer is no longer pending', 'danger'); closeModal('modal-trf-recv'); refreshAll(); return; }
+            const recv = [];
+            for (let i = 0; i < out.items.length; i++) {
+                const q = parseInt(trfrQty[i]);
+                if (isNaN(q) || q < 0 || q > out.items[i].qty) { showToast(`Received quantity for ${out.items[i].prodName} must be 0 to ${out.items[i].qty}`, 'danger'); return; }
+                recv.push(q);
+            }
+            if (!recv.some(q => q > 0) && !confirm('Nothing was received. Record the whole transfer as lost in transit?')) return;
+            const inv = db.inventory;
+            const inItems = out.items.map((it, i) => {
+                const q = recv[i];
+                let p = inv.find(x => _norm(x.name) === _norm(it.prodName) && (!it.unit || !x.unit || _norm(x.unit) === _norm(it.unit)));
+                if (q > 0) {
+                    if (!p) { p = { id: uid('PRD'), name: it.prodName, cat: it.cat || '', unit: it.unit || '', qty: 0, cost: it.unitCost || 0, price: it.price || 0, status: 'Fresh', createdAt: Date.now() }; inv.push(p); }
+                    p.qty += q; p.status = 'Fresh'; if (it.unitCost > 0) p.cost = it.unitCost;
+                }
+                return { prodId: p ? p.id : '', prodName: it.prodName, qty: q, sentQty: it.qty, unitCost: it.unitCost, unit: it.unit || '' };
+            });
+            db.inventory = inv;
+            const short = out.items.reduce((s, it, i) => s + (it.qty - recv[i]), 0);
+            const inId = uid('TRF');
+            out.items.forEach((it, i) => { it.recvQty = recv[i]; });
+            out.status = 'received'; out.receivedAt = Date.now(); out.receivedBy = currentUser || 'unknown'; out.inId = inId; out.shortQty = short; out.updatedAt = Date.now();
+            full.push({
+                id: inId, direction: 'in', date: new Date().toLocaleDateString('en-GB'), shop: getShopName(recShopId(out)), ref: out.id,
+                person: document.getElementById('trfr-person').value.trim(), notes: document.getElementById('trfr-notes').value.trim(),
+                items: inItems, total: _r2(inItems.reduce((s, i) => s + i.qty * i.unitCost, 0)), recordedBy: currentUser || 'unknown',
+                internal: true, fromShopId: recShopId(out), outId: out.id, shortQty: short, shopId: me, updatedAt: Date.now()
+            });
+            writeCollection('transfers', full);
+            closeModal('modal-trf-recv');
+            refreshAll();
+            showToast(short > 0 ? `Received with a shortage of ${short}. Flagged on both notes.` : 'Stock received. Your stock was increased.');
+            printTRF(inId);
         }
 
         function printTRF(id) {
@@ -9864,7 +10750,7 @@
                 <div class="grn-row" style="font-weight:800;font-size:1rem;border-top:1.5px solid #333;padding-top:6px;"><span>TOTAL VALUE AT COST</span><span>${formatZMW(t.total || 0)}</span></div>
                 ${t.notes ? `<div style="margin-top:8px;font-size:.78rem;background:#f7f7f7;padding:6px 8px;border-radius:4px;"><strong>Notes:</strong> ${esc(t.notes)}</div>` : ''}
                 <div class="grn-sign"><div>Sent by (name &amp; signature)</div><div>Received by (name &amp; signature)</div></div>
-                ${out ? '<div style="margin-top:8px;font-size:.75rem;color:#555;">The receiving shop should record this under Stock Transfers → Receive Stock, quoting the transfer number above.</div>' : ''}`;
+                ${out && t.internal ? '<div style="margin-top:8px;font-size:.75rem;color:#555;">' + esc(t.shop) + ' confirms receipt under Stock Transfers, Receive from my shops. Status: ' + (t.status === 'in_transit' ? 'IN TRANSIT' : 'DELIVERED') + '.</div>' : ''}${out && !t.internal ? '<div style="margin-top:8px;font-size:.75rem;color:#555;">The receiving shop should record this under Stock Transfers → Receive Stock, quoting the transfer number above.</div>' : ''}`;
             openModal('modal-trf-print');
         }
 
@@ -11221,7 +12107,7 @@
                     const r = await fetch(`${FIREBASE_CONFIG.databaseURL}/staffOf/${id}.json?auth=${idTok}`, { method: 'DELETE' });
                     if (!r.ok) throw new Error('status ' + r.status);
                     const s = db.settings;
-                    if (s.staffList) { delete s.staffList[id]; db.settings = s; }
+                    if (s.staffList) { delete s.staffList[id]; if (s.staffShops) delete s.staffShops[id]; db.settings = s; }
                     renderEmailStaffList();
                     showToast('Staff member removed. Their access is cut off.');
                 } catch (e) { showToast('Could not remove staff (check your connection and try again): ' + (e.message || ''), 'danger'); }
@@ -11234,6 +12120,7 @@
                 const accounts = getAccounts();
                 const clients = (accounts && accounts.clients) || [];
                 const removedUsername = clients[slot - 1] && clients[slot - 1].username;
+                if (removedUsername) { const _ss = db.settings; if (_ss.staffShops) { delete _ss.staffShops[staffKeyForUsername(removedUsername)]; db.settings = _ss; } }
                 clients[slot - 1] = null;
                 accounts.clients = clients;
                 localStorage.setItem(AUTH_KEY, JSON.stringify(accounts));
@@ -12479,6 +13366,7 @@
             document.getElementById('setup-page').classList.add('hidden');
             document.getElementById('app-layout').classList.remove('hidden');
             document.getElementById('user-display-name').textContent = session.displayName || '';
+            _activeShopCache = null;
             document.getElementById('app-layout').dataset.role = session.role;
             applyLicenseUI();
             renderCloudSyncUI();
