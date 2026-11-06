@@ -809,17 +809,26 @@
             <div style="margin-bottom:1rem;">
                 <label style="font-size:.8rem;font-weight:600;color:var(--text-muted);display:block;margin-bottom:.35rem;">PLAN REQUESTED</label>
                 <select id="subreq-tier" onchange="onSubReqTierChange()" style="width:100%;padding:.6rem .9rem;border:1.5px solid var(--border);border-radius:var(--radius);font-size:.9rem;">
-                    <option value="starter">Starter — K200/mo</option>
-                    <option value="standard">Standard — K300/mo</option>
-                    <option value="pro">Pro — K399/mo</option>
-                    <option value="lifetime">Lifetime — K2,500 once-off</option>
+                    <option value="starter">Starter</option>
+                    <option value="standard">Standard</option>
+                    <option value="pro">Pro</option>
+                    <option value="lifetime">Lifetime (pay once)</option>
+                </select>
+                <div id="subreq-tier-note" style="display:none;font-size:.75rem;color:var(--text-muted);margin-top:.3rem;"></div>
+            </div>
+            <div id="subreq-months-wrap" style="margin-bottom:1rem;">
+                <label style="font-size:.8rem;font-weight:600;color:var(--text-muted);display:block;margin-bottom:.35rem;">MONTHS TO PAY</label>
+                <select id="subreq-months" onchange="renderSubReq()" style="width:100%;padding:.6rem .9rem;border:1.5px solid var(--border);border-radius:var(--radius);font-size:.9rem;">
+                    <option value="1">1 month</option><option value="2">2 months</option><option value="3">3 months</option>
+                    <option value="4">4 months</option><option value="5">5 months</option><option value="6">6 months</option>
                 </select>
             </div>
-            <div id="subreq-extra-wrap" style="margin-bottom:1rem;">
-                <label style="font-size:.8rem;font-weight:600;color:var(--text-muted);display:block;margin-bottom:.35rem;">EXTRA SHOPS <span style="font-weight:400;">(besides your first shop)</span></label>
-                <input type="number" id="subreq-extra-shops" min="0" max="50" step="1" value="0" inputmode="numeric" oninput="updateSubReqQuote()" style="width:100%;padding:.6rem .9rem;border:1.5px solid var(--border);border-radius:var(--radius);font-size:.9rem;"/>
-                <div id="subreq-quote" style="margin-top:.45rem;font-size:.85rem;font-weight:700;color:#1E6B35;"></div>
+            <div id="subreq-shops-wrap" style="margin-bottom:1rem;">
+                <label style="font-size:.8rem;font-weight:600;color:var(--text-muted);display:block;margin-bottom:.35rem;">PAY FOR <span style="font-weight:400;">(tick the shops)</span></label>
+                <div id="subreq-shops"></div>
+                <div id="subreq-warn" style="display:none;font-size:.78rem;color:#b26a00;background:#fff8e6;border:1px solid #ffe2a8;border-radius:6px;padding:.45rem .65rem;margin-top:.5rem;"></div>
             </div>
+            <div id="subreq-summary" style="margin-bottom:1rem;background:#f1f8f3;border:1.5px solid #cfe6d5;border-radius:var(--radius);padding:.8rem .95rem;"></div>
             <div style="margin-bottom:1rem;">
                 <label style="font-size:.8rem;font-weight:600;color:var(--text-muted);display:block;margin-bottom:.35rem;">YOUR PHONE / WHATSAPP</label>
                 <input type="tel" id="subreq-phone" placeholder="e.g. 0977 000 000" style="width:100%;padding:.6rem .9rem;border:1.5px solid var(--border);border-radius:var(--radius);font-size:.9rem;"/>
@@ -838,7 +847,8 @@
             <div id="subreq-success" style="display:none;background:#e8f5e9;border-radius:8px;padding:1rem;text-align:center;margin-bottom:.75rem;">
                 <div style="font-size:1.5rem">✅</div>
                 <div style="font-weight:700;color:#2e7d32;margin:.3rem 0;">Request Sent!</div>
-                <div style="font-size:.82rem;color:#555;">We'll verify your payment and activate your plan shortly. Contact us on WhatsApp if you need faster assistance.</div>
+                <div id="subreq-ref" style="font-size:.85rem;font-weight:700;color:#13481F;margin-bottom:.35rem;"></div>
+                <div style="font-size:.82rem;color:#555;">We'll verify your payment and update the paid-until date for the shops you selected shortly. Status: pending approval. Contact us on WhatsApp if you need faster assistance.</div>
                 <button onclick="closeModal('modal-sub-request')" class="btn btn-primary" style="margin-top:1rem;width:100%;">Close</button>
             </div>
             <div id="subreq-actions" style="display:flex;gap:.75rem;margin-top:.5rem;position:sticky;bottom:-2rem;background:#fff;padding:.75rem 0 .25rem;z-index:2;">
@@ -6842,52 +6852,133 @@
             document.getElementById('subreq-txnid').value = '';
             document.getElementById('subreq-note').value = '';
             document.getElementById('subreq-txnid').style.borderColor = '';
-            // Pre-select tier
-            if (tier) {
+            // Pre-select the plan: the one asked for, else the plan they are on.
+            {
                 const sel = document.getElementById('subreq-tier');
-                if (sel) sel.value = tier;
+                let cur = ''; try { cur = (getLicense() || {}).tier || ''; } catch (e) {}
+                if (sel) sel.value = tier || (['starter', 'standard', 'pro', 'lifetime'].indexOf(cur) >= 0 ? cur : 'starter');
+                const mEl = document.getElementById('subreq-months'); if (mEl) mEl.value = '1';
             }
-            // Start the extra-shops count at the shops they already run, then refresh today's prices.
-            let _exN = 0; try { _exN = Math.max(0, getShops(false).length - 1); } catch (e) {}
-            const _exEl = document.getElementById('subreq-extra-shops'); if (_exEl) _exEl.value = String(_exN);
+            // Start with the shop they are working in ticked (plus the Main shop if the plan has expired).
+            _sr = { sel: subReqDefaultSel() };
             fetchPublicPricing(); fetchOwnerPricing(true);
             onSubReqTierChange();
             openModal('modal-sub-request');
         }
 
-        // What this request costs at today's prices. It is saved on the request, so the admin can
-        // see exactly what was quoted even if prices change later.
-        function buildPlanQuote(tier, extraCount) {
+        // ── PER-SHOP REQUEST FORM ─────────────────────────────────────────
+        // The owner ticks which shops they are paying for, picks the plan and 1–6 months, and sees an
+        // itemised total. Main shop = the plan price; every extra shop = the admin's extra-shop price.
+        // The itemised lines (and the prices quoted) are saved on the request so the admin dates only
+        // those shops, and can check the payment even if prices change later.
+        let _sr = { sel: {} };
+        const SUBREQ_MAX_MONTHS = 6;
+        function _fmtD(ms) { try { return new Date(ms).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }); } catch (e) { return ''; } }
+        function _addMonths(ms, n) { const d = new Date(ms); d.setMonth(d.getMonth() + n); return d.getTime(); }
+        function _srLic() { try { return getLicense() || {}; } catch (e) { return {}; } }
+        function _srShops() { try { return getShops(false); } catch (e) { return [{ id: MAIN_SHOP_ID, name: 'Main shop' }]; } }
+        function _srIsTrial(lic) { return !lic.tier || lic.tier === 'trial'; }
+        function _srMainExpired(lic) { return !_srIsTrial(lic) && lic.tier !== 'lifetime' && !(lic.expiry > Date.now()); }
+        function subReqDefaultSel() {
+            const lic = _srLic(), shops = _srShops(), trial = _srIsTrial(lic);
+            let active = MAIN_SHOP_ID; try { active = getActiveShopId(); } catch (e) {}
+            const sel = {};
+            shops.forEach(x => { sel[x.id] = trial || x.id === active || (x.id === MAIN_SHOP_ID && _srMainExpired(lic)); });
+            return sel;
+        }
+        // Where the new paid-until date starts from: the current date if still paid, otherwise today.
+        function _srBase(expiry) { return (typeof expiry === 'number' && expiry > Date.now()) ? expiry : Date.now(); }
+        function _srStatus(x, lic) {
+            if (x.id === MAIN_SHOP_ID) {
+                if (lic.tier === 'lifetime') return { text: 'Lifetime plan', life: true, expiry: null };
+                if (_srIsTrial(lic)) return { text: 'Free trial' + (lic.expiry ? ' until ' + _fmtD(lic.expiry) : ''), expiry: null };
+                return lic.expiry > Date.now()
+                    ? { text: 'Paid until ' + _fmtD(lic.expiry), expiry: lic.expiry }
+                    : { text: 'Expired ' + (lic.expiry ? _fmtD(lic.expiry) : ''), expiry: null, bad: true };
+            }
+            const sl = shopLicense(x.id);
+            if (sl.kind === 'lifetime') return { text: 'Lifetime', life: true, expiry: null };
+            if (sl.kind === 'paid') return { text: 'Paid until ' + _fmtD(sl.expiry), expiry: sl.expiry };
+            if (sl.kind === 'lapsed') return { text: 'Lapsed ' + _fmtD(sl.expiry), expiry: null, bad: true };
+            if (sl.kind === 'trial') return { text: 'Free during trial', expiry: null };
+            return { text: 'Not paid yet', expiry: null, bad: true };
+        }
+        // Works out the plan, months, itemised lines and total from the form. Used for display and for saving.
+        function computeSubReq() {
+            const lic = _srLic(), shops = _srShops(), trial = _srIsTrial(lic);
+            const tierEl = document.getElementById('subreq-tier'), mEl = document.getElementById('subreq-months');
+            let tier = tierEl ? tierEl.value : 'starter';
+            const sel = _sr.sel || {};
+            const mainLife = lic.tier === 'lifetime';
+            const mainTicked = trial ? true : !!sel[MAIN_SHOP_ID];
+            let lock = '';
+            if (mainLife) { tier = 'lifetime'; lock = 'You are on the Lifetime plan, so extra shops are paid once.'; }
+            else if (!mainTicked && ['starter', 'standard', 'pro'].indexOf(lic.tier) >= 0) { tier = lic.tier; lock = 'Extra shops are priced at your current plan (' + (TIER_LABELS[tier] || tier) + '). Tick the Main shop to change plan.'; }
             const isLife = tier === 'lifetime';
-            const planPrice = isLife ? LIFETIME_PLAN_PRICE : PLAN_MONTHLY_PRICE[tier];
-            if (!planPrice) return null;
-            const x = extraShopPrice(tier);
-            if (!x || x.kind === 'free') return null;
-            const n = Math.max(0, Math.min(50, parseInt(extraCount, 10) || 0));
+            const months = isLife ? 1 : Math.max(1, Math.min(SUBREQ_MAX_MONTHS, parseInt(mEl ? mEl.value : '1', 10) || 1));
             const pr = getPricing();
-            return { planPrice, planKind: isLife ? 'once' : 'monthly', extraShops: n, extraShopUnit: x.amount, extraShopsTotal: n * x.amount,
-                     total: planPrice + n * x.amount, pct: pr.pct, lifetimePrice: pr.lifetimePrice, priceSource: pr.source, quotedAt: Date.now() };
+            const ex = extraShopPrice(tier);
+            const rows = [], lines = [];
+            shops.forEach(x => {
+                const isMain = x.id === MAIN_SHOP_ID;
+                const st = _srStatus(x, lic);
+                const unit = isMain ? (isLife ? LIFETIME_PLAN_PRICE : PLAN_MONTHLY_PRICE[tier]) : (ex ? ex.amount : 0);
+                const amount = isLife ? unit : unit * months;
+                const disabled = !!st.life || (isMain && trial);
+                const ticked = disabled ? (isMain && trial) : !!sel[x.id];
+                const row = { id: x.id, name: x.name || (isMain ? 'Main shop' : 'Shop'), isMain, st, unit, amount, disabled, ticked };
+                if (ticked && unit >= 0) {
+                    row.newUntil = isLife ? null : _addMonths(_srBase(st.expiry), months);
+                    lines.push({ shopId: x.id, name: row.name, kind: isMain ? 'main' : 'extra', unit, months, amount, until: row.newUntil || null });
+                }
+                rows.push(row);
+            });
+            const total = lines.reduce((t, l) => t + l.amount, 0);
+            return { tier, months, isLife, lock, rows, lines, total, trial, mainTicked, mainExpired: _srMainExpired(lic), pr };
         }
-        function updateSubReqQuote() {
-            const wrap = document.getElementById('subreq-extra-wrap'), el = document.getElementById('subreq-quote');
-            const tierEl = document.getElementById('subreq-tier'), cntEl = document.getElementById('subreq-extra-shops');
-            if (!wrap || !el || !tierEl || !cntEl) return;
-            const tier = tierEl.value;
-            el.textContent = '';
-            const q = buildPlanQuote(tier, cntEl.value);
-            if (!q) return;
-            const per = q.planKind === 'once' ? ' once-off' : '/month', label = TIER_LABELS[tier] || tier;
-            // Price of one extra shop for the chosen plan, taken from what the admin published
-            // (an owner's special price wins; the built-in 50% / K1,250 is only a fallback).
-            const unitTxt = fmtK(q.extraShopUnit) + per + (q.planKind === 'once' ? '' : ' (' + q.pct + '% of the plan)');
-            el.style.whiteSpace = 'pre-line';
-            el.textContent = (q.extraShops
-                ? label + ' ' + fmtK(q.planPrice) + ' + ' + q.extraShops + ' × ' + fmtK(q.extraShopUnit) + ' = ' + fmtK(q.total) + per
-                : label + ' ' + fmtK(q.planPrice) + per) + '\nEach extra shop: ' + unitTxt;
+        function subReqToggle(id) { _sr.sel[id] = !_sr.sel[id]; renderSubReq(); }
+        function renderSubReq() {
+            const box = document.getElementById('subreq-shops'), sumEl = document.getElementById('subreq-summary');
+            if (!box || !sumEl) return;
+            const q = computeSubReq();
+            const tierEl = document.getElementById('subreq-tier'), note = document.getElementById('subreq-tier-note');
+            if (tierEl) { tierEl.value = q.tier; tierEl.disabled = !!q.lock; }
+            if (note) { note.textContent = q.lock; note.style.display = q.lock ? '' : 'none'; }
+            const mw = document.getElementById('subreq-months-wrap'); if (mw) mw.style.display = q.isLife ? 'none' : '';
+            const per = q.isLife ? ' once' : ' × ' + q.months + (q.months === 1 ? ' month' : ' months');
+            box.innerHTML = q.rows.map(r => {
+                const unitTxt = fmtK(r.unit) + (q.isLife ? '' : '/mo');
+                const right = r.disabled && !(r.isMain && q.trial)
+                    ? '<div style="font-size:.78rem;color:var(--text-muted);">No payment needed</div>'
+                    : '<div style="font-weight:800;color:#1E6B35;">' + fmtK(r.amount) + '</div><div style="font-size:.7rem;color:var(--text-muted);">' + unitTxt + (q.isLife ? '' : per.replace(' × ', ' × ')) + '</div>';
+                const until = r.ticked && !q.isLife && r.newUntil ? '<div style="font-size:.74rem;color:#1E6B35;margin-top:.1rem;">New paid-until after approval: <strong>' + _fmtD(r.newUntil) + '</strong></div>' : '';
+                const oc = r.disabled ? '' : ' onchange="subReqToggle(\'' + String(r.id).replace(/'/g, '') + '\')"';
+                return '<label style="display:flex;align-items:flex-start;gap:.6rem;padding:.6rem .7rem;margin-bottom:.4rem;border:1.5px solid ' + (r.ticked ? '#1E6B35' : 'var(--border)') + ';border-radius:var(--radius);background:' + (r.ticked ? '#f6fbf7' : '#fff') + ';' + (r.disabled ? 'opacity:.75;' : 'cursor:pointer;') + '">' +
+                    '<input type="checkbox" ' + (r.ticked ? 'checked ' : '') + (r.disabled ? 'disabled ' : '') + oc + ' style="width:18px;height:18px;margin-top:.15rem;accent-color:#1E6B35;flex:none;">' +
+                    '<div style="flex:1;min-width:0;"><div style="font-weight:700;font-size:.9rem;">' + esc(r.name) + (r.isMain ? ' <span style="font-weight:400;font-size:.72rem;color:var(--text-muted);">(plan)</span>' : '') + '</div>' +
+                    '<div style="font-size:.76rem;color:' + (r.st.bad ? '#c0392b' : 'var(--text-muted)') + ';">' + esc(r.st.text) + '</div>' + until + '</div>' +
+                    '<div style="text-align:right;flex:none;">' + right + '</div></label>';
+            }).join('');
+            const warn = document.getElementById('subreq-warn');
+            let w = '';
+            if (!q.trial && q.mainExpired && !q.mainTicked) w = 'The Main shop plan has expired, so the whole account is view-only until it is renewed. Tick the Main shop too.';
+            if (warn) { warn.textContent = w; warn.style.display = w ? '' : 'none'; }
+            const label = TIER_LABELS[q.tier] || q.tier;
+            if (!q.lines.length) {
+                sumEl.innerHTML = '<div style="font-size:.85rem;color:var(--text-muted);">Tick at least one shop to see the amount to pay.</div>';
+            } else {
+                const n = q.lines.length;
+                sumEl.innerHTML = '<div style="font-size:.74rem;font-weight:700;color:var(--text-muted);letter-spacing:.4px;">AMOUNT TO PAY</div>' +
+                    '<div style="font-size:1.7rem;font-weight:800;color:#13481F;line-height:1.2;">' + fmtK(q.total) + '</div>' +
+                    '<div style="font-size:.8rem;color:var(--text-muted);">' + label + ' plan · ' + n + (n === 1 ? ' shop' : ' shops') + (q.isLife ? ' · once-off' : ' · ' + q.months + (q.months === 1 ? ' month' : ' months')) + '</div>' +
+                    '<div style="font-size:.78rem;color:var(--text-muted);margin-top:.35rem;">Pay exactly this amount by Mobile Money, then enter the transaction ID below.</div>';
+            }
         }
+        // Kept under its old name because the pricing refresh calls it when new prices arrive.
+        function updateSubReqQuote() { renderSubReq(); }
 
         function onSubReqTierChange() {
-            try { updateSubReqQuote(); } catch (e) {}
+            try { renderSubReq(); } catch (e) { console.error(e); }
         }
 
         async function submitSubRequest() {
@@ -6895,12 +6986,18 @@
             const btn    = document.getElementById('subreq-btn');
             errEl.style.display = 'none';
 
-            const tier  = document.getElementById('subreq-tier').value.trim();
+            const tier  = computeSubReq().tier;
             const phone = document.getElementById('subreq-phone').value.trim();
             const txnId = document.getElementById('subreq-txnid').value.trim();
             const note  = document.getElementById('subreq-note').value.trim();
 
             // Validation
+            const _q = computeSubReq();
+            if (!_q.lines.length) {
+                errEl.textContent = 'Tick at least one shop to pay for.';
+                errEl.style.display = 'block';
+                return;
+            }
             if (!phone) {
                 errEl.textContent = 'Please enter your phone / WhatsApp number.';
                 errEl.style.display = 'block';
@@ -6943,10 +7040,19 @@
                     ts: Date.now()
                 };
 
-                // Save the price quoted right now (plan + extra shops) so it can be checked against the payment.
+                // Save the itemised quote (which shops, how many months, the price of each) so the admin
+                // can date just those shops and check the amount paid.
                 {
-                    const _q = buildPlanQuote(tier, document.getElementById('subreq-extra-shops').value);
-                    if (_q) payload.quote = _q;
+                    const mainL = _q.lines.filter(l => l.kind === 'main')[0];
+                    const extraL = _q.lines.filter(l => l.kind === 'extra');
+                    payload.months = _q.months;
+                    payload.quote = {
+                        planKind: _q.isLife ? 'once' : 'monthly', months: _q.months,
+                        lines: _q.lines.map(l => ({ shopId: l.shopId, name: String(l.name || '').slice(0, 80), kind: l.kind, unit: l.unit, months: l.months, amount: l.amount })),
+                        planPrice: mainL ? mainL.unit : 0, extraShops: extraL.length, extraShopUnit: extraL.length ? extraL[0].unit : 0,
+                        extraShopsTotal: extraL.reduce((t, l) => t + l.amount, 0), total: _q.total,
+                        pct: _q.pr.pct, lifetimePrice: _q.pr.lifetimePrice, priceSource: _q.pr.source, quotedAt: Date.now()
+                    };
                 }
 
                 // Write to root-level subscriptionRequests/{uid} using user's auth token
@@ -6966,6 +7072,7 @@
 
                 // Show success
                 document.getElementById('subreq-form').style.display = 'none';
+                { const _rf = document.getElementById('subreq-ref'); if (_rf) _rf.textContent = 'Reference ' + requestId.slice(-6) + ' · ' + fmtK(_q.total); }
                 document.getElementById('subreq-success').style.display = 'block';
                 document.getElementById('subreq-actions').style.display = 'none';
                 const _b = document.getElementById('subreq-box'); if (_b) _b.scrollTop = 0;
