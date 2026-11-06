@@ -621,6 +621,7 @@
                     <div class="form-group"><label>Admin Username</label><input type="text" id="setup-admin-user" placeholder="e.g. admin" required autocomplete="off"/></div>
                     <div class="form-group"><label>Admin Password</label><input type="password" id="setup-admin-pw" placeholder="Min 6 characters" required/></div>
                     <div class="form-group"><label>Confirm Password</label><input type="password" id="setup-admin-pw2" placeholder="Repeat password" required/></div>
+                    <div class="form-group"><label>Email for updates and receipts</label><input type="email" id="setup-notify-email" placeholder="you@example.com" required autocomplete="email" inputmode="email" maxlength="120"/></div>
                     <div id="setup-error" style="display:none;color:var(--danger);font-size:.85rem;margin-bottom:.75rem;padding:.5rem;background:#ffebee;border-radius:4px;"></div>
                     <div id="setup-cloud-status" style="display:none;font-size:.82rem;margin-bottom:.75rem;padding:.5rem;border-radius:4px;"></div>
                     <button type="submit" class="btn btn-primary" style="width:100%" id="setup-btn">Create Account &amp; Connect Cloud →</button>
@@ -682,10 +683,10 @@
 
                 <!-- CREATE ACCOUNT PANEL -->
                 <div id="auth-signup-panel" style="display:none;">
-                    <form id="signupForm" onsubmit="handleSignup(event)">
+                    <form id="signupForm" onsubmit="handleSignup(event)" onreset="setTimeout(toggleSignupEmailFields,0)">
                         <div class="form-group"><label>Business / Company Name</label><input type="text" id="signup-company-name" placeholder="e.g. Chanda Agro Supplies" required autocomplete="organization" oninput="scheduleAvailabilityCheck()"/></div>
                         <div style="display:flex;align-items:flex-start;gap:.5rem;margin-bottom:1rem;font-size:.82rem;color:var(--text-muted);">
-                            <input type="checkbox" id="signup-join-mode" style="margin-top:3px;flex-shrink:0;accent-color:var(--primary);">
+                            <input type="checkbox" id="signup-join-mode" onchange="toggleSignupEmailFields()" style="margin-top:3px;flex-shrink:0;accent-color:var(--primary);">
                             <label for="signup-join-mode">I'm joining an <strong>existing</strong> business as an additional Administrator (not creating a new business). Use the same Business / Company Name the business already signed up with.</label>
                         </div>
                         <hr style="margin:.85rem 0;border-color:#ddd;"/>
@@ -694,6 +695,9 @@
                         <div id="signup-availability" style="display:none;font-size:.8rem;margin:-6px 0 10px;padding:4px 8px;border-radius:4px;"></div>
                         <div class="form-group"><label>Admin Password</label><input type="password" id="signup-admin-pw" placeholder="Min 6 characters" required/></div>
                         <div class="form-group"><label>Confirm Password</label><input type="password" id="signup-admin-pw2" placeholder="Repeat password" required/></div>
+                        <div id="signup-email-wrap">
+                            <div class="form-group"><label>Email for updates and receipts</label><input type="email" id="signup-notify-email" placeholder="you@example.com" autocomplete="email" inputmode="email" maxlength="120"/></div>
+                        </div>
                         <div id="signup-error" style="display:none;color:var(--danger);font-size:.85rem;margin-bottom:.75rem;padding:.5rem;background:#ffebee;border-radius:4px;"></div>
                         <div id="signup-cloud-status" style="display:none;font-size:.82rem;margin-bottom:.75rem;padding:.5rem;border-radius:4px;"></div>
                         <div style="display:flex;align-items:flex-start;gap:.5rem;margin-bottom:1rem;font-size:.82rem;color:var(--text-muted);">
@@ -832,6 +836,11 @@
             <div style="margin-bottom:1rem;">
                 <label style="font-size:.8rem;font-weight:600;color:var(--text-muted);display:block;margin-bottom:.35rem;">YOUR PHONE / WHATSAPP</label>
                 <input type="tel" id="subreq-phone" placeholder="e.g. 0977 000 000" style="width:100%;padding:.6rem .9rem;border:1.5px solid var(--border);border-radius:var(--radius);font-size:.9rem;"/>
+            </div>
+            <div style="margin-bottom:1rem;">
+                <label style="font-size:.8rem;font-weight:600;color:var(--text-muted);display:block;margin-bottom:.35rem;">EMAIL FOR YOUR RECEIPT</label>
+                <input type="email" id="subreq-email" readonly placeholder="Set in Settings" maxlength="120" style="background:#f4f6f4;width:100%;padding:.6rem .9rem;border:1.5px solid var(--border);border-radius:var(--radius);font-size:.9rem;"/>
+                <div style="font-size:.75rem;color:var(--text-muted);margin-top:.3rem;">Receipts go to the email on your account. Change it under Settings.</div>
             </div>
             <div style="margin-bottom:1rem;">
                 <label style="font-size:.8rem;font-weight:600;color:var(--text-muted);display:block;margin-bottom:.35rem;">TRANSACTION ID <span style="color:var(--danger);">*</span></label>
@@ -1343,6 +1352,25 @@
                         <div id="shop-form-error" style="display:none;color:var(--danger);font-size:.82rem;margin-bottom:.5rem;"></div>
                         <button class="btn btn-primary btn-sm" id="shop-save-btn" onclick="saveShop()">Add shop</button>
                         <button class="btn btn-sm" id="shop-cancel-btn" style="display:none;" onclick="cancelShopEdit()">Cancel</button>
+                    </div>
+                </div>
+                <!-- EMAIL FOR UPDATES AND RECEIPTS CARD -->
+                <div class="card" id="notify-card" style="margin-bottom: 2rem; border-left-color: #2E8B47;">
+                    <h3 style="margin-bottom:.5rem;">&#9993; Email for Updates &amp; Receipts</h3>
+                    <p style="color:var(--text-muted);font-size:.85rem;margin-bottom:1rem;">We email your subscription approvals and receipts to this address. It is confirmed with a 6-digit code, and the owner account must always have one.</p>
+                    <div id="notify-status" style="margin-bottom:1rem;font-size:.9rem;"></div>
+                    <div id="notify-form-wrap" style="display:none;max-width:420px;">
+                        <div id="notify-step1">
+                            <div class="form-group"><label>New email</label><input type="email" id="notify-email" placeholder="you@example.com" autocomplete="email" inputmode="email" maxlength="120"/></div>
+                            <button class="btn btn-primary btn-sm" id="notify-send-btn" onclick="notifySendCode()">Send verification code</button>
+                        </div>
+                        <div id="notify-step2" style="display:none;">
+                            <p id="notify-sent" style="font-size:.86rem;margin-bottom:.7rem;"></p>
+                            <div class="form-group"><label>6-digit code from your email</label><input type="text" id="notify-code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="123456"/></div>
+                            <button class="btn btn-primary btn-sm" id="notify-verify-btn" onclick="notifyVerify()">Verify &amp; save</button>
+                            <button class="btn btn-sm" onclick="notifyCancel()">Cancel</button>
+                        </div>
+                        <div id="notify-msg" style="display:none;font-size:.82rem;margin-top:.6rem;color:var(--danger);"></div>
                     </div>
                 </div>
                 <!-- ACCOUNT RECOVERY CARD -->
@@ -2233,6 +2261,26 @@
                 <button type="submit" class="btn btn-primary" style="width:100%;background:var(--warning);color:#1A2016;">Record Adjustment</button>
             </form>
             <button onclick="closeModal('modal-adjustment')" class="btn btn-sm" style="margin-top:8px;width:100%">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Required: verified email for updates and receipts (owner accounts) -->
+    <div id="modal-notify-email" class="modal-overlay hidden" style="z-index:10003;">
+        <div class="modal-content" style="max-width:400px;">
+            <h3 id="ne-title">&#9993; Add your email</h3>
+            <p id="ne-intro" style="color:var(--text-muted);font-size:.86rem;margin-bottom:.9rem;"></p>
+            <div id="ne-step1">
+                <div class="form-group"><label>Email for updates and receipts</label><input type="email" id="ne-email" placeholder="you@example.com" autocomplete="email" inputmode="email" maxlength="120"/></div>
+                <button class="btn btn-primary" style="width:100%" id="ne-send-btn" onclick="neSendCode()">Send verification code</button>
+            </div>
+            <div id="ne-step2" style="display:none;">
+                <p id="ne-sent" style="font-size:.86rem;margin-bottom:.7rem;"></p>
+                <div class="form-group"><label>6-digit code</label><input type="text" id="ne-code" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="123456"/></div>
+                <button class="btn btn-primary" style="width:100%" id="ne-verify-btn" onclick="neVerify()">Verify and continue</button>
+                <button class="btn btn-sm" style="margin-top:8px;width:100%" onclick="neBack()">Use a different email or send a new code</button>
+            </div>
+            <div id="ne-msg" style="display:none;color:var(--danger);font-size:.82rem;margin:.6rem 0;"></div>
+            <button class="btn btn-sm" style="margin-top:8px;width:100%" onclick="closeModal('modal-notify-email');logout();">Log out instead</button>
         </div>
     </div>
 
@@ -4226,6 +4274,12 @@
             if (adminPw !== adminPw2) { errEl.textContent = 'Passwords do not match.'; errEl.style.display = 'block'; return; }
             if (adminPw.length < 6) { errEl.textContent = 'Password must be at least 6 characters.'; errEl.style.display = 'block'; return; }
             if (!document.getElementById('signup-tos-check').checked) { errEl.textContent = 'Please agree to the Terms of Service and Privacy Policy to continue.'; errEl.style.display = 'block'; return; }
+            let notifyEmail = '';
+            if (!document.getElementById('signup-join-mode').checked) {
+                const _ne = readNotifyEmailOne('signup-notify-email');
+                if (_ne.error) { errEl.textContent = _ne.error; errEl.style.display = 'block'; return; }
+                notifyEmail = _ne.email;
+            }
 
             if (!isCloudConfigured()) {
                 errEl.textContent = 'Cloud sync is not configured. Sign up is unavailable until this is fixed.';
@@ -4308,6 +4362,7 @@
 
             const existingSettings = JSON.parse(kvGet(KEYS.settings) || '{}');
             existingSettings.companyName = companyName;
+            existingSettings.notifyEmail = notifyEmail;
             existingSettings.updatedAt = Date.now();
             kvSet(KEYS.settings, JSON.stringify(existingSettings));
             // pushFullSnapshot inside connectCloudSync already ran against empty/seed data since
@@ -5042,6 +5097,9 @@
             if (!companyName) { errEl.textContent = 'Please enter your business name.'; errEl.style.display = 'block'; return; }
             if (adminPw !== adminPw2) { errEl.textContent = 'Passwords do not match.'; errEl.style.display = 'block'; return; }
             if (adminPw.length < 6) { errEl.textContent = 'Password must be at least 6 characters.'; errEl.style.display = 'block'; return; }
+            const _neSetup = readNotifyEmailOne('setup-notify-email');
+            if (_neSetup.error) { errEl.textContent = _neSetup.error; errEl.style.display = 'block'; return; }
+            const notifyEmail = _neSetup.email;
 
             if (!isCloudConfigured()) {
                 errEl.textContent = 'Cloud sync is not configured. Sign up is unavailable until this is fixed.';
@@ -5083,6 +5141,7 @@
 
             const existingSettings = JSON.parse(kvGet(KEYS.settings) || '{}');
             existingSettings.companyName = companyName;
+            existingSettings.notifyEmail = notifyEmail;
             existingSettings.updatedAt = Date.now();
             kvSet(KEYS.settings, JSON.stringify(existingSettings));
             // Force-push settings to Firebase immediately now that cloudAuth exists, so company
@@ -5129,6 +5188,7 @@
         function renderStaffAccountUI() {
             try { renderEmailStaffList(); } catch (e) {}
             try { renderRecoveryCard(); } catch (e) {}
+            try { renderNotifyEmailCard(); } catch (e) {}
             const accounts = getAccounts();
             const clients = (accounts && accounts.clients) || [];
             // Always show at least 2 slots (the original default) and every slot that already
@@ -5348,6 +5408,7 @@
                 refreshAll();
                 nav('dashboard');
                 try { checkRecoveryNudge(); } catch (e) {}
+                try { checkNotifyEmailGate(); } catch (e) {}
             } else {
                 const attempts = (lk.attempts || 0) + 1;
                 if (attempts >= MAX_ATTEMPTS) {
@@ -5569,7 +5630,174 @@
             }
         }
 
-        // ── OWNER ACCOUNT RECOVERY (recovery email, handled by the recovery Worker) ──────────
+        // ── EMAIL FOR UPDATES AND RECEIPTS (required and confirmed for owner accounts) ─────────
+// Kept as settings.notifyEmail (+ notifyEmailVerified and notifyEmailProof) so it syncs like the rest of the
+// business settings. The email service (zamagro-mailer.gs) sends a 6-digit code and returns a signed proof for
+// this account + address; it only ever emails an address that carries a valid proof. This is separate from the
+// recovery email. Staff and co-admin logins cannot change it.
+// Paste the same web-app URL the admin panel uses (MAILER_URL). While it is left as is, an address is saved
+// without a code, so nobody is locked out before the email service is deployed.
+const NOTIFY_API = 'https://script.google.com/macros/s/AKfycbyA9Psh3Gafbojbbj0mWQApvdrZqJeOxqWNzToeHYSoE4SzcZLPXLj3fOfmEl9XD3_A/exec';
+function isNotifyApiConfigured() { return /^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(NOTIFY_API); }
+function normNotifyEmail(v) { return String(v == null ? '' : v).trim().toLowerCase(); }
+function isValidNotifyEmail(v) { return v.length > 0 && v.length <= 120 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v); }
+function readNotifyEmailOne(id) {
+    const a = normNotifyEmail(document.getElementById(id).value);
+    if (!a) return { error: 'Please enter your email address.' };
+    if (!isValidNotifyEmail(a)) return { error: 'That email address does not look right.' };
+    return { email: a };
+}
+function notifySettings() { try { return db.settings || {}; } catch (e) { return {}; } }
+function notifyEmailNow() { return normNotifyEmail(notifySettings().notifyEmail); }
+function notifyEmailVerifiedNow() {
+    const s = notifySettings(), e = normNotifyEmail(s.notifyEmail);
+    return !!e && normNotifyEmail(s.notifyEmailVerified) === e && !!s.notifyEmailProof;
+}
+// True while the owner still has to add or confirm an address.
+function notifyNeedsAttention() {
+    if (!isValidNotifyEmail(notifyEmailNow())) return true;
+    return isNotifyApiConfigured() && !notifyEmailVerifiedNow();
+}
+function notifyOwnerReady() { return currentUser === 'admin' && !!cloudAuth && !cloudAuth.staff; }
+function storeNotifyEmail(email, proof) {
+    const s = db.settings;
+    s.notifyEmail = email;
+    if (proof) { s.notifyEmailVerified = email; s.notifyEmailProof = proof; }
+    else { delete s.notifyEmailVerified; delete s.notifyEmailProof; }
+    db.settings = s;
+}
+async function notifyApi(body) {
+    const idToken = await getFreshIdToken();
+    if (!idToken) throw new Error('Please sign in again, then retry.');
+    let resp;
+    try { resp = await fetch(NOTIFY_API, { method: 'POST', body: JSON.stringify(Object.assign({ idToken: idToken }, body)) }); }
+    catch (e) { throw new Error('Could not reach the email service. Check your connection and try again.'); }
+    let d = {}; try { d = await resp.json(); } catch (e) {}
+    if (!resp.ok || !d.ok) throw new Error(d.error || 'The email service did not answer. Please try again.');
+    return d;
+}
+function toggleSignupEmailFields() {
+    const w = document.getElementById('signup-email-wrap'), j = document.getElementById('signup-join-mode');
+    if (w && j) w.style.display = j.checked ? 'none' : '';
+}
+
+// --- required prompt: runs after every owner login and cannot be closed ---
+let _notifyGateBusy = false;
+function neMsg(t) { const m = document.getElementById('ne-msg'); m.style.display = t ? 'block' : 'none'; m.textContent = t || ''; }
+async function checkNotifyEmailGate() {
+    try {
+        if (_notifyGateBusy || !notifyOwnerReady()) return;
+        if (!notifyNeedsAttention()) return;
+        _notifyGateBusy = true;
+        // A new device may not have pulled the settings yet: look in the cloud once before asking.
+        if (isCloudConfigured() && navigator.onLine !== false) {
+            try {
+                const g = await Promise.all(['notifyEmail', 'notifyEmailVerified', 'notifyEmailProof'].map(function (k) { return firebaseGet('settings/' + k); }));
+                const raw = JSON.parse(kvGet(KEYS.settings) || '{}');
+                let lo = normNotifyEmail(raw.notifyEmail); const re = normNotifyEmail(g[0]);
+                if (!lo && re) { raw.notifyEmail = re; lo = re; }
+                if (lo && lo === re) { if (g[1]) raw.notifyEmailVerified = g[1]; if (g[2]) raw.notifyEmailProof = g[2]; }
+                kvSet(KEYS.settings, JSON.stringify(raw));
+            } catch (e) {}
+        }
+        _notifyGateBusy = false;
+        if (!notifyOwnerReady() || !notifyNeedsAttention()) return;
+        neOpen();
+    } catch (e) { _notifyGateBusy = false; }
+}
+function neOpen() {
+    const have = notifyEmailNow(), live = isNotifyApiConfigured();
+    document.getElementById('ne-title').innerHTML = have ? '&#9993; Confirm your email' : '&#9993; Add your email';
+    document.getElementById('ne-intro').textContent = 'We email you updates and receipts, for example when your subscription request is approved.' +
+        (live ? ' We will send a 6-digit code to confirm the address is yours.' : '') + ' You can change it later in Settings.';
+    document.getElementById('ne-email').value = have;
+    document.getElementById('ne-code').value = '';
+    document.getElementById('ne-step1').style.display = ''; document.getElementById('ne-step2').style.display = 'none';
+    const b = document.getElementById('ne-send-btn'); b.disabled = false; b.textContent = live ? 'Send verification code' : 'Save and continue';
+    neMsg('');
+    openModal('modal-notify-email');
+    setTimeout(function () { try { document.getElementById('ne-email').focus(); } catch (e) {} }, 150);
+}
+async function neSendCode() {
+    const r = readNotifyEmailOne('ne-email');
+    if (r.error) { neMsg(r.error); return; }
+    if (!isNotifyApiConfigured()) { storeNotifyEmail(r.email, null); neDone(r.email); return; }
+    const b = document.getElementById('ne-send-btn'); b.disabled = true; b.textContent = 'Sending…'; neMsg('');
+    try {
+        await notifyApi({ action: 'verify-start', email: r.email });
+        document.getElementById('ne-sent').textContent = 'We sent a 6-digit code to ' + r.email + '. It is valid for 10 minutes. Check your spam folder too.';
+        document.getElementById('ne-step1').style.display = 'none'; document.getElementById('ne-step2').style.display = '';
+        document.getElementById('ne-code').value = '';
+        setTimeout(function () { try { document.getElementById('ne-code').focus(); } catch (e) {} }, 100);
+    } catch (e) { neMsg(e.message); }
+    b.disabled = false; b.textContent = 'Send verification code';
+}
+async function neVerify() {
+    const code = document.getElementById('ne-code').value.replace(/\D/g, '');
+    if (code.length !== 6) { neMsg('Enter the 6-digit code from your email.'); return; }
+    const b = document.getElementById('ne-verify-btn'); b.disabled = true; b.textContent = 'Checking…'; neMsg('');
+    try {
+        const d = await notifyApi({ action: 'verify-confirm', code: code });
+        storeNotifyEmail(normNotifyEmail(d.email), d.proof);
+        neDone(normNotifyEmail(d.email));
+    } catch (e) { neMsg(e.message); }
+    b.disabled = false; b.textContent = 'Verify and continue';
+}
+function neBack() { document.getElementById('ne-step1').style.display = ''; document.getElementById('ne-step2').style.display = 'none'; neMsg(''); }
+function neDone(email) {
+    closeModal('modal-notify-email');
+    try { renderNotifyEmailCard(); } catch (e) {}
+    showToast('Email saved. Updates and receipts will go to ' + email + '.');
+}
+
+// --- Settings card: change the address any time (replaced only after the new one is confirmed) ---
+function notifyMsg(t) { const m = document.getElementById('notify-msg'); m.style.display = t ? 'block' : 'none'; m.textContent = t || ''; }
+function renderNotifyEmailCard() {
+    const st = document.getElementById('notify-status'), wrap = document.getElementById('notify-form-wrap');
+    if (!st || !wrap) return;
+    if (!notifyOwnerReady()) { wrap.style.display = 'none'; st.textContent = 'Only the business owner can change the email for updates and receipts.'; return; }
+    wrap.style.display = 'block';
+    const cur = notifyEmailNow(), live = isNotifyApiConfigured();
+    if (!isValidNotifyEmail(cur)) st.innerHTML = '⚠️ <strong>No email on file yet.</strong> Add one below.';
+    else if (live && !notifyEmailVerifiedNow()) st.innerHTML = '⚠️ <strong>' + esc(cur) + '</strong> is not confirmed yet. Send a code below to confirm it.';
+    else st.innerHTML = '✅ Updates and receipts go to <strong>' + esc(cur) + '</strong>' + (live ? ' (confirmed)' : '') + '. To change it, enter a new address below.';
+    const inp = document.getElementById('notify-email');
+    if (inp && !inp.value && cur && live && !notifyEmailVerifiedNow()) inp.value = cur;
+    document.getElementById('notify-send-btn').textContent = live ? 'Send verification code' : 'Save email';
+}
+async function notifySendCode() {
+    if (!notifyOwnerReady()) { notifyMsg('Only the business owner can change this.'); return; }
+    const r = readNotifyEmailOne('notify-email');
+    if (r.error) { notifyMsg(r.error); return; }
+    if (!isNotifyApiConfigured()) {
+        storeNotifyEmail(r.email, null);
+        document.getElementById('notify-email').value = ''; notifyMsg(''); renderNotifyEmailCard(); showToast('Email saved.'); return;
+    }
+    const b = document.getElementById('notify-send-btn'); b.disabled = true; b.textContent = 'Sending…'; notifyMsg('');
+    try {
+        await notifyApi({ action: 'verify-start', email: r.email });
+        document.getElementById('notify-sent').textContent = 'We sent a 6-digit code to ' + r.email + '. It is valid for 10 minutes. Check your spam folder too. Your current email stays in use until you confirm this one.';
+        document.getElementById('notify-step1').style.display = 'none'; document.getElementById('notify-step2').style.display = '';
+        document.getElementById('notify-code').value = '';
+    } catch (e) { notifyMsg(e.message); }
+    b.disabled = false; renderNotifyEmailCard();
+}
+async function notifyVerify() {
+    const code = document.getElementById('notify-code').value.replace(/\D/g, '');
+    if (code.length !== 6) { notifyMsg('Enter the 6-digit code from your email.'); return; }
+    const b = document.getElementById('notify-verify-btn'); b.disabled = true; b.textContent = 'Checking…'; notifyMsg('');
+    try {
+        const d = await notifyApi({ action: 'verify-confirm', code: code });
+        storeNotifyEmail(normNotifyEmail(d.email), d.proof);
+        document.getElementById('notify-email').value = ''; document.getElementById('notify-code').value = '';
+        document.getElementById('notify-step1').style.display = ''; document.getElementById('notify-step2').style.display = 'none';
+        renderNotifyEmailCard(); showToast('Email confirmed and saved.');
+    } catch (e) { notifyMsg(e.message); }
+    b.disabled = false; b.textContent = 'Verify & save';
+}
+function notifyCancel() { document.getElementById('notify-step1').style.display = ''; document.getElementById('notify-step2').style.display = 'none'; notifyMsg(''); }
+
+// ── OWNER ACCOUNT RECOVERY (recovery email, handled by the recovery Worker) ──────────
         // Owners sign in with a made-up address (company.username@zamagro.app) that cannot receive mail,
         // so a verified recovery email is stored by the Worker. Nothing here changes any business data.
         const RECOVERY_CACHE_KEY = 'za_recovery_status', RECOVERY_NUDGE_KEY = 'za_recovery_nudge_until';
@@ -6930,6 +7158,7 @@
             document.getElementById('subreq-btn').disabled = false;
             document.getElementById('subreq-btn').textContent = 'Submit Request';
             document.getElementById('subreq-phone').value = '';
+            document.getElementById('subreq-email').value = notifyEmailNow();
             document.getElementById('subreq-txnid').value = '';
             document.getElementById('subreq-note').value = '';
             document.getElementById('subreq-txnid').style.borderColor = '';
@@ -7071,6 +7300,7 @@
             const phone = document.getElementById('subreq-phone').value.trim();
             const txnId = document.getElementById('subreq-txnid').value.trim();
             const note  = document.getElementById('subreq-note').value.trim();
+            const email = notifyEmailNow();
 
             // Validation
             const _q = computeSubReq();
@@ -7082,6 +7312,12 @@
             if (!phone) {
                 errEl.textContent = 'Please enter your phone / WhatsApp number.';
                 errEl.style.display = 'block';
+                return;
+            }
+            if (email && !isValidNotifyEmail(email)) {
+                errEl.textContent = 'The email on your account does not look right. Fix it under Settings, then try again.';
+                errEl.style.display = 'block';
+                document.getElementById('subreq-email').focus();
                 return;
             }
             if (!txnId) {
@@ -7121,6 +7357,7 @@
                     ts: Date.now()
                 };
 
+                if (email) payload.email = email;
                 // Save the itemised quote (which shops, how many months, the price of each) so the admin
                 // can date just those shops and check the amount paid.
                 {
@@ -13492,6 +13729,7 @@
             refreshAll();
             nav('dashboard');
             try { checkRecoveryNudge(); } catch (e) {}
+                try { checkNotifyEmailGate(); } catch (e) {}
         }
         window.__zaStoreReady.then(boot);
 
@@ -13701,6 +13939,7 @@ function appendTPINToPrintDoc(win){
 <li style="margin-bottom:.3rem;"><strong>Business records you enter (required to use the app).</strong> Inventory, sales, purchases, expenses, FISP claims, credit records, suppliers, customers (names and phone numbers), farmer NRC numbers if you choose to enter them, business settings, and a business logo if you upload one.</li>
 <li style="margin-bottom:.3rem;"><strong>Licence information.</strong> Your free-trial or licence status and its start and end dates. Where a licence was arranged with us outside the app, we also hold the payment reference needed for our accounting.</li>
 <li style="margin-bottom:.3rem;"><strong>Recovery email (optional).</strong> If you add one, we store it so you can reset the owner password with a 6-digit code sent to that address.</li>
+<li style="margin-bottom:.3rem;"><strong>Email for updates and receipts (required for the owner account).</strong> The address you give when you sign up or later in Settings. We send it a one-time 6-digit code to confirm it is yours, and we keep it, with a signed confirmation, in your business settings. We use it only to email you about your subscription, for example when a request is approved, and to send receipts. You can change it in Settings at any time.</li>
 <li style="margin-bottom:.3rem;"><strong>Feedback (optional).</strong> If you submit feedback: your name, optional business or location, the gender option you pick, a star rating and your comment. Once we approve it, it is shown publicly on the app’s landing page. Please do not include phone numbers or other private details.</li>
 <li style="margin-bottom:.3rem;"><strong>Error reports (automatic).</strong> If the app hits an error it sends a small technical report: the error message, a cleaned technical trace, app version, screen name, your role (admin or staff), device or browser type, whether you were online, how many changes were waiting to sync, and your business ID. Reports are scrubbed of email addresses and long numbers and are designed not to include record contents, names, amounts or phone numbers.</li>
 <li style="margin-bottom:.3rem;"><strong>Data on your device.</strong> The app keeps a copy of your records on your device, in the storage of the browser that displays it, so it works offline. It also keeps a queue of changes waiting to sync.</li>
