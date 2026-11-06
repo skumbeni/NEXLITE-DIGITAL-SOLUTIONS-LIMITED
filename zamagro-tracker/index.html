@@ -3401,10 +3401,45 @@
                     try { applyLicenseUI(); } catch (e) {}
                     try { refreshAll(); } catch (e) {}
                 }
-                if (manual) showToast(changed ? 'Licence updated.' : 'Checked. No change yet. If you have paid, we will approve it shortly.');
+                if (manual) { showToast(changed ? 'Licence updated.' : 'Checked. No change yet.'); if (!changed) showLicenseDiag(); }
             } catch (e) {
                 if (manual) showToast('Could not check the licence. Try again.', 'danger');
             } finally { _licBusy = false; }
+        }
+        // Plain-language snapshot of what this device knows about the licence, to send to support.
+        function licenseDiagText() {
+            const L = [];
+            try {
+                const lic = getLicense() || {};
+                const pubUsed = !!readLicensePub();
+                let aid = MAIN_SHOP_ID; try { aid = getActiveShopId(); } catch (e) {}
+                const sl = shopLicense(aid);
+                const shopsObj = (lic.shops && typeof lic.shops === 'object') ? lic.shops : {};
+                const stored = ((dbLoad('settings') || {}).licenseData) || {};
+                const storedShops = (stored.shops && typeof stored.shops === 'object') ? stored.shops : {};
+                const d = ms => (typeof ms === 'number' && isFinite(ms)) ? new Date(ms).toISOString().slice(0, 10) : 'none';
+                L.push('Licence source: ' + (pubUsed ? 'published copy (pub)' : 'settings'));
+                L.push('Server published copy: ' + (window.__licPubState || 'not checked'));
+                L.push('Plan: ' + (lic.tier || '?') + ' · Main shop date: ' + d(lic.expiry));
+                L.push('This shop id: ' + aid + ' → ' + sl.kind + (sl.expiry ? ' until ' + d(sl.expiry) : ''));
+                L.push('Shop dates in use: ' + (Object.keys(shopsObj).map(k => k + '=' + (shopsObj[k].lifetime ? 'lifetime' : d(shopsObj[k].expiry))).join(', ') || 'none'));
+                L.push('Shop dates saved in settings: ' + (Object.keys(storedShops).map(k => k + '=' + (storedShops[k].lifetime ? 'lifetime' : d(storedShops[k].expiry))).join(', ') || 'none'));
+                L.push('Shops here: ' + getShops(true).map(x => x.id + ' (' + x.name + ')').join('; '));
+            } catch (e) { L.push('Could not read licence: ' + (e && e.message)); }
+            return L.join('\n');
+        }
+        function showLicenseDiag() {
+            const old = document.getElementById('lic-diag-ov'); if (old) old.remove();
+            const ov = document.createElement('div');
+            ov.id = 'lic-diag-ov';
+            ov.style.cssText = 'position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:1rem;';
+            ov.innerHTML = '<div style="background:#fff;border-radius:12px;max-width:520px;width:100%;max-height:85vh;overflow:auto;padding:1rem 1.1rem;">' +
+                '<div style="font-weight:800;color:#13481F;margin-bottom:.5rem;">Licence check</div>' +
+                '<pre style="white-space:pre-wrap;word-break:break-word;font-size:.78rem;line-height:1.5;margin:0 0 .8rem;"></pre>' +
+                '<button type="button" style="padding:.55rem 1.1rem;border:0;border-radius:8px;background:#1E6B35;color:#fff;font-weight:700;">OK</button></div>';
+            ov.querySelector('pre').textContent = licenseDiagText();
+            ov.querySelector('button').onclick = () => ov.remove();
+            document.body.appendChild(ov);
         }
         async function pollCloudNow() {
             if (_pollBusy || !cloudAuth || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
@@ -3611,10 +3646,18 @@
             if (!uid || !idToken) return null;
             try {
                 const r = await fetch(`${FIREBASE_CONFIG.databaseURL}/licenses/${encodeURIComponent(uid)}/pub.json?auth=${idToken}`, signal ? { signal } : undefined);
-                if (!r.ok) return null;                       // not published yet / no access: caller falls back to the old fields
+                if (!r.ok) { window.__licPubState = 'error ' + r.status; return null; }   // no access: caller falls back to the old fields
                 const p = await r.json();
+                if (p === null) {
+                    // The server has no published licence for this business. A copy cached earlier would be
+                    // out of date and, because it wins over the settings licence, would hide the admin's new dates.
+                    window.__licPubState = 'none on server';
+                    try { localStorage.removeItem(LIC_PUB_KEY); } catch (e) {}
+                    return null;
+                }
+                window.__licPubState = (p && typeof p === 'object' && p.tier) ? 'found' : 'empty';
                 return (p && typeof p === 'object' && p.tier) ? p : null;
-            } catch (e) { return null; }
+            } catch (e) { window.__licPubState = 'offline'; return null; }
         }
         function storeLicensePub(uid, pub) {
             try { localStorage.setItem(LIC_PUB_KEY, JSON.stringify({ uid: uid, pub: pub })); } catch (e) {}
