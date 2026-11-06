@@ -914,6 +914,7 @@
             <div id="ro-banner" role="status">
                 <span class="ro-text">🔒 <strong>View-only mode.</strong> <span id="ro-msg">Your licence has expired. You can still view and export your records, but you can't add or change anything.</span><span class="pay-ui"> Renew: <strong>0977 638 790 / 0960 271 128</strong> (WhatsApp / Call)</span></span>
                 <button type="button" class="ro-btn pay-ui" onclick="openSubRequest(null, true)">📨 Request Renewal</button>
+                <button type="button" class="ro-btn pay-ui" onclick="refreshLicenseNow(true)" style="margin-left:.4rem;">🔄 I have paid — Refresh</button>
             </div>
             <div class="content-inner">
             <div class="header-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
@@ -3378,9 +3379,37 @@
             pollCloudNow();
         }
         function stopCloudListener() { if (sseConn) { clearInterval(sseConn); sseConn = null; } }
+        // The admin writes the licence (plan date and each shop's paid-until date) without touching
+        // settings.updatedAt, so a normal sync never notices it. Without this, an owner who is already
+        // signed in stays view-only after paying until they sign out and in again. This fetches the
+        // licence on its own: during the regular sync, when the app comes back to the screen, and when
+        // the owner taps Refresh on the view-only banner.
+        let _licCheckedAt = 0, _licBusy = false;
+        async function refreshLicenseNow(manual) {
+            if (_licBusy) return;
+            if (!cloudAuth || !cloudAuth.uid || (typeof navigator !== 'undefined' && navigator.onLine === false)) {
+                if (manual) showToast('You are offline. Connect to the internet and try again.', 'danger');
+                return;
+            }
+            _licBusy = true;
+            try {
+                const before = JSON.stringify(getLicense() || null);
+                await pullPlatformFlags(authedSource());
+                _licCheckedAt = Date.now();
+                const changed = JSON.stringify(getLicense() || null) !== before;
+                if (changed) {
+                    try { applyLicenseUI(); } catch (e) {}
+                    try { refreshAll(); } catch (e) {}
+                }
+                if (manual) showToast(changed ? 'Licence updated.' : 'Checked. No change yet. If you have paid, we will approve it shortly.');
+            } catch (e) {
+                if (manual) showToast('Could not check the licence. Try again.', 'danger');
+            } finally { _licBusy = false; }
+        }
         async function pollCloudNow() {
             if (_pollBusy || !cloudAuth || (typeof navigator !== 'undefined' && navigator.onLine === false)) return;
             _pollBusy = true;
+            if (Date.now() - _licCheckedAt > 60000) refreshLicenseNow(false);
             try { await pullIncremental(authedSource(), { wide: _pollWide }); _pollWide = false; }
             catch (e) {
                 console.warn('ZamAgro Cloud: incremental pull failed, will retry', e);
