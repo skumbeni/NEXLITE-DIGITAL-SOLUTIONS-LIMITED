@@ -1260,21 +1260,22 @@
                         <input type="month" id="pl-month" style="padding:7px 10px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:0.875rem;outline:none;" onchange="renderPL()">
                         <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="document.getElementById('pl-month').value=''; renderPL();">All Time</button>
                         <select id="pl-scope" style="display:none;padding:6px 10px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:.82rem;" onchange="setGroupScope(this.value==='all')"></select>
-                        <button class="btn btn-sm btn-primary" onclick="exportPLpdf()">⬇ P&amp;L PDF</button>
-                        <button class="btn btn-sm btn-primary" onclick="exportPLword()">⬇ P&amp;L Word</button>
-                        <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="exportPLcsv()">⬇ P&amp;L CSV</button>
-                        <button class="btn btn-sm btn-primary" onclick="exportPDF('sales')">⬇ Sales PDF</button>
-                        <button class="btn btn-sm btn-primary" onclick="exportWord('sales')">⬇ Sales Word</button>
-                        <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="exportCSV('sales')">⬇ Sales CSV</button>
-                        <button class="btn btn-sm btn-primary" onclick="exportPDF('purchases')">⬇ Purchases PDF</button>
-                        <button class="btn btn-sm btn-primary" onclick="exportWord('purchases')">⬇ Purchases Word</button>
-                        <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="exportCSV('purchases')">⬇ Purchases CSV</button>
-                        <button class="btn btn-sm btn-primary" onclick="exportPDF('expenses')">⬇ Expenses PDF</button>
-                        <button class="btn btn-sm btn-primary" onclick="exportWord('expenses')">⬇ Expenses Word</button>
-                        <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="exportCSV('expenses')">⬇ Expenses CSV</button>
-                        <button class="btn btn-sm btn-primary" onclick="exportPDF('inventory')">⬇ Stock PDF</button>
-                        <button class="btn btn-sm btn-primary" onclick="exportWord('inventory')">⬇ Stock Word</button>
-                        <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="exportCSV('inventory')">⬇ Stock CSV</button>
+                        <select id="rep-shop" title="Which shop the downloads below are built for" style="display:none;padding:6px 10px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:.82rem;"></select>
+                        <button class="btn btn-sm btn-primary" onclick="repRun(exportPLpdf)">⬇ P&amp;L PDF</button>
+                        <button class="btn btn-sm btn-primary" onclick="repRun(exportPLword)">⬇ P&amp;L Word</button>
+                        <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="repRun(exportPLcsv)">⬇ P&amp;L CSV</button>
+                        <button class="btn btn-sm btn-primary" onclick="repRun(exportPDF,'sales')">⬇ Sales PDF</button>
+                        <button class="btn btn-sm btn-primary" onclick="repRun(exportWord,'sales')">⬇ Sales Word</button>
+                        <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="repRun(exportCSV,'sales')">⬇ Sales CSV</button>
+                        <button class="btn btn-sm btn-primary" onclick="repRun(exportPDF,'purchases')">⬇ Purchases PDF</button>
+                        <button class="btn btn-sm btn-primary" onclick="repRun(exportWord,'purchases')">⬇ Purchases Word</button>
+                        <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="repRun(exportCSV,'purchases')">⬇ Purchases CSV</button>
+                        <button class="btn btn-sm btn-primary" onclick="repRun(exportPDF,'expenses')">⬇ Expenses PDF</button>
+                        <button class="btn btn-sm btn-primary" onclick="repRun(exportWord,'expenses')">⬇ Expenses Word</button>
+                        <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="repRun(exportCSV,'expenses')">⬇ Expenses CSV</button>
+                        <button class="btn btn-sm btn-primary" onclick="repRun(exportPDF,'inventory')">⬇ Stock PDF</button>
+                        <button class="btn btn-sm btn-primary" onclick="repRun(exportWord,'inventory')">⬇ Stock Word</button>
+                        <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="repRun(exportCSV,'inventory')">⬇ Stock CSV</button>
                     </div>
                     <table id="table-pl"><thead><tr><th>Category</th><th id="pl-col-header">All Time (ZMW)</th></tr></thead><tbody></tbody></table>
                 </div>
@@ -2547,7 +2548,7 @@
 
         // --- SHOPS: id of the always-present Main shop. Records with no shopId belong to it. ---
         const MAIN_SHOP_ID = 'main';
-        let _activeShopCache = null; let _waAll = false; let _groupTax = false;
+        let _activeShopCache = null; let _waAll = false; let _groupTax = false; let _repAll = false;
         let _groupScope = (function () { try { return localStorage.getItem('za_group_scope') === '1'; } catch (e) { return false; } })(); // dashboard + P&L show all shops // _waAll: false | 'group' | 'plain' while a WhatsApp message is built for All shops // active shop id for this device; cleared whenever settings change
 
         // --- PERSISTENCE HELPERS ---
@@ -3420,6 +3421,12 @@
                 const d = ms => (typeof ms === 'number' && isFinite(ms)) ? new Date(ms).toISOString().slice(0, 10) : 'none';
                 L.push('Licence source: ' + (pubUsed ? 'published copy (pub)' : 'settings'));
                 L.push('Server published copy: ' + (window.__licPubState || 'not checked'));
+                const inf = window.__licPubInfo;
+                L.push('Account: ...' + String((inf && inf.uid) || currentLicenseUid() || '?').slice(-6));
+                if (inf) {
+                    L.push('Server copy saved: ' + (inf.stamp ? new Date(inf.stamp).toISOString().replace('T', ' ').slice(0, 16) + ' UTC' : 'no stamp (not written by the new admin)'));
+                    L.push('Server copy shops: ' + (inf.shops.join(', ') || 'none'));
+                }
                 L.push('Plan: ' + (lic.tier || '?') + ' · Main shop date: ' + d(lic.expiry));
                 L.push('This shop id: ' + aid + ' → ' + sl.kind + (sl.expiry ? ' until ' + d(sl.expiry) : ''));
                 L.push('Shop dates in use: ' + (Object.keys(shopsObj).map(k => k + '=' + (shopsObj[k].lifetime ? 'lifetime' : d(shopsObj[k].expiry))).join(', ') || 'none'));
@@ -3656,6 +3663,8 @@
                     return null;
                 }
                 window.__licPubState = (p && typeof p === 'object' && p.tier) ? 'found' : 'empty';
+                // For the Licence check box: what the server returned on THIS fetch, for which account.
+                try { window.__licPubInfo = { uid: uid, at: Date.now(), stamp: (p && p.updatedAt) || null, shops: Object.keys((p && p.shops) || {}) }; } catch (e) {}
                 return (p && typeof p === 'object' && p.tier) ? p : null;
             } catch (e) { window.__licPubState = 'offline'; return null; }
         }
@@ -8103,6 +8112,16 @@
                 el.style.display = can ? '' : 'none';
                 el.innerHTML = `<option value="one"${on ? '' : ' selected'}>This shop: ${esc(getShopName(getActiveShopId()))}</option><option value="all"${on ? ' selected' : ''}>All shops (group)</option>`;
             });
+            // Reports: which shop the downloads are built for.
+            const rs = document.getElementById('rep-shop');
+            if (rs) {
+                const keep = rs.value, act = getActiveShopId();
+                rs.style.display = can ? '' : 'none';
+                rs.innerHTML = `<option value="">Download for: current view</option>` +
+                    getShops(true).filter(x => x.id !== act).map(x => `<option value="${esc(x.id)}">Download for: ${esc(x.name)}${x.active === false ? ' (inactive)' : ''}</option>`).join('') +
+                    `<option value="${WA_ALL}">Download for: all shops, by shop</option>`;
+                rs.value = Array.from(rs.options).some(o => o.value === keep) ? keep : '';
+            }
         }
         function _groupSums(pred) {
             const g = { grossSales: 0, returnsTotal: 0, purchasesRaw: 0, extIn: 0, extOut: 0, expenses: 0, writeoffs: 0, closingShops: 0, rows: [] };
@@ -8289,7 +8308,61 @@
 
         // ── SHARED EXPORT HELPERS ────────────────────────────────────────────
 
+        // ── REPORTS BY SHOP ───────────────────────────────────────────────
+        // The Reports "Download for" menu picks which shop the downloads are built for: the current view (as before),
+        // any other shop, or all shops with one section per shop and a total for each. Word/PDF/CSV builders read all
+        // shop data before their only await, so switching the shop view around the call is safe.
+        const REP_TYPES = ['inventory', 'sales', 'purchases', 'expenses'];
+        function repScopeRun(fn) {
+            const sel = document.getElementById('rep-shop'), v = sel ? sel.value : '';
+            if (!v || !canGroupView()) return fn();
+            const pg = _groupScope;
+            try {
+                if (v === WA_ALL) { _groupScope = true; _repAll = true; return fn(); }
+                _groupScope = false;
+                return _asShop(v, fn);
+            } finally { _groupScope = pg; _repAll = false; }
+        }
+        function repRun(fn, arg) { return repScopeRun(() => fn(arg)); }
+        function _repShopTag() {
+            if (getShops(false).length < 2) return '';
+            return '_' + String(getShopName(getActiveShopId())).replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24);
+        }
+        // All shops in one table: a Shop column, every shop's rows, a total after each shop, then a grand total.
+        // A shop with no records still gets its line, so an idle shop is visible. Inactive shops show only if they have records.
+        function _repAllShopsDef(type) {
+            const label = { inventory: 'Stock', sales: 'Sales', purchases: 'Purchases', expenses: 'Expenses' }[type];
+            const date = new Date().toLocaleDateString('en-GB');
+            let headers = null, amtIdx = -1, grand = 0;
+            const rows = [];
+            getShops(true).forEach(sh => {
+                const d = _asShop(sh.id, () => _exportTableDefBase(type));
+                if (!d) return;
+                if (!headers) {
+                    headers = ['Shop'].concat(d.headers);
+                    const z = d.headers.map((h, i) => /\(ZMW\)/.test(h) ? i : -1).filter(i => i >= 0);
+                    amtIdx = z.length ? z[z.length - 1] + 1 : -1;
+                }
+                if (!d.rows.length && sh.active === false) return;
+                const name = sh.name + (sh.active === false ? ' (inactive)' : '');
+                let sub = 0;
+                d.rows.forEach(r => { rows.push([name].concat(r)); if (amtIdx > 0) sub += parseFloat(r[amtIdx - 1]) || 0; });
+                if (!d.rows.length) rows.push([name, 'No records'].concat(new Array(headers.length - 2).fill('')));
+                const t = new Array(headers.length).fill(''); t[0] = name; t[1] = 'SHOP TOTAL'; if (amtIdx > 0) t[amtIdx] = sub.toFixed(2);
+                rows.push(t); grand += sub;
+            });
+            if (!headers) return null;
+            const g = new Array(headers.length).fill(''); g[0] = 'ALL SHOPS'; g[1] = 'GRAND TOTAL'; if (amtIdx > 0) g[amtIdx] = grand.toFixed(2);
+            rows.push(g);
+            return { title: `${getCompanyInfo(true).name} \u2014 ${label} Report by shop (${date})`, headers, rows, filename: `ZamAgro_${label}_AllShops_${date.replace(/\//g, '-')}` };
+        }
         function _exportTableDef(type) {
+            if (_repAll && REP_TYPES.indexOf(type) >= 0) return _repAllShopsDef(type);
+            const d = _exportTableDefBase(type);
+            if (d && d.filename) d.filename += _repShopTag();
+            return d;
+        }
+        function _exportTableDefBase(type) {
             // Returns { title, headers, rows, filename }
             const co = getCompanyInfo().name;
             const date = new Date().toLocaleDateString('en-GB');
@@ -8422,6 +8495,21 @@
                 alternateRowStyles: { fillColor: [243, 246, 238] },
                 margin: { left: 14, right: 14 }
             });
+            if (pl.group && pl.shops && pl.shops.length) {
+                const yy = (doc.lastAutoTable ? doc.lastAutoTable.finalY : y) + 9;
+                doc.setFontSize(11); doc.setFont('helvetica','bold');
+                doc.text('By shop (each shop on its own)', 14, yy);
+                doc.autoTable({
+                    startY: yy + 3,
+                    head: [['Shop', 'Revenue (ZMW)', 'Expenses (ZMW)', 'Stock value (ZMW)']],
+                    body: pl.shops.map(x => [x.name + (x.active ? '' : ' (inactive)'), (x.sales - x.rets).toFixed(2), x.exp.toFixed(2), x.stock.toFixed(2)])
+                        .concat(pl.inTransit > 0 ? [['In transit between shops', '', '', pl.inTransit.toFixed(2)]] : []),
+                    styles: { fontSize: 9, cellPadding: 2 },
+                    headStyles: { fillColor: [30, 107, 53], textColor: 255, fontStyle: 'bold' },
+                    alternateRowStyles: { fillColor: [243, 246, 238] },
+                    margin: { left: 14, right: 14 }
+                });
+            }
             doc.save(`ZamAgro_PL_${pl.period.replace(/\s/g,'_')}.pdf`);
         }
 
@@ -8561,6 +8649,12 @@
                 new Paragraph({ children: [new TextRun({ text: `Profit & Loss — ${pl.period}`, bold: true, size: 24, color: green })], spacing: { before: 200 } }),
                 new Paragraph({ text: '', spacing: { after: 100 } }),
                 new Table({ rows: [mkHdr(['Category', `Amount (ZMW) — ${pl.period}`]), ...summaryRows.map((r,i) => mkRow(r,i))], width: { size: 100, type: WidthType.PERCENTAGE } }),
+                ...(pl.group && pl.shops && pl.shops.length ? [
+                    new Paragraph({ children: [new TextRun({ text: 'By shop (each shop on its own)', bold: true, size: 22, color: green })], spacing: { before: 240, after: 100 } }),
+                    new Table({ rows: [mkHdr(['Shop', 'Revenue (ZMW)', 'Expenses (ZMW)', 'Stock value (ZMW)']),
+                        ...pl.shops.map((x, i) => mkRow([x.name + (x.active ? '' : ' (inactive)'), (x.sales - x.rets).toFixed(2), x.exp.toFixed(2), x.stock.toFixed(2)], i)),
+                        ...(pl.inTransit > 0 ? [mkRow(['In transit between shops', '', '', pl.inTransit.toFixed(2)], pl.shops.length)] : [])], width: { size: 100, type: WidthType.PERCENTAGE } })
+                ] : []),
                 new Paragraph({ text: '', spacing: { after: 200 } }),
                 new Paragraph({ children: [new TextRun({ text: `Generated by ZamAgro Track on ${new Date().toLocaleDateString('en-GB')}`, size: 16, color: '888888', italics: true })] })
             ]}]});
@@ -8732,6 +8826,11 @@
         }
 
         function exportCSV(type) {
+            if (_repAll && REP_TYPES.indexOf(type) >= 0) {
+                const d = _repAllShopsDef(type);
+                if (d) downloadCSV(d.filename + '.csv', [[d.title], [], d.headers, ...d.rows]);
+                return;
+            }
             let headers, rows;
             if (type === 'inventory') {
                 headers = ['ID', 'Product', 'Category', 'Unit', 'Qty', 'Unit Cost (ZMW)', 'Total Value (ZMW)', 'Status'];
@@ -8788,7 +8887,7 @@
             const labelMap = { inventory: 'Stock', sales: 'Sales', purchases: 'Purchases', expenses: 'Expenses', adjustments: 'Adjustments', grns: 'GRN', pos: 'PO' };
             const label = labelMap[type] || type;
             const coName = getCompanyInfo().name;
-            downloadCSV(`ZamAgro_${label}_${new Date().toISOString().slice(0,10)}.csv`, [
+            downloadCSV(`ZamAgro_${label}_${new Date().toISOString().slice(0,10)}${_repShopTag()}.csv`, [
                 [`${coName} — ${label} Export ${new Date().toLocaleDateString('en-GB')}`],
                 [],
                 headers,
