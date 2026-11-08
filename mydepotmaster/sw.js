@@ -25,7 +25,11 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.18 (2026-11-08) — App Check fix: the reCAPTCHA→App Check token exchange
+// Current version: v0.3.19 (2026-11-08) — App Check: the reCAPTCHA site key in the code was one
+//   character short (39 chars, one 'A' missing; real keys are 40), so reCAPTCHA never issued a
+//   token and App Check showed 0% verified. Key corrected in all places. No sw.js logic changes — bump only.
+//
+// v0.3.18: (2026-11-08) — App Check fix: the reCAPTCHA→App Check token exchange
 //   now sends the Firebase API key (?key=), as the SDK does — without it the exchange failed and
 //   every request showed as unverified. Firebase Auth now also gets App Check tokens
 //   (firebase-app-check-compat.js + activate in the <head> init block). Setup comment corrected.
@@ -1811,7 +1815,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.18';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.19';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
