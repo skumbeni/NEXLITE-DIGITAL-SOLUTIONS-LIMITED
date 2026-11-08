@@ -1311,6 +1311,49 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
 // TEMP DEBUG: add ?acdebug=1 to the URL to see App Check token diagnostics as toasts.
 // Remove this block once the App Check issue is resolved.
 window._AC_DEBUG = /[?&]acdebug=1/.test(location.search);
+// Persistent debug panel (only with ?acdebug=1): messages stay on screen until you
+// close the panel, and "Copy all" puts the whole log on the clipboard.
+window._AC_LOG = [];
+window._acShow = function (msg) {
+  try {
+    window._AC_LOG.push(new Date().toLocaleTimeString() + '  ' + msg);
+    console.log('[AC]', msg);
+    var render = function () {
+      var box = document.getElementById('ac-debug-panel');
+      if (!box) {
+        box = document.createElement('div');
+        box.id = 'ac-debug-panel';
+        box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;max-height:45vh;overflow:auto;z-index:2147483647;background:#0b0b0b;color:#7CFC9A;font:12px/1.4 monospace;padding:8px;border-top:2px solid #7CFC9A;';
+        var bar = document.createElement('div');
+        bar.style.cssText = 'display:flex;gap:8px;margin-bottom:6px;position:sticky;top:0;background:#0b0b0b;';
+        var copy = document.createElement('button');
+        var close = document.createElement('button');
+        copy.textContent = 'Copy all'; close.textContent = 'Close';
+        copy.style.cssText = close.style.cssText = 'padding:6px 12px;font-size:13px;';
+        var pre = document.createElement('pre');
+        pre.id = 'ac-debug-text';
+        pre.style.cssText = 'margin:0;white-space:pre-wrap;word-break:break-word;user-select:text;-webkit-user-select:text;';
+        var fallback = function () {
+          var r = document.createRange(); r.selectNodeContents(pre);
+          var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+          copy.textContent = 'Selected - long-press to copy';
+        };
+        copy.onclick = function () {
+          var t = window._AC_LOG.join('\n');
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(t).then(function () { copy.textContent = 'Copied ✓'; }, fallback);
+          } else { fallback(); }
+        };
+        close.onclick = function () { box.remove(); };
+        bar.appendChild(copy); bar.appendChild(close);
+        box.appendChild(bar); box.appendChild(pre);
+        document.body.appendChild(box);
+      }
+      document.getElementById('ac-debug-text').textContent = window._AC_LOG.join('\n');
+    };
+    if (document.body) render(); else document.addEventListener('DOMContentLoaded', render);
+  } catch (e) {}
+};
 
 // ══════════════════════════════════════════════════════════
 // ██  PDF PRINT ENGINE  ████████████████████████████████████
@@ -1981,8 +2024,18 @@ let _acTokenCache  = null; // { token, expireMs }
 let _acFailedUntil = 0;
 const _AC_FAIL_COOLDOWN_MS = 30000;
 
+let _acInfoLogged = false;
 async function _getAppCheckToken() {
   try {
+    if (window._AC_DEBUG && !_acInfoLogged) {
+      _acInfoLogged = true;
+      var _rs = document.querySelector('script[src*="recaptcha/api.js"]');
+      var _rk = _rs ? (new URL(_rs.src).searchParams.get('render') || '') : '(script tag not found)';
+      _acShow('🐞 AC info: page=' + (typeof SW_VERSION !== 'undefined' ? SW_VERSION : '?') +
+        ' host=' + location.hostname +
+        ' | code key=' + _AC_SITE_KEY.length + ' chars (' + _AC_SITE_KEY.slice(0,10) + '…' + _AC_SITE_KEY.slice(-6) + ')' +
+        ' | script-tag key=' + _rk.length + ' chars' + (_rk === _AC_SITE_KEY ? ' (same)' : ' (DIFFERENT)'));
+    }
     // Return cached token if still valid (with 60s buffer)
     if (_acTokenCache && Date.now() < _acTokenCache.expireMs - 60000) {
       return _acTokenCache.token;
@@ -1990,7 +2043,7 @@ async function _getAppCheckToken() {
     // Recently failed — skip straight to null instead of retrying the same
     // expensive (and likely still-failing) round trip again immediately.
     if (_acFailedUntil && Date.now() < _acFailedUntil) {
-      if (window._AC_DEBUG) showToast('🐞 AC: skipped - earlier failure: ' + (window._AC_LAST || 'unknown'));
+      if (window._AC_DEBUG) _acShow('🐞 AC: skipped - earlier failure: ' + (window._AC_LAST || 'unknown'));
       return null;
     }
     // Wait for the reCAPTCHA script to finish loading (resolves via onload=
@@ -2003,13 +2056,13 @@ async function _getAppCheckToken() {
       ]);
     } catch(e) {
       window._AC_LAST = 'grecaptcha script did not load (blocked or offline)';
-      if (window._AC_DEBUG) showToast('🐞 AC: grecaptcha load timeout');
+      if (window._AC_DEBUG) _acShow('🐞 AC: grecaptcha load timeout');
       _acFailedUntil = Date.now() + _AC_FAIL_COOLDOWN_MS;
       return null;
     }
     if (typeof grecaptcha === 'undefined' || !grecaptcha.execute) {
       window._AC_LAST = 'grecaptcha not loaded';
-      if (window._AC_DEBUG) showToast('🐞 AC: grecaptcha not loaded');
+      if (window._AC_DEBUG) _acShow('🐞 AC: grecaptcha not loaded');
       _acFailedUntil = Date.now() + _AC_FAIL_COOLDOWN_MS;
       return null;
     }
@@ -2021,12 +2074,16 @@ async function _getAppCheckToken() {
     const rcToken = await Promise.race([
       new Promise((res, rej) => {
         grecaptcha.ready(() => {
-          grecaptcha.execute(_AC_SITE_KEY, { action: 'firebase' }).then(res).catch(rej);
+          // grecaptcha.execute can THROW synchronously (e.g. "Invalid site key"). That happens
+          // inside this callback, outside the Promise executor, so it never rejected and the
+          // only symptom was a 10s "reCAPTCHA timeout". Catch it so the real reason surfaces.
+          try { grecaptcha.execute(_AC_SITE_KEY, { action: 'firebase' }).then(res).catch(rej); }
+          catch (execErr) { rej(execErr); }
         });
       }),
       new Promise((_, rej) => setTimeout(() => rej(new Error('reCAPTCHA timeout')), _FB_TIMEOUT_MS))
     ]);
-    if (window._AC_DEBUG) showToast('🐞 AC: rcToken ok in ' + (Date.now()-_acStart) + 'ms');
+    if (window._AC_DEBUG) _acShow('🐞 AC: rcToken ok in ' + (Date.now()-_acStart) + 'ms');
     const url = `https://firebaseappcheck.googleapis.com/v1/projects/${_AC_PROJECT}/apps/${FB_CONFIG.appId}:exchangeRecaptchaV3Token?key=${encodeURIComponent(FB_CONFIG.apiKey)}`;
     const _exStart = Date.now();
     const resp = await _fetchWithTimeout(url, {
@@ -2037,19 +2094,19 @@ async function _getAppCheckToken() {
     if (!resp.ok) {
       const _exBody = await resp.text().catch(()=>'');
       window._AC_LAST = 'Firebase exchange HTTP ' + resp.status + ': ' + _exBody.slice(0,120);
-      if (window._AC_DEBUG) { showToast('🐞 AC: exchange HTTP ' + resp.status + ' in ' + (Date.now()-_exStart) + 'ms: ' + _exBody.slice(0,80)); }
+      if (window._AC_DEBUG) { _acShow('🐞 AC: exchange HTTP ' + resp.status + ' in ' + (Date.now()-_exStart) + 'ms: ' + _exBody.slice(0,80)); }
       _acFailedUntil = Date.now() + _AC_FAIL_COOLDOWN_MS;
       return null;
     }
     const { token, ttl } = await resp.json();
-    if (window._AC_DEBUG) showToast('🐞 AC: token ok in ' + (Date.now()-_exStart) + 'ms');
+    if (window._AC_DEBUG) _acShow('🐞 AC: token ok in ' + (Date.now()-_exStart) + 'ms');
     const ttlMs = ttl ? parseInt(ttl) * 1000 : 3600000;
     _acTokenCache = { token, expireMs: Date.now() + ttlMs };
     _acFailedUntil = 0; // success — clear any prior cooldown
     return token;
   } catch (e) {
     window._AC_LAST = 'reCAPTCHA/exchange error: ' + (e && (e.message || e)) ;
-    if (window._AC_DEBUG) showToast('🐞 AC: threw — ' + (e.message||e));
+    if (window._AC_DEBUG) _acShow('🐞 AC: threw — ' + (e.message||e));
     _acFailedUntil = Date.now() + _AC_FAIL_COOLDOWN_MS;
     return null; // degrade gracefully — Firebase rules still protect via installId
   }
@@ -4228,7 +4285,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.20';
+const SW_VERSION  = 'v0.3.22';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
