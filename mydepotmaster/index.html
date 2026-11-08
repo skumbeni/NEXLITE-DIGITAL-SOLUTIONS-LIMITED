@@ -739,6 +739,7 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
 <!-- runs, so FB_CONFIG is already defined by the time this init code needs it. -->
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-check-compat.js" defer></script>
 <script defer>
   // Fix: this used to resolve as soon as firebase.initializeApp() returned,
   // which only sets up the SDK — it does NOT mean a previously-persisted
@@ -759,6 +760,13 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
   window._fbAuthSdkReady = new Promise(function(resolve) {
     try {
       firebase.initializeApp(FB_CONFIG);
+      // App Check for the SDK (Firebase Auth). Without this, sign-in / token-refresh
+      // calls carry no App Check token and would be rejected once Authentication
+      // enforcement is switched on. Kept in its own try/catch so an App Check
+      // failure can never block Auth start-up. RTDB REST calls keep using
+      // _getAppCheckToken() below (same reCAPTCHA v3 site key).
+      try { firebase.appCheck().activate('6LcLhystAAAAHClIZK1fQf1AbgAYJdDLwUNX9XT', true); }
+      catch (acErr) { console.warn('App Check SDK activation failed:', acErr); }
       const _done = (function(){ let called=false; return function(){ if(called)return; called=true; resolve(); }; })();
       firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
       const unsub = firebase.auth().onAuthStateChanged(function(){ unsub(); _done(); }, function(){ unsub(); _done(); });
@@ -1915,14 +1923,13 @@ function esc(str) {
 //   • Leave it in "monitoring" mode for 1–2 days first to confirm no
 //     legitimate traffic gets blocked before switching to "enforced"
 //
-// STEP 4 — No code changes required in this app. The REST API calls
-//   (fbGet / fbSet / fbDelete) already work with App Check enforcement
-//   because App Check tokens are injected automatically by Firebase when
-//   the SDK is loaded — and this app uses the REST API which is covered
-//   by App Check enforcement at the project level, not at the SDK level.
-//   NOTE: If you add the Firebase JS SDK in future, initialise App Check
-//   before any other Firebase service:
-//   firebase.appCheck().activate('YOUR_RECAPTCHA_SITE_KEY', true);
+// STEP 4 — Code: raw REST calls are NOT covered automatically. This app attaches
+//   an App Check token itself: _getAppCheckToken() exchanges a reCAPTCHA v3 token
+//   (…:exchangeRecaptchaV3Token?key=<apiKey>) and fbGet / fbSet / fbDelete send it
+//   in the X-Firebase-AppCheck header. Firebase Auth (SDK) gets its token from
+//   firebase.appCheck().activate(siteKey, true) in the <head> init block.
+//   Any other page using this Firebase project (e.g. the admin panel) must do the
+//   same BEFORE enforcement is switched on.
 //
 // RESULT: Once enforced, any direct REST call without a valid App Check
 //   token returns HTTP 403, even if the caller has the API key.
@@ -2017,7 +2024,7 @@ async function _getAppCheckToken() {
       new Promise((_, rej) => setTimeout(() => rej(new Error('reCAPTCHA timeout')), _FB_TIMEOUT_MS))
     ]);
     if (window._AC_DEBUG) showToast('🐞 AC: rcToken ok in ' + (Date.now()-_acStart) + 'ms');
-    const url = `https://firebaseappcheck.googleapis.com/v1/projects/${_AC_PROJECT}/apps/${FB_CONFIG.appId}:exchangeRecaptchaV3Token`;
+    const url = `https://firebaseappcheck.googleapis.com/v1/projects/${_AC_PROJECT}/apps/${FB_CONFIG.appId}:exchangeRecaptchaV3Token?key=${encodeURIComponent(FB_CONFIG.apiKey)}`;
     const _exStart = Date.now();
     const resp = await _fetchWithTimeout(url, {
       method: 'POST',
@@ -4215,7 +4222,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.17';
+const SW_VERSION  = 'v0.3.18';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version

@@ -25,7 +25,13 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.17 (2026-11-02) — Terms/Privacy wording: access levels and fees stated neutrally (no mention of arranging plans outside Google Play)
+// Current version: v0.3.18 (2026-11-08) — App Check fix: the reCAPTCHA→App Check token exchange
+//   now sends the Firebase API key (?key=), as the SDK does — without it the exchange failed and
+//   every request showed as unverified. Firebase Auth now also gets App Check tokens
+//   (firebase-app-check-compat.js + activate in the <head> init block). Setup comment corrected.
+//   No sw.js fetch/cache logic changes — bump only.
+//
+// v0.3.17: (2026-11-02) — Terms/Privacy wording: access levels and fees stated neutrally (no mention of arranging plans outside Google Play)
 //
 // v0.3.16: (2026-11-02) — footer reads "© <year> NEXLITE DIGITAL SOLUTIONS LIMITED"
 //
@@ -1805,7 +1811,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.17';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.18';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
