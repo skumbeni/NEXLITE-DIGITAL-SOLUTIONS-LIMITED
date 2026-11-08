@@ -1969,6 +1969,7 @@ function initFirebase() {
 // Fetches a reCAPTCHA v3 token and exchanges it for a Firebase App Check
 // token. Called before every Firebase REST request.
 // Falls back silently if reCAPTCHA hasn't loaded yet (e.g. offline start).
+window._AC_LAST = '';
 const _AC_SITE_KEY = '6LcLhystAAAAAHClIZK1fQf1AbgAYJdDLwUNX9XT';
 const _AC_PROJECT  = 'realtime-database-be871';
 let _acTokenCache  = null; // { token, expireMs }
@@ -1989,7 +1990,7 @@ async function _getAppCheckToken() {
     // Recently failed — skip straight to null instead of retrying the same
     // expensive (and likely still-failing) round trip again immediately.
     if (_acFailedUntil && Date.now() < _acFailedUntil) {
-      if (window._AC_DEBUG) showToast('🐞 AC: skipped (recent failure, cooling down)');
+      if (window._AC_DEBUG) showToast('🐞 AC: skipped - earlier failure: ' + (window._AC_LAST || 'unknown'));
       return null;
     }
     // Wait for the reCAPTCHA script to finish loading (resolves via onload=
@@ -2001,11 +2002,13 @@ async function _getAppCheckToken() {
         new Promise((_, rej) => setTimeout(() => rej(new Error('grecaptcha load timeout')), _FB_TIMEOUT_MS))
       ]);
     } catch(e) {
+      window._AC_LAST = 'grecaptcha script did not load (blocked or offline)';
       if (window._AC_DEBUG) showToast('🐞 AC: grecaptcha load timeout');
       _acFailedUntil = Date.now() + _AC_FAIL_COOLDOWN_MS;
       return null;
     }
     if (typeof grecaptcha === 'undefined' || !grecaptcha.execute) {
+      window._AC_LAST = 'grecaptcha not loaded';
       if (window._AC_DEBUG) showToast('🐞 AC: grecaptcha not loaded');
       _acFailedUntil = Date.now() + _AC_FAIL_COOLDOWN_MS;
       return null;
@@ -2032,7 +2035,9 @@ async function _getAppCheckToken() {
       body: JSON.stringify({ recaptcha_v3_token: rcToken })
     }, _FB_TIMEOUT_MS);
     if (!resp.ok) {
-      if (window._AC_DEBUG) { const t = await resp.text().catch(()=>''); showToast('🐞 AC: exchange HTTP ' + resp.status + ' in ' + (Date.now()-_exStart) + 'ms: ' + t.slice(0,80)); }
+      const _exBody = await resp.text().catch(()=>'');
+      window._AC_LAST = 'Firebase exchange HTTP ' + resp.status + ': ' + _exBody.slice(0,120);
+      if (window._AC_DEBUG) { showToast('🐞 AC: exchange HTTP ' + resp.status + ' in ' + (Date.now()-_exStart) + 'ms: ' + _exBody.slice(0,80)); }
       _acFailedUntil = Date.now() + _AC_FAIL_COOLDOWN_MS;
       return null;
     }
@@ -2043,6 +2048,7 @@ async function _getAppCheckToken() {
     _acFailedUntil = 0; // success — clear any prior cooldown
     return token;
   } catch (e) {
+    window._AC_LAST = 'reCAPTCHA/exchange error: ' + (e && (e.message || e)) ;
     if (window._AC_DEBUG) showToast('🐞 AC: threw — ' + (e.message||e));
     _acFailedUntil = Date.now() + _AC_FAIL_COOLDOWN_MS;
     return null; // degrade gracefully — Firebase rules still protect via installId
@@ -4222,7 +4228,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.19';
+const SW_VERSION  = 'v0.3.20';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version

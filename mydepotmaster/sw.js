@@ -25,7 +25,10 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.19 (2026-11-08) — App Check: the reCAPTCHA site key in the code was one
+// Current version: v0.3.20 (2026-11-08) — App Check debug (?acdebug=1): the "skipped" toast now shows
+//   the earlier failure reason instead of hiding it. Diagnostics only — no logic changes. Bump only.
+//
+// v0.3.19: (2026-11-08) — App Check: the reCAPTCHA site key in the code was one
 //   character short (39 chars, one 'A' missing; real keys are 40), so reCAPTCHA never issued a
 //   token and App Check showed 0% verified. Key corrected in all places. No sw.js logic changes — bump only.
 //
@@ -1815,7 +1818,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.19';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.20';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
