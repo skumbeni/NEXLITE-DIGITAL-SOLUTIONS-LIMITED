@@ -1306,6 +1306,9 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
 
 <div id="update-toast">🔄 New version available — tap to update</div>
 
+<!-- Shared gating rules (tiers, feature table, licence status, read-only). Same file pos.html loads.
+     Must be a plain synchronous script, placed before the main script below. Keep gate.js in the sw.js precache list. -->
+<script src="gate.js"></script>
 <script>
 
 // TEMP DEBUG: add ?acdebug=1 to the URL to see App Check token diagnostics as toasts.
@@ -1991,11 +1994,12 @@ const FB_CONFIG = {
 
 // ── LICENSE STATE ─────────────────────────────────────────
 let LICENSE = { status: 'active', effectiveStatus: 'active', tier: 'pro', suspendedMsg: '', checkedAt: 0, trialStart: 0, activeUntil: 0, trialDaysLeft: 30, activeSince: 0, payments: [] };
-const LICENSE_CACHE_KEY = 'mdm_license_cache';
 const LICENSE_GRACE_MS  = 7 * 24 * 60 * 60 * 1000; // 7-day offline grace
-const TRIAL_MS          = 30 * 24 * 60 * 60 * 1000; // 30-day trial (1 month)
 const ACTIVE_MONTHS     = 1; // months active after payment (monthly subscription)
-const SUB_GRACE_MS      = 3 * 24 * 60 * 60 * 1000;  // 3-day grace after trial/expiry
+// Shared with pos.html: defined once in gate.js (loaded before this script). Same names as before,
+// so every call site below is unchanged. Tier/feature table, status rules and read-only rules: see gate.js.
+const { TRIAL_MS, SUB_GRACE_MS, TIER_ORDER, TRIAL_TIER, computeEffectiveStatus } = Gate;
+const LICENSE_CACHE_KEY = Gate.KEYS.license;
 
 let fbConfigured = false;
 
@@ -2992,6 +2996,7 @@ async function _fbRestoreDataImpl() {
       _fbBaselineSet(key, cloudTs, _fbUnits(val).hs);
       // Ensure the installId is pinned in the separate key after restore
       if (DATA.installId) _persistInstallId(DATA.installId);
+      DATA = _stampItemIds(DATA);
       sv(DATA); // write back to localStorage + IDB
       return true;
     }
@@ -3070,6 +3075,7 @@ async function forceCloudRestore() {
       DATA._syncTs = val._syncTs || Date.now();
       DATA._lastFbSync = Date.now();
       if (DATA.installId) _persistInstallId(DATA.installId);
+      DATA = _stampItemIds(DATA);
       sv(DATA);
     });
     render();
@@ -3214,104 +3220,16 @@ function depotKey() {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// TIER FEATURE SPEC — single source of truth for the tiered licensing system.
-//
-// Tiers (low → high):
-//   free      — permanent free plan after trial ends; core data entry only
-//   starter   — first paid tier; same feature set as free, but with higher
-//               numeric caps (staff/commodity/contacts/history — enforced
-//               separately, not via TIER_FEATURES). No new unlocks here.
-//   growth    — small depot / single operator; unlocks exports + cloud sync
-//   pro       — full-featured; unlocks reports, payslips, staff management
-//   multisite — multiple depots under one account (future / enterprise)
-//
-// trial is treated as pro-equivalent access (all features on) for 30 days.
-// suspended / pending_approval are handled separately by applyLicenseMode().
+// TIER FEATURE SPEC now lives in gate.js (TIER_FEATURES / TIER_ORDER / TRIAL_TIER), shared with
+// pos.html so the feature → tier table exists exactly once.
 //
 // HOW TO ADD A NEW GATE:
-//   1. Add a feature key here under the tiers that should have it.
-//   2. Call hasFeature('your_key') at the function entry point.
-//   3. On false → call showUpgradePrompt('your_key') and return early.
+//   1. Add the feature key to the right tier in gate.js.
+//   2. Call hasFeature('your_key') at the function entry point (below, bound to this page's state).
+//   3. On false → call showUpgradePrompt('your_key') and return early (and add a label for it in
+//      _FEATURE_LABEL).
+// TIER_META (labels/prices) and TIER_CAPS (numeric limits) are UI/limits only and stay here.
 // ══════════════════════════════════════════════════════════════════════════════
-
-const TIER_FEATURES = {
-
-  // ── FREE ─────────────────────────────────────────────────────────────────
-  // Core data-entry that makes the app useful even without payment.
-  // If a feature is listed here it is also implicitly in all higher tiers.
-  free: [
-    'inventory_receive',         // Record stock received (General tab)
-    'inventory_issue',           // Record stock issued (General tab)
-    'inventory_stock_count',     // Physical stock count / variance
-    'commodity_receive',         // Commodity (maize etc.) receive
-    'commodity_issue',           // Commodity issue
-    'commodity_stock_count',     // Commodity stock count
-    'transport_log',             // Vehicle / transport log entries
-    'staff_clock_in',            // Staff clock-in / clock-out
-    'staff_roster',              // View staff list
-    'contacts_view',             // View contacts / suppliers (view only — no add/edit on Free)
-    'books_view',                // View saved books / notes
-    'dashboard_view',            // Dashboard summary (read-only stats)
-    'settings_basic',            // Currency, depot name, display prefs
-  ],
-
-  // ── STARTER ──────────────────────────────────────────────────────────────
-  // Starter unlocks contact editing (capped — see TIER_CAPS below) but still
-  // no cloud sync, exports, or reports. No new unlocks beyond contacts_edit.
-  starter: [
-    'contacts_edit',             // Add / edit contacts (capped at TIER_CAPS.starter.contacts)
-  ],
-
-  // ── GROWTH ───────────────────────────────────────────────────────────────
-  // Small operators who need to get data out of the app.
-  growth: [
-    'cloud_sync',                // Manual upload / download to Firebase
-    'export_csv',                // CSV exports across all tabs
-    'export_pdf_summary',        // Print-to-PDF period summary report
-    'books_edit',                // Create / edit books & spreadsheets
-    'supplier_performance',      // Supplier performance report tab
-    'budget_vs_actual',          // Budget vs Actual report
-    'global_search',             // Cross-tab global search (FAB)
-    'contacts_full',             // Full contact management (delete, export)
-  ],
-
-  // ── PRO ──────────────────────────────────────────────────────────────────
-  // Full-featured depot management — current K300/mo equivalent.
-  pro: [
-    'payslip_generate',          // Generate & print staff payslips (PDF)
-    'staff_id_card',             // Print staff ID cards (PDF)
-    'staff_warnings',            // Staff disciplinary warnings log
-    'staff_leave',               // Leave management
-    'staff_multi_user',          // Add extra login users beyond the admin
-    'audit_log',                 // View & export the audit log
-    'export_json_backup',        // Full JSON data export/import backup
-    'profit_loss',               // P&L report (General + Commodities)
-    'cash_flow',                 // Cash flow report
-    'dashboard_customize',       // Toggle / reorder dashboard widgets
-    'biometric_login',           // Fingerprint / Face ID login
-    'setup_checklist',           // First-run onboarding checklist
-    'custom_branding',           // Custom logo & accent colour on staff ID cards
-    'daily_sales',               // Daily Sales tab (close-out, receipt printing, sales history)
-    'ai_copilot',                // Depot Assistant (Gemini) — AI chat + reconciliation (Pro only)
-    'payroll_run',               // Payroll Run — Prepare Payroll, lock, pay out, mobile money CSV, run payslips, NAPSA/NHIMA/PAYE
-    'stock_check',               // Stock check — stock vs logged bags per task, and the "paid for" badge on stock rows
-  ],
-
-  // ── MULTISITE ────────────────────────────────────────────────────────────
-  // Future: multiple depots / branches under one subscription.
-  // Kept here as a placeholder — no gates wired yet (Step 5e).
-  multisite: [
-    'multi_depot',               // Switch between depot accounts
-    'depot_consolidation',       // Consolidated reports across depots
-    'branch_user_isolation',     // Per-branch user access control
-  ],
-};
-
-// Tiers ordered low → high. Used for "upgrade to at least X" prompts.
-const TIER_ORDER = ['free', 'starter', 'growth', 'pro', 'multisite'];
-
-// Trial gets full pro-equivalent access.
-const TRIAL_TIER = 'pro';
 
 // Human-readable tier labels and monthly prices (ZMW).
 // Update prices here only — all UI reads from this object.
@@ -3322,17 +3240,6 @@ const TIER_META = {
   pro:       { label: 'Pro',       price: 300,  currency: 'ZMW', desc: 'Full features — current plan' },
   multisite: { label: 'Multi-Site',price: 600,  currency: 'ZMW', desc: 'Multiple depots, enterprise' },
 };
-
-// ── Compute the flat feature set for a given tier (includes all lower tiers)
-function _tierFeatureSet(tier) {
-  const idx = TIER_ORDER.indexOf(tier);
-  if (idx === -1) return new Set(TIER_FEATURES.free);
-  const features = new Set();
-  for (let i = 0; i <= idx; i++) {
-    (TIER_FEATURES[TIER_ORDER[i]] || []).forEach(f => features.add(f));
-  }
-  return features;
-}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // TIER CAPS — numeric ceilings per tier, separate from the boolean TIER_FEATURES.
@@ -3429,27 +3336,6 @@ function showCapReachedPrompt(capKey, label) {
     <div class="mact" style="margin-top:0">
       <button class="btn bo" style="flex:1" onclick="closeModal()">Maybe Later</button>
     </div>`);
-}
-
-// ── Compute effective status from raw Firebase data
-function computeEffectiveStatus(raw, trialStart, activeUntil) {
-  if (raw === 'suspended') return 'suspended';
-  if (raw === 'pending_approval') return 'pending_approval';
-  const now = Date.now();
-  if (raw === 'trial') {
-    const ts = trialStart || now;
-    if (now <= ts + TRIAL_MS) return 'trial';
-    // After trial ends — apply 3-day grace
-    if (now <= ts + TRIAL_MS + SUB_GRACE_MS) return 'trial_grace';
-    return 'trial_expired';
-  }
-  if (raw === 'active') {
-    if (!activeUntil || now <= activeUntil) return 'active';
-    // After active period ends — apply 3-day grace
-    if (now <= activeUntil + SUB_GRACE_MS) return 'expired_grace';
-    return 'expired';
-  }
-  return raw || 'trial';
 }
 
 function trialDaysRemaining(trialStart) {
@@ -3722,12 +3608,8 @@ function applyLicenseMode() {
 // a console attacker would need to call applyLicenseMode() with a fresh object — but
 // checkLicense() always re-fetches from Firebase first.
 function isReadOnly() {
-  if (isSelfSuspended()) return true;
-  const eff = LICENSE.effectiveStatus || LICENSE.status || 'active';
-  // Read-only only for terminal states: pending approval, suspended, and the 3-day
-  // grace countdown banners. trial_expired and expired now degrade silently to the
-  // free tier (full data entry, feature-gated) rather than blocking the app.
-  return ['pending_approval','suspended','trial_grace','expired_grace'].includes(eff);
+  // Rule lives in gate.js (self-suspend, or pending/suspended/trial_grace/expired_grace).
+  return Gate.isReadOnly(LICENSE, DATA);
 }
 
 // ── SELF-SUSPEND (Admin-initiated pause, distinct from license 'suspended') ──
@@ -3736,7 +3618,7 @@ function isReadOnly() {
 // (including Admin) until an Admin reactivates it from the same screen.
 // Data is never touched — this only flips a flag on depotInfo.
 function isSelfSuspended(){
-  return !!((DATA.depotInfo||{}).selfSuspended);
+  return Gate.isSelfSuspended(DATA);
 }
 
 // ── TIER HELPERS ─────────────────────────────────────────────────────────────
@@ -3755,21 +3637,14 @@ function isSelfSuspended(){
 //   if (!hasFeature('payslip_generate')) { showUpgradePrompt('payslip_generate'); return; }
 // ─────────────────────────────────────────────────────────────────────────────
 
+// The rules themselves live in gate.js (Gate.tierOf / Gate.hasFeature / Gate.isReadOnly) so pos.html runs
+// the identical code. These three functions only bind them to this page's LICENSE and DATA.
 function currentTier() {
-  const eff = LICENSE.effectiveStatus || LICENSE.status || 'active';
-  // Trial always gets full pro-equivalent access
-  if (eff === 'trial') return TRIAL_TIER;
-  // Active subscription (and its 3-day grace): use the stored tier
-  if (eff === 'active' || eff === 'expired_grace') return LICENSE.tier || DATA.tier || 'pro';
-  // Trial ended / subscription lapsed → free tier. The app keeps working; only
-  // premium features are gated. (suspended / pending are blocked by isReadOnly().)
-  if (eff === 'trial_expired' || eff === 'expired') return 'free';
-  // Anything else (suspended, pending) → free tier; isReadOnly() handles the block.
-  return 'free';
+  return Gate.tierOf(LICENSE, DATA);
 }
 
 function hasFeature(featureName) {
-  return _tierFeatureSet(currentTier()).has(featureName);
+  return Gate.hasFeature(featureName, LICENSE, DATA);
 }
 
 // ── UPGRADE PROMPT ───────────────────────────────────────────────────────────
@@ -3800,6 +3675,7 @@ const _FEATURE_LABEL = {
   setup_checklist:    { name: 'Setup Checklist',           tier: 'pro'    },
   payroll_run:        { name: 'Payroll Run',               tier: 'pro'    },
   stock_check:        { name: 'Payroll Stock Check',       tier: 'pro'    },
+  pos_till:           { name: 'Sell Tab (Till)',           tier: 'pro'    },
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -4285,7 +4161,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.23';
+const SW_VERSION  = 'v0.3.25';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -4328,6 +4204,7 @@ const SW_FONTS_URL = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ita
 if ('caches' in window) {
   caches.open(SW_VERSION).then(cache => {
     cache.add(location.href).catch(() => {});
+    cache.add('pos.html').catch(() => {});
     if (navigator.onLine) cache.add(SW_FONTS_URL).catch(() => {});
   }).catch(() => {});
 }
@@ -4570,7 +4447,7 @@ const DEFAULT={
   users:[],
   generalInventory:[],  // {id,date,itemName,received,good,damaged,condition,notes}
   generalIssued:[],     // {id,date,itemName,issued,notes}
-  inventoryItems:[],    // admin-defined list of inventory names
+  inventoryItems:[],    // admin-defined item records {id,name,minStock,reservedQty,sku,barcode,unit,category,vat}
   commodities:[],    // admin defines commodities — no default
   commodityReceived:{},
   commodityIssued:{},
@@ -4715,6 +4592,7 @@ async function initData(){
         idbSet(DATA).catch(()=>{});
       }
       // if equal: both are in sync, do nothing
+      migrateItemIds();   // IDB copy may predate item ids
     }
   }catch(e){
     console.warn('IndexedDB load failed, using localStorage data',e);
@@ -4723,6 +4601,7 @@ async function initData(){
 
 let DATA=ld(); // immediate sync load from localStorage
 migrateShiftLogStatus();  // Two-Stage Shift Log: tag legacy logs as completed
+migrateItemIds();         // Item master: stamp itemId on existing stock records (additive)
 let USER=null;
 let STAFF_MODAL_PIN=false; // when true, staff profile modal stays open across actions instead of auto-closing
 let TAB='dashboard';
@@ -5272,7 +5151,7 @@ function setDateRange(tab,key,val){
   if(tab==='productivity') openProductivity();
 }
 
-function updateData(fn){DATA=fn(DATA);DATA._v=(DATA._v||0)+1;sv(DATA);render();scheduleFbSync();}
+function updateData(fn){DATA=_stampItemIds(fn(DATA));DATA._v=(DATA._v||0)+1;sv(DATA);render();scheduleFbSync();}
 
 // ══════════════════════════════════════════════════════════════════════════
 // ENTRY APPROVAL WORKFLOW
@@ -6775,6 +6654,7 @@ async function doLogin(){
               DATA._syncTs = val._syncTs || Date.now();
               DATA._lastFbSync = Date.now();
               if (DATA.installId) _persistInstallId(DATA.installId);
+              DATA = _stampItemIds(DATA);
               sv(DATA);
             }
           } else {
@@ -6808,6 +6688,7 @@ async function doLogin(){
                   DATA._syncTs = val2._syncTs || Date.now();
                   DATA._lastFbSync = Date.now();
                   if (DATA.installId) _persistInstallId(DATA.installId);
+                  DATA = _stampItemIds(DATA);
                   sv(DATA);
                   console.warn('doLogin: forced unconditional restore — username was confirmed server-side but missing after normal version-gated restore.');
                 }
@@ -7026,6 +6907,24 @@ function _doLogoutNow(){
   showLanding();
 }
 
+// ── TILL (pos.html) HANDOFF ──────────────────────────────────────────────────
+// pos.html is a separate page on the same origin: it shares localStorage/IndexedDB data, the signed
+// license cache and the Firebase Auth session. The tab-scoped sessionStorage key below tells it who
+// is signed in (username only — never a password or hash), even when "stay signed in" is off, and
+// lets this page restore that user when they come back. Cleared by every logout.
+const _POS_SESSION_KEY=Gate.KEYS.posSession;
+function openTill(){
+  if(!hasFeature('pos_till')){showUpgradePrompt('pos_till');return;}
+  if(!USER)return;
+  if(isReadOnly()){alert('The Till is unavailable while this account is read-only.');return;}
+  try{sessionStorage.setItem(_POS_SESSION_KEY,JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now()}));}catch{}
+  location.href='pos.html';
+}
+function _posReturnUser(){
+  try{const p=JSON.parse(sessionStorage.getItem(_POS_SESSION_KEY)||'null');
+    return p&&p.u&&Date.now()-p.t<Gate.POS_SESSION_MS?String(p.u).toLowerCase():null;}catch{return null;}
+}
+
 function doLogout(){
   openModal(`
     <div class="mtitle">⏏ Log Out</div>
@@ -7090,6 +6989,7 @@ function doLogout(){
   window._doLogoutNow = function() {
     _broadcastLogout();
     _clearStaySignedIn(); // any logout path always ends a persisted session too
+    try{sessionStorage.removeItem(_POS_SESSION_KEY);}catch{}
     _origDoLogoutNow();
   };
   // Re-expose so existing callers (doLogout modal, idle timer) pick up the patch
@@ -7107,7 +7007,7 @@ function doLogout(){
 // Any explicit logout (button, idle timeout, remote-tab logout) always clears
 // this — "stay signed in" only survives a page reload/app relaunch, never an
 // actual logout.
-const _STAY_KEY = 'mdm_stay_signed_in';
+const _STAY_KEY = Gate.KEYS.stay;
 const _STAY_DAYS_DEFAULT = 30;
 
 function getStaySignedInPref(){
@@ -8146,6 +8046,7 @@ function renderGeneral(){
       <button class="stab${GTAB==='inventory'?' act':''}" id="gtab-inventory">Received Stock</button>
       <button class="stab${GTAB==='issued'?' act':''}" id="gtab-issued">Issued</button>
       <button class="stab${GTAB==='sales'?' act':''}" id="gtab-sales">🛒 Sales${hasFeature('daily_sales')?'':' 🔒'}</button>
+      <button class="stab play-hide" id="gtab-till" onclick="openTill()">🧾 Till${hasFeature('pos_till')?'':' 🔒'}</button>
       <button class="stab${GTAB==='stockcount'?' act':''}" id="gtab-stockcount">Stock Count</button>
       <button class="stab${GTAB==='summary'?' act':''}" id="gtab-summary">Summary</button>
       <button class="stab${GTAB==='itemnames'?' act':''}" id="gtab-itemnames">📋 Item Names</button>
@@ -9937,10 +9838,14 @@ function renderGenItemNamesTab(){
   if(!isAdmin())return`<div class="card"><div class="empty">⛔ Admin access required to manage inventory item names.</div></div>`;
   const items=DATA.inventoryItems||[];
   const listHtml=items.length>0
-    ?`<div style="margin-bottom:12px">${items.map((item,i)=>`
-      <div style="padding:8px 0;border-bottom:1px solid var(--border)">
-        <span style="font-weight:700;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" onclick="openInvItemHistory(decodeURIComponent('${encodeURIComponent(_invItemName(item))}'))">${esc(_invItemName(item))}</span>
-      </div>`).join('')}</div>`
+    ?`<div style="margin-bottom:12px">${items.length>8?_itemSearchBoxHtml('inv-tab-list'):''}<div id="inv-tab-list">${items.map((item,i)=>`
+      <div class="inv-row" data-q="${esc(_itemSearchKey(item))}" style="padding:8px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+          <span style="font-weight:700;cursor:pointer;text-decoration:underline;text-decoration-style:dotted;text-underline-offset:3px" onclick="openInvItemHistory(decodeURIComponent('${encodeURIComponent(_invItemName(item))}'))">${esc(_invItemName(item))}</span>
+          <button class="btn bo" style="width:auto;padding:6px 12px;flex-shrink:0" onclick="openItemDetails('${esc(_invItemId(item))}','tab')">✏️ Details</button>
+        </div>
+        ${_itemChipsHtml(item)}
+      </div>`).join('')}</div></div>`
     :`<div style="color:var(--muted);font-size:18px;margin-bottom:12px">No items defined yet. Add items below.</div>`;
   const atCap = isAtCap('inventoryItems', items.length);
   // Items already recorded in actual stock activity (received/issued) but not yet
@@ -9970,7 +9875,8 @@ function renderGenItemNamesTab(){
   return `
     <div class="card">
       <div class="ctitle">📋 Inventory Item Names</div>
-      <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">Define item names that appear in the General Inventory dropdown. Ensures consistent naming across all entries and reports.${pickable.length>0?' Pick from items already recorded in stock, or choose OTHER to type a brand-new one.':''} Tap an item name to see its full history.</div>
+      <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">Define item names that appear in the General Inventory dropdown. Ensures consistent naming across all entries and reports.${pickable.length>0?' Pick from items already recorded in stock, or choose OTHER to type a brand-new one.':''} Tap an item name to see its full history, or ✏️ Details to set its barcode, SKU, unit, category, prices and VAT.</div>
+      ${_itemImportBarHtml('tab')}
       ${listHtml}
       ${addFormHtml}
     </div>`;
@@ -10161,7 +10067,7 @@ function saveEditGenRec(id){
     const prices={...(d.inventoryPrices||{})};
     if(pprice>0)prices[name]={...(prices[name]||{}),purchasePrice:pprice};
     return{...d,
-      generalInventory:d.generalInventory.map(x=>String(x.id)===String(id)?{...x,itemName:name,received:rec,good:Number(document.getElementById('eger-good').value||0),damaged:Number(document.getElementById('eger-dmg').value||0),condition:document.getElementById('eger-cond').value,rejectionReason:uc(document.getElementById('eger-reject-reason')?.value||''),creditStatus:document.getElementById('eger-credit')?.value||x.creditStatus||'paid',date:document.getElementById('eger-date').value,expiryDate:document.getElementById('eger-expiry')?.value||'',notes:uc(document.getElementById('eger-notes').value),purchasePrice:pprice,supplierId,supplierName}:x),
+      generalInventory:d.generalInventory.map(x=>String(x.id)===String(id)?{...x,itemName:name,itemId:'',received:rec,good:Number(document.getElementById('eger-good').value||0),damaged:Number(document.getElementById('eger-dmg').value||0),condition:document.getElementById('eger-cond').value,rejectionReason:uc(document.getElementById('eger-reject-reason')?.value||''),creditStatus:document.getElementById('eger-credit')?.value||x.creditStatus||'paid',date:document.getElementById('eger-date').value,expiryDate:document.getElementById('eger-expiry')?.value||'',notes:uc(document.getElementById('eger-notes').value),purchasePrice:pprice,supplierId,supplierName}:x),
       inventoryPrices:prices
     };
   });
@@ -10217,7 +10123,7 @@ function saveEditGenIss(id){
     const prices={...(d.inventoryPrices||{})};
     if(sprice>0)prices[name]={...(prices[name]||{}),sellingPrice:sprice};
     return{...d,
-      generalIssued:d.generalIssued.map(x=>String(x.id)===String(id)?{...x,itemName:name,issued:qty,date:document.getElementById('egei-date').value,notes:uc(document.getElementById('egei-notes').value),...custFields,sellingPrice:sprice,creditStatus:document.getElementById('egei-credit')?.value||'paid',partialPaid:Number(document.getElementById('egei-partial-amt')?.value||0)}:x),
+      generalIssued:d.generalIssued.map(x=>String(x.id)===String(id)?{...x,itemName:name,itemId:'',issued:qty,date:document.getElementById('egei-date').value,notes:uc(document.getElementById('egei-notes').value),...custFields,sellingPrice:sprice,creditStatus:document.getElementById('egei-credit')?.value||'paid',partialPaid:Number(document.getElementById('egei-partial-amt')?.value||0)}:x),
       inventoryPrices:prices
     };
   });
@@ -11659,17 +11565,549 @@ function openManageInventory(){
   if(!requireAdmin('manage inventory items'))return;
   renderManageInventoryModal();
 }
-// inventoryItems is [{name,minStock,reservedQty}] — helper to normalise legacy string entries
+// inventoryItems entries are item records: {id,name,minStock,reservedQty,sku,barcode,unit,category,vat}.
+// Legacy entries (plain strings, or objects saved before v0.3.24) lack the newer fields — helpers below normalise them.
 function _invItemName(x){return typeof x==='string'?x:(x&&x.name?x.name:'');}
 function _invItemMin(x){return typeof x==='string'?0:(x&&x.minStock?Number(x.minStock):0);}
 function _invItemReserved(x){return typeof x==='string'?0:(x&&x.reservedQty?Number(x.reservedQty):0);}
+
+// ══════════════════════════════════════════════════════════
+// ITEM MASTER (v0.3.24) — step 1 of the point-of-sale roadmap
+// ══════════════════════════════════════════════════════════
+// An item record: {id,name,minStock,reservedQty,sku,barcode,unit,category,vat}
+//   vat: '' (not set) | 'S' standard-rated | 'Z' zero-rated | 'E' exempt  (a code, not a rate)
+// Existing items have no id. _invItemId() derives a deterministic one from the
+// name, so every device computes the same id with no data migration; it is
+// written to the record the first time the item is edited. New items get a
+// stored id at creation (_newInvItem).
+// Prices are NOT duplicated onto the item: cost = DATA.inventoryPrices[name].purchasePrice
+// and selling price = DATA.inventoryPrices[name].sellingPrice, exactly as the Receive / Issue
+// forms, stock valuation and reports already use them. The editor below reads/writes those.
+function _itemVatCodes(){return {'':'Not set',S:'Standard-rated',Z:'Zero-rated',E:'Exempt'};}
+function _itemUnitSuggestions(){return ['PCS','KG','G','L','ML','BAG','BOX','CARTON','PACK','BOTTLE','TIN','SACHET','DOZEN','M','ROLL','PAIR'];}
+function _itemLegacyId(name){
+  const s=String(name||'').trim().toUpperCase();
+  let h=2166136261;                                   // FNV-1a, 32-bit
+  for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}
+  return 'itm_'+h.toString(36);
+}
+function _invItemId(x){const o=typeof x==='string'?{name:x}:(x||{});return o.id||_itemLegacyId(o.name);}
+function _invItemObj(x){
+  const o=typeof x==='string'?{name:x}:{...(x||{})};
+  return {minStock:0,reservedQty:0,sku:'',barcode:'',unit:'',category:'',vat:'',...o,id:_invItemId(o)};
+}
+// Re-adding an item that has history (e.g. removed, then added again) reuses the id its
+// old records already carry, so links to it (later: sales lines) are not orphaned.
+function _historyItemId(name){
+  try{
+    const k=_itemKey(name);if(!k||!DATA)return '';
+    const taken=new Set((DATA.inventoryItems||[]).map(x=>x&&x.id).filter(Boolean));
+    for(const ak of _itemIdArrays()){
+      const a=DATA[ak];if(!Array.isArray(a))continue;
+      for(const r of a){if(r&&r.itemId&&_itemKey(r.itemName)===k)return taken.has(r.itemId)?'':r.itemId;}
+    }
+  }catch(e){}
+  return '';
+}
+function _newInvItem(name){return {id:_historyItemId(name)||'itm_'+uid(),name,minStock:0,reservedQty:0,sku:'',barcode:'',unit:'',category:'',vat:''};}
+
+// ══════════════════════════════════════════════════════════
+// ITEM-ID MIGRATION (v0.3.25) — step 2 of the point-of-sale roadmap
+// ══════════════════════════════════════════════════════════
+// Every general-stock record (received, issued, stock counts, general budgets) now also
+// carries itemId = the item's id in the item master. itemName is NEVER changed or removed,
+// so reports, receipts, edit windows, stock maths and sync behave exactly as before; the id
+// is purely additive and later steps can start keying on it. Item names are immutable, so
+// name -> id is a safe join. Ids for existing items are the deterministic _itemLegacyId(name),
+// so every device stamps identical values and offline devices never conflict. The function is
+// idempotent and returns the SAME object/array references when nothing needs stamping
+// (several render caches compare array identity). Names with no item-master entry (history
+// of removed items) get the deterministic id too and are re-pointed if the item is re-added.
+function _itemKey(n){return String(n==null?'':n).trim().toUpperCase();}
+// NOTE: no top-level const here on purpose — migrateItemIds() runs at startup, before this
+// part of the script has executed, so everything it touches must be a hoisted function.
+function _itemIdArrays(){return ['generalInventory','generalIssued','generalStockCounts'];}
+// Runs inside EVERY updateData(), so it must never throw: any failure returns the data unchanged.
+function _stampItemIds(d){
+  try{
+    if(!d||typeof d!=='object')return d;
+    let out=d;
+    const set=(k,v)=>{if(out===d)out={...d};out[k]=v;};
+    const raw=Array.isArray(d.inventoryItems)?d.inventoryItems:[];
+    const used=new Set(), master=new Map();
+    raw.forEach(x=>{if(x&&typeof x==='object'&&x.id)used.add(x.id);});
+    // 1) item master: persist an id on every item that lacks one
+    let itemsChanged=false;
+    const items=raw.map(x=>{
+      if(!x)return x;
+      const o=_invItemObj(x);
+      if(typeof x==='string'||!x.id){
+        itemsChanged=true;
+        let id=o.id;while(used.has(id))id+='x';   // guard against a (very unlikely) hash clash
+        o.id=id;used.add(id);
+      }
+      const k=_itemKey(o.name);
+      if(k&&!master.has(k))master.set(k,o.id);
+      return o;
+    });
+    if(itemsChanged)set('inventoryItems',items);
+    // 2) names NOT in the item master (removed items): reuse the id their records already
+    //    carry (most common wins) so an id never changes just because an item was removed
+    const hist=new Map();
+    _itemIdArrays().forEach(k=>{
+      const a=d[k];if(!Array.isArray(a))return;
+      for(const r of a){
+        if(!r||!r.itemName||!r.itemId)continue;
+        const nk=_itemKey(r.itemName);if(master.has(nk))continue;
+        let m=hist.get(nk);if(!m){m=new Map();hist.set(nk,m);}
+        m.set(r.itemId,(m.get(r.itemId)||0)+1);
+      }
+    });
+    const best=new Map();
+    hist.forEach((m,nk)=>{let bid='',bc=0;m.forEach((c,id)=>{if(c>bc){bc=c;bid=id;}});if(bid&&!used.has(bid))best.set(nk,bid);});
+    // item master wins; else the id history already uses; else the deterministic legacy id
+    const idFor=n=>{const k=_itemKey(n);return k?(master.get(k)||best.get(k)||_itemLegacyId(k)):'';};
+    const stamp=(arr,pred)=>{
+      if(!Array.isArray(arr))return arr;
+      let res=null;
+      for(let i=0;i<arr.length;i++){
+        const r=arr[i];
+        if(!r||typeof r!=='object'||!r.itemName||(pred&&!pred(r)))continue;
+        const id=idFor(r.itemName);
+        if(id&&r.itemId!==id){if(!res)res=arr.slice();res[i]={...r,itemId:id};}
+      }
+      return res||arr;
+    };
+    _itemIdArrays().forEach(k=>{const a=stamp(d[k]);if(a!==d[k])set(k,a);});
+    const bud=stamp(d.budgets,r=>r.itemType==='general');
+    if(bud!==d.budgets)set('budgets',bud);
+    return out;
+  }catch(e){console.warn('[MDM] item-id stamping skipped',e);return d;}
+}
+// One-time (and every-load) pass: saved to localStorage only, like migrateShiftLogStatus.
+// _v is deliberately not bumped; the next real write syncs the stamped data.
+function migrateItemIds(){
+  try{
+    const n=_stampItemIds(DATA);
+    if(n!==DATA){DATA=n;try{localStorage.setItem(LK,JSON.stringify(DATA));}catch{}}
+  }catch(e){console.warn('[MDM] item-id migration skipped',e);}
+}
+
+// Small read-only summary line shown under an item's name.
+function _itemChipsHtml(item){
+  const it=_invItemObj(item), pr=(DATA.inventoryPrices||{})[it.name]||{}, vc=_itemVatCodes();
+  const chip=t=>`<span style="display:inline-block;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:1px 7px;margin:0 4px 4px 0;font-size:14px;color:var(--muted)">${t}</span>`;
+  const c=[];
+  if(it.barcode)c.push(chip('Barcode '+esc(it.barcode)));
+  if(it.sku)c.push(chip('SKU '+esc(it.sku)));
+  if(it.unit)c.push(chip(esc(it.unit)));
+  if(it.category)c.push(chip(esc(it.category)));
+  if(Number(pr.purchasePrice)>0)c.push(chip('Cost '+zm(pr.purchasePrice)));
+  if(Number(pr.sellingPrice)>0)c.push(chip('Price '+zm(pr.sellingPrice)));
+  if(it.vat)c.push(chip('VAT: '+esc(vc[it.vat]||it.vat)));
+  return c.length?`<div style="margin:2px 0 6px">${c.join('')}</div>`:'';
+}
+
+// EAN-13 check digit for the first 12 digits.
+function _ean13Check(d12){let t=0;for(let i=0;i<12;i++)t+=Number(d12[i])*(i%2?3:1);return (10-t%10)%10;}
+// Internal barcode for goods that have none. GS1 reserves prefixes 20–29 for in-store use,
+// so a leading 2 can never clash with a manufacturer's code.
+function genItemBarcode(){
+  const used=new Set((DATA.inventoryItems||[]).map(x=>String(_invItemObj(x).barcode).toLowerCase()).filter(Boolean));
+  let code='';
+  for(let n=0;n<50;n++){
+    let b='2';for(let i=0;i<11;i++)b+=Math.floor(Math.random()*10);
+    code=b+_ean13Check(b);
+    if(!used.has(code))break;
+  }
+  const el=document.getElementById('idt-barcode');
+  if(el)el.value=code;
+}
+
+function openItemDetails(id,from){
+  if(!requireAdmin('edit inventory item details'))return;
+  const it=(DATA.inventoryItems||[]).map(_invItemObj).find(x=>x.id===id);
+  if(!it){alert('Item not found.');return;}
+  const pr=(DATA.inventoryPrices||{})[it.name]||{};
+  const cats=[...new Set((DATA.inventoryItems||[]).map(x=>_invItemObj(x).category).filter(Boolean))].sort();
+  const vc=_itemVatCodes();
+  const fld=(label,inner)=>`<div style="margin-bottom:10px"><div style="font-size:15px;color:var(--muted);margin-bottom:3px">${label}</div>${inner}</div>`;
+  const nxt=nid=>`onkeydown="if(event.key==='Enter'){event.preventDefault();var n=document.getElementById('${nid}');if(n)n.focus();}"`;
+  openModal(`
+    <div class="mtitle">✏️ ${esc(it.name)}</div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Item ID: ${esc(it.id)}</div>
+    ${fld('BARCODE',`<div style="display:flex;gap:8px"><input class="fi" id="idt-barcode" value="${esc(it.barcode)}" placeholder="Scan or type" autocomplete="off" style="flex:1" ${nxt('idt-sku')}/><button class="btn bo" style="width:auto;padding:10px 12px" onclick="genItemBarcode()">Generate</button></div><div style="font-size:14px;color:var(--muted);margin-top:4px">No barcode on the product? Tap Generate for an in-store code you can print on a label.</div>`)}
+    ${fld('SKU / ITEM CODE (OPTIONAL)',`<input class="fi" id="idt-sku" value="${esc(it.sku)}" placeholder="E.G. FRT-001" autocomplete="off" oninput="this.value=this.value.toUpperCase()" ${nxt('idt-unit')}/>`)}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${fld('UNIT',`<input class="fi" id="idt-unit" list="idt-units" value="${esc(it.unit)}" placeholder="E.G. KG" autocomplete="off" oninput="this.value=this.value.toUpperCase()"/><datalist id="idt-units">${_itemUnitSuggestions().map(u=>`<option value="${u}">`).join('')}</datalist>`)}
+      ${fld('CATEGORY',`<input class="fi" id="idt-category" list="idt-cats" value="${esc(it.category)}" placeholder="E.G. DRINKS" autocomplete="off" oninput="this.value=this.value.toUpperCase()"/><datalist id="idt-cats">${cats.map(c=>`<option value="${esc(c)}">`).join('')}</datalist>`)}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${fld('COST PRICE'+(cur()?' ('+esc(cur())+')':''),`<input class="fi" id="idt-cost" type="number" inputmode="decimal" min="0" step="any" value="${Number(pr.purchasePrice)>0?Number(pr.purchasePrice):''}" placeholder="0.00"/>`)}
+      ${fld('SELLING PRICE'+(cur()?' ('+esc(cur())+')':''),`<input class="fi" id="idt-price" type="number" inputmode="decimal" min="0" step="any" value="${Number(pr.sellingPrice)>0?Number(pr.sellingPrice):''}" placeholder="0.00"/>`)}
+    </div>
+    ${fld('VAT',`<select class="fi" id="idt-vat">${Object.keys(vc).map(k=>`<option value="${k}"${it.vat===k?' selected':''}>${esc(vc[k])}</option>`).join('')}</select>`)}
+    <div style="font-size:14px;color:var(--muted);margin-bottom:8px;line-height:1.6">Cost and selling price are the same prices the Receive and Issue forms already use, so they stay in step. The item name can't be changed here yet.</div>
+    <div class="mact">
+      <button class="btn bo" onclick="${from==='manage'?'renderManageInventoryModal()':'closeModal()'}">Cancel</button>
+      <button class="btn bg" onclick="saveItemDetails('${esc(it.id)}','${from==='manage'?'manage':'tab'}')">Save</button>
+    </div>`);
+}
+
+function saveItemDetails(id,from){
+  if(!requireAdmin('edit inventory item details'))return;
+  const g=k=>String((document.getElementById('idt-'+k)||{}).value||'');
+  const barcode=g('barcode').trim();
+  const sku=uc(g('sku'));
+  const unit=uc(g('unit'));
+  const category=uc(g('category'));
+  const vat=g('vat');
+  const num=k=>{const v=g(k).trim();return v===''?0:Number(v);};
+  const cost=num('cost'), price=num('price');
+  if(barcode&&!/^[\x21-\x7E]{1,48}$/.test(barcode)){alert('Barcode must be 1–48 characters with no spaces.');return;}
+  if(sku.length>40){alert('SKU is too long (40 characters max).');return;}
+  if(!Number.isFinite(cost)||cost<0||!Number.isFinite(price)||price<0){alert('Prices must be zero or more.');return;}
+  if(!(vat in _itemVatCodes())){alert('Choose a VAT option.');return;}
+  const items=(DATA.inventoryItems||[]).map(_invItemObj);
+  const before=items.find(x=>x.id===id);
+  if(!before){alert('Item not found.');return;}
+  // A code must identify exactly one item: neither the barcode nor the SKU may match
+  // any other item's barcode or SKU (a scan or lookup would be ambiguous).
+  for(const v of [barcode,sku]){
+    if(!v)continue;
+    const lv=v.toLowerCase();
+    const clash=items.find(x=>x.id!==id&&(String(x.barcode).toLowerCase()===lv||String(x.sku).toLowerCase()===lv));
+    if(clash){alert('"'+v+'" is already used as a barcode or SKU by '+clash.name+'.');return;}
+  }
+  if(price>0&&cost>0&&price<cost&&!confirm('Selling price ('+price+') is below cost ('+cost+'). Save anyway?'))return;
+  const pr0=(DATA.inventoryPrices||{})[before.name]||{};
+  updateData(d=>{
+    const arr=(d.inventoryItems||[]).map(x=>typeof x==='string'?{name:x,minStock:0,reservedQty:0}:x);
+    const i=arr.findIndex(x=>_invItemId(x)===id);
+    if(i<0)return d;
+    arr[i]={...arr[i],id,sku,barcode,unit,category,vat};
+    const prices={...(d.inventoryPrices||{})};
+    const nm=arr[i].name, p={...(prices[nm]||{})};
+    if(cost>0)p.purchasePrice=cost;else delete p.purchasePrice;
+    if(price>0)p.sellingPrice=price;else delete p.sellingPrice;
+    if(Object.keys(p).length)prices[nm]=p;else delete prices[nm];
+    return {...d,inventoryItems:arr,inventoryPrices:prices};
+  });
+  logAuditEvent('EDIT','Inventory Item',`Item: ${before.name} · Barcode: ${barcode||'—'} · SKU: ${sku||'—'} · Unit: ${unit||'—'} · Category: ${category||'—'} · Cost: ${cost||'—'} · Price: ${price||'—'} · VAT: ${vat||'—'}`,{...before,purchasePrice:pr0.purchasePrice||0,sellingPrice:pr0.sellingPrice||0});
+  closeModal();
+  showToast('✅ Item details saved');
+  if(from==='manage')renderManageInventoryModal();
+}
+
+// ══════════════════════════════════════════════════════════
+// ITEM CSV IMPORT / EXPORT (v0.3.25)
+// ══════════════════════════════════════════════════════════
+// Bulk-fill the item master from a spreadsheet. Rows are matched to items by NAME; barcode, SKU,
+// unit, category, cost, price and VAT are updated; items not yet in the list can optionally be
+// added (within the plan's item cap). Blank cells (and a price of 0) never clear existing values.
+// Nothing is written until the admin has seen the preview and confirmed; the whole import is then
+// applied in ONE updateData call and re-planned against the live data first.
+function _itemImportMax(){return 2000;}
+function _normItemName(s){return String(s||'').replace(/\s+/g,' ').trim().toUpperCase();}
+function _normHeader(h){return String(h||'').toLowerCase().replace(/[^a-z0-9]/g,'');}
+function _itemImportAliases(){return {
+  name:['name','itemname','item','product','productname','description','itemdescription','article'],
+  barcode:['barcode','barcodes','barcodenumber','barcodeno','ean','ean13','ean8','upc','gtin'],
+  sku:['sku','skucode','itemcode','productcode','code','itemno','itemnumber','productno'],
+  unit:['unit','uom','unitofmeasure','units'],
+  category:['category','group','department','dept','class'],
+  cost:['cost','costprice','purchaseprice','buyingprice','buyprice','unitcost','purchasecost'],
+  price:['price','sellingprice','sellprice','retailprice','saleprice','unitprice','sp'],
+  vat:['vat','vatcode','vatstatus','tax','taxcode','taxstatus']
+};}
+
+// Small RFC-4180-style parser: quoted cells, "" escapes, embedded newlines, CRLF/LF/CR, UTF-8 BOM.
+// The delimiter (comma, semicolon or tab) is detected from the header row.
+function _parseCSV(text){
+  let t=String(text||'');
+  if(t.charCodeAt(0)===0xFEFF)t=t.slice(1);
+  let first='',q0=false;
+  for(const ch of t){
+    if(ch==='"')q0=!q0;
+    if(!q0&&(ch==='\n'||ch==='\r')){if(first.trim())break;first='';continue;}
+    first+=ch;
+  }
+  const cnt={',':0,';':0,'\t':0};let q1=false;
+  for(const ch of first){if(ch==='"')q1=!q1;else if(!q1&&ch in cnt)cnt[ch]++;}
+  const delim=Object.keys(cnt).reduce((a,b)=>cnt[b]>cnt[a]?b:a,',');
+  const rows=[];let row=[],cell='',q=false;
+  const flush=()=>{row.push(cell);cell='';if(row.some(c=>String(c).trim()!==''))rows.push(row);row=[];};
+  for(let i=0;i<t.length;i++){
+    const ch=t[i];
+    if(q){
+      if(ch==='"'){if(t[i+1]==='"'){cell+='"';i++;}else q=false;}
+      else cell+=ch;
+    }else if(ch==='"'&&cell.trim()===''){q=true;cell='';}
+    else if(ch===delim){row.push(cell);cell='';}
+    else if(ch==='\n'||ch==='\r'){if(ch==='\r'&&t[i+1]==='\n')i++;flush();}
+    else cell+=ch;
+  }
+  flush();
+  return {rows,delim};
+}
+
+function _cleanImportBarcode(raw){
+  let b=String(raw||'').trim().replace(/^'/,'').replace(/\s+/g,'');
+  if(!b)return {v:''};
+  if(/^\d+(\.\d+)?e[+-]?\d+$/i.test(b))return {err:'barcode "'+raw+'" looks like Excel scientific notation (digits were lost) — format the barcode column as Text in your spreadsheet and save again'};
+  if(/^\d+\.0+$/.test(b))b=b.replace(/\.0+$/,'');
+  if(!/^[\x21-\x7E]{1,48}$/.test(b))return {err:'barcode "'+raw+'" is not valid (1–48 characters, no spaces)'};
+  return {v:b};
+}
+function _parseImportMoney(raw){
+  const orig=String(raw||'').trim();
+  if(!orig)return {v:0};
+  let t=orig.replace(/[^\d.,\-]/g,'');
+  if(!/\d/.test(t)||t.indexOf('-')>=0)return {err:'"'+orig+'" is not a valid amount'};
+  if(t.includes(',')&&t.includes('.')){
+    if(t.lastIndexOf(',')>t.lastIndexOf('.'))t=t.replace(/\./g,'').replace(',','.');else t=t.replace(/,/g,'');
+  }else if(t.includes(',')){
+    if(/^\d+,\d{1,2}$/.test(t))t=t.replace(',','.');else t=t.replace(/,/g,'');
+  }
+  const n=Number(t);
+  if(!Number.isFinite(n)||n<0||n>1e9)return {err:'"'+orig+'" is not a valid amount'};
+  return {v:n};
+}
+function _parseImportVat(raw){
+  const k=String(raw||'').toLowerCase().replace(/[^a-z]/g,'');
+  if(!k)return {v:''};
+  if(['s','standard','standardrated','std'].includes(k))return {v:'S'};
+  if(['z','zero','zerorated'].includes(k))return {v:'Z'};
+  if(['e','exempt','exempted'].includes(k))return {v:'E'};
+  return {err:'VAT "'+raw+'" not recognised (use S, Z or E)'};
+}
+
+// Pure planner: reads DATA, writes nothing. Returns what an import WOULD do.
+function _planItemImport(text,opts){
+  opts=opts||{};
+  const parsed=_parseCSV(text);
+  if(!parsed.rows.length)return {ok:false,error:'Nothing to import — the text is empty.'};
+  const headRaw=parsed.rows[0],head=headRaw.map(_normHeader),al=_itemImportAliases(),col={},used=new Set();
+  ['name','barcode','sku','unit','category','cost','price','vat'].forEach(f=>{
+    for(const a of al[f]){const i=head.findIndex((h,ix)=>h===a&&!used.has(ix));if(i>=0){col[f]=i;used.add(i);break;}}
+  });
+  if(col.name===undefined)return {ok:false,error:'Could not find a name column. The first row must be headings such as: name, barcode, sku, unit, category, cost, price, vat.'};
+  if(Object.keys(col).length<2)return {ok:false,error:'Found a name column but nothing to import. Add at least one of: barcode, sku, unit, category, cost, price, vat.'};
+  const dataRows=parsed.rows.slice(1);
+  if(dataRows.length>_itemImportMax())return {ok:false,error:'Too many rows ('+dataRows.length+'). Import up to '+_itemImportMax()+' rows at a time.'};
+  const ignored=headRaw.filter((h,i)=>!used.has(i)&&String(h).trim());
+
+  const items=(DATA.inventoryItems||[]).map(_invItemObj);
+  const prices=DATA.inventoryPrices||{};
+  const byName=new Map();items.forEach((x,i)=>{const k=_normItemName(x.name);if(k&&!byName.has(k))byName.set(k,i);});
+  const nameOf=new Map(items.map(x=>[x.id,x.name]));
+  const owner=new Map();
+  items.forEach(x=>{[x.barcode,x.sku].forEach(c=>{const k=String(c||'').toLowerCase();if(k)owner.set(k,x.id);});});
+  // Take ownership of a row's codes, or report who already holds one.
+  const claim=(id,oldB,oldS,newB,newS)=>{
+    for(const c of [newB,newS]){
+      const k=String(c||'').toLowerCase();if(!k)continue;
+      const o=owner.get(k);
+      if(o&&o!==id)return {code:c,who:nameOf.get(o)||'another item'};
+    }
+    [oldB,oldS].forEach(c=>{const k=String(c||'').toLowerCase();if(k&&owner.get(k)===id)owner.delete(k);});
+    [newB,newS].forEach(c=>{const k=String(c||'').toLowerCase();if(k)owner.set(k,id);});
+    return null;
+  };
+
+  const updates=[],creates=[],problems=[],notInList=[],capSkipped=[],belowCost=[];
+  let unchanged=0;const seen=new Map();
+  const cap=currentCaps().inventoryItems;
+  dataRows.forEach((r,ri)=>{
+    const rowNo=ri+2;
+    const cell=f=>col[f]===undefined?'':String(r[col[f]]==null?'':r[col[f]]).trim();
+    const name=_normItemName(cell('name'));
+    if(!name){problems.push({row:rowNo,name:'(no name)',msg:'item name is empty'});return;}
+    if(name.length>120){problems.push({row:rowNo,name:name.slice(0,30)+'…',msg:'item name is too long (120 characters max)'});return;}
+    if(seen.has(name)){problems.push({row:rowNo,name,msg:'same item already appears on row '+seen.get(name)+' of this file'});return;}
+    seen.set(name,rowNo);
+    const errs=[],f={};
+    if(col.barcode!==undefined){const b=_cleanImportBarcode(cell('barcode'));if(b.err)errs.push(b.err);else if(b.v)f.barcode=b.v;}
+    if(col.sku!==undefined){const v=uc(cell('sku'));if(v.length>40)errs.push('SKU is too long (40 characters max)');else if(v)f.sku=v;}
+    if(col.unit!==undefined){const v=uc(cell('unit'));if(v.length>40)errs.push('unit is too long (40 characters max)');else if(v)f.unit=v;}
+    if(col.category!==undefined){const v=uc(cell('category'));if(v.length>40)errs.push('category is too long (40 characters max)');else if(v)f.category=v;}
+    if(col.cost!==undefined){const m=_parseImportMoney(cell('cost'));if(m.err)errs.push('cost '+m.err);else if(m.v>0)f.cost=m.v;}
+    if(col.price!==undefined){const m=_parseImportMoney(cell('price'));if(m.err)errs.push('price '+m.err);else if(m.v>0)f.price=m.v;}
+    if(col.vat!==undefined){const v=_parseImportVat(cell('vat'));if(v.err)errs.push(v.err);else if(v.v)f.vat=v.v;}
+    if(errs.length){problems.push({row:rowNo,name,msg:errs.join('; ')});return;}
+
+    const idx=byName.get(name);
+    if(idx===undefined){
+      if(!opts.create){notInList.push(name);return;}
+      if(cap!==null&&cap!==undefined&&items.length+creates.length>=cap){capSkipped.push(name);return;}
+      const tmp='~new'+creates.length;nameOf.set(tmp,name);
+      const c=claim(tmp,'','',f.barcode,f.sku);
+      if(c){problems.push({row:rowNo,name,msg:'"'+c.code+'" is already used by '+c.who});return;}
+      creates.push({name,fields:f});
+      if(f.cost>0&&f.price>0&&f.price<f.cost)belowCost.push(name);
+      return;
+    }
+    const T=items[idx],pr=prices[T.name]||{},ch={};
+    ['barcode','sku','unit','category','vat'].forEach(k=>{if(f[k]!==undefined&&f[k]!==T[k])ch[k]=f[k];});
+    if(f.cost>0&&f.cost!==Number(pr.purchasePrice||0))ch.cost=f.cost;
+    if(f.price>0&&f.price!==Number(pr.sellingPrice||0))ch.price=f.price;
+    if(!Object.keys(ch).length){unchanged++;return;}
+    if(ch.barcode!==undefined||ch.sku!==undefined){
+      const c=claim(T.id,T.barcode,T.sku,ch.barcode!==undefined?ch.barcode:T.barcode,ch.sku!==undefined?ch.sku:T.sku);
+      if(c){problems.push({row:rowNo,name,msg:'"'+c.code+'" is already used by '+c.who});return;}
+    }
+    const nc=ch.cost!==undefined?ch.cost:Number(pr.purchasePrice||0),np=ch.price!==undefined?ch.price:Number(pr.sellingPrice||0);
+    if(nc>0&&np>0&&np<nc)belowCost.push(T.name);
+    updates.push({id:T.id,name:T.name,changes:ch});
+  });
+  const colNames={};Object.keys(col).forEach(f=>{colNames[f]=String(headRaw[col[f]]).trim();});
+  return {ok:true,delim:parsed.delim,cols:colNames,ignored,total:dataRows.length,updates,creates,unchanged,notInList,capSkipped,problems,belowCost,cap};
+}
+
+function _renderItemImportPreview(plan){
+  const li=(icon,html)=>`<div style="display:flex;gap:8px;margin-bottom:6px;font-size:17px;line-height:1.5"><span>${icon}</span><span>${html}</span></div>`;
+  const list=(arr,n)=>arr.slice(0,n).map(esc).join(', ')+(arr.length>n?' … +'+(arr.length-n)+' more':'');
+  const u=plan.updates.length,c=plan.creates.length,total=u+c;
+  const cols=Object.keys(plan.cols).map(f=>f+' ← “'+esc(plan.cols[f])+'”').join(' · ');
+  let h=`<div class="mtitle">📥 Import preview</div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:12px;line-height:1.6">${plan.total} row(s) read. Columns used: ${cols}.${plan.ignored.length?' Ignored: '+esc(plan.ignored.join(', '))+'.':''}</div>`;
+  h+=li('✅',`<strong>${u}</strong> existing item(s) will be updated`);
+  if(c)h+=li('➕',`<strong>${c}</strong> new item(s) will be added`);
+  if(plan.unchanged)h+=li('⏭',`${plan.unchanged} already up to date`);
+  if(plan.notInList.length)h+=li('❓',`<strong>${plan.notInList.length}</strong> name(s) are not in your item list and were skipped (check spelling, or tick “add items not in my list”): <span style="color:var(--muted)">${list(plan.notInList,8)}</span>`);
+  if(plan.capSkipped.length)h+=li('🔒',`<strong>${plan.capSkipped.length}</strong> new item(s) skipped — your plan allows up to ${plan.cap} items: <span style="color:var(--muted)">${list(plan.capSkipped,5)}</span>`);
+  if(plan.belowCost.length)h+=li('⚠️',`${plan.belowCost.length} item(s) end up with a selling price below cost (imported anyway): <span style="color:var(--muted)">${list(plan.belowCost,5)}</span>`);
+  if(plan.problems.length){
+    h+=li('⛔',`<strong>${plan.problems.length}</strong> row(s) have problems and will be skipped:`);
+    h+=`<div style="margin:0 0 8px 28px;font-size:15px;color:var(--muted);line-height:1.6">${plan.problems.slice(0,12).map(p=>`Row ${p.row} · ${esc(p.name)} — ${esc(p.msg)}`).join('<br>')}${plan.problems.length>12?'<br>… +'+(plan.problems.length-12)+' more':''}</div>`;
+  }
+  h+=`<div class="mact"><button class="btn bo" onclick="openItemImport()">← Back</button>${total?`<button class="btn bg" onclick="applyItemImport()">Apply ${total} change${total!==1?'s':''}</button>`:''}</div>`;
+  if(!total)h+=`<div style="font-size:15px;color:var(--muted);margin-top:8px">Nothing to apply yet — fix the points above, then go back and preview again.</div>`;
+  return h;
+}
+
+function openItemImport(from){
+  if(!requireAdmin('import inventory items'))return;
+  const st=window._itemImport||{};
+  window._itemImport={...st,from:from||st.from||'tab'};
+  const f=window._itemImport.from;
+  openModal(`
+    <div class="mtitle">📥 Import Items from CSV</div>
+    <div style="font-size:16px;color:var(--muted);margin-bottom:12px;line-height:1.7">First row = headings. Only <strong style="color:var(--text)">name</strong> is required; add any of <strong style="color:var(--text)">barcode, sku, unit, category, cost, price, vat</strong>. Items are matched by name. Blank cells never erase existing values. Up to ${_itemImportMax()} rows at a time.</div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:12px;line-height:1.6">⚠️ In Excel or Sheets, set the barcode column to <strong style="color:var(--text)">Text</strong> before saving, otherwise long codes turn into 6.0E+12 and lose digits.</div>
+    <div style="margin-bottom:8px"><input type="file" id="imp-file" accept=".csv,.txt,text/csv,text/plain" class="fi" style="padding:9px" onchange="_itemImportFile(this)"/></div>
+    <div style="font-size:15px;color:var(--muted);margin:6px 0">…or paste your table here:</div>
+    <textarea id="imp-text" class="fi" rows="6" placeholder="name,barcode,price&#10;SOAP BAR,6001234567890,12.50" style="width:100%;font-family:monospace;font-size:14px">${esc(window._itemImport.text||'')}</textarea>
+    <label style="display:flex;gap:8px;align-items:flex-start;margin:12px 0;font-size:16px;line-height:1.5"><input type="checkbox" id="imp-create" ${window._itemImport.create?'checked':''} style="margin-top:4px"/><span>Also add items that aren't in my item list yet</span></label>
+    <div class="mact">
+      <button class="btn bo" onclick="${f==='manage'?'renderManageInventoryModal()':'closeModal()'}">Cancel</button>
+      <button class="btn bg" onclick="previewItemImport()">Preview</button>
+    </div>`);
+}
+function _itemImportFile(input){
+  const f=input.files&&input.files[0];
+  if(!f)return;
+  if(f.size>2*1024*1024){alert('That file is over 2 MB. Split it into smaller files.');input.value='';return;}
+  const r=new FileReader();
+  r.onload=()=>{
+    const buf=r.result,b=new Uint8Array(buf);
+    if(b[0]===0x50&&b[1]===0x4B){alert('That looks like an Excel (.xlsx) file. Open it, choose Save As → CSV, then pick the .csv file.');input.value='';return;}
+    let txt;
+    try{txt=new TextDecoder('utf-8',{fatal:true}).decode(buf);}
+    catch(e){try{txt=new TextDecoder('windows-1252').decode(buf);}catch(e2){txt=new TextDecoder().decode(buf);}}
+    const ta=document.getElementById('imp-text');
+    if(ta)ta.value=txt;
+    showToast('📄 '+f.name+' loaded — tap Preview');
+  };
+  r.onerror=()=>alert('Could not read that file.');
+  r.readAsArrayBuffer(f);
+}
+function previewItemImport(){
+  if(!requireAdmin('import inventory items'))return;
+  const text=(document.getElementById('imp-text')||{}).value||'';
+  const create=!!(document.getElementById('imp-create')||{}).checked;
+  window._itemImport={...(window._itemImport||{}),text,create};
+  if(!text.trim()){alert('Choose a CSV file or paste your table first.');return;}
+  const plan=_planItemImport(text,{create});
+  if(!plan.ok){alert(plan.error);return;}
+  openModal(_renderItemImportPreview(plan));
+}
+function applyItemImport(){
+  if(!requireAdmin('import inventory items'))return;
+  const st=window._itemImport||{};
+  if(!st.text)return;
+  requireAdminPassword('import these inventory items',()=>{
+    // Re-plan against the live data: it may have synced since the preview was shown.
+    const plan=_planItemImport(st.text,{create:st.create});
+    if(!plan.ok){alert(plan.error);return;}
+    if(!plan.updates.length&&!plan.creates.length){alert('Nothing to apply — the data already matches.');return;}
+    updateData(d=>{
+      const arr=(d.inventoryItems||[]).map(x=>typeof x==='string'?{name:x,minStock:0,reservedQty:0}:x);
+      const prices={...(d.inventoryPrices||{})};
+      const byId=new Map(arr.map((x,i)=>[_invItemId(x),i]));
+      const setPrices=(name,cost,price)=>{
+        if(!(cost>0)&&!(price>0))return;
+        const p={...(prices[name]||{})};
+        if(cost>0)p.purchasePrice=cost;
+        if(price>0)p.sellingPrice=price;
+        prices[name]=p;
+      };
+      plan.updates.forEach(u=>{
+        const i=byId.get(u.id);if(i===undefined)return;
+        const {cost,price,...rest}=u.changes;
+        arr[i]={...arr[i],id:u.id,...rest};
+        setPrices(arr[i].name,cost,price);
+      });
+      plan.creates.forEach(c=>{
+        const {cost,price,...rest}=c.fields;
+        arr.push({..._newInvItem(c.name),...rest});
+        setPrices(c.name,cost,price);
+      });
+      return {...d,inventoryItems:arr,inventoryPrices:prices};
+    });
+    logAuditEvent('UPDATE','Inventory Items',`CSV import · Updated ${plan.updates.length} · Added ${plan.creates.length} · Unchanged ${plan.unchanged} · Skipped ${plan.problems.length+plan.notInList.length+plan.capSkipped.length}`);
+    window._itemImport={from:st.from};
+    closeModal();
+    showToast(`✅ Import done: ${plan.updates.length} updated, ${plan.creates.length} added`);
+    if(st.from==='manage')renderManageInventoryModal();
+  });
+}
+function exportItemsCSV(){
+  if(!requireAdmin('export inventory items'))return;
+  if(!hasFeature('export_csv')){showUpgradePrompt('export_csv');return;}
+  const items=(DATA.inventoryItems||[]).map(_invItemObj),pr=DATA.inventoryPrices||{};
+  const rows=[['name','barcode','sku','unit','category','cost','price','vat']];
+  items.forEach(it=>{const p=pr[it.name]||{};rows.push([it.name,it.barcode,it.sku,it.unit,it.category,p.purchasePrice||'',p.sellingPrice||'',it.vat]);});
+  const csv='\uFEFF'+rows.map(r=>_csvRow(r)).join('\r\n')+'\r\n';
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  a.download=_csvFilename('Item_List');
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  showToast(items.length?'📤 '+items.length+' item(s) exported':'📤 Empty template downloaded');
+}
+function _itemImportBarHtml(from){
+  return `<div style="display:flex;gap:8px;margin:10px 0 12px"><button class="btn bo" style="width:auto;flex:1;padding:10px 8px" onclick="openItemImport('${from}')">📥 Import CSV</button><button class="btn bo" style="width:auto;flex:1;padding:10px 8px" onclick="exportItemsCSV()">📤 Export CSV</button></div>`;
+}
+
+// Search box for long item lists (shown once a list has more than 8 items).
+function _itemSearchKey(item){const o=_invItemObj(item);return (o.name+' '+o.barcode+' '+o.sku).toLowerCase();}
+function _itemSearchBoxHtml(targetId){
+  return `<input class="fi" placeholder="🔍 Search name, barcode or SKU" autocomplete="off" style="margin-bottom:8px" oninput="_filterItemRows(this,'${targetId}')"/>`;
+}
+function _filterItemRows(input,targetId){
+  const q=String(input.value||'').trim().toLowerCase();
+  const root=document.getElementById(targetId);
+  if(!root)return;
+  root.querySelectorAll('.inv-row').forEach(r=>{r.style.display=(!q||(r.getAttribute('data-q')||'').includes(q))?'':'none';});
+}
 
 function renderManageInventoryModal(){
   const items=(DATA.inventoryItems||[]).map(x=>typeof x==='string'?{name:x,minStock:0,reservedQty:0}:x);
   const listHtml=items.length>0
     ?items.map((item,i)=>`
-      <div style="border-bottom:1px solid var(--border);padding:10px 0">
+      <div class="inv-row" data-q="${esc(_itemSearchKey(item))}" style="border-bottom:1px solid var(--border);padding:10px 0">
         <div style="font-weight:700;margin-bottom:6px">${esc(item.name)}</div>
+        ${_itemChipsHtml(item)}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
           <div>
             <div style="font-size:15px;color:var(--muted);margin-bottom:3px">MIN STOCK</div>
@@ -11684,7 +12122,7 @@ function renderManageInventoryModal(){
               onchange="_setInvReserved(${i},this.value)" placeholder="0"/>
           </div>
         </div>
-        <button class="delbtn" style="margin-top:6px" onclick="removeInvItemModal(${i})">🗑 Remove</button>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px"><button class="btn bo" style="width:auto;padding:6px 12px" onclick="openItemDetails('${esc(_invItemId(item))}','manage')">✏️ Details</button><button class="delbtn" onclick="removeInvItemModal(${i})">🗑 Remove</button></div>
       </div>`).join('')
     :`<div style="color:var(--muted);font-size:18px;margin-bottom:12px">No items defined yet. Add items below.</div>`;
   const atCap = isAtCap('inventoryItems', items.length);
@@ -11699,8 +12137,9 @@ function renderManageInventoryModal(){
     </div>`;
   openModal(`
     <div class="mtitle">⚙️ Manage Inventory Items</div>
-    <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">Set <strong style="color:var(--text)">Min Stock</strong> for low-stock alerts. Set <strong style="color:var(--text)">Reserved Qty</strong> to hold stock aside (e.g. for contracts).</div>
-    <div style="margin-bottom:12px">${listHtml}</div>
+    <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">Set <strong style="color:var(--text)">Min Stock</strong> for low-stock alerts. Set <strong style="color:var(--text)">Reserved Qty</strong> to hold stock aside (e.g. for contracts). Tap <strong style="color:var(--text)">✏️ Details</strong> to set barcode, SKU, unit, category, prices and VAT.</div>
+    <div style="margin-bottom:12px">${items.length>8?_itemSearchBoxHtml('inv-modal-list'):''}<div id="inv-modal-list">${listHtml}</div></div>
+    ${_itemImportBarHtml('manage')}
     <div class="sh" style="margin-top:16px;margin-bottom:8px">Add New Item</div>
     ${addFormHtml}
     <div class="mact"><button class="btn bo" onclick="closeModal()">Close</button></div>`);
@@ -11730,7 +12169,7 @@ function addInvItemModal(){
   if(!val){alert('Enter an item name.');return;}
   const items=(DATA.inventoryItems||[]).map(x=>typeof x==='string'?{name:x,minStock:0,reservedQty:0}:x);
   if(items.some(x=>x.name===val)){alert('Item already exists.');return;}
-  updateData(d=>({...d,inventoryItems:[...(d.inventoryItems||[]).map(x=>typeof x==='string'?{name:x,minStock:0,reservedQty:0}:x),{name:val,minStock:0,reservedQty:0}]}));
+  updateData(d=>({...d,inventoryItems:[...(d.inventoryItems||[]).map(x=>typeof x==='string'?{name:x,minStock:0,reservedQty:0}:x),_newInvItem(val)]}));
   renderManageInventoryModal();
 }
 function removeInvItemModal(idx){
@@ -20622,7 +21061,7 @@ function addInvItem(){
   if(!val){alert(sel?'Select an item, or choose OTHER and type a new item name.':'Enter an item name.');return;}
   if((DATA.inventoryItems||[]).some(x=>_invItemName(x)===val)){alert('Item already exists.');return;}
   requireAdminPassword('add this inventory item', ()=>{
-    updateData(d=>({...d,inventoryItems:[...(d.inventoryItems||[]),{name:val,minStock:0,reservedQty:0}]}));
+    updateData(d=>({...d,inventoryItems:[...(d.inventoryItems||[]),_newInvItem(val)]}));
     if(sel)sel.value='';
     if(otherInput){otherInput.value='';otherInput.style.display='none';}
   });
@@ -22083,7 +22522,7 @@ setTimeout(async ()=>{
     // sequence as a manual password login. Any failure here (account no
     // longer exists locally, etc.) falls through to the normal login screen
     // — never blocks the user from signing in manually.
-    const _stayUsername = _checkStaySignedIn();
+    const _stayUsername = _checkStaySignedIn() || _posReturnUser();
     if (_stayUsername && !USER) {
       const _userObj = (DATA.users||[]).find(x=>(x.username||'').toLowerCase()===_stayUsername);
       if (_userObj) {

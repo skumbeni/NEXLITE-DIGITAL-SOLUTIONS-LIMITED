@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+<meta name="theme-color" content="#1A1A2E"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<title>Till — Shop Inventory &amp; Sales Manager</title>
+<link rel="manifest" href="manifest.json">
+<!-- Same origin as index.html, so it shares localStorage, IndexedDB and the Firebase Auth session.
+     CSP mirrors index.html minus what the till does not use. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' https://www.google.com/recaptcha/ https://www.gstatic.com/; style-src 'self' 'unsafe-inline'; connect-src https://*.firebaseio.com https://firebaseinstallations.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://firebaseappcheck.googleapis.com https://www.google.com/recaptcha/ https://recaptcha.google.com; img-src 'self' data: blob: https:; worker-src 'self' blob:; manifest-src 'self' blob:; frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com; frame-ancestors 'none';">
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{--bg:#1A1A2E;--surface:#16213E;--border:#2C3E50;--text:#fff;--muted:#9aa5b8;--green:#00e096;--red:#ff6b6b;--amber:#ffb84d}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  padding:env(safe-area-inset-top,0) env(safe-area-inset-right,0) env(safe-area-inset-bottom,0) env(safe-area-inset-left,0)}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding:12px 14px;background:var(--surface);border-bottom:1px solid var(--border)}
+header b{font-size:18px}header small{display:block;color:var(--muted);font-size:13px}
+.pills{display:flex;flex-wrap:wrap;gap:6px}
+.pill{font-size:12px;padding:3px 9px;border-radius:99px;border:1px solid var(--border);color:var(--muted)}
+.pill.ok{color:var(--green);border-color:var(--green)}.pill.bad{color:var(--red);border-color:var(--red)}
+main{max-width:560px;margin:0 auto;padding:28px 16px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px;text-align:center}
+.card .ic{font-size:40px;margin-bottom:8px}.card h1{font-size:20px;margin-bottom:6px}.card p{color:var(--muted);margin-bottom:16px}
+.row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+button{font:inherit;font-weight:600;padding:11px 18px;border-radius:10px;border:1px solid var(--border);background:transparent;color:var(--text);cursor:pointer}
+button.pri{background:var(--green);border-color:var(--green);color:#0a1628}
+
+/* ── layout shell: header on top, the rest of the screen belongs to <main> ── */
+[hidden]{display:none!important}
+body{display:flex;flex-direction:column;height:100vh;height:100dvh}
+main{width:100%}
+header{flex:none}
+header .hr{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;justify-content:flex-end}
+header .hb{display:flex;gap:6px}
+button.sm{padding:5px 11px;font-size:13px;font-weight:600;border-radius:8px}
+button:focus-visible,input:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+.pill{font-size:12px}
+
+/* ── SELL SCREEN ─────────────────────────────────────────────────────────────
+   Phone  (<768px): items fill the screen; the cart is a bottom sheet opened from a bar at the bottom.
+   Tablet (>=768px): two panes, items on the left, cart on the right, always visible. */
+main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
+.sell{position:relative;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);height:100%;overflow:hidden}
+.items{display:flex;flex-direction:column;min-height:0;min-width:0}
+
+.searchbar{display:flex;gap:8px;padding:10px 12px 6px}
+.searchbar input{flex:1;min-width:0;font:inherit;font-size:17px;padding:12px 14px;border-radius:12px;border:2px solid var(--border);background:var(--surface);color:var(--text)}
+.searchbar input:focus{outline:none;border-color:var(--green)}
+.searchbar input::placeholder{color:var(--muted)}
+#kb{display:none;min-width:48px;padding:0 12px;font-size:20px;line-height:1}
+.msg{min-height:22px;padding:0 14px 4px;font-size:13px;color:var(--muted)}
+.msg.ok{color:var(--green)}.msg.bad{color:var(--red)}
+
+.grid{flex:1;min-height:0;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(142px,1fr));gap:8px;align-content:start;padding:4px 12px 84px;overscroll-behavior:contain}
+.grid .note{grid-column:1/-1;text-align:center;color:var(--muted);padding:28px 8px;font-size:14px}
+.tile{position:relative;display:flex;flex-direction:column;justify-content:space-between;gap:8px;min-height:96px;padding:10px 11px;text-align:left;font-weight:400;border-radius:12px;background:var(--surface);border:1px solid var(--border)}
+.tile:active:not(:disabled){background:#1c2a4d}
+.tile:disabled{opacity:.5;cursor:not-allowed}
+.tile .nm{font-weight:600;font-size:15px;line-height:1.25;overflow-wrap:anywhere;padding-right:20px}
+.tile .pr{color:var(--green);font-weight:700;font-size:15px}
+.tile .pr small{color:var(--muted);font-weight:400;font-size:12px;margin-left:4px}
+.tile .st{font-size:12px;color:var(--muted)}
+.tile .st.low{color:var(--amber)}.tile .st.out{color:var(--red)}
+.tile .inc{position:absolute;top:7px;right:7px;min-width:22px;height:22px;padding:0 6px;border-radius:99px;background:var(--green);color:#0a1628;font-size:12px;font-weight:700;line-height:22px;text-align:center}
+
+.cartbar{position:absolute;left:0;right:0;bottom:0;z-index:20;display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;padding:14px 16px;border:0;border-top:1px solid var(--border);border-radius:0;background:var(--surface);font-size:16px;text-align:left}
+.cartbar .cb-main{display:flex;flex-direction:column;line-height:1.25}
+.cartbar .cb-main small{color:var(--muted);font-weight:400;font-size:13px}
+.cartbar .cb-tot{font-weight:700;color:var(--green)}
+.cartbar.has .cb-go{color:var(--green)}
+.cartbar .cb-go{font-size:14px}
+
+.scrim{position:absolute;inset:0;z-index:25;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .2s}
+.sell.open .scrim{opacity:1;pointer-events:auto}
+
+.cart{position:absolute;left:0;right:0;bottom:0;z-index:30;display:flex;flex-direction:column;height:84%;background:var(--surface);border-top:1px solid var(--border);border-radius:18px 18px 0 0;transform:translateY(100%);visibility:hidden;transition:transform .22s ease,visibility 0s linear .22s}
+.sell.open .cart{transform:none;visibility:visible;transition:transform .22s ease}
+.grab{flex:none;display:block;width:100%;padding:8px 0 2px;border:0;background:transparent}
+.grab i{display:block;width:44px;height:5px;margin:0 auto;border-radius:3px;background:var(--border)}
+.cart-h{flex:none;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 14px 10px;border-bottom:1px solid var(--border)}
+.cart-h h2{font-size:17px}
+.cart-h .acts{display:flex;gap:6px}
+.lines{flex:1;min-height:0;overflow-y:auto;padding:4px 14px;overscroll-behavior:contain}
+.lines .empty{text-align:center;color:var(--muted);padding:36px 12px;font-size:14px}
+.line{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:11px 0;border-bottom:1px solid var(--border)}
+.line .ln{font-weight:600;line-height:1.25;overflow-wrap:anywhere}
+.line .lt{font-weight:700;text-align:right}
+.line .lp{color:var(--muted);font-size:13px;align-self:center}
+.line .lw{grid-column:1/-1;font-size:12px;color:var(--amber)}
+.qty{display:flex;align-items:center;gap:4px;justify-self:end}
+.qty button{width:40px;height:40px;padding:0;font-size:20px;line-height:1;border-radius:10px}
+.qty input{width:58px;height:40px;text-align:center;font:inherit;font-weight:600;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);padding:0 2px}
+.cart-f{flex:none;padding:12px 14px calc(12px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--border)}
+.tot{display:flex;justify-content:space-between;align-items:baseline;font-size:15px;color:var(--muted);margin-bottom:10px}
+.tot b{font-size:24px;color:var(--text)}
+.cart-f .pri{width:100%;padding:14px 18px;font-size:17px}
+.cart-f .pri:disabled{opacity:.45;cursor:not-allowed}
+.cart-f .hint{margin-top:8px;text-align:center;font-size:12px;color:var(--muted)}
+
+@media (min-width:768px){
+  .sell{grid-template-columns:minmax(0,1fr) 380px}
+  .grid{padding-bottom:12px}
+  .cartbar,.scrim,.grab,.cart-h .x{display:none}
+  .cart{position:static;z-index:auto;height:auto;transform:none;visibility:visible;border-radius:0;border-top:0;border-left:1px solid var(--border);transition:none}
+  .cart-h{padding-top:12px}
+}
+@media (max-width:767px){
+  header{flex-wrap:wrap;gap:6px 8px;padding:8px 12px}
+  header b{font-size:17px}header small{display:none}
+  header .hr{display:contents}
+  header>div:first-child{flex:1;min-width:0}
+  header .hb{order:2}
+  header .pills{order:3;width:100%;flex-wrap:nowrap;overflow:hidden;gap:5px}
+  .pill{font-size:11px;padding:2px 8px;white-space:nowrap}
+}
+@media (prefers-reduced-motion:reduce){.cart,.scrim{transition:none!important}}
+</style>
+</head>
+<body>
+<header id="hdr" hidden>
+  <div><b>🧾 Till</b><small id="depot"></small></div>
+  <div class="hr">
+    <div class="pills"><span class="pill" id="p-net"></span><span class="pill" id="p-cloud"></span><span class="pill" id="p-user"></span></div>
+    <div class="hb"><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
+  </div>
+</header>
+<main id="main"></main>
+
+<!-- Shared gating rules (same file index.html loads). Plain synchronous script, before the inline script below. -->
+<script src="gate.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-check-compat.js" defer></script>
+<script defer>
+// ── SHARED WITH index.html — Firebase config + data key (keep in sync). Gating rules now come from gate.js. ──
+const FB_CONFIG={apiKey:"AIzaSyD_WnWTMBgd__V2M8840LDt1a-7Ebnh6ZU",authDomain:"realtime-database-be871.firebaseapp.com",databaseURL:"https://realtime-database-be871-default-rtdb.firebaseio.com",projectId:"realtime-database-be871",storageBucket:"realtime-database-be871.firebasestorage.app",messagingSenderId:"1051301635587",appId:"1:1051301635587:web:00c5bc5825dd41fd329036"};
+const APP_CHECK_KEY='6LcLhystAAAAAHCIiZK1fQf1AbgAYJdDLwUNX9XT';
+const DATA_LK='mdm_depot_v2';
+const LIC_KEY=Gate.KEYS.license, STAY_KEY=Gate.KEYS.stay, SESSION_KEY=Gate.KEYS.posSession, SESSION_MS=Gate.POS_SESSION_MS;
+const TRIAL_MS=Gate.TRIAL_MS;
+
+const $=id=>document.getElementById(id);
+let DATA=null, USER=null, LICENSE=null;
+
+// Firebase Auth: same init as index.html, so the persisted session (IndexedDB) is restored here too.
+window._fbAuthSdkReady=new Promise(function(resolve){
+  try{
+    firebase.initializeApp(FB_CONFIG);
+    try{firebase.appCheck().activate(APP_CHECK_KEY,true);}catch(e){console.warn('App Check activation failed',e);}
+    let done=false;const fin=()=>{if(!done){done=true;resolve();}};
+    firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
+    const un=firebase.auth().onAuthStateChanged(()=>{un();fin();},()=>{un();fin();});
+    setTimeout(fin,4000);
+  }catch(e){console.warn('Firebase Auth SDK init failed',e);resolve();}
+});
+
+async function hmac256(key,data){
+  try{
+    const enc=new TextEncoder();
+    const k=await crypto.subtle.importKey('raw',enc.encode(key),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+    const sig=await crypto.subtle.sign('HMAC',k,enc.encode(data));
+    return Array.from(new Uint8Array(sig)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  }catch{return '';}   // no crypto.subtle: signature can't match, so the till stays locked (fail closed)
+}
+
+// ── DATA: newest of localStorage / IndexedDB, as index.html does ───────────
+function idbData(){
+  return new Promise(res=>{
+    try{
+      const q=indexedDB.open('mdm_db',1);
+      q.onerror=()=>res(null);
+      q.onsuccess=()=>{try{
+        const g=q.result.transaction('depot_data','readonly').objectStore('depot_data').get('main');
+        g.onsuccess=()=>res(g.result||null);g.onerror=()=>res(null);
+      }catch{res(null);}};
+    }catch{res(null);}
+  });
+}
+async function loadData(){
+  let ls=null;try{ls=JSON.parse(localStorage.getItem(DATA_LK)||'null');}catch{}
+  const db=await idbData();
+  if(ls&&db)return (db._v||0)>(ls._v||0)?db:ls;
+  return ls||db;
+}
+
+// ── SESSION: handed over by index.html (this tab) or a valid "stay signed in" ─
+function sessionUser(){
+  let u=null;
+  try{const p=JSON.parse(sessionStorage.getItem(SESSION_KEY)||'null');if(p&&p.u&&Date.now()-p.t<SESSION_MS)u=p.u;}catch{}
+  if(!u)try{const p=JSON.parse(localStorage.getItem(STAY_KEY)||'null');if(p&&p.enabled&&p.username&&p.expiresAt>Date.now())u=p.username;}catch{}
+  if(!u)return null;
+  return (DATA.users||[]).find(x=>String(x.username||'').toLowerCase()===String(u).toLowerCase())||null;
+}
+
+// ── LICENSE / TIER: signed cache written by index.html, same rules as currentTier() ─
+async function loadLicense(){
+  try{
+    const w=JSON.parse(localStorage.getItem(LIC_KEY)||'null');
+    if(w&&w.data&&w.sig&&await hmac256('mdm_lic',w.data)===w.sig)return JSON.parse(w.data);
+  }catch{}
+  const ts=DATA.trialStart||0;    // no/invalid cache: same fallback as index.html (trial from trialStart)
+  return {effectiveStatus:ts&&Date.now()<ts+TRIAL_MS?'trial':'trial_expired',trialStart:ts};
+}
+// The rules are the ones index.html runs (gate.js). The till does no network check, so it first applies the
+// clock to the cached licence's dates (Gate.reconcile) — the cache can be older than the dates inside it.
+function gateLic(){return Gate.reconcile(LICENSE,Date.now());}
+function currentTier(){return Gate.tierOf(gateLic(),DATA);}
+function hasFeature(f){return Gate.hasFeature(f,gateLic(),DATA);}
+function isReadOnly(){return Gate.isReadOnly(gateLic(),DATA);}
+
+// ── UI ──────────────────────────────────────────────────────────────────────
+function card(icon,title,msg,buttons){
+  const m=$('main');m.replaceChildren();m.className='';
+  const c=document.createElement('div');c.className='card';
+  const mk=(t,cls,txt)=>{const e=document.createElement(t);if(cls)e.className=cls;e.textContent=txt;return e;};
+  c.append(mk('div','ic',icon),mk('h1','',title),mk('p','',msg));
+  const r=document.createElement('div');r.className='row';
+  buttons.forEach(([label,fn,pri])=>{const b=mk('button',pri?'pri':'',label);b.onclick=fn;r.append(b);});
+  c.append(r);m.append(c);
+}
+const toApp=()=>{location.href='index.html';};
+async function logout(){
+  try{sessionStorage.removeItem(SESSION_KEY);}catch{}
+  try{const p=JSON.parse(localStorage.getItem(STAY_KEY)||'null');if(p)localStorage.setItem(STAY_KEY,JSON.stringify({enabled:p.enabled,days:p.days}));}catch{}
+  try{new BroadcastChannel('mdm_session').postMessage({type:'logout'});}catch{}
+  try{localStorage.setItem('mdm_session_event','logout:'+Date.now());setTimeout(()=>{try{localStorage.removeItem('mdm_session_event');}catch{}},500);}catch{}
+  try{await Promise.race([firebase.auth().signOut(),new Promise(r=>setTimeout(r,1500))]);}catch{}
+  toApp();
+}
+function setPill(id,text,cls){const e=$(id);e.textContent=text;e.className='pill'+(cls?' '+cls:'');}
+function netPill(){setPill('p-net',navigator.onLine?'Online':'Offline',navigator.onLine?'ok':'bad');}
+async function cloudPill(){
+  setPill('p-cloud','Cloud: checking…');
+  try{
+    await window._fbAuthSdkReady;
+    const u=firebase.auth().currentUser;
+    setPill('p-cloud',u?'Cloud: signed in':'Cloud: no session',u?'ok':'bad');
+  }catch{setPill('p-cloud','Cloud: unavailable','bad');}
+}
+// Shared with the next steps (sales writes, sync): the same Firebase token and depot key index.html uses.
+window.POS={
+  data:()=>DATA,user:()=>USER,hasFeature,isReadOnly,depotKey:()=>DATA&&DATA.installId,
+  idToken:async()=>{await window._fbAuthSdkReady;const u=firebase.auth().currentUser;return u?u.getIdToken():null;}
+};
+
+// Idle logout, same rule as index.html: off while "stay signed in" is active.
+let idleT=null;
+function stayOn(){try{const p=JSON.parse(localStorage.getItem(STAY_KEY)||'null');return !!(p&&p.enabled&&p.username&&p.expiresAt>Date.now());}catch{return false;}}
+function idleReset(){
+  clearTimeout(idleT);if(!USER||stayOn())return;
+  const di=DATA.depotInfo||{};
+  const mins=Number((di.autoLogoutMinutesByRole||{})[USER.role])||Number(di.autoLogoutMinutes)||10;
+  idleT=setTimeout(logout,mins*6e4);
+}
+
+// ── SELL SCREEN (roadmap step 4: layout) ────────────────────────────────────
+// Reads the item master (DATA.inventoryItems), selling price (DATA.inventoryPrices[name].sellingPrice) and
+// stock (approved received minus approved issued, by itemName) exactly as index.html does. The cart lives in
+// memory only for now: payment, held sales and saving the sale are the next steps, so nothing is written yet.
+const COARSE=matchMedia('(pointer:coarse)').matches;   // touch device: keep the soft keyboard down until asked
+const MAX_TILES=120;
+let ITEMS=[],BYID=new Map(),CART=[];
+let SELL,Q,GRID,MSG,LINES,CARTBAR,CHARGE,msgT=null,kbBusy=false;
+
+function el(tag,cls,text,attrs){
+  const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;
+  if(attrs)for(const k in attrs)e.setAttribute(k,attrs[k]);return e;
+}
+function money(n){
+  const c=String((DATA&&DATA.currency)||'').toUpperCase();
+  const v=(Number(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  return c?c+' '+v:v;
+}
+const fq=n=>(+Number(n).toFixed(3)).toLocaleString();
+// Same id rule as index.html's _itemLegacyId(): FNV-1a of the upper-cased name, for items not yet stamped with an id.
+function legacyId(name){
+  const s=String(name||'').trim().toUpperCase();let h=2166136261;
+  for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}
+  return 'itm_'+h.toString(36);
+}
+const isApproved=r=>!r||!r.approvalStatus||r.approvalStatus==='approved';
+
+function loadCatalog(){
+  const rec=new Map(),iss=new Map();
+  (DATA.generalInventory||[]).filter(isApproved).forEach(r=>rec.set(r.itemName,(rec.get(r.itemName)||0)+Number(r.received||0)));
+  (DATA.generalIssued||[]).filter(isApproved).forEach(r=>iss.set(r.itemName,(iss.get(r.itemName)||0)+Number(r.issued||0)));
+  const prices=DATA.inventoryPrices||{};
+  ITEMS=(DATA.inventoryItems||[]).map(x=>typeof x==='string'?{name:x}:x).filter(x=>x&&x.name).map(x=>{
+    const o={
+      id:x.id||legacyId(x.name),name:String(x.name),sku:String(x.sku||''),barcode:String(x.barcode||''),
+      unit:String(x.unit||''),category:String(x.category||''),min:Number(x.minStock)||0,
+      price:Number((prices[x.name]||{}).sellingPrice)||0,
+      avail:(rec.get(x.name)||0)-(iss.get(x.name)||0)
+    };
+    o.hay=(o.name+' '+o.sku+' '+o.barcode+' '+o.category).toLowerCase();
+    return o;
+  }).sort((a,b)=>a.name.localeCompare(b.name));
+  BYID=new Map(ITEMS.map(i=>[i.id,i]));
+}
+function matches(q){
+  const t=String(q||'').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  return t.length?ITEMS.filter(i=>t.every(w=>i.hay.includes(w))):ITEMS;
+}
+function scanMatch(q){
+  const c=String(q||'').trim().toLowerCase();if(!c)return null;
+  return ITEMS.find(i=>(i.barcode&&i.barcode.toLowerCase()===c)||(i.sku&&i.sku.toLowerCase()===c))||null;
+}
+function say(text,cls){
+  MSG.textContent=text||'';MSG.className='msg'+(cls?' '+cls:'');
+  clearTimeout(msgT);if(text)msgT=setTimeout(()=>{MSG.textContent='';MSG.className='msg';},2600);
+}
+function focusSearch(){try{Q.focus({preventScroll:true});}catch{Q.focus();}}
+
+// ── items pane
+function tile(i){
+  const b=el('button','tile','',{type:'button','data-id':i.id});
+  b.append(el('span','nm',i.name));
+  const pr=el('span','pr',i.price?money(i.price):'No price');
+  if(i.unit&&i.price)pr.append(el('small','','/ '+i.unit.toLowerCase()));
+  b.append(pr);
+  let st,cls='st';
+  if(!i.price){st='Set a price in the main app';}
+  else if(i.avail<=0){st='Out of stock';cls+=' out';}
+  else if(i.min&&i.avail<=i.min){st=fq(i.avail)+' left';cls+=' low';}
+  else st=fq(i.avail)+' in stock';
+  b.append(el('span',cls,st));
+  if(!i.price)b.disabled=true;
+  return b;
+}
+function renderGrid(){
+  const list=matches(Q.value),frag=document.createDocumentFragment();
+  list.slice(0,MAX_TILES).forEach(i=>frag.append(tile(i)));
+  if(!ITEMS.length)frag.append(el('div','note','No items yet. Add items in the main app under Manage Items.'));
+  else if(!list.length)frag.append(el('div','note','No item matches \u201c'+Q.value.trim()+'\u201d.'));
+  else if(list.length>MAX_TILES)frag.append(el('div','note','Showing '+MAX_TILES+' of '+list.length+'. Type more to narrow the list.'));
+  GRID.replaceChildren(frag);refreshBadges();
+}
+// Updates the "in cart" count on each tile in place, so the list does not jump while selling.
+function refreshBadges(){
+  const q=new Map(CART.map(l=>[l.id,l.qty]));
+  GRID.querySelectorAll('.tile').forEach(t=>{
+    const n=q.get(t.dataset.id);let b=t.querySelector('.inc');
+    if(n){if(!b){b=el('span','inc');t.append(b);}b.textContent=fq(n);}else if(b)b.remove();
+  });
+}
+
+// ── cart
+const cartTotal=()=>Math.round(CART.reduce((a,l)=>a+l.price*l.qty,0)*100)/100;
+function addItem(i,n){
+  const l=CART.find(x=>x.id===i.id);
+  if(l)l.qty=Math.round((l.qty+(n||1))*1000)/1000;else CART.push({id:i.id,name:i.name,unit:i.unit,price:i.price,qty:n||1});
+  renderCart();say('Added '+i.name,'ok');
+}
+function setQty(id,q){
+  q=Math.round(Number(q)*1000)/1000;
+  if(!(q>0))CART=CART.filter(l=>l.id!==id);else{const l=CART.find(x=>x.id===id);if(l)l.qty=q;}
+  renderCart();
+}
+function clearCart(){CART=[];renderCart();}
+function lineEl(l){
+  const it=BYID.get(l.id),row=el('div','line');
+  row.append(el('div','ln',l.name),el('div','lt',money(l.price*l.qty)));
+  row.append(el('div','lp',money(l.price)+(l.unit?' / '+l.unit.toLowerCase():'')));
+  const minus=el('button','','\u2212',{type:'button','aria-label':'Decrease '+l.name});
+  const plus=el('button','','+',{type:'button','aria-label':'Increase '+l.name});
+  const inp=el('input','','',{type:'number',inputmode:'decimal',min:'0',step:'any','aria-label':'Quantity of '+l.name});
+  inp.value=l.qty;
+  minus.onclick=()=>setQty(l.id,l.qty-1);plus.onclick=()=>setQty(l.id,l.qty+1);
+  inp.onchange=()=>{setQty(l.id,inp.value);if(!COARSE)focusSearch();};
+  inp.onfocus=()=>inp.select();
+  inp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();inp.blur();}};
+  const q=el('div','qty');q.append(minus,inp,plus);row.append(q);
+  if(it&&l.qty>it.avail)row.append(el('div','lw',it.avail>0?'Only '+fq(it.avail)+' in stock':'None in stock'));
+  return row;
+}
+function renderCart(){
+  const lines=document.createDocumentFragment();
+  if(!CART.length)lines.append(el('div','empty','Scan a barcode or tap an item to start a sale.'));
+  CART.forEach(l=>lines.append(lineEl(l)));
+  LINES.replaceChildren(lines);
+  const tot=cartTotal(),n=CART.length;
+  $('tot').textContent=money(tot);
+  CHARGE.disabled=true;CHARGE.textContent=n?'Charge '+money(tot):'Charge';
+  $('clr').hidden=!n;
+  CARTBAR.classList.toggle('has',n>0);
+  $('cb-a').textContent=n?n+(n===1?' item':' items'):'Cart is empty';
+  $('cb-b').textContent=n?'Tap to review and charge':'Scan or tap an item';
+  $('cb-t').textContent=n?money(tot):'';
+  refreshBadges();
+}
+function openCart(){SELL.classList.add('open');CARTBAR.setAttribute('aria-expanded','true');}
+function closeCart(){SELL.classList.remove('open');CARTBAR.setAttribute('aria-expanded','false');if(!COARSE)focusSearch();}
+
+function buildSell(){
+  const m=$('main');m.replaceChildren();m.className='on-sell';
+  SELL=el('div','sell');
+  // items pane
+  const items=el('section','items');
+  const bar=el('div','searchbar');
+  Q=el('input','','',{id:'q',type:'search',placeholder:'Scan barcode or search item',autocomplete:'off',autocapitalize:'off',autocorrect:'off',spellcheck:'false',enterkeyhint:'search','aria-label':'Scan barcode or search item'});
+  if(COARSE)Q.setAttribute('inputmode','none');
+  const kb=el('button','','\u2328',{id:'kb',type:'button','aria-label':'Show keyboard'});
+  bar.append(Q,kb);
+  MSG=el('div','msg','',{role:'status','aria-live':'polite'});
+  GRID=el('div','grid');
+  items.append(bar,MSG,GRID);
+  // cart: bottom sheet on phones, right-hand pane on tablets
+  const cart=el('aside','cart','',{id:'cart','aria-label':'Current sale'});
+  const grab=el('button','grab','',{type:'button','aria-label':'Close cart'});grab.append(el('i'));
+  const head=el('div','cart-h');head.append(el('h2','','Current sale'));
+  const acts=el('div','acts');
+  const clr=el('button','sm','Clear',{id:'clr',type:'button'});
+  const x=el('button','sm x','Close',{type:'button'});
+  acts.append(clr,x);head.append(acts);
+  LINES=el('div','lines');
+  const foot=el('div','cart-f');
+  const tot=el('div','tot');tot.append(el('span','','Total'),el('b','','',{id:'tot'}));
+  CHARGE=el('button','pri','Charge',{type:'button'});CHARGE.disabled=true;
+  foot.append(tot,CHARGE,el('div','hint','Payment comes in the next step.'));
+  cart.append(grab,head,LINES,foot);
+  // phone: bar that opens the sheet, and the dimmed backdrop behind it
+  CARTBAR=el('button','cartbar','',{id:'cartbar',type:'button','aria-controls':'cart','aria-expanded':'false'});
+  const cbm=el('span','cb-main');cbm.append(el('span','','',{id:'cb-a'}),el('small','','',{id:'cb-b'}));
+  const cbr=el('span','cb-main');cbr.style.alignItems='flex-end';cbr.append(el('span','cb-tot','',{id:'cb-t'}),el('small','cb-go','View cart \u25B2'));
+  CARTBAR.append(cbm,cbr);
+  const scrim=el('div','scrim');
+  SELL.append(items,CARTBAR,scrim,cart);
+  m.append(SELL);
+
+  // events
+  GRID.addEventListener('click',e=>{
+    const t=e.target.closest('.tile');if(!t||t.disabled)return;
+    const i=BYID.get(t.dataset.id);if(i){addItem(i,1);if(!COARSE)focusSearch();}
+  });
+  Q.addEventListener('input',renderGrid);
+  Q.addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&Q.value){Q.value='';renderGrid();return;}
+    if(e.key!=='Enter')return;
+    e.preventDefault();
+    const v=Q.value.trim();if(!v)return;
+    let hit=scanMatch(v);                                // scanner: exact barcode or SKU, then Enter
+    if(!hit){const r=matches(v);if(r.length===1)hit=r[0];}   // typing: one item left in the list
+    if(!hit){say('No item matches \u201c'+v+'\u201d.','bad');Q.select();return;}
+    if(!hit.price){say(hit.name+' has no selling price. Set it in the main app.','bad');Q.select();return;}
+    addItem(hit,1);Q.value='';renderGrid();focusSearch();
+  });
+  // Touch devices: the box keeps focus for a Bluetooth/USB scanner, but the on-screen keyboard stays down
+  // until the keyboard button is tapped, so it does not cover the items.
+  if(COARSE){
+    kb.style.display='block';
+    kb.onclick=()=>{kbBusy=true;Q.setAttribute('inputmode','search');Q.blur();focusSearch();kbBusy=false;};
+    Q.addEventListener('blur',()=>{if(!kbBusy)Q.setAttribute('inputmode','none');});
+  }
+  CARTBAR.onclick=openCart;scrim.onclick=closeCart;grab.onclick=closeCart;x.onclick=closeCart;
+  clr.onclick=()=>{if(CART.length&&confirm('Clear this sale?'))clearCart();};
+  // A scanner types like a keyboard. If focus is anywhere that is not a text field, send the keystrokes to the box.
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&SELL.classList.contains('open')){closeCart();return;}
+    const t=e.target,tag=t&&t.tagName;
+    if(tag==='INPUT'||tag==='TEXTAREA'||tag==='SELECT'||(t&&t.isContentEditable))return;
+    if(e.ctrlKey||e.metaKey||e.altKey||e.key.length!==1||e.key===' ')return;
+    focusSearch();
+  },true);
+  // Back from another tab (e.g. the main app after receiving stock): pick up the latest items and stock.
+  document.addEventListener('visibilitychange',async()=>{
+    if(document.visibilityState!=='visible')return;
+    const d=await loadData();if(!d)return;DATA=d;loadCatalog();
+    CART.forEach(l=>{const it=BYID.get(l.id);if(it)l.unit=it.unit;});
+    renderGrid();renderCart();
+  });
+  renderGrid();renderCart();focusSearch();
+}
+
+async function boot(){
+  if(sessionStorage.getItem('_play')==='1')return card('🔒','Not available','The till is not available in this version of the app.',[['Back to app',toApp,true]]);
+  DATA=await loadData();
+  if(!DATA)return card('📭','No data on this device','Open the main app and sign in first.',[['Open main app',toApp,true]]);
+  USER=sessionUser();
+  if(!USER)return card('🔑','Please sign in','Sign in on the main app, then open the Till from there.',[['Open main app',toApp,true]]);
+  LICENSE=await loadLicense();
+  if(!hasFeature('pos_till'))return card('🔒','Till — Pro feature','Upgrade to Pro from the main app to use the Till.',[['Back to app',toApp,true]]);
+  if(isReadOnly())return card('⏸','Till unavailable','This account is read-only right now (suspended, pending or in grace period). Check the main app.',[['Back to app',toApp,true]]);
+  try{sessionStorage.setItem(SESSION_KEY,JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now()}));}catch{}
+  const di=DATA.depotInfo||{};
+  $('depot').textContent=di.name||'';
+  setPill('p-user',USER.username+(USER.role?' · '+USER.role:''));
+  $('hdr').hidden=false;netPill();cloudPill();
+  addEventListener('online',()=>{netPill();cloudPill();});addEventListener('offline',netPill);
+  ['pointerdown','keydown','touchstart','scroll'].forEach(e=>document.addEventListener(e,idleReset,{passive:true,capture:true}));
+  idleReset();
+  try{new BroadcastChannel('mdm_session').onmessage=e=>{if(e.data&&e.data.type==='logout'){try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}};}catch{}
+  addEventListener('storage',e=>{if(e.key==='mdm_session_event'&&e.newValue&&e.newValue.startsWith('logout:')){try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}});
+  $('b-app').onclick=toApp;$('b-out').onclick=logout;
+  loadCatalog();buildSell();
+}
+boot();
+</script>
+</body>
+</html>
