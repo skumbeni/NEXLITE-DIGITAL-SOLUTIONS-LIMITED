@@ -25,7 +25,19 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.23 (2026-11-08) — App Check: reCAPTCHA site key corrected to match the console
+// Current version: v0.3.25 (2026-11-09) — Item CSV import/export: Import CSV and Export CSV buttons in
+//   Manage Inventory and the Item Names tab. Import matches rows to items by name and fills barcode,
+//   SKU, unit, category, cost, price and VAT (optionally adding items not yet in the list), with a
+//   preview before anything is written. Long item lists get a search box. index.html change +
+//   version bump; no sw.js logic changes.
+//
+// v0.3.24: (2026-11-09) — Item master (step 1 of the point-of-sale roadmap): each
+//   inventory item can now carry an id, barcode, SKU, unit, category and VAT code, edited from the new
+//   Details button in Manage Inventory and the Item Names tab. Cost and selling price are edited in the
+//   same form but stay in inventoryPrices (no second source of truth). No data migration: ids for
+//   existing items are derived from the name. index.html change + version bump; no sw.js logic changes.
+//
+// v0.3.23: (2026-11-08) — App Check: reCAPTCHA site key corrected to match the console
 //   exactly (two look-alike characters were swapped: "lI" should be "Ii"); Google's script reported
 //   "Invalid site key". Key fixed in index.html (3 places) and mdm-admin.html. Bump only.
 //
@@ -1830,7 +1842,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.23';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.25';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
@@ -1884,6 +1896,8 @@ self.addEventListener('install', e => {
     caches.open(CACHE)
       .then(cache => cache.add(SHELL)                         // shell always first
         .then(() => cache.add('manifest.json').catch(() => {})) // manifest (best-effort)
+        .then(() => cache.add('gate.js').catch(() => {}))       // shared gating rules: index.html AND pos.html need it to start offline
+        .then(() => cache.add('pos.html').catch(() => {}))      // the till page (best-effort; index.html also adds it)
         .then(() => cache.add(FONTS_CSS).catch(() => {}))       // fonts (best-effort, may fail offline)
       )
       .finally(() => self.skipWaiting())   // always activate immediately
@@ -1958,6 +1972,14 @@ self.addEventListener('fetch', e => {
   // Google Fonts — cache-first (stale-while-revalidate)
   if (url.includes('fonts.gstatic.com') || url.includes('fonts.googleapis.com')) {
     e.respondWith(cacheFirst(req));
+    return;
+  }
+
+  // gate.js — shared licence/tier rules, loaded as a plain <script src> by index.html and pos.html.
+  // It is not a navigation, so without this rule it would pass straight to the network and both pages
+  // would fail to start offline. Network-first so a deploy is picked up; cache fallback when offline.
+  if (/\/gate\.js(\?|$)/.test(url)) {
+    e.respondWith(networkFirst(req));
     return;
   }
 
