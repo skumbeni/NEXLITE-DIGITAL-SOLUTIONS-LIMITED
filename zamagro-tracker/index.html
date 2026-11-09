@@ -4506,7 +4506,7 @@
         // publishes the live percentage and Lifetime price (and any special price for one owner);
         // everything here reads them through getPricing(). The numbers below are only the built-in
         // fallback for when nothing has loaded yet and nothing is cached on this phone.
-        const EXTRA_SHOP_PRICING = { pct: 50, roundTo: 5, lifetimePrice: 1250 };
+        const EXTRA_SHOP_PRICING = { pct: 20, roundTo: 5, lifetimePrice: 500 };
         const LIFETIME_PLAN_PRICE = 2500;
         const PLAN_MONTHLY_PRICE = { starter: 200, standard: 300, pro: 399 };
 
@@ -4747,10 +4747,32 @@
             return '';
         }
 
-        function hasFeature(feature) {
-            // Plan modules stay visible after expiry (view-only mode); writes are blocked separately.
+        // ── PER-SHOP PLAN ─────────────────────────────────────────────────
+        // The Main shop runs on the account plan. Every extra shop runs on the plan it was last paid on, stored by
+        // the admin as licenseData.shops[shopId].tier. So when the Main shop is upgraded and an extra shop is left
+        // out of that payment, the extra shop keeps its old modules until its own paid date ends, and it moves to
+        // the new plan (and price) when it is renewed. A shop with no stored plan follows the account plan, and a
+        // shop can never get more than the account plan covers.
+        const TIER_RANK = { starter: 1, standard: 2, pro: 3, lifetime: 3 };
+        function shopTier(shopId, licIn) {
+            const id = shopId || MAIN_SHOP_ID;
+            const lic = licIn || getLicense() || {};
+            const acct = lic.tier;
+            if (id === MAIN_SHOP_ID || !TIER_RANK[acct]) return acct;       // Main shop, trial or unknown: account plan
+            const e = (lic.shops && typeof lic.shops === 'object') ? lic.shops[id] : null;
+            if (e && e.lifetime === true) return 'lifetime';
+            const t = e && e.tier;
+            if (!t || !TIER_RANK[t] || t === 'lifetime') return acct;
+            return TIER_RANK[t] <= TIER_RANK[acct] ? t : acct;
+        }
+
+        // Plan modules stay visible after expiry (view-only mode); writes are blocked separately.
+        // Checked against the shop being worked in, unless a shop id is given.
+        function hasFeature(feature, shopId) {
             const lic = getLicense();
-            const allowed = TIER_FEATURES[lic.tier] || TIER_FEATURES['trial'];
+            let t = lic.tier;
+            try { t = shopTier(shopId === undefined ? getActiveShopId() : shopId, lic); } catch (e) { t = lic.tier; }
+            const allowed = TIER_FEATURES[t] || TIER_FEATURES['trial'];
             return allowed.includes(feature);
         }
 
@@ -4775,10 +4797,11 @@
             }
 
             // Update license bar
-            const tierLabel = TIER_LABELS[lic.tier] || lic.tier;
+            const _dispTier = (_extraShop && active) ? (shopTier(_shopId, lic) || lic.tier) : lic.tier;
+            const tierLabel = TIER_LABELS[_dispTier] || _dispTier;
             document.getElementById('lb-tier').textContent = tierLabel;
             const badge = document.getElementById('lb-badge');
-            badge.innerHTML = `<span class="license-badge badge-${lic.tier}">${TIER_PRICES[lic.tier] || ''}</span>`;
+            badge.innerHTML = `<span class="license-badge badge-${_dispTier}">${TIER_PRICES[_dispTier] || ''}</span>`;
 
             const expiryEl = document.getElementById('lb-expiry');
             expiryEl.style.color = '';
@@ -4838,7 +4861,7 @@
             const _xs = getShops(false).filter(x => x.id !== MAIN_SHOP_ID);
             const shopsBlock = _xs.length ? `<div style="grid-column:1/-1;"><strong>Extra shops:</strong>` + _xs.map(x => {
                 const sl = shopLicense(x.id);
-                return `<div style="display:flex;justify-content:space-between;gap:.6rem;flex-wrap:wrap;padding:.15rem 0;"><span>${esc(x.name)}</span><span style="color:${sl.active ? 'var(--success)' : 'var(--danger)'};font-weight:600;">${esc(shopLicenseText(sl))}</span></div>`;
+                return `<div style="display:flex;justify-content:space-between;gap:.6rem;flex-wrap:wrap;padding:.15rem 0;"><span>${esc(x.name)}${lic.tier !== 'trial' ? ' &middot; ' + esc(TIER_LABELS[shopTier(x.id, lic)] || '') : ''}</span><span style="color:${sl.active ? 'var(--success)' : 'var(--danger)'};font-weight:600;">${esc(shopLicenseText(sl))}</span></div>`;
             }).join('') + `</div>` : '';
             box.innerHTML = `
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem 1.5rem;font-size:.88rem;">
@@ -6153,7 +6176,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                     target.classList.remove('hidden');
                     const lic = getLicense();
                     const tierNeeded = view === 'purchases' || view === 'grn' || view === 'po' || view === 'payables' || view === 'fisp' || view === 'credit' ? 'Standard' : 'Pro';
-                    target.innerHTML = `<div class="locked-view-msg"><div class="lock-icon">🔒</div><h3>Feature Locked</h3><p>This module requires the <strong>${tierNeeded}</strong> plan or higher.</p><p style="margin-top:.5rem;font-size:.85rem;color:#888;">Contact us to upgrade your plan.</p></div>`;
+                    target.innerHTML = `<div class="locked-view-msg"><div class="lock-icon">🔒</div><h3>Feature Locked</h3><p>This module requires the <strong>${tierNeeded}</strong> plan or higher.</p>${(getActiveShopId() !== MAIN_SHOP_ID && shopTier(getActiveShopId())) ? `<p style="margin-top:.5rem;font-size:.85rem;">${esc(getShopName(getActiveShopId()))} is on the <strong>${esc(TIER_LABELS[shopTier(getActiveShopId())] || '')}</strong> plan until its paid date ends.</p>` : ''}<p style="margin-top:.5rem;font-size:.85rem;color:#888;">Contact us to upgrade your plan.</p></div>`;
                 }
                 const titles = { purchases:'Purchases', po:'Purchase Orders', grn:'Goods Received', fisp:'FISP Claims', credit:'Credit Tracker' };
                 document.getElementById('page-title').textContent = titles[view] || view;
@@ -7208,7 +7231,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             }
             const sl = shopLicense(x.id);
             if (sl.kind === 'lifetime') return { text: 'Lifetime', life: true, expiry: null };
-            if (sl.kind === 'paid') return { text: 'Paid until ' + _fmtD(sl.expiry), expiry: sl.expiry };
+            if (sl.kind === 'paid') return { text: 'Paid until ' + _fmtD(sl.expiry) + (TIER_RANK[lic.tier] ? ' · ' + (TIER_LABELS[shopTier(x.id, lic)] || '') : ''), expiry: sl.expiry };
             if (sl.kind === 'lapsed') return { text: 'Lapsed ' + _fmtD(sl.expiry), expiry: null, bad: true };
             if (sl.kind === 'trial') return { text: 'Free during trial', expiry: null };
             return { text: 'Not paid yet', expiry: null, bad: true };
@@ -7272,6 +7295,8 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const warn = document.getElementById('subreq-warn');
             let w = '';
             if (!q.trial && q.mainExpired && !q.mainTicked) w = 'The Main shop plan has expired, so the whole account is view-only until it is renewed. Tick the Main shop too.';
+            else if (!q.trial && q.mainTicked && q.tier !== (_srLic().tier || '') && q.rows.some(r => !r.isMain && !r.ticked && !r.disabled && r.st.expiry))
+                w = 'Shops you do not tick keep their current plan until their paid date ends. When they are renewed they move to the ' + (TIER_LABELS[q.tier] || q.tier) + ' plan and its price.';
             if (warn) { warn.textContent = w; warn.style.display = w ? '' : 'none'; }
             const label = TIER_LABELS[q.tier] || q.tier;
             if (!q.lines.length) {
@@ -7848,6 +7873,12 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             setActiveShopId(id);
             try { updateBrand(); } catch (e) {}
             try { applyLicenseUI(); } catch (e) {}
+            try {
+                // The new shop may be on a plan without the module that is open: go back to the dashboard.
+                const _gated = { purchases: 'purchases', grn: 'purchases', po: 'purchases', payables: 'purchases', fisp: 'fisp', credit: 'credit', activitylog: 'adjustlog' };
+                const _cv = window.__curView;
+                if (_cv && _gated[_cv] && !hasFeature(_gated[_cv])) nav('dashboard');
+            } catch (e) {}
             refreshAll();
             renderShopSwitcher();
             const _n = _pendingInternalTRFs().length;
