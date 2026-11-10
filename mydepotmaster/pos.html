@@ -294,7 +294,8 @@ function idleReset(){
 
 // ── SELL SCREEN (roadmap step 4: layout) ────────────────────────────────────
 // Reads the item master (DATA.inventoryItems), selling price (DATA.inventoryPrices[name].sellingPrice) and
-// stock (approved received minus approved issued, by itemName) exactly as index.html does. The cart lives in
+// stock (approved received minus approved issued, by itemName) exactly as index.html does. Commodities are listed
+// too (see commodityItems). The cart lives in
 // memory only for now: payment, held sales and saving the sale are the next steps, so nothing is written yet.
 const COARSE=matchMedia('(pointer:coarse)').matches;   // touch device: keep the soft keyboard down until asked
 const MAX_TILES=120;
@@ -319,21 +320,46 @@ function legacyId(name){
 }
 const isApproved=r=>!r||!r.approvalStatus||r.approvalStatus==='approved';
 
+// Commodities (DATA.commodities) are sold from the till too. They are not in the item master, so: stock = approved
+// received minus approved issued, summed over ALL batches of that commodity; price = the selling price set for it in
+// the main app's Price List (💲 Prices) — DATA.commodities[i].sellingPrice. No price set = not sellable yet.
+// The id is prefixed 'com:' so it can never clash with an item id.
+function commodityItems(){
+  const cr=DATA.commodityReceived||{},ci=DATA.commodityIssued||{};
+  return (DATA.commodities||[]).filter(c=>c&&c.id&&c.name).map(c=>{
+    let rec=cr[c.id]||[],iss=ci[c.id]||[];
+    if(c.id==='maize'){                         // old maize-only arrays, until the main app has migrated them
+      if(!rec.length)rec=DATA.maizeReceived||[];
+      if(!iss.length)iss=DATA.maizeIssued||[];
+    }
+    rec=rec.filter(isApproved);iss=iss.filter(isApproved);
+    const avail=rec.reduce((a,r)=>a+Number(r.received||0),0)-iss.reduce((a,r)=>a+Number(r.issued||0),0);
+    const unit=String(c.unit||'');
+    const o={
+      id:'com:'+c.id,kind:'commodity',icon:String(c.icon||''),name:String(c.name),sku:'',barcode:'',
+      unit,per:/.s$/i.test(unit)?unit.slice(0,-1):unit,   // "bags" -> price shown "per bag"
+      category:'Commodity',min:0,price:Number(c.sellingPrice)||0,avail
+    };
+    o.hay=(o.name+' commodity '+unit).toLowerCase();
+    return o;
+  });
+}
 function loadCatalog(){
   const rec=new Map(),iss=new Map();
   (DATA.generalInventory||[]).filter(isApproved).forEach(r=>rec.set(r.itemName,(rec.get(r.itemName)||0)+Number(r.received||0)));
   (DATA.generalIssued||[]).filter(isApproved).forEach(r=>iss.set(r.itemName,(iss.get(r.itemName)||0)+Number(r.issued||0)));
   const prices=DATA.inventoryPrices||{};
-  ITEMS=(DATA.inventoryItems||[]).map(x=>typeof x==='string'?{name:x}:x).filter(x=>x&&x.name).map(x=>{
+  const general=(DATA.inventoryItems||[]).map(x=>typeof x==='string'?{name:x}:x).filter(x=>x&&x.name).map(x=>{
     const o={
-      id:x.id||legacyId(x.name),name:String(x.name),sku:String(x.sku||''),barcode:String(x.barcode||''),
-      unit:String(x.unit||''),category:String(x.category||''),min:Number(x.minStock)||0,
+      id:x.id||legacyId(x.name),kind:'item',name:String(x.name),sku:String(x.sku||''),barcode:String(x.barcode||''),
+      unit:String(x.unit||''),per:String(x.unit||''),category:String(x.category||''),min:Number(x.minStock)||0,
       price:Number((prices[x.name]||{}).sellingPrice)||0,
       avail:(rec.get(x.name)||0)-(iss.get(x.name)||0)
     };
     o.hay=(o.name+' '+o.sku+' '+o.barcode+' '+o.category).toLowerCase();
     return o;
-  }).sort((a,b)=>a.name.localeCompare(b.name));
+  });
+  ITEMS=general.concat(commodityItems()).sort((a,b)=>a.name.localeCompare(b.name));
   BYID=new Map(ITEMS.map(i=>[i.id,i]));
 }
 function matches(q){
@@ -353,12 +379,12 @@ function focusSearch(){try{Q.focus({preventScroll:true});}catch{Q.focus();}}
 // ── items pane
 function tile(i){
   const b=el('button','tile','',{type:'button','data-id':i.id});
-  b.append(el('span','nm',i.name));
+  b.append(el('span','nm',(i.icon?i.icon+' ':'')+i.name));
   const pr=el('span','pr',i.price?money(i.price):'No price');
-  if(i.unit&&i.price)pr.append(el('small','','/ '+i.unit.toLowerCase()));
+  if(i.per&&i.price)pr.append(el('small','','/ '+i.per.toLowerCase()));
   b.append(pr);
   let st,cls='st';
-  if(!i.price){st='Set a price in the main app';}
+  if(!i.price){st='Not priced yet';}
   else if(i.avail<=0){st='Out of stock';cls+=' out';}
   else if(i.min&&i.avail<=i.min){st=fq(i.avail)+' left';cls+=' low';}
   else st=fq(i.avail)+' in stock';
@@ -369,7 +395,7 @@ function tile(i){
 function renderGrid(){
   const list=matches(Q.value),frag=document.createDocumentFragment();
   list.slice(0,MAX_TILES).forEach(i=>frag.append(tile(i)));
-  if(!ITEMS.length)frag.append(el('div','note','No items yet. Add items in the main app under Manage Items.'));
+  if(!ITEMS.length)frag.append(el('div','note','No items yet. Add items or commodities in the main app, then set their prices under \uD83D\uDCB2 Prices.'));
   else if(!list.length)frag.append(el('div','note','No item matches \u201c'+Q.value.trim()+'\u201d.'));
   else if(list.length>MAX_TILES)frag.append(el('div','note','Showing '+MAX_TILES+' of '+list.length+'. Type more to narrow the list.'));
   GRID.replaceChildren(frag);refreshBadges();
@@ -394,7 +420,7 @@ const cartTotal=()=>Math.round(CART.reduce((a,l)=>a+lineTotal(l),0)*100)/100;
 // onto each line at the moment of sale (so editing a price later never changes an old receipt). id and
 // receiptNo stay null until payment (step 6) and the per-till number prefix (step 8) exist. Nothing is saved.
 function makeBasket(){
-  const lines=CART.map(l=>({itemId:l.id,name:l.name,unit:l.unit,qty:l.qty,price:l.price,total:lineTotal(l)}));
+  const lines=CART.map(l=>({itemId:l.id,kind:l.kind||'item',name:l.name,unit:l.unit,qty:l.qty,price:l.price,total:lineTotal(l)}));
   return {
     id:null,receiptNo:null,at:Date.now(),
     cashier:USER?String(USER.username):'',
@@ -454,7 +480,7 @@ function hideReceipt(){
 }
 function addItem(i,n){
   const l=CART.find(x=>x.id===i.id);
-  if(l)l.qty=Math.round((l.qty+(n||1))*1000)/1000;else CART.push({id:i.id,name:i.name,unit:i.unit,price:i.price,qty:n||1});
+  if(l)l.qty=Math.round((l.qty+(n||1))*1000)/1000;else CART.push({id:i.id,kind:i.kind,name:i.name,unit:i.unit,per:i.per,price:i.price,qty:n||1});
   renderCart();say('Added '+i.name,'ok');
 }
 function setQty(id,q){
@@ -468,7 +494,7 @@ function lineEl(l){
   const rm=el('button','rm','\u2715',{type:'button','aria-label':'Remove '+l.name});rm.onclick=()=>setQty(l.id,0);
   const tcell=el('div','lt');tcell.append(el('span','',money(lineTotal(l))),rm);
   row.append(el('div','ln',l.name),tcell);
-  row.append(el('div','lp',money(l.price)+(l.unit?' / '+l.unit.toLowerCase():'')));
+  row.append(el('div','lp',money(l.price)+(l.per?' / '+l.per.toLowerCase():'')));
   const minus=el('button','','\u2212',{type:'button','aria-label':'Decrease '+l.name});
   const plus=el('button','','+',{type:'button','aria-label':'Increase '+l.name});
   const inp=el('input','','',{type:'number',inputmode:'decimal',min:'0',step:'any','aria-label':'Quantity of '+l.name});
@@ -551,7 +577,7 @@ function buildSell(){
     let hit=scanMatch(v);                                // scanner: exact barcode or SKU, then Enter
     if(!hit){const r=matches(v);if(r.length===1)hit=r[0];}   // typing: one item left in the list
     if(!hit){say('No item matches \u201c'+v+'\u201d.','bad');Q.select();return;}
-    if(!hit.price){say(hit.name+' has no selling price. Set it in the main app.','bad');Q.select();return;}
+    if(!hit.price){say(hit.name+' has no price yet. Set it in the main app under \uD83D\uDCB2 Prices.','bad');Q.select();return;}
     addItem(hit,1);Q.value='';renderGrid();focusSearch();
   });
   // Touch devices: the box keeps focus for a Bluetooth/USB scanner, but the on-screen keyboard stays down
@@ -576,7 +602,7 @@ function buildSell(){
   document.addEventListener('visibilitychange',async()=>{
     if(document.visibilityState!=='visible')return;
     const d=await loadData();if(!d)return;DATA=d;loadCatalog();
-    CART.forEach(l=>{const it=BYID.get(l.id);if(it)l.unit=it.unit;});
+    CART.forEach(l=>{const it=BYID.get(l.id);if(it){l.unit=it.unit;l.per=it.per;}});
     renderGrid();renderCart();
   });
   renderGrid();renderCart();focusSearch();
@@ -589,7 +615,7 @@ async function boot(){
   USER=sessionUser();
   if(!USER)return card('🔑','Please sign in','Sign in on the main app, then open the Till from there.',[['Open main app',toApp,true]]);
   LICENSE=await loadLicense();
-  if(!hasFeature('pos_till'))return card('🔒','Till — Pro feature','Upgrade to Pro from the main app to use the Till.',[['Back to app',toApp,true]]);
+  if(!hasFeature('pos_till'))return card('🔒','Till not available','The Till is not available on this account. Check the main app.',[['Back to app',toApp,true]]);
   if(isReadOnly())return card('⏸','Till unavailable','This account is read-only right now (suspended, pending or in grace period). Check the main app.',[['Back to app',toApp,true]]);
   try{sessionStorage.setItem(SESSION_KEY,JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now()}));}catch{}
   const di=DATA.depotInfo||{};

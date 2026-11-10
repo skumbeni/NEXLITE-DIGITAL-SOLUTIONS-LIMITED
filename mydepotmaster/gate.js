@@ -21,7 +21,7 @@ const Gate = (function () {
   // TIER FEATURE SPEC — single source of truth for the tiered licensing system.
   //
   // Tiers (low → high):
-  //   free      — permanent free plan after trial ends; core data entry only
+  //   free      — permanent free plan after trial ends; core data entry, plus the Till (pos.html)
   //   starter   — first paid tier; same feature set as free, but with higher
   //               numeric caps (staff/commodity/contacts/history — enforced
   //               separately, not via TIER_FEATURES). No new unlocks here.
@@ -57,6 +57,7 @@ const Gate = (function () {
       'books_view',                // View saved books / notes
       'dashboard_view',            // Dashboard summary (read-only stats)
       'settings_basic',            // Currency, depot name, display prefs
+      'pos_till',                  // Sell tab / till — separate page pos.html, on EVERY plan (pos.html reads this same table via gate.js)
     ],
 
     // ── STARTER ──────────────────────────────────────────────────────────────
@@ -96,7 +97,6 @@ const Gate = (function () {
       'setup_checklist',           // First-run onboarding checklist
       'custom_branding',           // Custom logo & accent colour on staff ID cards
       'daily_sales',               // Daily Sales tab (close-out, receipt printing, sales history)
-      'pos_till',                  // Sell tab / till — separate page pos.html (same gating as daily_sales; pos.html reads this same table via gate.js)
       'ai_copilot',                // Depot Assistant (Gemini) — AI chat + reconciliation (Pro only)
       'payroll_run',               // Payroll Run — Prepare Payroll, lock, pay out, mobile money CSV, run payslips, NAPSA/NHIMA/PAYE
       'stock_check',               // Stock check — stock vs logged bags per task, and the "paid for" badge on stock rows

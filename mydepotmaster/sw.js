@@ -25,7 +25,20 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.25 (2026-11-09) — Item CSV import/export: Import CSV and Export CSV buttons in
+// Current version: v0.3.27 (2026-11-10) — Price List: new 💲 Prices button (Admin) on the General and Commodities
+//   tabs opens one screen to set the selling price of every stock item and every commodity before any sale,
+//   with search, an "only unpriced" filter, Enter-to-next-field and a single save. Stock items keep using
+//   inventoryPrices[name].sellingPrice; commodities get a new sellingPrice on the commodity record. The
+//   commodity Issue form and the multi-issue form now pre-fill from the list, and the Till prices commodities
+//   from it (no more guessing from the last sale). index.html + pos.html change + version bump; no sw.js logic changes.
+//
+// v0.3.26: (2026-11-10) — The Till (pos.html) is now on every plan: pos_till moved from the
+//   Pro list to the Free list in gate.js (Free, Starter and Growth get it too, and it keeps working after the
+//   trial ends). The Till now also sells commodities: they appear in the item list with stock summed over all
+//   batches and the latest sale price from their issue records. gate.js + pos.html + index.html change +
+//   version bump; no sw.js logic changes.
+//
+// v0.3.25: (2026-11-09) — Item CSV import/export: Import CSV and Export CSV buttons in
 //   Manage Inventory and the Item Names tab. Import matches rows to items by name and fills barcode,
 //   SKU, unit, category, cost, price and VAT (optionally adding items not yet in the list), with a
 //   preview before anything is written. Long item lists get a search box. index.html change +
@@ -1842,7 +1855,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.25';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.27';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

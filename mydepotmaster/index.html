@@ -395,6 +395,19 @@ body.light .clockout-btn{border-color:var(--amber);color:var(--amber);}
 .modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:24px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;overflow-x:hidden;box-sizing:border-box;box-shadow:var(--shadow-lg);}
 .mtitle{font-family:var(--fh);font-size:24px;font-weight:800;color:var(--white);margin-bottom:18px;letter-spacing:-0.3px;}
 .mact{display:flex;gap:10px;margin-top:20px;}
+.pl-row{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);}
+.pl-nm{flex:1;min-width:0;}
+.pl-nm b{display:block;font-weight:700;overflow-wrap:anywhere;}
+.pl-sub{font-size:15px;color:var(--muted);margin-top:2px;}
+.pl-pc{flex:none;width:140px;text-align:right;}
+.pl-in{width:100%;background:var(--surface2);border:1.5px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-size:19px;text-align:right;font-family:var(--fb);outline:none;}
+.pl-in:focus{border-color:var(--green);}
+.pl-in.chg{border-color:var(--amber);}
+.pl-flag{font-size:14px;margin-top:2px;min-height:18px;color:var(--muted);}
+.pl-flag.bad{color:var(--red);font-weight:700;}
+.pl-use{background:none;border:none;color:var(--blue);font-size:15px;padding:0;margin-top:2px;cursor:pointer;text-decoration:underline;font-family:var(--fb);}
+.pl-head{font-family:var(--fh);font-size:18px;font-weight:800;color:var(--white);margin:12px 0 2px;}
+#pl-list{max-height:50vh;overflow-y:auto;}
 .twobox{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 
 /* Misc */
@@ -3675,7 +3688,7 @@ const _FEATURE_LABEL = {
   setup_checklist:    { name: 'Setup Checklist',           tier: 'pro'    },
   payroll_run:        { name: 'Payroll Run',               tier: 'pro'    },
   stock_check:        { name: 'Payroll Stock Check',       tier: 'pro'    },
-  pos_till:           { name: 'Sell Tab (Till)',           tier: 'pro'    },
+  pos_till:           { name: 'Sell Tab (Till)',           tier: 'free'   },
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -4161,7 +4174,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.25';
+const SW_VERSION  = 'v0.3.27';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -8038,6 +8051,7 @@ function renderGeneral(){
         <button class="btn bo bsm" onclick="openMultiEntryForm('receive')" title="Receive multiple items/commodities in one transaction">&#x1F500; Multi Receive</button>
         <button class="btn bo bsm" onclick="openMultiEntryForm('issue')" title="Issue multiple items/commodities in one transaction">&#x1F500; Multi Issue</button>
         ${USER.role==='admin'?`<button class="btn bo bsm" onclick="openManageInventory()">⚙️ Manage</button>`:''}
+        ${USER.role==='admin'?`<button class="btn bo bsm" onclick="openPriceList()">💲 Prices</button>`:''}
         <button class="btn bo bsm" id="btn-add-transport" onclick="openTransportForm()">🚛 Transport</button>
         <button class="btn bo bsm" onclick="exportCurrentTabCSV()" title="Export current view as PDF">⬇️ PDF</button>
       </div>
@@ -10248,6 +10262,7 @@ function renderMaize(){
         <button class="btn bo bsm" onclick="openMultiEntryForm('receive')" title="Receive multiple items/commodities in one transaction">&#x1F500; Multi Receive</button>
         <button class="btn bo bsm" onclick="openMultiEntryForm('issue')" title="Issue multiple items/commodities in one transaction">&#x1F500; Multi Issue</button>
         ${USER.role==='admin'?`<button class="btn bo bsm" id="btn-manage-commodities" onclick="openManageCommodities()">⚙️ Manage</button>`:''}
+        ${USER.role==='admin'?`<button class="btn bo bsm" onclick="openPriceList()">💲 Prices</button>`:''}
         <button class="btn bo bsm" onclick="exportCurrentTabCSV()" title="Export current view as PDF">⬇️ PDF</button>
       </div>
     </div>
@@ -10649,6 +10664,9 @@ function openMaizeIssForm(){
     <div class="fw"><div class="fl">Payment Status</div><select class="fi" id="mi-credit" onchange="document.getElementById('mi-partial-wrap').style.display=this.value==='partial'?'':' none'"><option value="paid">✅ PAID — Settled in full</option><option value="partial">🔶 PARTIAL — Partially paid</option><option value="credit">🔴 CREDIT — On account / debt</option></select></div>
     <div class="fw" id="mi-partial-wrap" style="display:none"><div class="fl">Amount Paid (${cur()} — for partial)</div><input class="fi" type="number" id="mi-partial-amt" placeholder="0.00" step="0.01" inputmode="decimal"/></div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn ba" onclick="saveMaizeIss()">✓ Issue</button></div>`);
+  // Pre-fill the price from the Price List (💲 Prices)
+  const _lp=Number(getCom(CCOM).sellingPrice)||0;
+  if(_lp>0){const _e=document.getElementById('mi-sprice');if(_e)_e.value=_lp;}
   // Auto-select the most recent receive for the chosen batch
   _miAutoSrcRec(batches[0]||'');
 }
@@ -10829,6 +10847,11 @@ function _mriSetField(id,field,val){
   const l=_mriLines.find(x=>x.id===id);
   if(!l)return;
   l[field]=val;
+  if(field==='price')l._pAuto=false;
+  if(_mriType==='issue'&&(field==='kind'||field==='commodityId'||field==='itemName')&&(l._pAuto||!(Number(l.price)>0))){
+    const p=l.kind==='commodity'?_plPriceOf('com',l.commodityId):_plPriceOf('item',l.itemName);   // Price List
+    l.price=p>0?p:'';l._pAuto=p>0;
+  }
   if(field==='kind'||field==='commodityId'||field==='itemName'){_mriRefreshRows();return;}
   _mriUpdateTotal();
 }
@@ -11559,6 +11582,138 @@ function deleteCommodity(cid){
   });
 }
 
+
+// ── PRICE LIST (admin) ───────────────────────────────────────────────────────
+// ONE screen to set the selling price of every stock item AND every commodity, before anything is sold.
+//   Stock items : DATA.inventoryPrices[name].sellingPrice — the store the Receive/Issue forms, reports and the Till read.
+//   Commodities : DATA.commodities[i].sellingPrice        — commodities had no price store of their own.
+// The Till (pos.html) reads these same two fields. Only rows whose figure changed are written; blank or 0 clears
+// a price. One save = one updateData + one audit entry (typing is never saved row by row, so the list never jumps).
+function _plPriceOf(kind,key){
+  if(kind==='com'){const c=(DATA.commodities||[]).find(x=>x.id===key);return Number(c&&c.sellingPrice)||0;}
+  return Number(((DATA.inventoryPrices||{})[key]||{}).sellingPrice)||0;      // key = item name
+}
+function _plLastSold(cid){   // most recent approved issue that carried a sale price (shown as a one-tap suggestion)
+  const r=approvedArr(cIss(cid)).filter(x=>Number(x.salePrice)>0)
+    .sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')))[0];
+  return r?Number(r.salePrice):0;
+}
+function _plSingular(u){u=String(u||'');return /.s$/i.test(u)?u.slice(0,-1):u;}
+function _plVal(el){const raw=String(el.value).trim();if(raw==='')return 0;const v=Number(raw);return isFinite(v)?Math.round(v*100)/100:NaN;}
+function _plRowHtml(o){
+  const inp=`<input class="pl-in" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00" value="${o.price>0?o.price:''}" data-kind="${o.kind}" data-k="${esc(o.id)}" data-nm="${esc(o.name)}" data-orig="${o.price>0?o.price:''}" data-cost="${o.cost>0?o.cost:''}" aria-label="Selling price of ${esc(o.name)}" oninput="_plChanged(this)" onkeydown="_plKey(event)"/>`;
+  const use=(o.hint>0&&!(o.price>0))?`<button type="button" class="pl-use" onclick="_plUse(this,${o.hint})">Last sold ${esc(zm(o.hint))} · use</button>`:'';
+  return `<div class="pl-row" data-q="${esc(o.q)}"><div class="pl-nm"><b>${o.icon?esc(o.icon)+' ':''}${esc(o.name)}</b><div class="pl-sub">${o.sub}</div></div><div class="pl-pc">${inp}<div class="pl-flag"></div>${use}</div></div>`;
+}
+function openPriceList(){
+  if(!requireAdmin('edit the price list'))return;
+  const items=(DATA.inventoryItems||[]).map(_invItemObj).sort((a,b)=>a.name.localeCompare(b.name));
+  const coms=(DATA.commodities||[]).filter(c=>c&&c.id).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  const pr=DATA.inventoryPrices||{};
+  const itemRows=items.map(it=>{
+    const cost=Number((pr[it.name]||{}).purchasePrice)||0;
+    return _plRowHtml({kind:'item',id:it.id,name:it.name,icon:'',price:_plPriceOf('item',it.name),cost,hint:0,
+      q:(it.name+' '+it.barcode+' '+it.sku+' '+it.category).toLowerCase(),
+      sub:[it.unit?esc(it.unit):'',cost>0?'Cost '+esc(zm(cost)):''].filter(Boolean).join(' · ')||'&nbsp;'});
+  }).join('');
+  const comRows=coms.map(c=>_plRowHtml({kind:'com',id:c.id,name:c.name,icon:c.icon||'',price:Number(c.sellingPrice)||0,cost:0,hint:_plLastSold(c.id),
+    q:(c.name+' commodity '+(c.unit||'')).toLowerCase(),
+    sub:'per '+esc(_plSingular(c.unit)||'unit')})).join('');
+  const sections=
+    (items.length?`<div class="pl-sec"><div class="pl-head">📦 Stock items (${items.length})</div>${itemRows}</div>`:'')+
+    (coms.length?`<div class="pl-sec"><div class="pl-head">🌾 Commodities (${coms.length})</div>${comRows}</div>`:'');
+  openModal(`
+    <div class="mtitle">💲 Price List</div>
+    <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">Set the <strong style="color:var(--text)">selling price</strong> of every item and commodity here, before you sell. The Till and the Issue forms use these prices. Press <strong style="color:var(--text)">Enter</strong> to jump to the next price. Leave a price blank for none.</div>
+    ${sections?`
+    <input class="fi" id="pl-q" placeholder="🔍 Search" autocomplete="off" style="margin-bottom:8px" oninput="_plFilter()"/>
+    <label style="display:flex;align-items:center;gap:8px;font-size:17px;color:var(--muted);margin-bottom:6px"><input type="checkbox" id="pl-nb" onchange="_plFilter()"/> Only show unpriced <span id="pl-count" style="margin-left:auto"></span></label>
+    <div id="pl-list">${sections}</div>`
+    :`<div style="color:var(--muted);font-size:18px;margin:12px 0">Nothing to price yet. Add items under <strong style="color:var(--text)">Manage Inventory Items</strong> and commodities under <strong style="color:var(--text)">Manage Commodities</strong>.</div>`}
+    <div class="mact"><button class="btn bo" onclick="_plCancel()">${sections?'Cancel':'Close'}</button>${sections?`<button class="btn bg" id="pl-save" onclick="savePriceList()">Save prices</button>`:''}</div>`,'uncloseable');
+  _plRefreshAll();
+}
+function _plFlag(el){
+  const v=_plVal(el),cost=Number(el.dataset.cost)||0,f=el.closest('.pl-row').querySelector('.pl-flag');
+  el.classList.toggle('chg',v!==(Number(el.dataset.orig)||0));
+  if(v>0&&cost>0){
+    if(v<cost){f.textContent='Below cost';f.className='pl-flag bad';}
+    else{f.textContent='Margin '+Math.round((v-cost)/v*100)+'%';f.className='pl-flag';}
+  }else{f.textContent='';f.className='pl-flag';}
+}
+function _plChangeCount(){let n=0;document.querySelectorAll('#pl-list .pl-in').forEach(el=>{if(_plVal(el)!==(Number(el.dataset.orig)||0))n++;});return n;}
+function _plSummary(){
+  const all=[...document.querySelectorAll('#pl-list .pl-in')];
+  const c=document.getElementById('pl-count');if(c)c.textContent=all.filter(e=>_plVal(e)>0).length+' of '+all.length+' priced';
+  const ch=_plChangeCount(),b=document.getElementById('pl-save');if(b)b.textContent=ch?'Save prices ('+ch+')':'Save prices';
+}
+function _plRefreshAll(){document.querySelectorAll('#pl-list .pl-in').forEach(_plFlag);_plSummary();}
+function _plChanged(el){_plFlag(el);_plSummary();}
+function _plFilter(){
+  const q=String((document.getElementById('pl-q')||{}).value||'').trim().toLowerCase();
+  const nb=!!(document.getElementById('pl-nb')||{}).checked;
+  document.querySelectorAll('#pl-list .pl-sec').forEach(sec=>{
+    let any=false;
+    sec.querySelectorAll('.pl-row').forEach(r=>{
+      const show=(!q||(r.getAttribute('data-q')||'').includes(q))&&(!nb||!(_plVal(r.querySelector('.pl-in'))>0));
+      r.style.display=show?'':'none';if(show)any=true;
+    });
+    sec.style.display=any?'':'none';
+  });
+}
+function _plKey(e){
+  if(e.key!=='Enter')return;
+  e.preventDefault();
+  const all=[...document.querySelectorAll('#pl-list .pl-in')].filter(i=>i.offsetParent!==null);
+  const nx=all[all.indexOf(e.target)+1];
+  if(nx){nx.focus();try{nx.select();}catch{}}else e.target.blur();
+}
+function _plUse(btn,val){
+  const row=btn.closest('.pl-row'),i=row&&row.querySelector('.pl-in');
+  if(i){i.value=val;_plChanged(i);}
+  btn.remove();
+}
+function _plCancel(){
+  if(document.getElementById('pl-list')&&_plChangeCount()>0&&!confirm('Discard your price changes?'))return;
+  closeModal();
+}
+function savePriceList(){
+  if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+  if(!requireAdmin('edit the price list'))return;
+  const ch=[];let bad=null;
+  document.querySelectorAll('#pl-list .pl-in').forEach(el=>{
+    const v=_plVal(el),orig=Number(el.dataset.orig)||0;
+    if(Number.isNaN(v)||v<0){bad=bad||el;return;}
+    if(v===orig)return;
+    ch.push({kind:el.dataset.kind,key:el.dataset.k,name:el.dataset.nm,from:orig,to:v,cost:Number(el.dataset.cost)||0});
+  });
+  if(bad){alert('Prices must be numbers, 0 or more.');bad.focus();return;}
+  if(!ch.length){closeModal();showToast('No price changes');return;}
+  const below=ch.filter(c=>c.to>0&&c.cost>0&&c.to<c.cost);
+  if(below.length&&!confirm(below.length+' price(s) are below cost:\n'+below.slice(0,5).map(c=>'• '+c.name+' (cost '+c.cost.toFixed(2)+', price '+c.to.toFixed(2)+')').join('\n')+(below.length>5?'\n…':'')+'\n\nSave anyway?'))return;
+  const byItem=new Map(ch.filter(c=>c.kind==='item').map(c=>[c.key,c.to]));
+  const byCom=new Map(ch.filter(c=>c.kind==='com').map(c=>[c.key,c.to]));
+  updateData(d=>{
+    const prices={...(d.inventoryPrices||{})};
+    (d.inventoryItems||[]).forEach(it=>{
+      const id=_invItemId(it);if(!byItem.has(id))return;
+      const nm=_invItemObj(it).name,v=byItem.get(id),p={...(prices[nm]||{})};
+      if(v>0)p.sellingPrice=v;else delete p.sellingPrice;
+      if(Object.keys(p).length)prices[nm]=p;else delete prices[nm];
+    });
+    const commodities=(d.commodities||[]).map(c=>{
+      if(!byCom.has(c.id))return c;
+      const v=byCom.get(c.id),o={...c};
+      if(v>0)o.sellingPrice=v;else delete o.sellingPrice;
+      return o;
+    });
+    return {...d,inventoryPrices:prices,commodities};
+  });
+  logAuditEvent('EDIT','Price List',`${ch.length} price(s) changed: `+ch.slice(0,10).map(c=>`${c.name} ${c.from||'—'} → ${c.to||'cleared'}`).join(' · ')+(ch.length>10?` · +${ch.length-10} more`:''),
+    {prices:ch.map(c=>({name:c.name,price:c.from||null}))});
+  closeModal();
+  showToast('✅ '+ch.length+(ch.length===1?' price':' prices')+' saved');
+}
 
 // ── Manage Inventory Items (admin)
 function openManageInventory(){
