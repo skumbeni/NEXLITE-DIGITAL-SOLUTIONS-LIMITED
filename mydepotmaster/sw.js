@@ -25,7 +25,12 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.29 (2026-11-10) — Open Till shortcuts: a row at the top of the hamburger menu's Quick
+// Current version: v0.3.30 (2026-11-10) — Till step 6, payment: Charge opens a payment screen (pos.html) with cash
+//   received + change, MTN Money / Airtel Money (reference required), card, split payments, and the balance on a
+//   customer's account (credit / partial, same creditStatus values as the main app). The paid receipt lists the
+//   payments. NOTHING IS SAVED YET — the receipt is tagged "NOT RECORDED YET"; steps 8-9 commit the sale.
+//   pos.html change + version bump; no sw.js logic changes.
+// Previous: v0.3.29 (2026-11-10) — Open Till shortcuts: a row at the top of the hamburger menu's Quick
 //   Actions and a full-width button under the dashboard Quick Actions tiles, both calling openTill() (same
 //   plan/read-only checks as the Till tab). Hidden for Staff and in the Play build, like the Till tab.
 //   index.html change + version bump; no sw.js logic changes.
@@ -1864,7 +1869,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.29';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.30';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

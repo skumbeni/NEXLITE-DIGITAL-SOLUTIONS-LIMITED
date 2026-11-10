@@ -153,6 +153,41 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
   .rbar{display:none!important}
   .paper{border-radius:0;padding:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }
+
+/* ── PAYMENT SCREEN (roadmap step 6) ── */
+.povl{position:fixed;inset:0;z-index:70;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.72);padding:env(safe-area-inset-top,0) 0 0}
+.pay{width:100%;max-width:520px;max-height:100%;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border);border-radius:18px 18px 0 0}
+@media (min-width:768px){.povl{align-items:center;padding:16px}.pay{border-radius:18px;max-height:94%}}
+.pay-h{flex:none;display:flex;justify-content:space-between;align-items:center;gap:8px;padding:14px 16px 8px}
+.pay-h h2{font-size:17px}
+.pay-body{flex:1;min-height:0;overflow-y:auto;padding:4px 16px 12px;overscroll-behavior:contain}
+.pay-due{display:flex;justify-content:space-between;align-items:baseline;padding:6px 0;color:var(--muted)}
+.pay-due b{font-size:26px;color:var(--text)}
+.tl .t{display:grid;grid-template-columns:1fr auto auto;gap:2px 8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border)}
+.tl .t small{grid-column:1/-1;color:var(--muted);font-size:12px}
+.tl .rm{width:34px;height:34px;padding:0;border-radius:8px;border-color:transparent;color:var(--muted);font-size:15px;line-height:1}
+.pay-sum{display:grid;grid-template-columns:1fr auto;gap:3px 10px;font-size:15px;padding:10px 0;margin:6px 0 10px;border-bottom:1px solid var(--border)}
+.pay-sum .r{text-align:right;font-weight:700}
+.pay-sum .amb{color:var(--amber)}.pay-sum .ok,.pay-sum .chg{color:var(--green)}
+.pay-sum .chg{font-size:20px}
+.methods{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:4px 0 10px}
+.methods button{padding:10px 2px;font-size:13px;border-radius:10px}
+.methods button.on{background:var(--green);border-color:var(--green);color:#0a1628}
+.fld{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;font-size:13px;color:var(--muted)}
+.fld input,.fld select{width:100%;font:inherit;font-size:17px;padding:11px 12px;border-radius:10px;border:2px solid var(--border);background:var(--bg);color:var(--text)}
+.fld input:focus,.fld select:focus{outline:none;border-color:var(--green)}
+.pay-hint{min-height:18px;margin:-4px 0 8px;font-size:13px;color:var(--muted)}
+.quick{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+.quick button{padding:8px 14px;font-size:14px;border-radius:8px}
+.pay-err{min-height:18px;margin-bottom:4px;font-size:13px;color:var(--red)}
+.pay .add{width:100%;padding:12px 16px;margin-bottom:12px}
+.pay .acct{width:100%;margin-bottom:10px;padding:10px 14px;font-size:14px}
+.pay .acct.on{border-color:var(--amber);color:var(--amber)}
+.pay-f{flex:none;padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--border)}
+.pay-f .pri{width:100%;padding:14px 18px;font-size:17px}
+.pay-f .pri:disabled{opacity:.45;cursor:not-allowed}
+.pay-note{margin-top:8px;text-align:center;font-size:12px;color:var(--amber)}
+.pay-note.mu{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -419,17 +454,17 @@ const cartTotal=()=>Math.round(CART.reduce((a,l)=>a+lineTotal(l),0)*100)/100;
 // This is the shape that step 9 will store as sales/{saleId}: header + lines, with the selling price copied
 // onto each line at the moment of sale (so editing a price later never changes an old receipt). id and
 // receiptNo stay null until payment (step 6) and the per-till number prefix (step 8) exist. Nothing is saved.
-function makeBasket(){
+function makeBasket(pay){
   const lines=CART.map(l=>({itemId:l.id,kind:l.kind||'item',name:l.name,unit:l.unit,qty:l.qty,price:l.price,total:lineTotal(l)}));
-  return {
+  return Object.assign({
     id:null,receiptNo:null,at:Date.now(),
     cashier:USER?String(USER.username):'',
     lines,lineCount:lines.length,
     qtyTotal:Math.round(lines.reduce((a,l)=>a+l.qty,0)*1000)/1000,
     total:Math.round(lines.reduce((a,l)=>a+l.total,0)*100)/100
-  };
+  },pay||{});
 }
-function receiptEl(b,preview){
+function receiptEl(b,tag){
   const di=DATA.depotInfo||{};
   const accent=/^#[0-9a-f]{3,8}$/i.test(di.brandColor||'')?di.brandColor:'#1E8449';
   const paper=el('div','paper');paper.style.setProperty('--acc',accent);
@@ -444,8 +479,8 @@ function receiptEl(b,preview){
   if(di.contactPhone)paper.append(el('div','c mu','Tel: '+di.contactPhone));
   paper.append(el('hr','rule'),el('div','c mu','SALES RECEIPT'));
   if(b.receiptNo){const no=el('div','c b','#'+b.receiptNo);no.style.fontSize='16px';paper.append(no);}
-  else paper.append(el('div','c mu','Receipt number is given at payment'));
-  if(preview){const w=el('div','c');w.append(el('span','tag','PREVIEW — NOT A SALE'));paper.append(w);}
+  else paper.append(el('div','c mu','Receipt number is given when the sale is saved'));
+  if(tag){const w=el('div','c');w.append(el('span','tag',tag));paper.append(w);}
   const d=new Date(b.at);
   paper.append(el('div','c mu',d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+' · '+d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})));
   if(b.cashier)paper.append(el('div','c mu','Served by: '+b.cashier));
@@ -460,15 +495,26 @@ function receiptEl(b,preview){
   const tt=el('table'),tr=el('tr','gt');tr.append(el('td','','TOTAL'),el('td','r',money(b.total)));tt.append(tr);
   paper.append(tt);
   paper.append(el('div','mu',b.lineCount+(b.lineCount===1?' item':' items')+' · '+fq(b.qtyTotal)+(b.qtyTotal===1?' unit':' units')));
+  if(b.payments){                                  // payment lines: cash shows what was handed over, then the change
+    paper.append(el('hr','dash'));
+    const pt=el('table');
+    const prow=(a,v,cls)=>{const r=el('tr',cls||'');r.append(el('td','',a),el('td','r',v));pt.append(r);};
+    b.payments.forEach(p=>prow(p.label+(p.ref?' · '+p.ref:''),money(p.method==='cash'?p.tendered:p.amount)));
+    if(b.change>0)prow('Change',money(b.change),'b');
+    if(b.balance>0)prow('Balance on account',money(b.balance),'b');
+    paper.append(pt);
+    if(b.customerName)paper.append(el('div','mu','Customer: '+b.customerName));
+    if(b.creditStatus&&b.creditStatus!=='paid'){const w=el('div','c');w.append(el('span','tag',b.creditStatus==='credit'?'ON CREDIT':'PART PAID'));paper.append(w);}
+  }
   paper.append(el('hr','rule'),el('div','ft','Thank you for your business!'));
   return paper;
 }
 let ROVL=null,ROPENER=null;
-function showReceipt(){
+function showReceipt(b,tag){
   if(!CART.length||ROVL)return;
   ROPENER=document.activeElement;
   const ovl=el('div','rovl','',{role:'dialog','aria-modal':'true','aria-label':'Receipt preview'});
-  const sc=el('div','rscroll');sc.append(receiptEl(makeBasket(),true));
+  const sc=el('div','rscroll');sc.append(receiptEl(b||makeBasket(),tag||'PREVIEW — NOT A SALE'));
   const bar=el('div','rbar');
   const pr=el('button','pri','Print',{type:'button'}),cl=el('button','','Close',{type:'button'});
   pr.onclick=()=>window.print();cl.onclick=hideReceipt;
@@ -478,6 +524,184 @@ function hideReceipt(){
   if(!ROVL)return;ROVL.remove();ROVL=null;
   try{if(ROPENER&&document.contains(ROPENER))ROPENER.focus();}catch{}
 }
+// ── PAYMENT (roadmap step 6) ─────────────────────────────────────────────────
+// Charge opens one payment screen for the basket. Tenders: cash (amount received, change worked out), MTN Money and
+// Airtel Money (transaction reference required), card (slip no. optional); a basket can be split over any mix.
+// Whatever is not paid can go on a customer's account: nothing paid = 'credit', some paid = 'partial', all paid =
+// 'paid' — the same creditStatus values the main app puts on issues. Money is worked in whole ngwee so totals never drift.
+// NOTHING IS SAVED YET: finalizeSale() is where step 8 (receipt number) and step 9 (sales/{saleId}) will commit the sale.
+const METHODS={cash:{label:'Cash'},mtn:{label:'MTN Money',ref:true},airtel:{label:'Airtel Money',ref:true},card:{label:'Card'}};
+const toC=n=>Math.round((Number(n)||0)*100),fromC=c=>c/100;
+const MAXC=toC(1e9);
+let PAYOVL=null,PAYBODY=null,PAYFOOT=null,PAY=null;
+
+// tenders are applied in the order entered. Cash may be more than what is left (the rest is change); MTN/Airtel/card
+// may not (they cannot give change) — addTender() blocks that, `over` is only a safety net.
+function settle(totalC,tenders){
+  let rem=totalC,paid=0,change=0,over=false;
+  const applied=tenders.map(t=>{
+    const give=toC(t.tendered),use=Math.min(give,rem);
+    if(t.method!=='cash'&&give>rem)over=true;
+    rem-=use;paid+=use;if(t.method==='cash')change+=give-use;
+    return use;
+  });
+  return {applied,paid,rem,change,over};
+}
+const payStatus=S=>S.rem<=0?'paid':(S.paid>0?'partial':'credit');
+const payReady=S=>!S.over&&(S.rem<=0||(PAY.onAccount&&!!PAY.customer));
+const customers=()=>(DATA.contacts||[]).filter(c=>c&&c.type==='customer'&&c.id).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+function fld(label,input){const w=el('label','fld');w.append(el('span','',label),input);return w;}
+
+function openPay(){
+  if(!CART.length||PAYOVL)return;
+  if(isReadOnly()){say('The till is read-only right now.','bad');return;}
+  if(toC(cartTotal())<=0){say('Nothing to charge.','bad');return;}
+  PAY={method:'cash',tenders:[],onAccount:false,customer:''};
+  const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Payment'});
+  const box=el('div','pay'),head=el('div','pay-h');
+  const cx=el('button','sm','Cancel',{type:'button'});cx.onclick=cancelPay;
+  head.append(el('h2','','Payment'),cx);
+  PAYBODY=el('div','pay-body');PAYFOOT=el('div','pay-f');
+  box.append(head,PAYBODY,PAYFOOT);ovl.append(box);
+  ovl.addEventListener('click',e=>{if(e.target===ovl)cancelPay();});
+  document.body.append(ovl);PAYOVL=ovl;
+  renderPay();
+}
+function closePay(){
+  if(!PAYOVL)return;
+  PAYOVL.remove();PAYOVL=PAYBODY=PAYFOOT=PAY=null;
+  if(!COARSE)focusSearch();
+}
+function cancelPay(){
+  if(PAY&&PAY.tenders.length&&!confirm('Discard the payments entered?'))return;
+  closePay();
+}
+function renderPay(){
+  const totalC=toC(cartTotal()),S=settle(totalC,PAY.tenders),fr=document.createDocumentFragment();
+  const due=el('div','pay-due');due.append(el('span','','Total due'),el('b','',money(fromC(totalC))));fr.append(due);
+
+  if(PAY.tenders.length){                                   // payments taken so far
+    const tl=el('div','tl');
+    PAY.tenders.forEach((t,i)=>{
+      const row=el('div','t');
+      row.append(el('span','',METHODS[t.method].label),el('b','',money(fromC(S.applied[i]))));
+      const rm=el('button','rm','\u2715',{type:'button','aria-label':'Remove '+METHODS[t.method].label+' payment'});
+      rm.onclick=()=>{PAY.tenders.splice(i,1);renderPay();};
+      row.append(rm);
+      const sub=[];
+      if(t.ref)sub.push('Ref '+t.ref);
+      if(t.method==='cash'&&toC(t.tendered)>S.applied[i])sub.push('Received '+money(t.tendered));
+      if(sub.length)row.append(el('small','',sub.join(' · ')));
+      tl.append(row);
+    });
+    fr.append(tl);
+  }
+  const sum=el('div','pay-sum');
+  sum.append(el('span','','Paid'),el('span','r',money(fromC(S.paid))));
+  sum.append(el('span','','Left to pay'),el('span','r '+(S.rem>0?'amb':'ok'),money(fromC(S.rem))));
+  if(S.change>0)sum.append(el('span','b','Change to give'),el('span','r chg',money(fromC(S.change))));
+  fr.append(sum);
+
+  if(S.rem>0){                                              // take another payment
+    const spec=METHODS[PAY.method],mt=el('div','methods');
+    Object.keys(METHODS).forEach(k=>{
+      const b=el('button',PAY.method===k?'on':'',METHODS[k].label,{type:'button'});
+      b.onclick=()=>{PAY.method=k;renderPay();};
+      mt.append(b);
+    });
+    fr.append(mt);
+    const amt=el('input','','',{id:'pay-amt',type:'number',inputmode:'decimal',min:'0',step:'0.01','aria-label':'Amount'});
+    amt.value=fromC(S.rem).toFixed(2);
+    fr.append(fld(PAY.method==='cash'?'Cash received':spec.label+' amount',amt));
+    const hint=el('div','pay-hint');fr.append(hint);
+    let ref=null;
+    if(PAY.method!=='cash'){
+      ref=el('input','','',{id:'pay-ref',type:'text',autocomplete:'off',autocapitalize:'characters',spellcheck:'false',maxlength:'40'});
+      fr.append(fld(spec.ref?spec.label+' transaction reference (required)':'Card slip / approval no. (optional)',ref));
+    }
+    if(PAY.method==='cash'){                                // one-tap cash: exact, then the next round notes above what is left
+      const q=el('div','quick'),vals=[S.rem],k=S.rem/100;
+      [10,50,100,200].forEach(n=>{const v=Math.ceil(k/n)*n*100;if(v>S.rem&&!vals.includes(v))vals.push(v);});
+      vals.slice(0,4).forEach((v,i)=>{
+        const b=el('button','',i===0?'Exact':fq(fromC(v)),{type:'button'});
+        b.onclick=()=>{PAY.tenders.push({method:'cash',tendered:fromC(v),ref:''});renderPay();};
+        q.append(b);
+      });
+      fr.append(q);
+    }
+    const err=el('div','pay-err','',{role:'alert'});
+    const add=el('button','add','Add payment',{type:'button'});
+    const upd=()=>{
+      const c=toC(amt.value);err.textContent='';
+      hint.textContent=c>S.rem&&PAY.method==='cash'?'Change to give: '+money(fromC(c-S.rem)):(c>0&&c<S.rem?'Still to pay after this: '+money(fromC(S.rem-c)):'');
+    };
+    const doAdd=()=>{
+      const c=toC(amt.value),m=PAY.method,fail=t=>{err.textContent=t;};
+      if(!(c>0)||c>MAXC)return fail('Enter the amount.');
+      if(m!=='cash'&&c>S.rem)return fail('Only '+money(fromC(S.rem))+' is left to pay, and '+spec.label+' cannot give change.');
+      let r='';
+      if(ref){
+        r=ref.value.trim().toUpperCase().replace(/\s+/g,'');
+        if(spec.ref&&r.length<4)return fail('Enter the '+spec.label+' transaction reference (at least 4 characters).');
+        if(r&&PAY.tenders.some(t=>t.ref===r))return fail('That reference is already used on this sale.');
+      }
+      PAY.tenders.push({method:m,tendered:fromC(c),ref:r});
+      renderPay();
+    };
+    amt.oninput=upd;add.onclick=doAdd;
+    const enter=e=>{if(e.key==='Enter'){e.preventDefault();doAdd();}};
+    amt.onkeydown=enter;if(ref)ref.onkeydown=enter;
+    fr.append(err,add);upd();
+
+    const ab=el('button','acct'+(PAY.onAccount?' on':''),PAY.onAccount?'\u2713 Balance goes on account \u2014 tap to undo':'Put the balance on account (credit)',{type:'button'});
+    ab.onclick=()=>{PAY.onAccount=!PAY.onAccount;renderPay();};
+    fr.append(ab);
+  }
+
+  const cs=customers(),sel=el('select','','',{'aria-label':'Customer'});
+  sel.append(el('option','','Walk-in / no customer',{value:''}));
+  cs.forEach(c=>sel.append(el('option','',String(c.name||'')+(c.phone?' · '+c.phone:''),{value:c.id})));
+  if(!cs.some(c=>c.id===PAY.customer))PAY.customer='';
+  sel.value=PAY.customer;
+  sel.onchange=()=>{PAY.customer=sel.value;renderPayFoot(settle(toC(cartTotal()),PAY.tenders));};
+  fr.append(fld(S.rem>0&&PAY.onAccount?'Customer (required for credit)':'Customer (optional)',sel));
+  if(S.rem>0&&PAY.onAccount&&!cs.length)fr.append(el('div','pay-note','No customers yet. Add the customer in the main app under Contacts, then come back.'));
+
+  PAYBODY.replaceChildren(fr);
+  renderPayFoot(S);
+  const a=$('pay-amt');if(a&&!COARSE){a.focus();a.select();}
+}
+function renderPayFoot(S){
+  const F=PAYFOOT;F.replaceChildren();
+  const go=el('button','pri','',{type:'button'});
+  go.textContent=S.rem<=0?'Complete sale':(PAY.onAccount?'Complete \u2014 '+money(fromC(S.rem))+' on account':'Complete sale');
+  go.disabled=!payReady(S);go.onclick=completePay;
+  F.append(go);
+  let msg='';
+  if(S.over)msg='A payment is more than what is left to pay. Remove it and add it again.';
+  else if(S.rem>0&&!PAY.onAccount)msg=money(fromC(S.rem))+' still to pay.';
+  else if(S.rem>0&&!PAY.customer)msg='Choose the customer to put '+money(fromC(S.rem))+' on account.';
+  if(msg)F.append(el('div','pay-note',msg));
+  F.append(el('div','pay-note mu','Not recorded yet. Saving the sale is the next step.'));
+}
+function completePay(){
+  if(!PAY)return;
+  const S=settle(toC(cartTotal()),PAY.tenders);
+  if(!payReady(S))return;
+  const cust=customers().find(c=>c.id===PAY.customer);
+  finalizeSale(makeBasket({
+    payments:PAY.tenders.map((t,i)=>({method:t.method,label:METHODS[t.method].label,amount:fromC(S.applied[i]),tendered:t.tendered,ref:t.ref||''})),
+    amountPaid:fromC(S.paid),change:fromC(S.change),balance:fromC(S.rem),creditStatus:payStatus(S),
+    customerId:cust?cust.id:'',customerName:cust?String(cust.name||''):''
+  }));
+}
+// Step 8 stamps receiptNo here, step 9 appends sales/{saleId}, reduces stock and clears the cart. Until then the
+// paid receipt is only shown, tagged so nobody mistakes it for a recorded sale.
+function finalizeSale(b){
+  closePay();
+  showReceipt(b,'NOT RECORDED YET');
+}
+
 function addItem(i,n){
   const l=CART.find(x=>x.id===i.id);
   if(l)l.qty=Math.round((l.qty+(n||1))*1000)/1000;else CART.push({id:i.id,kind:i.kind,name:i.name,unit:i.unit,per:i.per,price:i.price,qty:n||1});
@@ -514,7 +738,7 @@ function renderCart(){
   LINES.replaceChildren(lines);
   const tot=cartTotal(),n=CART.length;
   $('tot').textContent=money(tot);
-  CHARGE.disabled=true;CHARGE.textContent=n?'Charge '+money(tot):'Charge';
+  CHARGE.disabled=!n;CHARGE.textContent=n?'Charge '+money(tot):'Charge';
   $('clr').hidden=!n;$('prv').disabled=!n;
   if(!n)hideReceipt();
   CARTBAR.classList.toggle('has',n>0);
@@ -550,9 +774,9 @@ function buildSell(){
   LINES=el('div','lines');
   const foot=el('div','cart-f');
   const tot=el('div','tot');tot.append(el('span','','Total'),el('b','','',{id:'tot'}));
-  CHARGE=el('button','pri','Charge',{type:'button'});CHARGE.disabled=true;
-  const prv=el('button','sec','Preview receipt',{id:'prv',type:'button'});prv.disabled=true;prv.onclick=showReceipt;
-  foot.append(tot,prv,CHARGE,el('div','hint','Payment comes in the next step.'));
+  CHARGE=el('button','pri','Charge',{type:'button'});CHARGE.disabled=true;CHARGE.onclick=openPay;
+  const prv=el('button','sec','Preview receipt',{id:'prv',type:'button'});prv.disabled=true;prv.onclick=()=>showReceipt();
+  foot.append(tot,prv,CHARGE,el('div','hint','Sales are not saved yet. That is the next step.'));
   cart.append(grab,head,LINES,foot);
   // phone: bar that opens the sheet, and the dimmed backdrop behind it
   CARTBAR=el('button','cartbar','',{id:'cartbar',type:'button','aria-controls':'cart','aria-expanded':'false'});
@@ -591,6 +815,7 @@ function buildSell(){
   clr.onclick=()=>{if(CART.length&&confirm('Clear this sale?'))clearCart();};
   // A scanner types like a keyboard. If focus is anywhere that is not a text field, send the keystrokes to the box.
   document.addEventListener('keydown',e=>{
+    if(PAYOVL){if(e.key==='Escape')cancelPay();return;}
     if(e.key==='Escape'&&ROVL){hideReceipt();return;}
     if(e.key==='Escape'&&SELL.classList.contains('open')){closeCart();return;}
     const t=e.target,tag=t&&t.tagName;
