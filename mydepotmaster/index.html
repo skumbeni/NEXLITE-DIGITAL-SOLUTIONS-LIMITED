@@ -1156,6 +1156,10 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
     <span>Settings</span>
   </button>
   <div class="hdr-menu-section-lbl">Quick Actions</div>
+  <button class="hdr-menu-navbtn hdr-hide-staff play-hide" id="hdr-menu-till-btn" onclick="closeHdrMenu();openTill()">
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 01-8 0"/></svg>
+    <span>Open Till</span>
+  </button>
   <button class="hdr-menu-navbtn" onclick="closeHdrMenu();openGlobalSearch()">
     <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
     <span>Search Everything</span>
@@ -4174,7 +4178,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.27';
+const SW_VERSION  = 'v0.3.29';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -7851,6 +7855,7 @@ function renderDash(){
       <button onclick="showTab('general');setTimeout(()=>openGenRecForm(),80)" class="qa-btn-amber" style="background:var(--surface);border:1.5px solid var(--amber);border-radius:12px;padding:12px 6px;color:var(--amber);font-family:var(--fh);font-size:18px;font-weight:700;cursor:pointer;touch-action:manipulation;display:flex;flex-direction:column;align-items:center;gap:4px"><span style="font-size:27px">📦</span>Receive</button>
       <button onclick="showTab('staff');setTimeout(()=>openClockInForm(),80)" class="qa-btn-blue" style="background:var(--surface);border:1.5px solid var(--blue);border-radius:12px;padding:12px 6px;color:var(--blue);font-family:var(--fh);font-size:18px;font-weight:700;cursor:pointer;touch-action:manipulation;display:flex;flex-direction:column;align-items:center;gap:4px"><span style="font-size:27px">👷</span>Clock In</button>
       <button onclick="openPrintSummary()" class="qa-btn-purple" style="background:var(--surface);border:1.5px solid var(--purple);border-radius:12px;padding:12px 6px;color:var(--purple);font-family:var(--fh);font-size:18px;font-weight:700;cursor:pointer;touch-action:manipulation;display:flex;flex-direction:column;align-items:center;gap:4px"><span style="font-size:27px">🖨️</span>Print Summary</button>
+      ${isStaffRole()?'':`<button onclick="openTill()" class="qa-btn-green play-hide" style="grid-column:1/-1;background:var(--surface);border:1.5px solid var(--green);border-radius:12px;padding:14px 6px;color:var(--green);font-family:var(--fh);font-size:20px;font-weight:700;cursor:pointer;touch-action:manipulation;display:flex;align-items:center;justify-content:center;gap:10px"><span style="font-size:27px">🧾</span>Open Till${hasFeature('pos_till')?'':' 🔒'}</button>`}
     </div>` : ''}
 
     <!-- Today Snapshot -->
@@ -8979,8 +8984,10 @@ function giSaveNewCustomer(){
 function saveGenIss(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;} if(!requireAddPermission('issue stock'))return;
   const name=document.getElementById('gi-name').value;
   const qty=Number(document.getElementById('gi-qty').value||0);
-  const sprice=Number(document.getElementById('gi-sprice')?.value||0);
   if(!name||!qty){alert('Select item and enter quantity.');return;}
+  const _lp=_plRequire('item',name,name);if(!_lp)return;
+  const _sr=String(document.getElementById('gi-sprice')?.value??'').trim();
+  const sprice=_sr===''?_lp:(Number(_sr)||0);   // blank = Price List price; a typed figure is a one-off override
   const creditStatus=document.getElementById('gi-credit')?.value||'paid';
   const partialAmt=creditStatus==='partial'?Number(document.getElementById('gi-partial-amt')?.value||0):0;
   // Customer linking
@@ -9032,7 +9039,6 @@ function _commitGenIss(payload){
   const sprice=Number(payload.sellingPrice||0);
   updateData(d=>{
     const prices={...(d.inventoryPrices||{})};
-    if(sprice>0)prices[payload.itemName]={...(prices[payload.itemName]||{}),sellingPrice:sprice};
     return{...d,generalIssued:[...d.generalIssued,payload],inventoryPrices:prices};
   });
   logAuditEvent('CREATE','Inventory Issued',`Item: ${payload.itemName} · Qty: ${payload.issued}`);
@@ -9290,7 +9296,6 @@ function saveBulkEditGenIss(){
       const notes=uc(chkNotes?bulkNotes:(_bulkRowVal('bel-notes',id)||''));
       const creditStatus=chkCredit?bulkCredit:_bulkRowVal('bel-creditStatus',id);
       const partialPaid=chkPartial?Number(bulkPartial||0):Number(_bulkRowVal('bel-partialPaid',id)||0);
-      if(sellingPrice>0)prices[itemName]={...(prices[itemName]||{}),sellingPrice};
       return{...x,itemName,issued,sellingPrice,date,notes,creditStatus,partialPaid};
     });
     return{...d,generalIssued,inventoryPrices:prices};
@@ -10135,7 +10140,6 @@ function saveEditGenIss(id){
   const custFields=_cs?{customerId:_cs.value,customerName:(()=>{const c=(DATA.contacts||[]).find(c=>c.id===_cs.value);return c?c.name:(_cs.value&&before&&before.customerId===_cs.value?(before.customerName||''):'');})()}:{};
   updateData(d=>{
     const prices={...(d.inventoryPrices||{})};
-    if(sprice>0)prices[name]={...(prices[name]||{}),sellingPrice:sprice};
     return{...d,
       generalIssued:d.generalIssued.map(x=>String(x.id)===String(id)?{...x,itemName:name,itemId:'',issued:qty,date:document.getElementById('egei-date').value,notes:uc(document.getElementById('egei-notes').value),...custFields,sellingPrice:sprice,creditStatus:document.getElementById('egei-credit')?.value||'paid',partialPaid:Number(document.getElementById('egei-partial-amt')?.value||0)}:x),
       inventoryPrices:prices
@@ -10659,7 +10663,7 @@ function openMaizeIssForm(){
     <div class="fw"><div class="fl">Source Receive Record <span style="font-size:15px;color:var(--muted)">— for traceability (optional)</span></div><select class="fi" id="mi-src-rec">${srcOpts}</select></div>
     <div class="fw"><div class="fl">Transporter Name</div><input class="fi" id="mi-trans" placeholder="e.g. Truck A, John's Truck…"/></div>
     <div class="fw"><div class="fl">${com.unit.charAt(0).toUpperCase()+com.unit.slice(1)} Issued</div><input class="fi" type="number" id="mi-qty" placeholder="0" inputmode="numeric"/></div>
-    <div class="fw"><div class="fl">Sale Price (${cur()} per ${com.unit.slice(0,-1)||com.unit}) <span style="color:var(--muted);font-weight:400;font-size:15px">— optional</span></div><input class="fi" type="number" id="mi-sprice" placeholder="0.00" step="0.01" inputmode="decimal"/></div>
+    <div class="fw"><div class="fl">Sale Price (${cur()} per ${com.unit.slice(0,-1)||com.unit}) <span style="color:var(--muted);font-weight:400;font-size:15px">— from Price List</span></div><input class="fi" type="number" id="mi-sprice" placeholder="0.00" step="0.01" inputmode="decimal"/></div>
     <div class="fw"><div class="fl">Date Issued</div><input class="fi" type="date" id="mi-date" value="${today()}"/></div>
     <div class="fw"><div class="fl">Payment Status</div><select class="fi" id="mi-credit" onchange="document.getElementById('mi-partial-wrap').style.display=this.value==='partial'?'':' none'"><option value="paid">✅ PAID — Settled in full</option><option value="partial">🔶 PARTIAL — Partially paid</option><option value="credit">🔴 CREDIT — On account / debt</option></select></div>
     <div class="fw" id="mi-partial-wrap" style="display:none"><div class="fl">Amount Paid (${cur()} — for partial)</div><input class="fi" type="number" id="mi-partial-amt" placeholder="0.00" step="0.01" inputmode="decimal"/></div>
@@ -10683,7 +10687,9 @@ function saveMaizeIss(){if(isReadOnly()){alert("🔒 This account is in read-onl
   const qty=Number(document.getElementById('mi-qty').value||0);
   if(!qty){alert('Enter quantity to issue.');return;}
   if(!trans){alert('Enter transporter name.');return;}
-  const salePrice=Number(document.getElementById('mi-sprice').value||0);
+  const _lp=_plRequire('com',CCOM,getCom(CCOM).name);if(!_lp)return;
+  const _sr=String(document.getElementById('mi-sprice').value||'').trim();
+  const salePrice=_sr===''?_lp:(Number(_sr)||0);   // blank = Price List price; a typed figure is a one-off override
   const sourceReceiveId=document.getElementById('mi-src-rec')?.value||'';
   const creditStatus=document.getElementById('mi-credit')?.value||'paid';
   const partialPaid=creditStatus==='partial'?Number(document.getElementById('mi-partial-amt')?.value||0):0;
@@ -10971,11 +10977,19 @@ function _mriSave(){
       if(!l.commodityId){alert('Select a commodity for every commodity line.');return;}
       if(!l.batchName){alert(isRec?'Enter a batch name for every commodity line.':'Select a batch for every commodity line.');return;}
       if(!isRec&&!(l.transporter||'').trim()){alert('Enter a transporter name for every commodity issue line.');return;}
-      lines.push({...l,qty});
+      if(isRec)lines.push({...l,qty});
+      else{
+        const lp=_plRequire('com',l.commodityId,getCom(l.commodityId).name);if(!lp)return;
+        lines.push({...l,qty,price:String(l.price).trim()===''?lp:Number(l.price)||0});
+      }
     } else {
       const name=l.itemName==='__other__'?(l.itemNameOther||'').trim().toUpperCase():(l.itemName||'').trim().toUpperCase();
       if(!name){alert('Enter or select an item name for every general-inventory line.');return;}
-      lines.push({...l,qty,_resolvedName:name});
+      if(isRec)lines.push({...l,qty,_resolvedName:name});
+      else{
+        const lp=_plRequire('item',name,name);if(!lp)return;
+        lines.push({...l,qty,_resolvedName:name,price:String(l.price).trim()===''?lp:Number(l.price)||0});
+      }
     }
   }
   if(lines.length===0){alert('Add at least one line.');return;}
@@ -11022,7 +11036,6 @@ function _mriSave(){
           const partialPaid=l.creditStatus==='partial'?Number(l.partialPaid||0):0;
           const payload=stampEntry({id:uid(),date,time:nowTime(),itemName:name,issued:qty,sellingPrice:price,creditStatus:l.creditStatus||'paid',partialPaid,customerId:l.contactId||'',customerName:contactName,notes:uc(l.notes||'')});
           genArr=[...genArr,payload];
-          if(price>0)prices[name]={...(prices[name]||{}),sellingPrice:price};
         }
       }
     });
@@ -11593,6 +11606,13 @@ function _plPriceOf(kind,key){
   if(kind==='com'){const c=(DATA.commodities||[]).find(x=>x.id===key);return Number(c&&c.sellingPrice)||0;}
   return Number(((DATA.inventoryPrices||{})[key]||{}).sellingPrice)||0;      // key = item name
 }
+// A sale needs a price on the Price List first. Returns the list price, or 0 after telling the user what to do.
+function _plRequire(kind,key,label){
+  const p=_plPriceOf(kind,key);
+  if(p>0)return p;
+  alert('"'+label+'" has no price on the Price List.\n\n'+(USER.role==='admin'?'Tap \uD83D\uDCB2 Prices and set it, then sell.':'Ask an admin to set it under \uD83D\uDCB2 Prices.'));
+  return 0;
+}
 function _plLastSold(cid){   // most recent approved issue that carried a sale price (shown as a one-tap suggestion)
   const r=approvedArr(cIss(cid)).filter(x=>Number(x.salePrice)>0)
     .sort((a,b)=>((b.date||'')+(b.time||'')).localeCompare((a.date||'')+(a.time||'')))[0];
@@ -11610,6 +11630,13 @@ function openPriceList(){
   const items=(DATA.inventoryItems||[]).map(_invItemObj).sort((a,b)=>a.name.localeCompare(b.name));
   const coms=(DATA.commodities||[]).filter(c=>c&&c.id).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
   const pr=DATA.inventoryPrices||{};
+  // Stock that has receive/issue records but no item-master entry still shows in the Issue forms, so it must be priceable too.
+  const known=new Set(items.map(i=>i.name));
+  const orphans=[...new Set([...(DATA.generalInventory||[]),...(DATA.generalIssued||[])].map(x=>x&&x.itemName).filter(Boolean))].filter(n=>!known.has(n)).sort();
+  const orphanRows=orphans.map(n=>{
+    const cost=Number((pr[n]||{}).purchasePrice)||0;
+    return _plRowHtml({kind:'name',id:n,name:n,icon:'',price:_plPriceOf('item',n),cost,hint:0,q:n.toLowerCase(),sub:cost>0?'Cost '+esc(zm(cost)):'&nbsp;'});
+  }).join('');
   const itemRows=items.map(it=>{
     const cost=Number((pr[it.name]||{}).purchasePrice)||0;
     return _plRowHtml({kind:'item',id:it.id,name:it.name,icon:'',price:_plPriceOf('item',it.name),cost,hint:0,
@@ -11621,7 +11648,8 @@ function openPriceList(){
     sub:'per '+esc(_plSingular(c.unit)||'unit')})).join('');
   const sections=
     (items.length?`<div class="pl-sec"><div class="pl-head">📦 Stock items (${items.length})</div>${itemRows}</div>`:'')+
-    (coms.length?`<div class="pl-sec"><div class="pl-head">🌾 Commodities (${coms.length})</div>${comRows}</div>`:'');
+    (coms.length?`<div class="pl-sec"><div class="pl-head">🌾 Commodities (${coms.length})</div>${comRows}</div>`:'')+
+    (orphans.length?`<div class="pl-sec"><div class="pl-head">📋 Other stock, not in Manage Inventory Items (${orphans.length})</div>${orphanRows}</div>`:'');
   openModal(`
     <div class="mtitle">💲 Price List</div>
     <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">Set the <strong style="color:var(--text)">selling price</strong> of every item and commodity here, before you sell. The Till and the Issue forms use these prices. Press <strong style="color:var(--text)">Enter</strong> to jump to the next price. Leave a price blank for none.</div>
@@ -11693,11 +11721,17 @@ function savePriceList(){
   if(below.length&&!confirm(below.length+' price(s) are below cost:\n'+below.slice(0,5).map(c=>'• '+c.name+' (cost '+c.cost.toFixed(2)+', price '+c.to.toFixed(2)+')').join('\n')+(below.length>5?'\n…':'')+'\n\nSave anyway?'))return;
   const byItem=new Map(ch.filter(c=>c.kind==='item').map(c=>[c.key,c.to]));
   const byCom=new Map(ch.filter(c=>c.kind==='com').map(c=>[c.key,c.to]));
+  const byName=new Map(ch.filter(c=>c.kind==='name').map(c=>[c.key,c.to]));   // stock with records but no item-master entry
   updateData(d=>{
     const prices={...(d.inventoryPrices||{})};
     (d.inventoryItems||[]).forEach(it=>{
       const id=_invItemId(it);if(!byItem.has(id))return;
       const nm=_invItemObj(it).name,v=byItem.get(id),p={...(prices[nm]||{})};
+      if(v>0)p.sellingPrice=v;else delete p.sellingPrice;
+      if(Object.keys(p).length)prices[nm]=p;else delete prices[nm];
+    });
+    byName.forEach((v,nm)=>{
+      const p={...(prices[nm]||{})};
       if(v>0)p.sellingPrice=v;else delete p.sellingPrice;
       if(Object.keys(p).length)prices[nm]=p;else delete prices[nm];
     });
