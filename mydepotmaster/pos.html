@@ -188,6 +188,25 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 .pay-f .pri:disabled{opacity:.45;cursor:not-allowed}
 .pay-note{margin-top:8px;text-align:center;font-size:12px;color:var(--amber)}
 .pay-note.mu{color:var(--muted)}
+
+/* ── HELD / PARKED SALES (roadmap step 7) ── */
+.msg.warn{color:var(--amber)}
+.statrow{display:flex;align-items:flex-start;gap:8px}
+.statrow .msg{flex:1;min-width:0}
+#hb{flex:none;margin:0 12px 6px 0;padding:7px 12px;white-space:nowrap;border-color:var(--amber);color:var(--amber)}
+.cart-f .sec-row{display:flex;gap:8px;margin-bottom:8px}
+.cart-f .sec-row .sec{flex:1;width:auto;margin:0;padding:10px 8px}
+.pay-body.held-body{padding-bottom:calc(16px + env(safe-area-inset-bottom,0px))}
+.held{padding:12px 0;border-bottom:1px solid var(--border)}
+.held:last-child{border-bottom:0}
+.h-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.h-top .ag{margin-left:6px;font-size:13px;color:var(--muted)}
+.h-top .ag.old{color:var(--amber)}
+.h-sub{margin:3px 0 10px;font-size:13px;color:var(--muted);overflow-wrap:anywhere}
+.h-acts{display:flex;gap:8px}
+.h-acts .pri{flex:1;padding:10px 16px}
+.h-acts button:not(.pri){padding:10px 16px}
+.h-empty{text-align:center;color:var(--muted);padding:28px 8px;font-size:14px}
 </style>
 </head>
 <body>
@@ -294,6 +313,7 @@ function card(icon,title,msg,buttons){
 }
 const toApp=()=>{location.href='index.html';};
 async function logout(){
+  parkOnExit();
   try{sessionStorage.removeItem(SESSION_KEY);}catch{}
   try{const p=JSON.parse(localStorage.getItem(STAY_KEY)||'null');if(p)localStorage.setItem(STAY_KEY,JSON.stringify({enabled:p.enabled,days:p.days}));}catch{}
   try{new BroadcastChannel('mdm_session').postMessage({type:'logout'});}catch{}
@@ -335,7 +355,7 @@ function idleReset(){
 const COARSE=matchMedia('(pointer:coarse)').matches;   // touch device: keep the soft keyboard down until asked
 const MAX_TILES=120;
 let ITEMS=[],BYID=new Map(),CART=[];
-let SELL,Q,GRID,MSG,LINES,CARTBAR,CHARGE,msgT=null,kbBusy=false;
+let SELL,Q,GRID,MSG,LINES,CARTBAR,CHARGE,HBTN,HOVL=null,HBODY=null,msgT=null,kbBusy=false;
 
 function el(tag,cls,text,attrs){
   const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;
@@ -405,9 +425,9 @@ function scanMatch(q){
   const c=String(q||'').trim().toLowerCase();if(!c)return null;
   return ITEMS.find(i=>(i.barcode&&i.barcode.toLowerCase()===c)||(i.sku&&i.sku.toLowerCase()===c))||null;
 }
-function say(text,cls){
+function say(text,cls,ms){
   MSG.textContent=text||'';MSG.className='msg'+(cls?' '+cls:'');
-  clearTimeout(msgT);if(text)msgT=setTimeout(()=>{MSG.textContent='';MSG.className='msg';},2600);
+  clearTimeout(msgT);if(text)msgT=setTimeout(()=>{MSG.textContent='';MSG.className='msg';},ms||2600);
 }
 function focusSearch(){try{Q.focus({preventScroll:true});}catch{Q.focus();}}
 
@@ -713,6 +733,128 @@ function setQty(id,q){
   renderCart();
 }
 function clearCart(){CART=[];renderCart();}
+
+// ── HELD / PARKED SALES (roadmap step 7) ─────────────────────────────────────
+// "Hold sale" parks the cart so the next customer can be served; "Held (n)" beside the search box lists the parked
+// baskets and brings one back. A held basket is NOT a sale: nothing is recorded, no stock moves and no receipt number
+// is used until it is paid. Baskets are kept on THIS device (localStorage, one list per depot), so they survive a
+// reload, a logout or an offline spell, and every till tab on the device sees the same list.
+// Resuming moves the basket back into the cart. Whatever is in the cart at that moment is parked first, so nothing is
+// lost, and prices are re-read from the Price List: a basket held this morning is sold at today's price, exactly as if
+// its items were scanned now. Leaving the till (logout, idle timeout, signed out from another tab) with items in the
+// cart parks them instead of throwing them away.
+const HELD_MAX=20,HELD_OLD_MS=12*3600*1000;
+const heldKey=()=>'mdm_pos_held_v1:'+((DATA&&DATA.installId)||'local');
+const heldLineOk=l=>!!(l&&l.id&&Number(l.qty)>0&&Number.isFinite(Number(l.price)));
+function readHeld(){
+  try{
+    const a=JSON.parse(localStorage.getItem(heldKey())||'[]');
+    return (Array.isArray(a)?a:[]).filter(h=>h&&h.id&&Array.isArray(h.lines))
+      .map(h=>Object.assign({},h,{lines:h.lines.filter(heldLineOk)})).filter(h=>h.lines.length);
+  }catch{return [];}
+}
+function writeHeld(a){
+  try{if(a.length)localStorage.setItem(heldKey(),JSON.stringify(a));else localStorage.removeItem(heldKey());return true;}
+  catch{return false;}   // storage full or blocked: the caller keeps the cart as it is
+}
+const heldTotal=h=>Math.round(h.lines.reduce((a,l)=>a+lineTotal({price:Number(l.price),qty:Number(l.qty)}),0)*100)/100;
+const cartAsHeld=()=>({
+  id:'h_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),at:Date.now(),by:USER?String(USER.username):'',
+  lines:CART.map(l=>({id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:l.price,qty:l.qty}))
+});
+function ago(t){
+  const m=Math.max(0,Math.round((Date.now()-t)/6e4));
+  if(m<1)return 'just now';if(m<60)return m+' min ago';
+  const h=Math.floor(m/60);if(h<24)return h+' h ago';
+  const d=Math.floor(h/24);return d+(d===1?' day ago':' days ago');
+}
+function renderHeldBtn(){
+  if(!HBTN)return;
+  const n=readHeld().length;HBTN.hidden=!n;HBTN.textContent='Held ('+n+')';
+}
+// Returns true when the cart is empty afterwards (held, or there was nothing to hold).
+function holdCart(quiet){
+  if(!CART.length)return true;
+  const a=readHeld();
+  if(a.length>=HELD_MAX){say('Too many held sales ('+HELD_MAX+'). Resume or discard one first.','bad');return false;}
+  a.push(cartAsHeld());
+  if(!writeHeld(a)){say('Could not hold the sale: no storage space left on this device.','bad');return false;}
+  CART=[];renderCart();renderHeldBtn();
+  if(!quiet)say('Sale held. Serve the next customer.','ok');
+  return true;
+}
+function parkOnExit(){try{if(CART&&CART.length)holdCart(true);}catch{}}
+function resumeHeld(id){
+  const a=readHeld(),i=a.findIndex(h=>h.id===id);   // read fresh: another till tab may have resumed it already
+  if(i<0){say('That held sale was already resumed or discarded.','bad');renderHeldBtn();renderHeldList();return;}
+  const h=a.splice(i,1)[0],parked=CART.length>0;
+  if(parked)a.push(cartAsHeld());                   // one out, one in: never over the limit
+  if(!writeHeld(a)){say('Could not resume: no storage space left on this device.','bad');return;}
+  let repriced=0;const unlisted=[];
+  CART=h.lines.map(l=>{
+    const it=BYID.get(l.id);
+    const line={id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:Number(l.price),qty:Number(l.qty)};
+    if(it&&it.price>0){
+      if(Math.abs(it.price-line.price)>0.004)repriced++;
+      line.price=it.price;line.name=it.name;line.unit=it.unit;line.per=it.per;line.kind=it.kind;
+    }else unlisted.push(String(l.name));
+    return line;
+  });
+  closeHeld();renderCart();renderHeldBtn();openCart();
+  const note=[];
+  if(repriced)note.push(repriced+(repriced===1?' price was':' prices were')+' updated to the Price List');
+  if(unlisted.length)note.push((unlisted.length===1?unlisted[0]+' is':unlisted.length+' items are')+' not on the Price List any more, so the held price is kept');
+  if(parked)note.push('the sale you had open is now held');
+  say('Held sale resumed'+(note.length?'. '+note.join('. '):'')+'.',repriced||unlisted.length?'warn':'ok',note.length?7000:null);
+}
+function discardHeld(id){
+  const h=readHeld().find(x=>x.id===id);
+  if(!h){renderHeldBtn();renderHeldList();return;}
+  if(!confirm('Discard this held sale ('+money(heldTotal(h))+')? It cannot be brought back.'))return;
+  writeHeld(readHeld().filter(x=>x.id!==id));
+  renderHeldBtn();renderHeldList();
+}
+function openHeld(){
+  if(HOVL||PAYOVL)return;
+  const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Held sales'});
+  const box=el('div','pay'),head=el('div','pay-h');
+  const cx=el('button','sm','Close',{type:'button'});cx.onclick=closeHeld;
+  head.append(el('h2','','Held sales'),cx);
+  HBODY=el('div','pay-body held-body');
+  box.append(head,HBODY);ovl.append(box);
+  ovl.addEventListener('click',e=>{if(e.target===ovl)closeHeld();});
+  document.body.append(ovl);HOVL=ovl;
+  renderHeldList();
+  const f=HBODY.querySelector('.pri');if(f)f.focus();
+}
+function closeHeld(){
+  if(!HOVL)return;
+  HOVL.remove();HOVL=HBODY=null;
+  if(!COARSE)focusSearch();
+}
+function renderHeldList(){
+  if(!HBODY)return;
+  const a=readHeld().sort((x,y)=>y.at-x.at),fr=document.createDocumentFragment();
+  if(!a.length)fr.append(el('div','h-empty','No held sales.'));
+  a.forEach(h=>{
+    const d=new Date(h.at),today=d.toDateString()===new Date().toDateString();
+    const when=el('div');
+    when.append(
+      el('b','',(today?'':d.toLocaleDateString('en-GB',{day:'2-digit',month:'short'})+', ')+d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})),
+      el('span','ag'+(Date.now()-h.at>HELD_OLD_MS?' old':''),ago(h.at))
+    );
+    const top=el('div','h-top');top.append(when,el('b','',money(heldTotal(h))));
+    const n=h.lines.length;
+    const names=h.lines.slice(0,2).map(l=>l.name).join(', ')+(n>2?' +'+(n-2)+' more':'');
+    const row=el('div','held');
+    row.append(top,el('div','h-sub',n+(n===1?' item':' items')+' \u00B7 '+names+(h.by?' \u00B7 '+h.by:'')));
+    const acts=el('div','h-acts');
+    const go=el('button','pri','Resume',{type:'button'}),del=el('button','','Discard',{type:'button','aria-label':'Discard held sale'});
+    go.onclick=()=>resumeHeld(h.id);del.onclick=()=>discardHeld(h.id);
+    acts.append(go,del);row.append(acts);fr.append(row);
+  });
+  HBODY.replaceChildren(fr);
+}
 function lineEl(l){
   const it=BYID.get(l.id),row=el('div','line');
   const rm=el('button','rm','\u2715',{type:'button','aria-label':'Remove '+l.name});rm.onclick=()=>setQty(l.id,0);
@@ -739,7 +881,7 @@ function renderCart(){
   const tot=cartTotal(),n=CART.length;
   $('tot').textContent=money(tot);
   CHARGE.disabled=!n;CHARGE.textContent=n?'Charge '+money(tot):'Charge';
-  $('clr').hidden=!n;$('prv').disabled=!n;
+  $('clr').hidden=!n;$('prv').disabled=!n;$('hld').disabled=!n;
   if(!n)hideReceipt();
   CARTBAR.classList.toggle('has',n>0);
   $('cb-a').textContent=n?n+(n===1?' item':' items'):'Cart is empty';
@@ -762,7 +904,9 @@ function buildSell(){
   bar.append(Q,kb);
   MSG=el('div','msg','',{role:'status','aria-live':'polite'});
   GRID=el('div','grid');
-  items.append(bar,MSG,GRID);
+  HBTN=el('button','sm','Held',{id:'hb',type:'button','aria-label':'Held sales'});HBTN.hidden=true;
+  const stat=el('div','statrow');stat.append(MSG,HBTN);   // status line on the left, "Held (n)" pill on the right
+  items.append(bar,stat,GRID);
   // cart: bottom sheet on phones, right-hand pane on tablets
   const cart=el('aside','cart','',{id:'cart','aria-label':'Current sale'});
   const grab=el('button','grab','',{type:'button','aria-label':'Close cart'});grab.append(el('i'));
@@ -776,7 +920,9 @@ function buildSell(){
   const tot=el('div','tot');tot.append(el('span','','Total'),el('b','','',{id:'tot'}));
   CHARGE=el('button','pri','Charge',{type:'button'});CHARGE.disabled=true;CHARGE.onclick=openPay;
   const prv=el('button','sec','Preview receipt',{id:'prv',type:'button'});prv.disabled=true;prv.onclick=()=>showReceipt();
-  foot.append(tot,prv,CHARGE,el('div','hint','Sales are not saved yet. That is the next step.'));
+  const hld=el('button','sec','Hold sale',{id:'hld',type:'button'});hld.disabled=true;hld.onclick=()=>{if(holdCart())closeCart();};
+  const secrow=el('div','sec-row');secrow.append(prv,hld);
+  foot.append(tot,secrow,CHARGE,el('div','hint','Sales are not saved yet. That is the next step.'));
   cart.append(grab,head,LINES,foot);
   // phone: bar that opens the sheet, and the dimmed backdrop behind it
   CARTBAR=el('button','cartbar','',{id:'cartbar',type:'button','aria-controls':'cart','aria-expanded':'false'});
@@ -813,9 +959,11 @@ function buildSell(){
   }
   CARTBAR.onclick=openCart;scrim.onclick=closeCart;grab.onclick=closeCart;x.onclick=closeCart;
   clr.onclick=()=>{if(CART.length&&confirm('Clear this sale?'))clearCart();};
+  HBTN.onclick=openHeld;
   // A scanner types like a keyboard. If focus is anywhere that is not a text field, send the keystrokes to the box.
   document.addEventListener('keydown',e=>{
     if(PAYOVL){if(e.key==='Escape')cancelPay();return;}
+    if(HOVL){if(e.key==='Escape')closeHeld();return;}
     if(e.key==='Escape'&&ROVL){hideReceipt();return;}
     if(e.key==='Escape'&&SELL.classList.contains('open')){closeCart();return;}
     const t=e.target,tag=t&&t.tagName;
@@ -828,9 +976,10 @@ function buildSell(){
     if(document.visibilityState!=='visible')return;
     const d=await loadData();if(!d)return;DATA=d;loadCatalog();
     CART.forEach(l=>{const it=BYID.get(l.id);if(it){l.unit=it.unit;l.per=it.per;}});
-    renderGrid();renderCart();
+    renderGrid();renderCart();renderHeldBtn();if(HOVL)renderHeldList();
   });
-  renderGrid();renderCart();focusSearch();
+  addEventListener('storage',e=>{if(e.key===heldKey()){renderHeldBtn();renderHeldList();}});   // another till tab held/resumed one
+  renderGrid();renderCart();renderHeldBtn();focusSearch();
 }
 
 async function boot(){
@@ -850,8 +999,8 @@ async function boot(){
   addEventListener('online',()=>{netPill();cloudPill();});addEventListener('offline',netPill);
   ['pointerdown','keydown','touchstart','scroll'].forEach(e=>document.addEventListener(e,idleReset,{passive:true,capture:true}));
   idleReset();
-  try{new BroadcastChannel('mdm_session').onmessage=e=>{if(e.data&&e.data.type==='logout'){try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}};}catch{}
-  addEventListener('storage',e=>{if(e.key==='mdm_session_event'&&e.newValue&&e.newValue.startsWith('logout:')){try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}});
+  try{new BroadcastChannel('mdm_session').onmessage=e=>{if(e.data&&e.data.type==='logout'){parkOnExit();try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}};}catch{}
+  addEventListener('storage',e=>{if(e.key==='mdm_session_event'&&e.newValue&&e.newValue.startsWith('logout:')){parkOnExit();try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}});
   $('b-app').onclick=toApp;$('b-out').onclick=logout;
   loadCatalog();buildSell();
 }

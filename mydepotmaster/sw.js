@@ -25,7 +25,13 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.30 (2026-11-10) — Till step 6, payment: Charge opens a payment screen (pos.html) with cash
+// Current version: v0.3.31 (2026-11-10) — Till step 7, held sales: "Hold sale" in the cart parks the basket, and a
+//   "Held (n)" button under the search box lists the parked baskets and resumes or discards one. Baskets are kept on
+//   the device (localStorage, one list per depot), so they survive a reload, a logout or an offline spell and are
+//   shared by every till tab. Resuming parks any cart that is open, then re-reads the prices from the Price List.
+//   A cart left open at logout / idle timeout is parked instead of lost. A held basket is not a sale: nothing is
+//   recorded and no stock moves until it is paid (steps 8-9). pos.html change + version bump; no sw.js logic changes.
+// Previous: v0.3.30 (2026-11-10) — Till step 6, payment: Charge opens a payment screen (pos.html) with cash
 //   received + change, MTN Money / Airtel Money (reference required), card, split payments, and the balance on a
 //   customer's account (credit / partial, same creditStatus values as the main app). The paid receipt lists the
 //   payments. NOTHING IS SAVED YET — the receipt is tagged "NOT RECORDED YET"; steps 8-9 commit the sale.
@@ -1869,7 +1875,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.30';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.31';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
