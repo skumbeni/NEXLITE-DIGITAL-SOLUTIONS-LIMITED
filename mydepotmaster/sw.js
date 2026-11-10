@@ -25,7 +25,15 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.31 (2026-11-10) — Till step 7, held sales: "Hold sale" in the cart parks the basket, and a
+// Current version: v0.3.32 (2026-11-10) — Till: Firebase start-up fix + live-cart autosave (pos.html).
+//   (1) The till's inline script ran before its `defer`red Firebase SDK tags, so firebase.initializeApp never ran:
+//   App Check was never activated and POS.idToken() always returned null. Init now waits for DOMContentLoaded (the page
+//   still paints without waiting for the SDK; with no SDK it carries on without a cloud session, as before).
+//   (2) The open cart is autosaved on the device after every change and restored after a reload; a cart left by a tab
+//   that died (browser killed, phone restarted) is moved into Held, marked "recovered", by the next till tab that opens.
+//   A tab still in use is never robbed of its cart (Web Locks tell live tabs from dead ones). Not a sale: nothing is
+//   recorded and no stock moves. pos.html change + version bump; no sw.js logic changes.
+// Previous: v0.3.31 (2026-11-10) — Till step 7, held sales: "Hold sale" in the cart parks the basket, and a
 //   "Held (n)" button under the search box lists the parked baskets and resumes or discards one. Baskets are kept on
 //   the device (localStorage, one list per depot), so they survive a reload, a logout or an offline spell and are
 //   shared by every till tab. Resuming parks any cart that is open, then re-reads the prices from the Price List.
@@ -1875,7 +1883,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.31';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.32';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

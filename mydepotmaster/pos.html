@@ -224,7 +224,7 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-check-compat.js" defer></script>
-<script defer>
+<script>
 // ── SHARED WITH index.html — Firebase config + data key (keep in sync). Gating rules now come from gate.js. ──
 const FB_CONFIG={apiKey:"AIzaSyD_WnWTMBgd__V2M8840LDt1a-7Ebnh6ZU",authDomain:"realtime-database-be871.firebaseapp.com",databaseURL:"https://realtime-database-be871-default-rtdb.firebaseio.com",projectId:"realtime-database-be871",storageBucket:"realtime-database-be871.firebasestorage.app",messagingSenderId:"1051301635587",appId:"1:1051301635587:web:00c5bc5825dd41fd329036"};
 const APP_CHECK_KEY='6LcLhystAAAAAHCIiZK1fQf1AbgAYJdDLwUNX9XT';
@@ -236,15 +236,24 @@ const $=id=>document.getElementById(id);
 let DATA=null, USER=null, LICENSE=null;
 
 // Firebase Auth: same init as index.html, so the persisted session (IndexedDB) is restored here too.
+// START-UP ORDER: the three SDK tags above are `defer`red, which runs them AFTER the page has been parsed. An inline
+// script ignores `defer` and runs while parsing, i.e. BEFORE the SDK exists, so initialising right here threw
+// "firebase is not defined" (swallowed by the catch below) and Firebase was never started: App Check was never
+// activated and POS.idToken() always returned null. So the init waits for DOMContentLoaded, which fires after every
+// deferred script has run (or failed). The page still paints without waiting for the SDK; if it cannot load at all
+// (offline, blocked) the same catch resolves the promise and the till carries on without a cloud session.
 window._fbAuthSdkReady=new Promise(function(resolve){
-  try{
-    firebase.initializeApp(FB_CONFIG);
-    try{firebase.appCheck().activate(APP_CHECK_KEY,true);}catch(e){console.warn('App Check activation failed',e);}
-    let done=false;const fin=()=>{if(!done){done=true;resolve();}};
-    firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
-    const un=firebase.auth().onAuthStateChanged(()=>{un();fin();},()=>{un();fin();});
-    setTimeout(fin,4000);
-  }catch(e){console.warn('Firebase Auth SDK init failed',e);resolve();}
+  function init(){
+    try{
+      firebase.initializeApp(FB_CONFIG);
+      try{firebase.appCheck().activate(APP_CHECK_KEY,true);}catch(e){console.warn('App Check activation failed',e);}
+      let done=false;const fin=()=>{if(!done){done=true;resolve();}};
+      firebase.auth().setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(()=>{});
+      const un=firebase.auth().onAuthStateChanged(()=>{un();fin();},()=>{un();fin();});
+      setTimeout(fin,4000);
+    }catch(e){console.warn('Firebase Auth SDK init failed',e);resolve();}
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init,{once:true});else init();
 });
 
 async function hmac256(key,data){
@@ -350,8 +359,8 @@ function idleReset(){
 // ── SELL SCREEN (roadmap step 4: layout) ────────────────────────────────────
 // Reads the item master (DATA.inventoryItems), selling price (DATA.inventoryPrices[name].sellingPrice) and
 // stock (approved received minus approved issued, by itemName) exactly as index.html does. Commodities are listed
-// too (see commodityItems). The cart lives in
-// memory only for now: payment, held sales and saving the sale are the next steps, so nothing is written yet.
+// too (see commodityItems). The open cart is autosaved on this device after every change (see LIVE-CART AUTOSAVE
+// below) so a reload or a killed browser does not lose it; saving the SALE itself is still a later step.
 const COARSE=matchMedia('(pointer:coarse)').matches;   // touch device: keep the soft keyboard down until asked
 const MAX_TILES=120;
 let ITEMS=[],BYID=new Map(),CART=[];
@@ -790,8 +799,17 @@ function resumeHeld(id){
   const h=a.splice(i,1)[0],parked=CART.length>0;
   if(parked)a.push(cartAsHeld());                   // one out, one in: never over the limit
   if(!writeHeld(a)){say('Could not resume: no storage space left on this device.','bad');return;}
+  const r=repriceLines(h.lines);CART=r.lines;
+  closeHeld();renderCart();renderHeldBtn();openCart();
+  const note=priceNotes(r,'held');
+  if(parked)note.push('the sale you had open is now held');
+  say('Held sale resumed'+(note.length?'. '+note.join('. '):'')+'.',r.repriced||r.unlisted.length?'warn':'ok',note.length?7000:null);
+}
+// Lines coming back from storage (a held basket, a restored cart) are re-read from the Price List, exactly as if the
+// items were scanned now. An item with no price any more keeps the stored price and is named in the notes.
+function repriceLines(lines){
   let repriced=0;const unlisted=[];
-  CART=h.lines.map(l=>{
+  const out=lines.map(l=>{
     const it=BYID.get(l.id);
     const line={id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:Number(l.price),qty:Number(l.qty)};
     if(it&&it.price>0){
@@ -800,12 +818,13 @@ function resumeHeld(id){
     }else unlisted.push(String(l.name));
     return line;
   });
-  closeHeld();renderCart();renderHeldBtn();openCart();
+  return {lines:out,repriced,unlisted};
+}
+function priceNotes(r,what){   // what: 'held' (Resume) or 'saved' (restored cart)
   const note=[];
-  if(repriced)note.push(repriced+(repriced===1?' price was':' prices were')+' updated to the Price List');
-  if(unlisted.length)note.push((unlisted.length===1?unlisted[0]+' is':unlisted.length+' items are')+' not on the Price List any more, so the held price is kept');
-  if(parked)note.push('the sale you had open is now held');
-  say('Held sale resumed'+(note.length?'. '+note.join('. '):'')+'.',repriced||unlisted.length?'warn':'ok',note.length?7000:null);
+  if(r.repriced)note.push(r.repriced+(r.repriced===1?' price was':' prices were')+' updated to the Price List');
+  if(r.unlisted.length)note.push((r.unlisted.length===1?r.unlisted[0]+' is':r.unlisted.length+' items are')+' not on the Price List any more, so the '+(what||'held')+' price is kept');
+  return note;
 }
 function discardHeld(id){
   const h=readHeld().find(x=>x.id===id);
@@ -847,7 +866,7 @@ function renderHeldList(){
     const n=h.lines.length;
     const names=h.lines.slice(0,2).map(l=>l.name).join(', ')+(n>2?' +'+(n-2)+' more':'');
     const row=el('div','held');
-    row.append(top,el('div','h-sub',n+(n===1?' item':' items')+' \u00B7 '+names+(h.by?' \u00B7 '+h.by:'')));
+    row.append(top,el('div','h-sub',n+(n===1?' item':' items')+' \u00B7 '+names+(h.by?' \u00B7 '+h.by:'')+(h.rec?' \u00B7 recovered':'')));
     const acts=el('div','h-acts');
     const go=el('button','pri','Resume',{type:'button'}),del=el('button','','Discard',{type:'button','aria-label':'Discard held sale'});
     go.onclick=()=>resumeHeld(h.id);del.onclick=()=>discardHeld(h.id);
@@ -855,6 +874,106 @@ function renderHeldList(){
   });
   HBODY.replaceChildren(fr);
 }
+// ── LIVE-CART AUTOSAVE ───────────────────────────────────────────────────────
+// Held baskets only protect a sale the cashier parks, or leaves through logout / idle timeout. An OPEN cart used to
+// live in memory alone, so a reload (including the update reload), a killed browser or a dead battery lost it. Now every
+// cart change writes the cart to localStorage (one draft per till tab, per depot), and the draft is deleted the moment
+// the cart is empty again (held, cleared, or, later, paid).
+//   • Reloaded tab: the tab keeps its id in sessionStorage, so it finds its own draft and puts it straight back in the
+//     cart (re-priced, see repriceLines). A different cashier's draft goes to Held instead of into this cashier's cart.
+//   • Tab that died (browser killed, phone restarted): its draft is moved to the Held list, marked "recovered", by
+//     whichever till tab opens next. Whether a tab is still alive is read from the Web Locks API: every till tab holds a
+//     lock named after its id for as long as it is open. Without Web Locks a draft is only adopted after HELD_OLD_MS of
+//     silence, so a tab that is merely in the background is never robbed of its cart.
+// Nothing here records a sale; a draft is just a cart that survived.
+const DRAFT_PFX='mdm_pos_draft_v1:',TAB_KEY='mdm_pos_tab',LOCK_PFX='mdm_pos_tab:';
+let TAB='';
+const draftKey=(tab)=>DRAFT_PFX+((DATA&&DATA.installId)||'local')+':'+tab;
+function saveDraft(){
+  if(!TAB)return;                                   // before boot has claimed a tab id
+  try{
+    if(!CART.length){localStorage.removeItem(draftKey(TAB));return;}
+    localStorage.setItem(draftKey(TAB),JSON.stringify({v:1,tab:TAB,at:Date.now(),by:USER?String(USER.username):'',
+      lines:CART.map(l=>({id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:l.price,qty:l.qty}))}));
+  }catch{}                                          // storage full or blocked: the cart still works, it just is not saved
+}
+// Pick this tab's id and take its lock. A duplicated browser tab copies sessionStorage, so if another tab already holds
+// the lock for the id we were given, we take a new one rather than share a draft with it.
+async function claimTab(){
+  const mk=()=>'t'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);
+  let id=null;try{id=sessionStorage.getItem(TAB_KEY);}catch{}
+  if(!id)id=mk();
+  if(navigator.locks&&navigator.locks.request){
+    for(let i=0;i<3;i++){
+      let got=false;
+      try{got=await new Promise(res=>{
+        navigator.locks.request(LOCK_PFX+id,{ifAvailable:true},lock=>{
+          if(!lock){res(false);return;}
+          res(true);return new Promise(()=>{});     // never settles: the lock is held until this page closes
+        }).catch(()=>res(true));
+      });}catch{got=true;}
+      if(got)break;
+      id=mk();
+    }
+  }
+  try{sessionStorage.setItem(TAB_KEY,id);}catch{}
+  return id;
+}
+async function liveTabLocks(){
+  try{
+    if(!(navigator.locks&&navigator.locks.query))return null;
+    return new Set(((await navigator.locks.query()).held||[]).map(l=>l.name));
+  }catch{return null;}                              // unknown: the caller falls back to the age rule
+}
+// Called at boot (before the sell screen is built; boot=true) and whenever the till comes back to the front.
+// Returns {restored,adopted} so the caller can say what happened.
+async function recoverDrafts(boot){
+  const out={restored:0,adopted:0,notes:[]};
+  const pre=draftKey(''),mine=draftKey(TAB);
+  const keys=[];
+  try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k&&k.startsWith(pre))keys.push(k);}}catch{return out;}
+  if(!keys.length)return out;
+  const live=await liveTabLocks();
+  const held=readHeld(),have=new Set(held.map(h=>h.id)),adopt=[],spent=[];
+  const me=USER?String(USER.username).toLowerCase():'';
+  for(const k of keys){
+    let d=null;try{d=JSON.parse(localStorage.getItem(k)||'null');}catch{}
+    const lines=d&&Array.isArray(d.lines)?d.lines.filter(heldLineOk):[];
+    if(!lines.length){if(k!==mine)try{localStorage.removeItem(k);}catch{}continue;}   // empty or unreadable: nothing to keep
+    if(k===mine){
+      if(!boot)continue;                                                              // our own live draft
+      if(!CART.length&&String(d.by||'').toLowerCase()===me){
+        const r=repriceLines(lines);CART=r.lines;out.restored=r.lines.length;out.notes=priceNotes(r,'saved');continue;
+      }
+      // someone else's cart, or this tab already has items: park it below
+    }else{
+      const dead=live?!live.has(LOCK_PFX+d.tab):Date.now()-(Number(d.at)||0)>HELD_OLD_MS;
+      if(!dead)continue;                                                              // another tab is still using it
+    }
+    adopt.push({id:'r_'+String(d.tab)+'_'+String(d.at),at:Number(d.at)||Date.now(),by:String(d.by||''),rec:true,
+      lines:lines.map(l=>({id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:Number(l.price),qty:Number(l.qty)})),key:k});
+  }
+  // Move them into Held. A fixed id (tab + last change) means a pass that is interrupted before the draft is deleted
+  // cannot create the basket twice. If Held is full the draft simply stays where it is and is tried again next time.
+  let changed=false;
+  for(const a of adopt){
+    const {key,...h}=a;
+    if(have.has(h.id)){spent.push(key);continue;}
+    if(held.length>=HELD_MAX)break;
+    held.push(h);have.add(h.id);spent.push(key);out.adopted++;changed=true;
+  }
+  if(changed&&!writeHeld(held)){out.adopted=0;return out;}   // could not save the list: keep every draft
+  spent.forEach(k=>{try{localStorage.removeItem(k);}catch{}});
+  return out;
+}
+function draftNotice(r){
+  const m=[];
+  if(r.restored)m.push('Your open sale was restored');
+  if(r.adopted)m.push(r.adopted+(r.adopted===1?' unsaved sale was':' unsaved sales were')+' recovered into Held');
+  m.push(...r.notes);
+  return m;
+}
+
 function lineEl(l){
   const it=BYID.get(l.id),row=el('div','line');
   const rm=el('button','rm','\u2715',{type:'button','aria-label':'Remove '+l.name});rm.onclick=()=>setQty(l.id,0);
@@ -888,6 +1007,7 @@ function renderCart(){
   $('cb-b').textContent=n?'Tap to review and charge':'Scan or tap an item';
   $('cb-t').textContent=n?money(tot):'';
   refreshBadges();
+  saveDraft();                                   // every cart change goes through here (LIVE-CART AUTOSAVE)
 }
 function openCart(){SELL.classList.add('open');CARTBAR.setAttribute('aria-expanded','true');}
 function closeCart(){SELL.classList.remove('open');CARTBAR.setAttribute('aria-expanded','false');if(!COARSE)focusSearch();}
@@ -976,7 +1096,9 @@ function buildSell(){
     if(document.visibilityState!=='visible')return;
     const d=await loadData();if(!d)return;DATA=d;loadCatalog();
     CART.forEach(l=>{const it=BYID.get(l.id);if(it){l.unit=it.unit;l.per=it.per;}});
+    const rc=await recoverDrafts(false);                // a tab that died while this one was in the background
     renderGrid();renderCart();renderHeldBtn();if(HOVL)renderHeldList();
+    if(rc.adopted)say(draftNotice(rc).join('. ')+'.','warn',7000);
   });
   addEventListener('storage',e=>{if(e.key===heldKey()){renderHeldBtn();renderHeldList();}});   // another till tab held/resumed one
   renderGrid();renderCart();renderHeldBtn();focusSearch();
@@ -1002,7 +1124,11 @@ async function boot(){
   try{new BroadcastChannel('mdm_session').onmessage=e=>{if(e.data&&e.data.type==='logout'){parkOnExit();try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}};}catch{}
   addEventListener('storage',e=>{if(e.key==='mdm_session_event'&&e.newValue&&e.newValue.startsWith('logout:')){parkOnExit();try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}});
   $('b-app').onclick=toApp;$('b-out').onclick=logout;
-  loadCatalog();buildSell();
+  loadCatalog();
+  TAB=await claimTab();
+  const rc=await recoverDrafts(true);                   // BEFORE buildSell: its first renderCart would delete our draft
+  buildSell();
+  if(rc.restored||rc.adopted){const n=draftNotice(rc);say(n.join('. ')+'.',rc.notes.length?'warn':'ok',7000);if(rc.restored)openCart();}
 }
 boot();
 </script>
