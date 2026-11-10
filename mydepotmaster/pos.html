@@ -211,9 +211,9 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 </head>
 <body>
 <header id="hdr" hidden>
-  <div><b>🧾 Till</b><small id="depot"></small></div>
+  <div><b>🧾 Till <span id="tillcode"></span></b><small id="depot"></small></div>
   <div class="hr">
-    <div class="pills"><span class="pill" id="p-net"></span><span class="pill" id="p-cloud"></span><span class="pill" id="p-user"></span></div>
+    <div class="pills"><span class="pill" id="p-net"></span><span class="pill" id="p-cloud"></span><span class="pill" id="p-till"></span><span class="pill" id="p-user"></span></div>
     <div class="hb"><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
   </div>
 </header>
@@ -343,8 +343,47 @@ async function cloudPill(){
 // Shared with the next steps (sales writes, sync): the same Firebase token and depot key index.html uses.
 window.POS={
   data:()=>DATA,user:()=>USER,hasFeature,isReadOnly,depotKey:()=>DATA&&DATA.installId,
-  idToken:async()=>{await window._fbAuthSdkReady;const u=firebase.auth().currentUser;return u?u.getIdToken():null;}
+  idToken:async(force)=>{await window._fbAuthSdkReady;const u=firebase.auth().currentUser;return u?u.getIdToken(!!force):null;}
 };
+
+// ── RECEIPT NUMBERS (roadmap step 8) ──────────────────────────────────────────
+// All the rules live in gate.js (Gate.receiptNumbering), the same code index.html runs, so both pages use ONE counter
+// per device. This till's code (e.g. K7F2) is claimed in the cloud once (depots/<depot>/tills/<code>, create-only in the
+// database rules), which is what makes two tills unable to share a code. Until it is claimed the till will not number
+// a sale (a practice sale needs no number). After that it needs no network. The claim is retried whenever the phone
+// comes back online.
+const NUM=Gate.receiptNumbering({
+  depotKey:()=>DATA&&DATA.installId,
+  who:()=>USER?String(USER.username):'',
+  cloud:Gate.restCloud({
+    dbUrl:FB_CONFIG.databaseURL,
+    idToken:force=>window.POS.idToken(force),
+    appCheck:async()=>{try{await window._fbAuthSdkReady;const t=await firebase.appCheck().getToken();return t&&t.token||null;}catch{return null;}}
+  })
+});
+let TILL_ERR='';
+function tillReady(){const t=NUM.peek();return !!(t&&t.registered);}
+function paintTill(){
+  const t=NUM.peek(),ok=!!(t&&t.registered);
+  $('tillcode').textContent=ok?t.code:'';
+  document.title=(ok?'Till '+t.code+' \u2014 ':'Till \u2014 ')+'Shop Inventory & Sales Manager';
+  setPill('p-till',ok?'Till '+t.code:(TILL_ERR||'Till: setting up\u2026'),ok?'ok':(TILL_ERR?'bad':''));
+}
+function tillErrText(e){
+  const c=e&&e.code;
+  if(c==='NETWORK'||c==='NO_AUTH')return 'Till: go online once to set up';
+  if(c==='STORAGE')return 'Till: phone storage problem';
+  return 'Till: set-up failed (' + (c||'error') + ')';
+}
+let tillBusy=false;
+async function setupTill(){
+  if(tillBusy||tillReady()){paintTill();return;}
+  if(!(DATA&&DATA.installId)){TILL_ERR='Till: open the main app online first';paintTill();return;}
+  tillBusy=true;TILL_ERR='';paintTill();
+  try{await NUM.ensureRegistered();}catch(e){TILL_ERR=tillErrText(e);console.warn('Till code claim failed',e);}
+  tillBusy=false;paintTill();
+  if(PAYOVL&&PAYFOOT&&PAY)renderPayFoot(settle(toC(cartTotal()),PAY.tenders));   // a payment screen left open: unlock Complete
+}
 
 // Idle logout, same rule as index.html: off while "stay signed in" is active.
 let idleT=null;
@@ -482,7 +521,7 @@ const cartTotal=()=>Math.round(CART.reduce((a,l)=>a+lineTotal(l),0)*100)/100;
 // ── BASKET: the cart frozen into one record = one receipt ─────────────────────
 // This is the shape that step 9 will store as sales/{saleId}: header + lines, with the selling price copied
 // onto each line at the moment of sale (so editing a price later never changes an old receipt). id and
-// receiptNo stay null until payment (step 6) and the per-till number prefix (step 8) exist. Nothing is saved.
+// receiptNo is stamped when the sale is completed (step 8, see finalizeSale). Nothing is saved yet.
 function makeBasket(pay){
   const lines=CART.map(l=>({itemId:l.id,kind:l.kind||'item',name:l.name,unit:l.unit,qty:l.qty,price:l.price,total:lineTotal(l)}));
   return Object.assign({
@@ -508,7 +547,7 @@ function receiptEl(b,tag){
   if(di.contactPhone)paper.append(el('div','c mu','Tel: '+di.contactPhone));
   paper.append(el('hr','rule'),el('div','c mu','SALES RECEIPT'));
   if(b.receiptNo){const no=el('div','c b','#'+b.receiptNo);no.style.fontSize='16px';paper.append(no);}
-  else paper.append(el('div','c mu','Receipt number is given when the sale is saved'));
+  else if(!b.practice)paper.append(el('div','c mu','Receipt number is given when the sale is saved'));
   if(tag){const w=el('div','c');w.append(el('span','tag',tag));paper.append(w);}
   const d=new Date(b.at);
   paper.append(el('div','c mu',d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+' · '+d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})));
@@ -558,7 +597,7 @@ function hideReceipt(){
 // Airtel Money (transaction reference required), card (slip no. optional); a basket can be split over any mix.
 // Whatever is not paid can go on a customer's account: nothing paid = 'credit', some paid = 'partial', all paid =
 // 'paid' — the same creditStatus values the main app puts on issues. Money is worked in whole ngwee so totals never drift.
-// NOTHING IS SAVED YET: finalizeSale() is where step 8 (receipt number) and step 9 (sales/{saleId}) will commit the sale.
+// NOTHING IS SAVED YET: finalizeSale() takes the receipt number (step 8); step 9 (sales/{saleId}) will commit the sale there.
 const METHODS={cash:{label:'Cash'},mtn:{label:'MTN Money',ref:true},airtel:{label:'Airtel Money',ref:true},card:{label:'Card'}};
 const toC=n=>Math.round((Number(n)||0)*100),fromC=c=>c/100;
 const MAXC=toC(1e9);
@@ -585,7 +624,7 @@ function openPay(){
   if(!CART.length||PAYOVL)return;
   if(isReadOnly()){say('The till is read-only right now.','bad');return;}
   if(toC(cartTotal())<=0){say('Nothing to charge.','bad');return;}
-  PAY={method:'cash',tenders:[],onAccount:false,customer:''};
+  PAY={method:'cash',tenders:[],onAccount:false,customer:'',practice:false};
   const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Payment'});
   const box=el('div','pay'),head=el('div','pay-h');
   const cx=el('button','sm','Cancel',{type:'button'});cx.onclick=cancelPay;
@@ -606,6 +645,7 @@ function cancelPay(){
   closePay();
 }
 function renderPay(){
+  PAYERR='';
   const totalC=toC(cartTotal()),S=settle(totalC,PAY.tenders),fr=document.createDocumentFragment();
   const due=el('div','pay-due');due.append(el('span','','Total due'),el('b','',money(fromC(totalC))));fr.append(due);
 
@@ -687,6 +727,10 @@ function renderPay(){
     fr.append(ab);
   }
 
+  const pb=el('button','acct'+(PAY.practice?' on':''),PAY.practice?'\u2713 Practice sale \u2014 no receipt number, not counted. Tap to undo':'Practice sale (training): no receipt number used',{type:'button'});
+  pb.onclick=()=>{PAY.practice=!PAY.practice;renderPay();};
+  fr.append(pb);
+
   const cs=customers(),sel=el('select','','',{'aria-label':'Customer'});
   sel.append(el('option','','Walk-in / no customer',{value:''}));
   cs.forEach(c=>sel.append(el('option','',String(c.name||'')+(c.phone?' · '+c.phone:''),{value:c.id})));
@@ -704,31 +748,63 @@ function renderPayFoot(S){
   const F=PAYFOOT;F.replaceChildren();
   const go=el('button','pri','',{type:'button'});
   go.textContent=S.rem<=0?'Complete sale':(PAY.onAccount?'Complete \u2014 '+money(fromC(S.rem))+' on account':'Complete sale');
-  go.disabled=!payReady(S);go.onclick=completePay;
+  const needTill=!PAY.practice&&!tillReady();
+  go.disabled=!payReady(S)||needTill||FINALIZING;go.onclick=completePay;
   F.append(go);
+  if(needTill){
+    F.append(el('div','pay-note','This till has no receipt code yet. It must go online once to get one. You can still run a practice sale.'));
+    const rt=el('button','sm','Set up this till now',{type:'button'});rt.style.margin='8px auto 0';rt.style.display='block';rt.onclick=setupTill;F.append(rt);
+  }
+  if(PAYERR)F.append(el('div','pay-err',PAYERR,{role:'alert'}));
   let msg='';
   if(S.over)msg='A payment is more than what is left to pay. Remove it and add it again.';
   else if(S.rem>0&&!PAY.onAccount)msg=money(fromC(S.rem))+' still to pay.';
   else if(S.rem>0&&!PAY.customer)msg='Choose the customer to put '+money(fromC(S.rem))+' on account.';
   if(msg)F.append(el('div','pay-note',msg));
-  F.append(el('div','pay-note mu','Not recorded yet. Saving the sale is the next step.'));
+  F.append(el('div','pay-note mu',PAY.practice?'Practice: nothing is recorded and no number is used.':'Not recorded yet. Saving the sale is the next step.'));
 }
 function completePay(){
-  if(!PAY)return;
+  if(!PAY||FINALIZING)return;
   const S=settle(toC(cartTotal()),PAY.tenders);
   if(!payReady(S))return;
   const cust=customers().find(c=>c.id===PAY.customer);
   finalizeSale(makeBasket({
     payments:PAY.tenders.map((t,i)=>({method:t.method,label:METHODS[t.method].label,amount:fromC(S.applied[i]),tendered:t.tendered,ref:t.ref||''})),
     amountPaid:fromC(S.paid),change:fromC(S.change),balance:fromC(S.rem),creditStatus:payStatus(S),
-    customerId:cust?cust.id:'',customerName:cust?String(cust.name||''):''
+    customerId:cust?cust.id:'',customerName:cust?String(cust.name||''):'',practice:!!PAY.practice
   }));
 }
-// Step 8 stamps receiptNo here, step 9 appends sales/{saleId}, reduces stock and clears the cart. Until then the
-// paid receipt is only shown, tagged so nobody mistakes it for a recorded sale.
-function finalizeSale(b){
-  closePay();
-  showReceipt(b,'NOT RECORDED YET');
+// Step 8 (done): the receipt number is taken HERE, once, as the last thing before the receipt shows: Gate numbering saves
+// the counter first and only then returns the number, so a crash leaves a gap but never a repeat. If the counter cannot
+// be saved the sale is refused and the payment screen stays open with the payments as entered. Step 9 appends
+// sales/{saleId} (carrying receiptNo, tillId, till, seq) right after the number, reduces stock and clears the cart; it
+// must skip a basket with practice:true. Until then the paid receipt is only shown, tagged so nobody mistakes it for a
+// recorded sale.
+let FINALIZING=false,PAYERR='';
+const NUM_MSG={
+  NOT_REGISTERED:'This till has no receipt code yet. Go online once, then tap \u201cSet up this till now\u201d.',
+  STORAGE:'This phone could not save the receipt counter (storage full or blocked). The sale was not completed. Free some space and try again.',
+  LOCK:'Another till tab is busy. Wait a moment and try again.'
+};
+async function finalizeSale(b){
+  if(FINALIZING)return;
+  FINALIZING=true;PAYERR='';
+  if(PAYOVL&&PAY)renderPayFoot(settle(toC(cartTotal()),PAY.tenders));
+  try{
+    if(b.practice){closePay();showReceipt(b,'PRACTICE \u2014 NOT A SALE');return;}
+    let r;
+    try{r=await NUM.next();}
+    catch(e){
+      console.warn('Receipt number failed',e);
+      PAYERR=NUM_MSG[e&&e.code]||'Could not take a receipt number. The sale was not completed. Try again.';
+      return;
+    }
+    b.receiptNo=r.receiptNo;b.tillId=r.tillId;b.till=r.code;b.seq=r.seq;
+    closePay();showReceipt(b,'NOT RECORDED YET');
+  }finally{
+    FINALIZING=false;
+    if(PAYOVL&&PAY)renderPayFoot(settle(toC(cartTotal()),PAY.tenders));
+  }
 }
 
 function addItem(i,n){
@@ -1118,13 +1194,14 @@ async function boot(){
   $('depot').textContent=di.name||'';
   setPill('p-user',USER.username+(USER.role?' · '+USER.role:''));
   $('hdr').hidden=false;netPill();cloudPill();
-  addEventListener('online',()=>{netPill();cloudPill();});addEventListener('offline',netPill);
+  addEventListener('online',()=>{netPill();cloudPill();setupTill();});addEventListener('offline',netPill);
   ['pointerdown','keydown','touchstart','scroll'].forEach(e=>document.addEventListener(e,idleReset,{passive:true,capture:true}));
   idleReset();
   try{new BroadcastChannel('mdm_session').onmessage=e=>{if(e.data&&e.data.type==='logout'){parkOnExit();try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}};}catch{}
   addEventListener('storage',e=>{if(e.key==='mdm_session_event'&&e.newValue&&e.newValue.startsWith('logout:')){parkOnExit();try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}});
   $('b-app').onclick=toApp;$('b-out').onclick=logout;
   loadCatalog();
+  paintTill();setupTill();                              // claim this till's code (needs the network once)
   TAB=await claimTab();
   const rc=await recoverDrafts(true);                   // BEFORE buildSell: its first renderCart would delete our draft
   buildSell();

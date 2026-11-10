@@ -4178,7 +4178,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.32';
+const SW_VERSION  = 'v0.3.33';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -8561,6 +8561,7 @@ function renderGenSales(){
 function printSaleReceipt(id){
   const item=DATA.generalIssued.find(x=>x.id===id);
   if(!item){showToast('⚠️ Record not found');return;}
+  const rno=String(item.receiptNo||item.id.slice(-6).toUpperCase());   // K7F2-000123; older records keep their old #XXXXXX
   const depot=(DATA.depotInfo||{});
   const sp=Number(item.sellingPrice||0);
   const total=sp*Number(item.issued||0);
@@ -8573,7 +8574,7 @@ function printSaleReceipt(id){
     ?`<img src="${depot.logoDataUrl}" style="height:56px;max-width:140px;object-fit:contain;display:block;margin:0 auto 6px" alt="${esc(depot.name||'')} logo">`
     :`<div style="width:56px;height:56px;border-radius:10px;background:${esc(accent)};color:#fff;font-size:17px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto 6px">${esc(initials)}</div>`;
   const html=`<!DOCTYPE html><html><head><meta charset="UTF-8">
-  <title>Receipt #${item.id.slice(-6).toUpperCase()}</title>
+  <title>Receipt #${esc(rno)}</title>
   <style>
     body{font-family:Arial,sans-serif;max-width:320px;margin:20px auto;padding:0 16px;color:#111;font-size:14px}
     .center{text-align:center}.muted{color:#888;font-size:12px}
@@ -8591,7 +8592,7 @@ function printSaleReceipt(id){
   ${depot.contactPhone?`<div class="center muted">Tel: ${esc(depot.contactPhone)}</div>`:''}
   <div class="brand-hr"></div>
   <div class="center muted">SALES RECEIPT</div>
-  <div class="center bold" style="font-size:16px">#${item.id.slice(-6).toUpperCase()}</div>
+  <div class="center bold" style="font-size:16px">#${esc(rno)}</div>
   <div class="center muted">${fmtDate(item.date)}${item.time?' · '+item.time:''}</div>
   ${item.customerName?`<div class="center muted" style="margin-top:4px">Customer: <strong>${esc(item.customerName)}</strong></div>`:''}
   <hr>
@@ -8612,7 +8613,7 @@ function printSaleReceipt(id){
   <div class="brand-hr"></div>
   <div class="footer">Thank you for your business!<br>${esc(depot.name||'Shop Inventory & Sales Manager')} · Powered by Shop Inventory & Sales Manager</div>
   </body></html>`;
-  _pdfPrint(html, `Receipt #${item.id.slice(-6).toUpperCase()}`);
+  _pdfPrint(html, `Receipt #${rno}`);
 }
 
 function openDailyCloseOut(){
@@ -9020,18 +9021,56 @@ function saveGenIss(){if(isReadOnly()){alert("🔒 This account is in read-only 
   document.getElementById('modal-ovl')._pendingIssPayload=payload;
 }
 
-function _doSaveGenIss(btn){
+// ── Receipt numbers: ONE series per device, shared with the till (pos.html). All rules live in gate.js
+// (Gate.receiptNumbering). The number looks like K7F2-000123: this device's cloud-claimed till code + its own counter.
+// The code is claimed once online (depots/<depot>/tills/<code>); until that has happened a sale still saves, and prints
+// the old record-id number, so issuing stock never blocks on the network.
+let _rcNum=null;
+function _receipts(){
+  if(!_rcNum)_rcNum=Gate.receiptNumbering({
+    depotKey:()=>DATA&&DATA.installId,
+    who:()=>USER?String(USER.username):'',
+    cloud:Gate.restCloud({dbUrl:FB_CONFIG.databaseURL,idToken:_getIdToken,appCheck:_getAppCheckToken})
+  });
+  return _rcNum;
+}
+function _receiptRegister(){try{if(DATA&&DATA.installId)_receipts().ensureRegistered().catch(()=>{});}catch(e){}}
+async function _takeReceiptNo(){
+  try{
+    if(!DATA||!DATA.installId)return null;
+    const n=_receipts();
+    try{return await n.next();}
+    catch(e){
+      if(!e||e.code!=='NOT_REGISTERED')throw e;
+      if(!navigator.onLine)return null;
+      await Promise.race([n.ensureRegistered(),new Promise((_,rj)=>setTimeout(()=>rj(new Error('slow')),6000))]);
+      return await n.next();
+    }
+  }catch(e){console.warn('[MDM] receipt number unavailable, using the record id',e);return null;}
+}
+async function _stampReceipt(payload){
+  const r=await _takeReceiptNo();
+  if(r){payload.receiptNo=r.receiptNo;payload.tillId=r.tillId;}
+}
+
+async function _doSaveGenIss(btn){
   const ovl=document.getElementById('modal-ovl');
   const payload=ovl._pendingIssPayload;
   if(!payload)return;
+  ovl._pendingIssPayload=null;      // a second tap can no longer save it twice
+  if(btn)btn.disabled=true;
+  await _stampReceipt(payload);
   _commitGenIss(payload);
   printSaleReceipt(payload.id);
 }
 
-function _doSaveGenIssNoprint(btn){
+async function _doSaveGenIssNoprint(btn){
   const ovl=document.getElementById('modal-ovl');
   const payload=ovl._pendingIssPayload;
   if(!payload)return;
+  ovl._pendingIssPayload=null;
+  if(btn)btn.disabled=true;
+  await _stampReceipt(payload);
   _commitGenIss(payload);
 }
 
@@ -10964,7 +11003,7 @@ function _mriUpdateTotal(){
   el.textContent=total>0?`Total: ${zm(total)}`:'';
 }
 
-function _mriSave(){
+async function _mriSave(){
   if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
   if(!requireAddPermission(_mriType==='receive'?'receive stock':'issue stock'))return;
   const isRec=_mriType==='receive';
@@ -11000,6 +11039,9 @@ function _mriSave(){
   }).join('\n');
   if(!confirm(`Confirm Multi ${isRec?'Receive':'Issue'} — ${lines.length} line(s):\n\n${summary}\n\nProceed?`))return;
 
+  // each general-item sale line is its own sale record, so each takes its own receipt number (taken before the save)
+  if(!isRec)for(const l of lines){if(l.kind!=='commodity'){const r=await _takeReceiptNo();if(r)l._rn=r;}}
+
   updateData(d=>{
     let genArr=[...(isRec?(d.generalInventory||[]):(d.generalIssued||[]))];
     let comReceived={...(d.commodityReceived||{})};
@@ -11034,7 +11076,7 @@ function _mriSave(){
           if(price>0)prices[name]={...(prices[name]||{}),purchasePrice:price};
         } else {
           const partialPaid=l.creditStatus==='partial'?Number(l.partialPaid||0):0;
-          const payload=stampEntry({id:uid(),date,time:nowTime(),itemName:name,issued:qty,sellingPrice:price,creditStatus:l.creditStatus||'paid',partialPaid,customerId:l.contactId||'',customerName:contactName,notes:uc(l.notes||'')});
+          const payload=stampEntry({id:uid(),date,time:nowTime(),itemName:name,issued:qty,sellingPrice:price,creditStatus:l.creditStatus||'paid',partialPaid,customerId:l.contactId||'',customerName:contactName,notes:uc(l.notes||''),...(l._rn?{receiptNo:l._rn.receiptNo,tillId:l._rn.tillId}:{})});
           genArr=[...genArr,payload];
         }
       }
@@ -22811,6 +22853,7 @@ setInterval(()=>{
   // Fix: check navigator.onLine directly rather than the custom ONLINE flag —
   // see note on the 5-minute push interval above for why that flag can go stale.
   if (!navigator.onLine || !USER) return;
+  _receiptRegister();   // claim this device's till code once (no-op afterwards)
   fetchNotifications(); // badge/inbox refresh — safe even with a modal open, doesn't touch DATA
   const ovl = document.getElementById('modal-ovl');
   if (ovl && ovl.style.display === 'flex') return; // don't interrupt active data entry

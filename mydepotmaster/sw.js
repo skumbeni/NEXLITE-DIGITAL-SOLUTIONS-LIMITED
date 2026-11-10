@@ -25,7 +25,15 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.32 (2026-11-10) — Till: Firebase start-up fix + live-cart autosave (pos.html).
+// Current version: v0.3.33 (2026-11-10) — Till step 8, receipt numbers (gate.js + pos.html + index.html + database rules).
+//   A sale gets a number like K7F2-000123 = this device's till code + its own counter. The code is CLAIMED IN THE CLOUD
+//   (depots/<depot>/tills/<code>, create-only in the rules), so two tills can never share one: no more 1-in-thousands
+//   chance. The claim needs the network once per device; until then the till will not number a sale (a practice sale,
+//   which uses no number and is not counted, still works) and the main app keeps the old #XXXXXX. The counter is saved
+//   and read back before the number is handed out, under a cross-tab lock, so tabs share it and a crash leaves a gap but
+//   never a repeat; a wiped or damaged record gets a NEW code. The main app's single and multi issue now use the same
+//   series and print it. PUBLISH database_rules.json (new tills node) BEFORE using the till. sw.js logic unchanged.
+// Previous: v0.3.32 (2026-11-10) — Till: Firebase start-up fix + live-cart autosave (pos.html).
 //   (1) The till's inline script ran before its `defer`red Firebase SDK tags, so firebase.initializeApp never ran:
 //   App Check was never activated and POS.idToken() always returned null. Init now waits for DOMContentLoaded (the page
 //   still paints without waiting for the SDK; with no SDK it carries on without a cloud session, as before).
@@ -1883,7 +1891,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.32';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.33';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
