@@ -1,5 +1,5 @@
 /*!
- * gate.js — licence / tier / feature gating + receipt numbering. ONE copy, loaded by both index.html and pos.html.
+ * gate.js — licence / tier / feature gating + receipt numbering + REST helper. ONE copy, loaded by both index.html and pos.html.
  *
  * Everything that decides "is this feature allowed?" and "is the account read-only?" lives here, so the
  * two pages cannot drift apart. Each page keeps its own state (LICENSE, DATA) and passes it in; the
@@ -380,7 +380,7 @@ const Gate = (function () {
   function restCloud(o) {
     const base = String(o.dbUrl).replace(/\/+$/, '');
     const doFetch = o.fetch || ((u, i) => fetch(u, i));
-    async function call(path, init) {
+    async function call(path, init, qs) {
       let res;
       for (let attempt = 0; attempt < 2; attempt++) {
         const tok = await o.idToken(attempt > 0);
@@ -389,7 +389,7 @@ const Gate = (function () {
         const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
         const timer = ctl ? setTimeout(() => ctl.abort(), o.timeoutMs || 12000) : null;
         try {
-          res = await doFetch(base + '/' + path + '.json?auth=' + encodeURIComponent(tok),
+          res = await doFetch(base + '/' + path + '.json?auth=' + encodeURIComponent(tok) + (qs ? '&' + qs : ''),
             Object.assign({}, init, { headers: Object.assign({}, init.headers, ac ? { 'X-Firebase-AppCheck': ac } : {}), signal: ctl ? ctl.signal : undefined }));
         } catch (e) { throw _err('NETWORK', 'Network error'); }
         finally { if (timer) clearTimeout(timer); }
@@ -401,6 +401,12 @@ const Gate = (function () {
     return {
       async get(path) {
         const res = await call(path, { method: 'GET', headers: {} });
+        if (!res.ok) throw _err('HTTP_' + res.status, 'HTTP ' + res.status);
+        return res.json();
+      },
+      // A filtered read, e.g. query('depots/X/sales', 'orderBy=%22createdAt%22&startAt=0&limitToFirst=300') (sales.js pull).
+      async query(path, qs) {
+        const res = await call(path, { method: 'GET', headers: {} }, qs);
         if (!res.ok) throw _err('HTTP_' + res.status, 'HTTP ' + res.status);
         return res.json();
       },

@@ -21,7 +21,7 @@ header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:sp
 header b{font-size:18px}header small{display:block;color:var(--muted);font-size:13px}
 .pills{display:flex;flex-wrap:wrap;gap:6px}
 .pill{font-size:12px;padding:3px 9px;border-radius:99px;border:1px solid var(--border);color:var(--muted)}
-.pill.ok{color:var(--green);border-color:var(--green)}.pill.bad{color:var(--red);border-color:var(--red)}
+.pill.ok{color:var(--green);border-color:var(--green)}.pill.bad{color:var(--red);border-color:var(--red)}.pill.warn{color:var(--amber);border-color:var(--amber)}
 main{max-width:560px;margin:0 auto;padding:28px 16px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px;text-align:center}
 .card .ic{font-size:40px;margin-bottom:8px}.card h1{font-size:20px;margin-bottom:6px}.card p{color:var(--muted);margin-bottom:16px}
@@ -213,7 +213,7 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 <header id="hdr" hidden>
   <div><b>🧾 Till <span id="tillcode"></span></b><small id="depot"></small></div>
   <div class="hr">
-    <div class="pills"><span class="pill" id="p-net"></span><span class="pill" id="p-cloud"></span><span class="pill" id="p-till"></span><span class="pill" id="p-user"></span></div>
+    <div class="pills"><span class="pill" id="p-net"></span><span class="pill" id="p-cloud"></span><span class="pill" id="p-till"></span><span class="pill" id="p-sales"></span><span class="pill" id="p-user"></span></div>
     <div class="hb"><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
   </div>
 </header>
@@ -221,6 +221,7 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 
 <!-- Shared gating rules (same file index.html loads). Plain synchronous script, before the inline script below. -->
 <script src="gate.js"></script>
+<script src="sales.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-check-compat.js" defer></script>
@@ -352,14 +353,15 @@ window.POS={
 // database rules), which is what makes two tills unable to share a code. Until it is claimed the till will not number
 // a sale (a practice sale needs no number). After that it needs no network. The claim is retried whenever the phone
 // comes back online.
+const CLOUD=Gate.restCloud({
+  dbUrl:FB_CONFIG.databaseURL,
+  idToken:force=>window.POS.idToken(force),
+  appCheck:async()=>{try{await window._fbAuthSdkReady;const t=await firebase.appCheck().getToken();return t&&t.token||null;}catch{return null;}}
+});
 const NUM=Gate.receiptNumbering({
   depotKey:()=>DATA&&DATA.installId,
   who:()=>USER?String(USER.username):'',
-  cloud:Gate.restCloud({
-    dbUrl:FB_CONFIG.databaseURL,
-    idToken:force=>window.POS.idToken(force),
-    appCheck:async()=>{try{await window._fbAuthSdkReady;const t=await firebase.appCheck().getToken();return t&&t.token||null;}catch{return null;}}
-  })
+  cloud:CLOUD
 });
 let TILL_ERR='';
 function tillReady(){const t=NUM.peek();return !!(t&&t.registered);}
@@ -395,11 +397,49 @@ function idleReset(){
   idleT=setTimeout(logout,mins*6e4);
 }
 
+// ── SALES LEDGER (roadmap step 9) ────────────────────────────────────────────
+// Every completed sale is ONE append-only record, sales/{saleId} (saleId = the receipt number), kept by sales.js, the same
+// file index.html loads. It is written to this phone's IndexedDB first, in one transaction together with its "still to
+// upload" mark, and only then is the receipt shown: a sale is never lost to a dropped signal or a dead battery. Uploading
+// to depots/<depot>/sales/<saleId> is create-only and idempotent, so it simply retries until it works. The same sync also
+// downloads the other tills' sales. Stock on this screen = received - issued (as before) - everything sold through any till.
+// The sale is NOT written into DATA, so two tills selling at the same moment cannot overwrite each other.
+const LEDGER=Sales.create({
+  depotKey:()=>DATA&&DATA.installId,
+  opts:{dateOf:t=>new Date(t).toISOString().slice(0,10)},   // the date rule index.html's today() uses, so Sales History agrees
+  adapter:Sales.idbAdapter()
+});
+let SOLD=new Map(),SALES_PENDING=0,SALES_ERR='',SALES_AUTH=false,salesBusy=false;
+async function loadSold(){
+  try{SOLD=Sales.soldById(await LEDGER.all());SALES_PENDING=await LEDGER.pending();}
+  catch(e){console.warn('Could not read the sales ledger',e);}
+}
+function paintSales(){
+  if(SALES_ERR)setPill('p-sales','Sales: '+SALES_ERR,'bad');
+  else if(SALES_PENDING)setPill('p-sales','Sales: '+SALES_PENDING+(!navigator.onLine?' waiting for signal':(SALES_AUTH?' waiting (no cloud session)':' uploading')),'warn');
+  else setPill('p-sales','Sales: all uploaded','ok');
+}
+// Upload this till's sales, then fetch the others'. Safe to call as often as you like; one run at a time.
+async function syncSales(){
+  if(salesBusy||!navigator.onLine||!(DATA&&DATA.installId))return;
+  salesBusy=true;
+  try{
+    const up=await LEDGER.push(CLOUD);
+    SALES_AUTH=!!(up.left&&up.error==='NO_AUTH');
+    SALES_ERR=(up.left&&up.error&&up.error!=='NETWORK'&&up.error!=='NO_AUTH')?'upload problem ('+up.error+')':'';
+    let got=0;
+    try{got=(await LEDGER.pull(CLOUD)).added;}catch(e){console.warn('Sales download failed',e);}
+    await loadSold();
+    if(got&&GRID){loadCatalog();renderGrid();}
+  }catch(e){console.warn('Sales sync failed',e);}
+  finally{salesBusy=false;paintSales();}
+}
+
 // ── SELL SCREEN (roadmap step 4: layout) ────────────────────────────────────
 // Reads the item master (DATA.inventoryItems), selling price (DATA.inventoryPrices[name].sellingPrice) and
-// stock (approved received minus approved issued, by itemName) exactly as index.html does. Commodities are listed
+// stock (approved received minus approved issued, by itemName, minus everything sold through the ledger, by item id). Commodities are listed
 // too (see commodityItems). The open cart is autosaved on this device after every change (see LIVE-CART AUTOSAVE
-// below) so a reload or a killed browser does not lose it; saving the SALE itself is still a later step.
+// below) so a reload or a killed browser does not lose it; the SALE itself is saved by finalizeSale (step 9).
 const COARSE=matchMedia('(pointer:coarse)').matches;   // touch device: keep the soft keyboard down until asked
 const MAX_TILES=120;
 let ITEMS=[],BYID=new Map(),CART=[];
@@ -422,6 +462,9 @@ function legacyId(name){
   return 'itm_'+h.toString(36);
 }
 const isApproved=r=>!r||!r.approvalStatus||r.approvalStatus==='approved';
+// Till sales are subtracted from the ledger (SOLD). index.html only overlays them on DATA in memory and never saves them there;
+// if a copy ever did leak into the saved data it must not be counted twice.
+const isStock=r=>isApproved(r)&&!(r&&r._sale);
 
 // Commodities (DATA.commodities) are sold from the till too. They are not in the item master, so: stock = approved
 // received minus approved issued, summed over ALL batches of that commodity; price = the selling price set for it in
@@ -435,8 +478,8 @@ function commodityItems(){
       if(!rec.length)rec=DATA.maizeReceived||[];
       if(!iss.length)iss=DATA.maizeIssued||[];
     }
-    rec=rec.filter(isApproved);iss=iss.filter(isApproved);
-    const avail=rec.reduce((a,r)=>a+Number(r.received||0),0)-iss.reduce((a,r)=>a+Number(r.issued||0),0);
+    rec=rec.filter(isApproved);iss=iss.filter(isStock);
+    const avail=Math.round((rec.reduce((a,r)=>a+Number(r.received||0),0)-iss.reduce((a,r)=>a+Number(r.issued||0),0)-(SOLD.get('com:'+c.id)||0))*1000)/1000;
     const unit=String(c.unit||'');
     const o={
       id:'com:'+c.id,kind:'commodity',icon:String(c.icon||''),name:String(c.name),sku:'',barcode:'',
@@ -450,14 +493,14 @@ function commodityItems(){
 function loadCatalog(){
   const rec=new Map(),iss=new Map();
   (DATA.generalInventory||[]).filter(isApproved).forEach(r=>rec.set(r.itemName,(rec.get(r.itemName)||0)+Number(r.received||0)));
-  (DATA.generalIssued||[]).filter(isApproved).forEach(r=>iss.set(r.itemName,(iss.get(r.itemName)||0)+Number(r.issued||0)));
+  (DATA.generalIssued||[]).filter(isStock).forEach(r=>iss.set(r.itemName,(iss.get(r.itemName)||0)+Number(r.issued||0)));
   const prices=DATA.inventoryPrices||{};
   const general=(DATA.inventoryItems||[]).map(x=>typeof x==='string'?{name:x}:x).filter(x=>x&&x.name).map(x=>{
     const o={
       id:x.id||legacyId(x.name),kind:'item',name:String(x.name),sku:String(x.sku||''),barcode:String(x.barcode||''),
       unit:String(x.unit||''),per:String(x.unit||''),category:String(x.category||''),min:Number(x.minStock)||0,
       price:Number((prices[x.name]||{}).sellingPrice)||0,
-      avail:(rec.get(x.name)||0)-(iss.get(x.name)||0)
+      avail:Math.round(((rec.get(x.name)||0)-(iss.get(x.name)||0)-(SOLD.get(x.id||legacyId(x.name))||0))*1000)/1000
     };
     o.hay=(o.name+' '+o.sku+' '+o.barcode+' '+o.category).toLowerCase();
     return o;
@@ -519,14 +562,14 @@ const lineTotal=l=>Math.round(l.price*l.qty*100)/100;
 const cartTotal=()=>Math.round(CART.reduce((a,l)=>a+lineTotal(l),0)*100)/100;
 
 // ── BASKET: the cart frozen into one record = one receipt ─────────────────────
-// This is the shape that step 9 will store as sales/{saleId}: header + lines, with the selling price copied
-// onto each line at the moment of sale (so editing a price later never changes an old receipt). id and
-// receiptNo is stamped when the sale is completed (step 8, see finalizeSale). Nothing is saved yet.
+// This is the shape sales.js stores as sales/{saleId}: header + lines, with the selling price copied
+// onto each line at the moment of sale (so editing a price later never changes an old receipt). receiptNo, tillId,
+// till and seq are stamped when the sale is completed (step 8), and finalizeSale saves it (step 9).
 function makeBasket(pay){
   const lines=CART.map(l=>({itemId:l.id,kind:l.kind||'item',name:l.name,unit:l.unit,qty:l.qty,price:l.price,total:lineTotal(l)}));
   return Object.assign({
     id:null,receiptNo:null,at:Date.now(),
-    cashier:USER?String(USER.username):'',
+    cashier:USER?String(USER.username):'',cashierRole:USER?String(USER.role||''):'',
     lines,lineCount:lines.length,
     qtyTotal:Math.round(lines.reduce((a,l)=>a+l.qty,0)*1000)/1000,
     total:Math.round(lines.reduce((a,l)=>a+l.total,0)*100)/100
@@ -577,19 +620,19 @@ function receiptEl(b,tag){
   paper.append(el('hr','rule'),el('div','ft','Thank you for your business!'));
   return paper;
 }
-let ROVL=null,ROPENER=null;
-function showReceipt(b,tag){
-  if(!CART.length||ROVL)return;
+let ROVL=null,ROPENER=null,ROVL_SALE=false;
+function showReceipt(b,tag,sale){          // sale=true: the receipt of a recorded sale; the cart is already empty then
+  if(ROVL||(!sale&&!CART.length))return;
   ROPENER=document.activeElement;
   const ovl=el('div','rovl','',{role:'dialog','aria-modal':'true','aria-label':'Receipt preview'});
   const sc=el('div','rscroll');sc.append(receiptEl(b||makeBasket(),tag||'PREVIEW — NOT A SALE'));
   const bar=el('div','rbar');
   const pr=el('button','pri','Print',{type:'button'}),cl=el('button','','Close',{type:'button'});
   pr.onclick=()=>window.print();cl.onclick=hideReceipt;
-  bar.append(cl,pr);ovl.append(sc,bar);document.body.append(ovl);ROVL=ovl;pr.focus();
+  bar.append(cl,pr);ovl.append(sc,bar);document.body.append(ovl);ROVL=ovl;ROVL_SALE=!!sale;pr.focus();
 }
 function hideReceipt(){
-  if(!ROVL)return;ROVL.remove();ROVL=null;
+  if(!ROVL)return;ROVL.remove();ROVL=null;ROVL_SALE=false;
   try{if(ROPENER&&document.contains(ROPENER))ROPENER.focus();}catch{}
 }
 // ── PAYMENT (roadmap step 6) ─────────────────────────────────────────────────
@@ -597,7 +640,7 @@ function hideReceipt(){
 // Airtel Money (transaction reference required), card (slip no. optional); a basket can be split over any mix.
 // Whatever is not paid can go on a customer's account: nothing paid = 'credit', some paid = 'partial', all paid =
 // 'paid' — the same creditStatus values the main app puts on issues. Money is worked in whole ngwee so totals never drift.
-// NOTHING IS SAVED YET: finalizeSale() takes the receipt number (step 8); step 9 (sales/{saleId}) will commit the sale there.
+// finalizeSale() takes the receipt number (step 8) and saves the sale to the ledger (step 9).
 const METHODS={cash:{label:'Cash'},mtn:{label:'MTN Money',ref:true},airtel:{label:'Airtel Money',ref:true},card:{label:'Card'}};
 const toC=n=>Math.round((Number(n)||0)*100),fromC=c=>c/100;
 const MAXC=toC(1e9);
@@ -761,7 +804,7 @@ function renderPayFoot(S){
   else if(S.rem>0&&!PAY.onAccount)msg=money(fromC(S.rem))+' still to pay.';
   else if(S.rem>0&&!PAY.customer)msg='Choose the customer to put '+money(fromC(S.rem))+' on account.';
   if(msg)F.append(el('div','pay-note',msg));
-  F.append(el('div','pay-note mu',PAY.practice?'Practice: nothing is recorded and no number is used.':'Not recorded yet. Saving the sale is the next step.'));
+  F.append(el('div','pay-note mu',PAY.practice?'Practice: nothing is recorded and no number is used.':'The sale is saved on this phone first, then uploaded when there is signal.'));
 }
 function completePay(){
   if(!PAY||FINALIZING)return;
@@ -774,17 +817,23 @@ function completePay(){
     customerId:cust?cust.id:'',customerName:cust?String(cust.name||''):'',practice:!!PAY.practice
   }));
 }
-// Step 8 (done): the receipt number is taken HERE, once, as the last thing before the receipt shows: Gate numbering saves
-// the counter first and only then returns the number, so a crash leaves a gap but never a repeat. If the counter cannot
-// be saved the sale is refused and the payment screen stays open with the payments as entered. Step 9 appends
-// sales/{saleId} (carrying receiptNo, tillId, till, seq) right after the number, reduces stock and clears the cart; it
-// must skip a basket with practice:true. Until then the paid receipt is only shown, tagged so nobody mistakes it for a
-// recorded sale.
+// Step 8: the receipt number is taken HERE, once: Gate numbering saves the counter first and only then returns the number,
+// so a crash leaves a gap but never a repeat. If the counter cannot be saved the sale is refused and the payment screen stays
+// open with the payments as entered.
+// Step 9: right after the number, the sale is appended to the ledger (sales.js): stored on this phone together with its
+// "to upload" mark in ONE transaction. Only when that has succeeded does the cart empty, stock drop and the receipt show;
+// if it fails nothing is recorded, the cart and the payments stay as they were, and the cashier can simply try again (the
+// number already taken is skipped, which leaves a gap, never a repeat). A practice basket (practice:true) skips all of this.
 let FINALIZING=false,PAYERR='';
 const NUM_MSG={
   NOT_REGISTERED:'This till has no receipt code yet. Go online once, then tap \u201cSet up this till now\u201d.',
   STORAGE:'This phone could not save the receipt counter (storage full or blocked). The sale was not completed. Free some space and try again.',
   LOCK:'Another till tab is busy. Wait a moment and try again.'
+};
+const SALE_MSG={
+  STORAGE:'This phone could not save the sale (storage full or blocked). Nothing was recorded. Free some space and try again.',
+  NO_DEPOT:'This till does not know its depot yet. Open the main app online once, then try again.',
+  EXISTS:'That receipt number is already recorded. Nothing new was recorded. Try again.'
 };
 async function finalizeSale(b){
   if(FINALIZING)return;
@@ -792,6 +841,7 @@ async function finalizeSale(b){
   if(PAYOVL&&PAY)renderPayFoot(settle(toC(cartTotal()),PAY.tenders));
   try{
     if(b.practice){closePay();showReceipt(b,'PRACTICE \u2014 NOT A SALE');return;}
+    if(isReadOnly()){PAYERR='The till is read-only right now. The sale was not completed.';return;}
     let r;
     try{r=await NUM.next();}
     catch(e){
@@ -800,7 +850,22 @@ async function finalizeSale(b){
       return;
     }
     b.receiptNo=r.receiptNo;b.tillId=r.tillId;b.till=r.code;b.seq=r.seq;
-    closePay();showReceipt(b,'NOT RECORDED YET');
+    let rec;
+    try{rec=await LEDGER.append(b);}
+    catch(e){
+      console.warn('Sale not saved',e);
+      PAYERR=(e&&e.code==='INVALID')?e.message+'. Nothing was recorded.':(SALE_MSG[e&&e.code]||'The sale could not be saved. Nothing was recorded. Try again.');
+      return;
+    }
+    // From here the sale exists. Take it out of stock, empty the cart, show the receipt, and upload if there is signal.
+    rec.lines.forEach(l=>SOLD.set(l.itemId,Math.round(((SOLD.get(l.itemId)||0)+l.qty)*1000)/1000));
+    SALES_PENDING++;
+    closePay();
+    CART=[];renderCart();                          // renderCart also deletes the autosaved copy of this cart
+    loadCatalog();renderGrid();paintSales();
+    showReceipt(b,'',true);
+    say('Sale '+b.receiptNo+' saved','ok',3500);
+    syncSales();
   }finally{
     FINALIZING=false;
     if(PAYOVL&&PAY)renderPayFoot(settle(toC(cartTotal()),PAY.tenders));
@@ -1077,7 +1142,7 @@ function renderCart(){
   $('tot').textContent=money(tot);
   CHARGE.disabled=!n;CHARGE.textContent=n?'Charge '+money(tot):'Charge';
   $('clr').hidden=!n;$('prv').disabled=!n;$('hld').disabled=!n;
-  if(!n)hideReceipt();
+  if(!n&&!ROVL_SALE)hideReceipt();               // a recorded sale's receipt stays up after the cart is emptied
   CARTBAR.classList.toggle('has',n>0);
   $('cb-a').textContent=n?n+(n===1?' item':' items'):'Cart is empty';
   $('cb-b').textContent=n?'Tap to review and charge':'Scan or tap an item';
@@ -1194,14 +1259,16 @@ async function boot(){
   $('depot').textContent=di.name||'';
   setPill('p-user',USER.username+(USER.role?' · '+USER.role:''));
   $('hdr').hidden=false;netPill();cloudPill();
-  addEventListener('online',()=>{netPill();cloudPill();setupTill();});addEventListener('offline',netPill);
+  addEventListener('online',()=>{netPill();cloudPill();setupTill();syncSales();paintSales();});addEventListener('offline',()=>{netPill();paintSales();});
+  setInterval(syncSales,60000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncSales();});
   ['pointerdown','keydown','touchstart','scroll'].forEach(e=>document.addEventListener(e,idleReset,{passive:true,capture:true}));
   idleReset();
   try{new BroadcastChannel('mdm_session').onmessage=e=>{if(e.data&&e.data.type==='logout'){parkOnExit();try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}};}catch{}
   addEventListener('storage',e=>{if(e.key==='mdm_session_event'&&e.newValue&&e.newValue.startsWith('logout:')){parkOnExit();try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}});
   $('b-app').onclick=toApp;$('b-out').onclick=logout;
+  await loadSold();                                    // stock = received - issued - sold: the ledger must be read BEFORE the catalog is built
   loadCatalog();
-  paintTill();setupTill();                              // claim this till's code (needs the network once)
+  paintTill();setupTill();paintSales();syncSales();                              // claim this till's code (needs the network once)
   TAB=await claimTab();
   const rc=await recoverDrafts(true);                   // BEFORE buildSell: its first renderCart would delete our draft
   buildSell();

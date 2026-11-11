@@ -25,7 +25,19 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.33 (2026-11-10) — Till step 8, receipt numbers (gate.js + pos.html + index.html + database rules).
+// Current version: v0.3.34 (2026-11-11) — Till step 9, the append-only sales ledger (sales.js NEW + pos.html + index.html +
+//   gate.js + database rules). Completing a sale in the till now RECORDS it: one record, sales/{saleId} (saleId = the receipt
+//   number), written once and never changed. It is saved on the phone first (IndexedDB "mdm_sales", with its "to upload"
+//   mark, in one transaction) and only then does the cart empty and the receipt show; if that fails nothing is recorded and
+//   the cart stays. It is then uploaded to depots/<depot>/sales/<saleId> (create-only in the rules, retried until it works,
+//   a double upload is harmless) and the other tills' sales are downloaded. Sales are NOT written into the DATA blob, so two
+//   tills selling at once cannot overwrite each other. Stock on the till = received - issued - sold (by item id). The main
+//   app overlays the ledger on DATA in memory (rows flagged _sale, never saved or synced as part of DATA) so stock, reports,
+//   close-out and customer balances include till sales; those rows cannot be edited or deleted. Sales are in JSON backups.
+//   Until roadmap step 10 replaces the overlay with stock = received - sold + returns. NOT YET: receiving payment on a till
+//   credit sale (it needs its own append-only record). PUBLISH database_rules.json (new sales node) BEFORE using the till.
+//   sw.js: sales.js is precached and served network-first, exactly like gate.js.
+// Previous: v0.3.33 (2026-11-10) — Till step 8, receipt numbers (gate.js + pos.html + index.html + database rules).
 //   A sale gets a number like K7F2-000123 = this device's till code + its own counter. The code is CLAIMED IN THE CLOUD
 //   (depots/<depot>/tills/<code>, create-only in the rules), so two tills can never share one: no more 1-in-thousands
 //   chance. The claim needs the network once per device; until then the till will not number a sale (a practice sale,
@@ -1891,7 +1903,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.33';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.34';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
@@ -1946,6 +1958,7 @@ self.addEventListener('install', e => {
       .then(cache => cache.add(SHELL)                         // shell always first
         .then(() => cache.add('manifest.json').catch(() => {})) // manifest (best-effort)
         .then(() => cache.add('gate.js').catch(() => {}))       // shared gating rules: index.html AND pos.html need it to start offline
+        .then(() => cache.add('sales.js').catch(() => {}))      // the sales ledger: index.html AND pos.html need it to start offline
         .then(() => cache.add('pos.html').catch(() => {}))      // the till page (best-effort; index.html also adds it)
         .then(() => cache.add(FONTS_CSS).catch(() => {}))       // fonts (best-effort, may fail offline)
       )
@@ -2027,7 +2040,8 @@ self.addEventListener('fetch', e => {
   // gate.js — shared licence/tier rules, loaded as a plain <script src> by index.html and pos.html.
   // It is not a navigation, so without this rule it would pass straight to the network and both pages
   // would fail to start offline. Network-first so a deploy is picked up; cache fallback when offline.
-  if (/\/gate\.js(\?|$)/.test(url)) {
+  // sales.js (the append-only sales ledger, step 9) is loaded the same way and needs the same rule.
+  if (/\/(gate|sales)\.js(\?|$)/.test(url)) {
     e.respondWith(networkFirst(req));
     return;
   }

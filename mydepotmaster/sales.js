@@ -1,0 +1,402 @@
+/*!
+ * sales.js — the append-only sales ledger. ONE copy, loaded by both index.html and pos.html (roadmap step 9).
+ *
+ * WHAT IT IS
+ *   Every till sale is ONE record, stored as sales/{saleId} (saleId = the receipt number, e.g. K7F2-000123).
+ *   A record is written once and never changed: no edit, no delete, no counters. Corrections are new records
+ *   (voids / refunds, roadmap step 19). The records live OUTSIDE the DATA blob, so two tills selling at the
+ *   same moment can never overwrite each other (the blob is last-write-wins; this is not).
+ *
+ * WHERE A RECORD LIVES
+ *   1. On the device: IndexedDB database "mdm_sales" (stores: sales, outbox, meta). A sale is saved there, in one
+ *      transaction together with its "still to upload" mark, BEFORE the receipt is shown. Works fully offline.
+ *   2. In the cloud: depots/<depotKey>/sales/<saleId>, create-only (see database_rules.json). Each device uploads
+ *      its own outbox whenever it is online, and downloads the other tills' sales (incrementally, by the server's
+ *      createdAt time). Uploading is idempotent: a sale that is already there is simply marked as uploaded.
+ *
+ * WHAT THE MAIN APP DOES WITH IT (bridge until roadmap step 10)
+ *   issuedRows() turns the sales into rows shaped like generalIssued / commodityIssued rows (flag _sale:true). The
+ *   main app overlays them on DATA in memory so stock, reports and customer balances see till sales, and strips them
+ *   again whenever DATA is saved or synced. Step 10 replaces this with stock = received − sold + returns.
+ *
+ * Plain classic script, no dependencies, one global: Sales. Load it with a normal <script src="sales.js"></script>
+ * after gate.js. Add sales.js to the precache list in sw.js, otherwise the pages cannot start offline.
+ * Storage and network are injected, so Node can test this file (see create(env) and memAdapter()).
+ */
+const Sales = (function () {
+  'use strict';
+
+  const V = 1;                                           // record format version
+  const ID_RE   = /^[A-HJ-KM-NP-Z2-9]{4}-[0-9]{6,9}$/;   // receipt number = sale id
+  const TILL_RE = /^[A-HJ-KM-NP-Z2-9]{4}$/;
+  const TID_RE  = /^[0-9a-f]{24}$/;
+  const STATUS  = ['paid', 'partial', 'credit'];
+  const METHODS = ['cash', 'mtn', 'airtel', 'card'];
+  const MAX_LINES = 200, MAX_PAYMENTS = 20;
+  const PAGE = 300, MAX_PAGES = 40;                      // pull: records per request / requests per pull
+  const OVERLAP_MS = 60000;                              // pull re-reads the last minute, so nothing near the cursor is missed
+  const BATCH_NAME = 'TILL SALES';                       // pseudo batch the main app shows for commodity sold at the till
+
+  const isNum = x => typeof x === 'number' && isFinite(x);
+  const r2 = n => Math.round(n * 100) / 100;
+  const r3 = n => Math.round(n * 1000) / 1000;
+  const toC = n => Math.round((Number(n) || 0) * 100);
+  const str = (x, n) => (x == null ? '' : String(x)).slice(0, n);
+  function err(code, msg) { const e = new Error(msg || code); e.code = code; return e; }
+  // Realtime Database hands back an array as {"0":..,"1":..}, and drops an empty one altogether.
+  const arr = x => Array.isArray(x) ? x : (x && typeof x === 'object' ? Object.keys(x).sort((a, b) => a - b).map(k => x[k]) : []);
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // THE RECORD
+  // ══════════════════════════════════════════════════════════════════════════════
+  // {
+  //   v:1, id, receiptNo, tillId, till, seq,            id === receiptNo; till = 4-char code; tillId = long random id
+  //   at, date, time,                                    epoch ms; date/time as the main app writes them
+  //   cashier, cashierRole,
+  //   lines:[{itemId, kind:'item'|'commodity', name, unit, qty, price, total}],   price copied at the moment of sale
+  //   lineCount, qtyTotal, total,
+  //   payments:[{method, label, amount, tendered, ref}],                          absent for a pure credit sale
+  //   amountPaid, change, balance, creditStatus:'paid'|'partial'|'credit', customerId, customerName
+  // }
+  // opts.dateOf(at) must give the date the way the main app's today() does (it uses the UTC date), so the till's
+  // sales land on the same day as everything else in Sales History and the daily close-out.
+  function toRecord(b, opts) {
+    opts = opts || {};
+    const at = Math.round(Number(b.at));
+    const dateOf = opts.dateOf || (t => new Date(t).toISOString().slice(0, 10));
+    const timeOf = opts.timeOf || (t => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); });
+    const rec = {
+      v: V, id: String(b.receiptNo), receiptNo: String(b.receiptNo), tillId: String(b.tillId), till: String(b.till), seq: Number(b.seq),
+      at, date: dateOf(at), time: timeOf(at),
+      cashier: str(b.cashier, 80), cashierRole: str(b.cashierRole, 20),
+      lines: arr(b.lines).map(l => ({
+        itemId: str(l.itemId, 80), kind: l.kind === 'commodity' ? 'commodity' : 'item', name: str(l.name, 200), unit: str(l.unit, 40),
+        qty: Number(l.qty), price: Number(l.price), total: Number(l.total)
+      })),
+      lineCount: Number(b.lineCount), qtyTotal: Number(b.qtyTotal), total: Number(b.total),
+      payments: arr(b.payments).map(p => {
+        const o = { method: String(p.method), label: str(p.label, 40), amount: Number(p.amount), ref: str(p.ref, 100) };
+        if (isNum(Number(p.tendered)) && p.tendered != null) o.tendered = Number(p.tendered);
+        return o;
+      }),
+      amountPaid: Number(b.amountPaid), change: Number(b.change), balance: Number(b.balance),
+      creditStatus: String(b.creditStatus), customerId: str(b.customerId, 80), customerName: str(b.customerName, 200)
+    };
+    return JSON.parse(JSON.stringify(rec));              // plain data only: what is stored here is what the cloud will hold
+  }
+
+  // '' when the record is sound, otherwise why not. Run before saving AND on everything pulled from the cloud.
+  function validate(s) {
+    if (!s || typeof s !== 'object') return 'not a record';
+    if (!ID_RE.test(String(s.id)) || s.id !== s.receiptNo) return 'bad receipt number';
+    if (!TILL_RE.test(String(s.till)) || String(s.receiptNo).slice(0, 4) !== s.till) return 'bad till code';
+    if (!TID_RE.test(String(s.tillId))) return 'bad till id';
+    if (!Number.isInteger(s.seq) || s.seq < 1 || Number(String(s.receiptNo).slice(5)) !== s.seq) return 'bad sequence';
+    if (!isNum(s.at) || s.at <= 0) return 'bad time';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.date)) || !/^\d{2}:\d{2}$/.test(String(s.time))) return 'bad date';
+    if (typeof s.cashier !== 'string' || s.cashier.length > 80) return 'bad cashier';
+    const lines = s.lines;
+    if (!Array.isArray(lines) || !lines.length || lines.length > MAX_LINES) return 'bad lines';
+    let sum = 0, qty = 0;
+    for (const l of lines) {
+      if (!l || typeof l.itemId !== 'string' || !l.itemId || l.itemId.length > 80) return 'bad item id';
+      if (l.kind !== 'item' && l.kind !== 'commodity') return 'bad item kind';
+      if ((l.kind === 'commodity') !== /^com:./.test(l.itemId)) return 'item kind does not match its id';
+      if (typeof l.name !== 'string' || !l.name || l.name.length > 200) return 'bad item name';
+      if (!isNum(l.qty) || !(l.qty > 0) || !isNum(l.price) || l.price < 0 || !isNum(l.total) || l.total < 0) return 'bad line amounts';
+      if (Math.abs(l.total - r2(l.price * l.qty)) > 0.005) return 'line total does not match price × qty';
+      sum += toC(l.total); qty += l.qty;
+    }
+    if (!isNum(s.total) || toC(s.total) !== sum) return 'total does not match the lines';
+    if (s.lineCount !== lines.length) return 'bad line count';
+    if (!isNum(s.qtyTotal) || Math.abs(s.qtyTotal - r3(qty)) > 0.0015) return 'bad quantity total';
+    const pays = s.payments === undefined ? [] : s.payments;
+    if (!Array.isArray(pays) || pays.length > MAX_PAYMENTS) return 'bad payments';
+    let paid = 0;
+    for (const p of pays) {
+      if (!p || METHODS.indexOf(p.method) < 0 || !isNum(p.amount) || p.amount < 0) return 'bad payment';
+      paid += toC(p.amount);
+    }
+    if (!isNum(s.amountPaid) || !isNum(s.balance) || !isNum(s.change) || s.amountPaid < 0 || s.balance < 0 || s.change < 0) return 'bad money';
+    if (toC(s.amountPaid) !== paid) return 'payments do not add up to the amount paid';
+    if (toC(s.amountPaid) + toC(s.balance) !== toC(s.total)) return 'paid + balance does not match the total';
+    if (STATUS.indexOf(s.creditStatus) < 0) return 'bad payment status';
+    const want = s.balance <= 0 ? 'paid' : (s.amountPaid > 0 ? 'partial' : 'credit');
+    if (s.creditStatus !== want) return 'payment status does not match the money';
+    if (typeof s.customerId !== 'string' || typeof s.customerName !== 'string') return 'bad customer';
+    if (s.balance > 0 && !s.customerId) return 'an unpaid balance needs a customer';
+    return '';
+  }
+
+  // The copy that goes to the cloud: the record plus the SERVER's clock, which is what pulls are ordered by.
+  // The id is the node's key, so it is not repeated inside (the rules reject unknown fields); fromCloud puts it back.
+  function forCloud(rec) { const o = Object.assign({}, rec, { createdAt: { '.sv': 'timestamp' } }); delete o.id; return o; }
+
+  // What came back from the cloud -> { rec | null, createdAt }. createdAt is not kept on the record, so a sale looks the
+  // same on every device however it got there.
+  function fromCloud(id, o) {
+    if (!o || typeof o !== 'object') return { rec: null, createdAt: 0 };
+    const createdAt = isNum(o.createdAt) ? o.createdAt : 0;
+    const rec = Object.assign({}, o);
+    delete rec.createdAt;
+    rec.id = id;
+    rec.lines = arr(rec.lines);
+    if (rec.payments !== undefined) rec.payments = arr(rec.payments);
+    if (rec.payments === undefined || !rec.payments.length) rec.payments = [];
+    ['customerId', 'customerName', 'cashierRole'].forEach(k => { if (rec[k] == null) rec[k] = ''; });
+    rec.lines.forEach(l => { if (l && l.unit == null) l.unit = ''; });
+    rec.payments.forEach(p => { if (p && p.ref == null) p.ref = ''; });
+    return { rec: validate(rec) ? null : rec, createdAt };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // READING THE LEDGER
+  // ══════════════════════════════════════════════════════════════════════════════
+  // How much of a basket's payment belongs to each line, in money: proportional to the line totals, whole ngwee, the
+  // last line takes the rounding. Used so a part-paid basket can be shown line by line.
+  function linePaid(s) {
+    const T = toC(s.total), P = toC(s.amountPaid), n = s.lines.length;
+    if (s.creditStatus === 'paid') return s.lines.map(l => l.total);
+    if (s.creditStatus === 'credit' || T <= 0) return s.lines.map(() => 0);
+    let given = 0;
+    return s.lines.map((l, i) => {
+      const c = i === n - 1 ? P - given : Math.floor(P * toC(l.total) / T);
+      given += c; return c / 100;
+    });
+  }
+  function methodsOf(s) {
+    const set = [];
+    arr(s.payments).forEach(p => { const m = String(p.label || p.method).toUpperCase(); if (set.indexOf(m) < 0) set.push(m); });
+    return set.join(' + ');
+  }
+
+  // Sales -> rows shaped like the main app's own records. gen: general items (generalIssued shape);
+  // com: { commodityId: [commodityIssued-shaped rows] }. Every row carries _sale:true and a unique id "<saleId>#<line>".
+  function issuedRows(sales) {
+    const gen = [], com = {};
+    const list = (sales || []).slice().sort((a, b) => (a.date + a.time + a.id).localeCompare(b.date + b.time + b.id));
+    list.forEach(s => {
+      const paid = linePaid(s);
+      s.lines.forEach((l, i) => {
+        const base = {
+          id: s.id + '#' + i, _sale: true, saleId: s.id, receiptNo: s.receiptNo, tillId: s.tillId,
+          date: s.date, time: s.time, issued: l.qty, notes: '',
+          creditStatus: l.total > 0 ? s.creditStatus : 'paid',
+          partialPaid: s.creditStatus === 'partial' ? paid[i] : 0,
+          customerId: s.customerId || '', customerName: s.customerName || '',
+          enteredBy: s.cashier, enteredByRole: s.cashierRole || '', enteredAt: s.at, approvalStatus: 'approved',
+          payMethods: methodsOf(s)
+        };
+        if (l.kind === 'commodity') {
+          const cid = l.itemId.slice(4);
+          (com[cid] || (com[cid] = [])).push(Object.assign(base, { batchName: BATCH_NAME, transporter: '', salePrice: l.price }));
+        } else {
+          gen.push(Object.assign(base, { itemName: l.name, itemId: l.itemId, sellingPrice: l.price, unit: l.unit }));
+        }
+      });
+    });
+    return { gen, com };
+  }
+
+  // itemId -> quantity sold (items AND commodities; commodity ids start with "com:"). The till subtracts this from stock.
+  function soldById(sales) {
+    const m = new Map();
+    (sales || []).forEach(s => s.lines.forEach(l => m.set(l.itemId, r3((m.get(l.itemId) || 0) + l.qty))));
+    return m;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // STORAGE ADAPTERS — every method is async; d = depot key
+  //   add(d, rec)                       save a sale AND queue it for upload, in one transaction; EXISTS if the id is taken
+  //   get(d, id) / all(d)               read
+  //   addMany(d, recs, queue)           add those not stored yet, return how many; queue=true also queues them for upload
+  //   outbox(d)                         [{id, tries, err}] still to upload      unqueue(d, id)      bump(d, id, err)
+  //   getMeta(k) / setMeta(k, v)
+  // ══════════════════════════════════════════════════════════════════════════════
+  function memAdapter() {
+    const sales = new Map(), outbox = new Map(), meta = new Map();
+    const K = (d, id) => d + '|' + id;
+    return {
+      async add(d, rec) {
+        if (sales.has(K(d, rec.id))) throw err('EXISTS', 'This receipt number is already recorded');
+        sales.set(K(d, rec.id), JSON.parse(JSON.stringify(rec)));
+        outbox.set(K(d, rec.id), { d, id: rec.id, tries: 0, err: '' });
+      },
+      async get(d, id) { const r = sales.get(K(d, id)); return r ? JSON.parse(JSON.stringify(r)) : null; },
+      async all(d) { const o = []; sales.forEach((r, k) => { if (k.startsWith(d + '|')) o.push(JSON.parse(JSON.stringify(r))); }); return o; },
+      async addMany(d, recs, queue) {
+        let n = 0;
+        recs.forEach(rec => {
+          if (sales.has(K(d, rec.id))) return;
+          sales.set(K(d, rec.id), JSON.parse(JSON.stringify(rec)));
+          if (queue) outbox.set(K(d, rec.id), { d, id: rec.id, tries: 0, err: '' });
+          n++;
+        });
+        return n;
+      },
+      async outbox(d) { const o = []; outbox.forEach(q => { if (q.d === d) o.push({ id: q.id, tries: q.tries, err: q.err }); }); return o; },
+      async unqueue(d, id) { outbox.delete(K(d, id)); },
+      async bump(d, id, e) { const q = outbox.get(K(d, id)); if (q) { q.tries++; q.err = String(e || ''); } },
+      async getMeta(k) { return meta.has(k) ? meta.get(k) : null; },
+      async setMeta(k, v) { meta.set(k, v); },
+    };
+  }
+
+  // IndexedDB: database "mdm_sales" (separate from index.html's "mdm_db", so neither page's schema upgrade can block the other).
+  function idbAdapter(idb) {
+    idb = idb || (typeof indexedDB !== 'undefined' ? indexedDB : null);
+    let dbp = null;
+    function open() {
+      if (dbp) return dbp;
+      if (!idb) return Promise.reject(err('STORAGE', 'IndexedDB is not available'));
+      dbp = new Promise((res, rej) => {
+        let q;
+        try { q = idb.open('mdm_sales', 1); } catch (e) { dbp = null; return rej(err('STORAGE', 'Could not open the sales store')); }
+        q.onupgradeneeded = () => {
+          const db = q.result;
+          db.createObjectStore('sales', { keyPath: 'k' }).createIndex('depot', 'depot');
+          db.createObjectStore('outbox', { keyPath: 'k' }).createIndex('depot', 'depot');
+          db.createObjectStore('meta', { keyPath: 'k' });
+        };
+        q.onsuccess = () => { const db = q.result; db.onversionchange = () => { try { db.close(); } catch (e) {} dbp = null; }; res(db); };
+        q.onerror = () => { dbp = null; rej(err('STORAGE', 'Could not open the sales store')); };
+      });
+      return dbp;
+    }
+    const wait = tx => new Promise((res, rej) => {
+      tx.oncomplete = () => res();
+      tx.onerror = () => rej(tx.error || err('STORAGE', 'Could not save'));
+      tx.onabort = () => rej(tx.error || err('STORAGE', 'Could not save'));
+    });
+    const req = r => new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error || err('STORAGE', 'Could not read')); });
+    // 'strict' makes the browser flush to disk before the transaction completes: a sale must survive a battery pull.
+    function tx(db, names, mode) {
+      try { return db.transaction(names, mode, { durability: 'strict' }); } catch (e) { return db.transaction(names, mode); }
+    }
+    return {
+      async add(d, rec) {
+        const db = await open(), t = tx(db, ['sales', 'outbox'], 'readwrite'), k = d + '|' + rec.id;
+        let dup = false;
+        const a = t.objectStore('sales').add({ k, depot: d, id: rec.id, rec });
+        a.onerror = ev => { dup = true; ev.preventDefault(); try { t.abort(); } catch (e) {} };
+        t.objectStore('outbox').put({ k, depot: d, id: rec.id, tries: 0, err: '' });
+        try { await wait(t); } catch (e) { throw dup ? err('EXISTS', 'This receipt number is already recorded') : (e && e.code ? e : err('STORAGE', 'Could not save the sale')); }
+      },
+      async get(d, id) {
+        const db = await open(), r = await req(tx(db, ['sales'], 'readonly').objectStore('sales').get(d + '|' + id));
+        return r ? r.rec : null;
+      },
+      async all(d) {
+        const db = await open(), rows = await req(tx(db, ['sales'], 'readonly').objectStore('sales').index('depot').getAll(d));
+        return rows.map(x => x.rec);
+      },
+      async addMany(d, recs, queue) {
+        if (!recs.length) return 0;
+        const db = await open(), t = tx(db, queue ? ['sales', 'outbox'] : ['sales'], 'readwrite');
+        let n = 0;
+        recs.forEach(rec => {
+          const k = d + '|' + rec.id;
+          const a = t.objectStore('sales').add({ k, depot: d, id: rec.id, rec });
+          a.onsuccess = () => { n++; if (queue) t.objectStore('outbox').put({ k, depot: d, id: rec.id, tries: 0, err: '' }); };
+          a.onerror = ev => ev.preventDefault();         // already stored: keep the original, carry on with the rest
+        });
+        await wait(t);
+        return n;
+      },
+      async outbox(d) {
+        const db = await open(), rows = await req(tx(db, ['outbox'], 'readonly').objectStore('outbox').index('depot').getAll(d));
+        return rows.map(q => ({ id: q.id, tries: q.tries || 0, err: q.err || '' }));
+      },
+      async unqueue(d, id) { const db = await open(), t = tx(db, ['outbox'], 'readwrite'); t.objectStore('outbox').delete(d + '|' + id); await wait(t); },
+      async bump(d, id, e) {
+        const db = await open(), t = tx(db, ['outbox'], 'readwrite'), s = t.objectStore('outbox'), k = d + '|' + id;
+        const g = s.get(k);
+        g.onsuccess = () => { const q = g.result; if (q) { q.tries = (q.tries || 0) + 1; q.err = String(e || ''); s.put(q); } };
+        await wait(t);
+      },
+      async getMeta(k) { const db = await open(), r = await req(tx(db, ['meta'], 'readonly').objectStore('meta').get(k)); return r ? r.v : null; },
+      async setMeta(k, v) { const db = await open(), t = tx(db, ['meta'], 'readwrite'); t.objectStore('meta').put({ k, v }); await wait(t); },
+    };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // THE STORE
+  //   env = { depotKey(), adapter?, opts? }     opts is passed to toRecord (dateOf / timeOf)
+  //   cloud = { get(path), putIfAbsent(path, obj), query(path, queryString) }   (Gate.restCloud gives exactly this)
+  // ══════════════════════════════════════════════════════════════════════════════
+  function create(env) {
+    const A = env.adapter || idbAdapter();
+    const depot = () => String(env.depotKey() || '');
+    const need = () => { const d = depot(); if (!d) throw err('NO_DEPOT', 'No depot yet'); return d; };
+
+    // Save one sale. It is stored and queued for upload in one transaction; only after this resolves may the receipt be shown.
+    async function append(basket) {
+      const d = need(), rec = toRecord(basket, env.opts);
+      const bad = validate(rec);
+      if (bad) throw err('INVALID', 'The sale is not valid: ' + bad);
+      await A.add(d, rec);
+      return rec;
+    }
+    async function all() { return (await A.all(need())).sort((a, b) => (a.at - b.at) || a.id.localeCompare(b.id)); }
+    async function pending() { return (await A.outbox(need())).length; }
+
+    // Upload this device's outbox. Stops at the first network failure (everything stays queued). A sale that is already in
+    // the cloud with the same till id counts as uploaded, which is what makes retries and double taps harmless.
+    async function push(cloud) {
+      const d = need(), queue = await A.outbox(d);
+      let sent = 0, lastErr = '';
+      for (const q of queue) {
+        const rec = await A.get(d, q.id);
+        if (!rec) { await A.unqueue(d, q.id); continue; }
+        const path = 'depots/' + d + '/sales/' + q.id;
+        try { await cloud.putIfAbsent(path, forCloud(rec)); await A.unqueue(d, q.id); sent++; continue; }
+        catch (e) {
+          const c = (e && e.code) || 'error';
+          if (c === 'NETWORK' || c === 'NO_AUTH') { lastErr = c; break; }
+          let there = null;
+          try { there = await cloud.get(path); } catch (e2) { lastErr = (e2 && e2.code) || 'error'; if (lastErr === 'NETWORK' || lastErr === 'NO_AUTH') break; await A.bump(d, q.id, lastErr); continue; }
+          if (there && typeof there === 'object' && there.tillId === rec.tillId) { await A.unqueue(d, q.id); sent++; }
+          else { lastErr = c; await A.bump(d, q.id, c); }
+        }
+      }
+      return { sent, left: (await A.outbox(d)).length, error: lastErr };
+    }
+
+    // Download the sales other tills have uploaded. Incremental: the cursor is the newest createdAt seen, and each pull
+    // starts a minute before it, so nothing written at the same moment is missed (re-reading a record is harmless).
+    async function pull(cloud) {
+      const d = need(), ck = 'cursor:' + d;
+      let cursor = Number(await A.getMeta(ck)) || 0, start = cursor ? Math.max(0, cursor - OVERLAP_MS) : 0, added = 0, bad = 0;
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const res = await cloud.query('depots/' + d + '/sales', 'orderBy=' + encodeURIComponent('"createdAt"') + '&startAt=' + start + '&limitToFirst=' + PAGE);
+        const ids = res && typeof res === 'object' ? Object.keys(res) : [];
+        if (!ids.length) break;
+        const good = []; let maxC = start;
+        ids.forEach(id => {
+          const x = fromCloud(id, res[id]);
+          if (x.rec) good.push(x.rec); else bad++;
+          if (x.createdAt > maxC) maxC = x.createdAt;
+        });
+        added += await A.addMany(d, good, false);
+        if (maxC > cursor) cursor = maxC;
+        if (ids.length < PAGE || maxC <= start) break;   // last page, or a full page that cannot move on: stop rather than loop
+        start = maxC;
+      }
+      await A.setMeta(ck, cursor);
+      return { added, bad };
+    }
+
+    // Records from a backup file: validated, stored if not already there, and queued so the cloud gets any it lacks.
+    async function importMany(list) {
+      const d = need(), good = [];
+      arr(list).forEach(r => { if (r && !validate(r)) good.push(JSON.parse(JSON.stringify(r))); });
+      return { added: await A.addMany(d, good, true), skipped: arr(list).length - good.length };
+    }
+
+    return { append, all, pending, push, pull, importMany };
+  }
+
+  return { V, ID_RE, BATCH_NAME, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, linePaid, methodsOf, create, memAdapter, idbAdapter };
+})();
+
+if (typeof module !== 'undefined' && module.exports) module.exports = Sales; // lets Node load it for tests
