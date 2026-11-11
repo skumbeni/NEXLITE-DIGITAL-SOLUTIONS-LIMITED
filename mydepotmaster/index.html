@@ -4183,7 +4183,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.34';
+const SW_VERSION  = 'v0.3.39';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -7734,9 +7734,8 @@ function renderDash(){
   });
   const warnItems=[...(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean),...new Set(DATA.generalInventory.map(x=>x.itemName))];
   [...new Set(warnItems)].forEach(name=>{
-    const rec=approvedArr(DATA.generalInventory).filter(r=>r.itemName===name).reduce((a,b)=>a+Number(b.received||0),0);
-    const iss=approvedArr(DATA.generalIssued).filter(r=>r.itemName===name).reduce((a,b)=>a+Number(b.issued||0),0);
-    if(iss>rec) warnings.push({icon:'🔴',title:`NEGATIVE BALANCE — ${name}`,msg:`Issued (${iss.toLocaleString()}) exceeds received (${rec.toLocaleString()}). Balance: <strong style="color:var(--red)">${(rec-iss).toLocaleString()}</strong>`});
+    const _gs=genStock(name);const rec=_gs.rec,iss=_gs.out;
+    if(_gs.bal<0) warnings.push({icon:'🔴',title:`NEGATIVE BALANCE — ${name}`,msg:`Issued (${iss.toLocaleString()}) exceeds received (${rec.toLocaleString()}). Balance: <strong style="color:var(--red)">${_gs.bal.toLocaleString()}</strong>`});
   });
   // Rejected goods alerts
   const rejectedEntries=approvedArr(DATA.generalInventory).filter(x=>x.condition==='rejected');
@@ -7753,9 +7752,7 @@ function renderDash(){
     const itemName=_invItemName(invItem);
     const minStock=_invItemMin(invItem);
     if(!itemName||minStock<=0)return;
-    const rec=approvedArr(DATA.generalInventory).filter(r=>r.itemName===itemName&&r.condition!=='rejected').reduce((a,b)=>a+Number(b.received||0),0);
-    const iss=approvedArr(DATA.generalIssued).filter(r=>r.itemName===itemName).reduce((a,b)=>a+Number(b.issued||0),0);
-    const bal=rec-iss;
+    const bal=genStock(itemName).bal;
     if(bal<=minStock){
       warnings.push({icon:'🔔',title:`LOW STOCK — ${itemName}`,msg:`Current balance: <strong style="color:var(--amber)">${bal.toLocaleString()} units</strong> · Minimum threshold: <strong>${minStock.toLocaleString()} units</strong>. Reorder required.`});
     }
@@ -7765,10 +7762,9 @@ function renderDash(){
     const itemName=_invItemName(invItem);
     const reserved=_invItemReserved(invItem);
     if(!itemName||reserved<=0)return;
-    const rec=approvedArr(DATA.generalInventory).filter(r=>r.itemName===itemName&&r.condition!=='rejected').reduce((a,b)=>a+Number(b.received||0),0);
-    const iss=approvedArr(DATA.generalIssued).filter(r=>r.itemName===itemName).reduce((a,b)=>a+Number(b.issued||0),0);
-    const available=(rec-iss)-reserved;
-    if(available<0){warnings.push({icon:'🔒',title:`RESERVED STOCK SHORTFALL — ${itemName}`,msg:`Reserved: <strong>${reserved.toLocaleString()}</strong> · Balance: <strong style="color:var(--red)">${(rec-iss).toLocaleString()}</strong> · Shortfall: <strong style="color:var(--red)">${Math.abs(available).toLocaleString()}</strong>`});}
+    const _gs=genStock(itemName);
+    const available=_gs.bal-reserved;
+    if(available<0){warnings.push({icon:'🔒',title:`RESERVED STOCK SHORTFALL — ${itemName}`,msg:`Reserved: <strong>${reserved.toLocaleString()}</strong> · Balance: <strong style="color:var(--red)">${_gs.bal.toLocaleString()}</strong> · Shortfall: <strong style="color:var(--red)">${Math.abs(available).toLocaleString()}</strong>`});}
   });
   // Expiry alerts (batches expiring within 30 days or already expired)
   const today30=new Date(); today30.setDate(today30.getDate()+30);
@@ -7803,9 +7799,7 @@ function renderDash(){
   const allItems=[...(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean),...new Set(DATA.generalInventory.map(x=>x.itemName)),...new Set(DATA.generalIssued.map(x=>x.itemName))];
   const uniqueItems=[...new Set(allItems)].sort();
   const invCards=uniqueItems.map(name=>{
-    const rec=DATA.generalInventory.filter(r=>r.itemName===name).reduce((a,b)=>a+Number(b.received||0),0);
-    const iss=DATA.generalIssued.filter(r=>r.itemName===name).reduce((a,b)=>a+Number(b.issued||0),0);
-    const bal=rec-iss;
+    const _gs=genStock(name);const rec=_gs.rec,iss=_gs.out,bal=_gs.bal;
     const invItemDef=(DATA.inventoryItems||[]).find(x=>_invItemName(x)===name);
     const reserved=invItemDef?_invItemReserved(invItemDef):0;
     const available=bal-reserved;
@@ -8023,9 +8017,7 @@ function renderGeneral(){
   // Stock value: for each item, current balance × latest purchase price
   const allItemNames=[...new Set([...(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean),...DATA.generalInventory.map(x=>x.itemName),...DATA.generalIssued.map(x=>x.itemName)])];
   const totalStockValue=allItemNames.reduce((sum,name)=>{
-    const rec=DATA.generalInventory.filter(r=>r.itemName===name).reduce((a,b)=>a+Number(b.received||0),0);
-    const iss=DATA.generalIssued.filter(r=>r.itemName===name).reduce((a,b)=>a+Number(b.issued||0),0);
-    const bal=Math.max(0,rec-iss);
+    const bal=Math.max(0,genStock(name).bal);
     const latestPP=DATA.generalInventory.filter(r=>r.itemName===name&&Number(r.purchasePrice||0)>0).slice(-1)[0];
     const pp=latestPP?Number(latestPP.purchasePrice):((DATA.inventoryPrices||{})[name]?.purchasePrice||0);
     return sum+bal*pp;
@@ -8694,9 +8686,7 @@ function renderGenSummary(){
   const cards=uniqueItems.map(name=>{
     const recEntries=DATA.generalInventory.filter(r=>r.itemName===name).sort((a,b)=>(a.date+(a.time||'')).localeCompare(b.date+(b.time||'')));
     const issEntries=DATA.generalIssued.filter(r=>r.itemName===name).sort((a,b)=>(a.date+(a.time||'')).localeCompare(b.date+(b.time||'')));
-    const totalRec=recEntries.reduce((a,b)=>a+Number(b.received||0),0);
-    const totalIss=issEntries.reduce((a,b)=>a+Number(b.issued||0),0);
-    const bal=totalRec-totalIss;
+    const _gs=genStock(name);const totalRec=_gs.rec,totalIss=_gs.out,bal=_gs.bal;
     const balColor=bal<=0?'var(--red)':bal<5?'var(--amber)':'var(--blue)';
 
     // Financial calculations
@@ -9090,6 +9080,30 @@ async function salesSync(){
     try{await L.pull(C);}catch(e){console.warn('[MDM] sales download failed',e);}
   }finally{_salesBusy=false;}
   await salesRefresh();
+}
+// ── ONE stock formula (roadmap step 10) ──────────────────────────────────────────────────────────────────────────
+//     stock = received - issued - sold + returns        no stored counters: every figure is summed from records
+// Sales.stockBook (sales.js) is the only place this is worked out; the till (pos.html) calls the same function, so both
+// always show the same number. received/issued are DATA.generalInventory / generalIssued (approved rows only; the overlay
+// rows flagged _sale are skipped), sold comes straight from the ledger, returns will come from void/refund records
+// (roadmap step 19; none exist yet). genStock(name) -> {rec, issued, sold, ret, out (= issued + sold), bal}.
+//   genStock(name,{until:'YYYY-MM-DD HH:MM'}) or genStock(name,{untilDate:'YYYY-MM-DD'}) gives the stock as it was then.
+var _gbook=null,_gbookKey=null;
+function _stockOpts(extra){
+  const ids=new Map();
+  (DATA.inventoryItems||[]).forEach(x=>{const n=_invItemName(x);if(n)ids.set(n,_invItemId(x));});
+  return Object.assign({idOfName:n=>ids.get(n)||_itemLegacyId(n)},extra);
+}
+function _stockSrc(){return {received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:_SALE_LIST||[],returns:[]};}
+function genStockBook(){
+  const k=[DATA.generalInventory,DATA.generalIssued,DATA.inventoryItems,_SALE_LIST];      // rebuilt only when one of these changed
+  if(_gbook&&_gbookKey&&k.every((x,j)=>x===_gbookKey[j]))return _gbook;
+  _gbook=Sales.stockBook(_stockSrc(),_stockOpts());_gbookKey=k;return _gbook;
+}
+function genStock(name,at){
+  if(!at)return genStockBook().byName(name);
+  const o=_stockOpts(at);o.only=o.idOfName(name);
+  return Sales.stockBook(_stockSrc(),o).byName(name);
 }
 function _saleLockToast(){showToast('\u{1F9FE} A till sale is a permanent record and cannot be edited or deleted here. Voids and refunds come with the till\u2019s next steps.');}
 // The receipt of a whole till basket (every line, every payment) for a Sales History row that came from the till.
@@ -9831,9 +9845,7 @@ function delGenIss(id){const _r=(DATA.generalIssued||[]).find(x=>x.id===id);if(_
 // ── GENERAL INVENTORY STOCK COUNT ────────────────────────────────────────────
 // Helper: compute system-available for a general inventory item (all-time)
 function itemAvail(itemName){
-  const rec=approvedArr(DATA.generalInventory).filter(r=>r.itemName===itemName).reduce((a,b)=>a+Number(b.received||0),0);
-  const iss=approvedArr(DATA.generalIssued).filter(i=>i.itemName===itemName).reduce((a,b)=>a+Number(b.issued||0),0);
-  return rec-iss;
+  return genStock(itemName).bal;      // received - issued - sold + returns (roadmap step 10)
 }
 // Helper: latest physical stock count for a general inventory item
 function itemPhysical(itemName){
@@ -9929,9 +9941,7 @@ function renderGenStockCount(){
   const countRows=counts.slice().sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time)).map(c=>{
     // System available at the time of this count: sum of records on or before count date/time
     const countDT=c.date+(c.time||'00:00');
-    const recAtCount=approvedArr(DATA.generalInventory).filter(r=>r.itemName===c.itemName&&((r.date+( r.time||'00:00'))<=countDT)).reduce((a,b)=>a+Number(b.received||0),0);
-    const issAtCount=approvedArr(DATA.generalIssued).filter(i=>i.itemName===c.itemName&&((i.date+(i.time||'00:00'))<=countDT)).reduce((a,b)=>a+Number(b.issued||0),0);
-    const availAtCount=recAtCount-issAtCount;
+    const availAtCount=genStock(c.itemName,{until:c.date+' '+(c.time||'00:00')}).bal;
     const variance=Number(c.physicalCount)-availAtCount;
     const varColor=variance<0?'var(--red)':variance===0?'var(--green)':'var(--amber)';
     const varTxt=(variance>=0?'+':'')+variance.toLocaleString();
@@ -10322,14 +10332,40 @@ function cIss(cid){ return (DATA.commodityIssued||{})[cid]||[]; }
 function cSC(cid){  return (DATA.commodityStockCounts||{})[cid]||[]; }
 function getCom(cid){ return (DATA.commodities||[]).find(c=>c.id===cid)||{id:cid,name:cid,icon:'📦',unit:'units'}; }
 
+// ── Commodity stock PER BATCH (v0.3.36) ─────────────────────────────────────────────────────────────────────────
+// Same formula as the till and genStock, split by batch:  batch stock = received - issued - sold.
+// A till sale names no batch, so Sales.batchBook (sales.js) allocates every sale line to the batches FIFO (oldest stock
+// first), replaying the records in date/time order. Nothing is stored; the batches always add up to the commodity total
+// the till shows. The overlay rows flagged _sale (batch 'TILL SALES') are skipped there; the ledger is read directly.
+// comBatchBook(cid) -> { get(batch) {rec,issued,sold,out,bal,soldValue}, names(), total(), timeline(), allocation(id) }
+// comBatchBook(cid,{untilDate:'YYYY-MM-DD'}) gives the books as they stood at the end of that day (not cached).
+var _cbooks={};
+function _comBatchSrc(cid){return {received:cRec(cid),issued:cIss(cid),sales:_SALE_LIST||[]};}
+function comBatchBook(cid,at){
+  cid=cid||CCOM;
+  if(at)return Sales.batchBook(_comBatchSrc(cid),Object.assign({cid:cid},at));
+  const k=[cRec(cid),cIss(cid),_SALE_LIST];       // rebuilt only when one of these changed
+  const c=_cbooks[cid];
+  if(c&&c.k.every((x,j)=>x===k[j]))return c.book;
+  const book=Sales.batchBook({received:k[0],issued:k[1],sales:_SALE_LIST||[]},{cid:cid});
+  _cbooks[cid]={k:k,book:book};return book;
+}
+// Batch names of a commodity: every batch with a received or issued record, plus the 'TILL SALES' pseudo batch ONLY if
+// a sale had no stock to come from (so nothing sold ever disappears from view).
+function comBatchNames(cid){
+  cid=cid||CCOM;
+  const names=[...new Set([...cRec(cid),...cIss(cid).filter(r=>!(r&&r._sale))].map(x=>x.batchName))];
+  const ps=Sales.BATCH_NAME;
+  if(names.indexOf(ps)<0&&comBatchBook(cid).get(ps).sold>0)names.push(ps);
+  return names;
+}
+
 // Helper: compute system-Available for a batch (all-time, not period-filtered) —
 // this is the LIVE current balance, used for stock-validation/warnings (issue forms,
 // variance checks) where the true up-to-the-minute figure is required.
 function batchAvail(batchName, cid){
   cid=cid||CCOM;
-  const rec=approvedArr(cRec(cid)).filter(r=>r.batchName===batchName).reduce((a,b)=>a+Number(b.received||0),0);
-  const iss=approvedArr(cIss(cid)).filter(i=>i.batchName===batchName).reduce((a,b)=>a+Number(b.issued||0),0);
-  return rec-iss;
+  return comBatchBook(cid).get(batchName).bal;   // received - issued - sold (till sales allocated FIFO), see comBatchBook
 }
 
 // Helper: per-batch running Available balance, frozen at each entry's own date/time —
@@ -10341,17 +10377,9 @@ function batchAvail(batchName, cid){
 // of only counting one. Returns a map of record id -> balance-after-that-record.
 function batchAvailTimeline(cid){
   cid=cid||CCOM;
-  const recs=approvedArr(cRec(cid)).map(r=>({id:r.id,batchName:r.batchName,date:r.date,time:r.time,delta:Number(r.received||0)}));
-  const isses=approvedArr(cIss(cid)).map(r=>({id:r.id,batchName:r.batchName,date:r.date,time:r.time,delta:-Number(r.issued||0)}));
-  const byBatch={};
-  [...recs,...isses].forEach(r=>{ (byBatch[r.batchName]=byBatch[r.batchName]||[]).push(r); });
-  const map={};
-  Object.keys(byBatch).forEach(bn=>{
-    const list=byBatch[bn].slice().sort((a,b)=>(a.date+(a.time||'')).localeCompare(b.date+(b.time||'')));
-    let bal=0;
-    list.forEach(r=>{ bal+=r.delta; map[r.id]=bal; });
-  });
-  return map;
+  // id -> stock after that row. A received/issued row shows its own batch; a till-sale row (belongs to no one batch)
+  // shows the commodity's total stock after the sale.
+  return comBatchBook(cid).timeline();
 }
 
 // Helper: latest physical stock count for a batch
@@ -10587,7 +10615,7 @@ function renderMaizeIss(){
 function renderMaizeVariance(){
   const com=getCom(CCOM);
   const allRec=cRec(CCOM); const allIss=cIss(CCOM);
-  const batches=[...new Set([...allRec.map(x=>x.batchName),...allIss.map(x=>x.batchName)])];
+  const batches=comBatchNames(CCOM);
   const counts=filterPeriod(cSC(CCOM), PERIOD.maize, 'date', 'maize');
   const rows=batches.map(bn=>{
     const avail=batchAvail(bn,CCOM);
@@ -10607,9 +10635,7 @@ function renderMaizeVariance(){
 
   const countRows=counts.slice().reverse().map(c=>{
     // System available at the time of this count: only records on or before count date
-    const recAtCount=cRec(CCOM).filter(r=>r.batchName===c.batchName&&r.date<=c.date).reduce((a,b)=>a+Number(b.received||0),0);
-    const issAtCount=cIss(CCOM).filter(i=>i.batchName===c.batchName&&i.date<=c.date).reduce((a,b)=>a+Number(b.issued||0),0);
-    const availAtCount=recAtCount-issAtCount;
+    const availAtCount=comBatchBook(CCOM,{untilDate:c.date}).get(c.batchName).bal;   // received - issued - sold, up to the end of the count day
     const variance=Number(c.physicalCount)-availAtCount;
     const varColor=variance<0?'var(--red)':variance===0?'var(--green)':'var(--amber)';
     const varTxt=variance<0?`${variance.toLocaleString()}`:(variance===0?'0':'+'+variance.toLocaleString());
@@ -10706,13 +10732,15 @@ function renderMaizeSummary(){
 
 function renderMaizeBatchSummaryRows(hasPricing){
   const allRec=cRec(CCOM); const allIss=cIss(CCOM);
-  const batches=[...new Set([...allRec.map(x=>x.batchName),...allIss.map(x=>x.batchName)])];
+  const batches=comBatchNames(CCOM);
+  const _book=comBatchBook(CCOM);
   if(batches.length===0)return`<tr><td colspan="${hasPricing?9:6}" class="empty">No batches yet</td></tr>`;
   return batches.map(bn=>{
     const recItems=allRec.filter(r=>r.batchName===bn);
-    const issItems=allIss.filter(i=>i.batchName===bn);
+    const issItems=allIss.filter(i=>i.batchName===bn&&!i._sale);   // till sales are counted below, allocated to the batch they came from
+    const _bb=_book.get(bn);
     const rec=recItems.reduce((a,b)=>a+Number(b.received||0),0);
-    const iss=issItems.reduce((a,b)=>a+Number(b.issued||0),0);
+    const iss=issItems.reduce((a,b)=>a+Number(b.issued||0),0)+_bb.sold;
     const avail=rec-iss;
     const latest=batchPhysical(bn,CCOM);
     const phys=latest?Number(latest.physicalCount):null;
@@ -10720,7 +10748,7 @@ function renderMaizeBatchSummaryRows(hasPricing){
     const varColor=variance===null?'var(--muted)':variance<0?'var(--red)':variance===0?'var(--green)':'var(--amber)';
     const varTxt=variance===null?'—':variance<0?`-${Math.abs(variance).toLocaleString()}`:(variance===0?'0':'+'+variance.toLocaleString());
     const batchCost=recItems.reduce((a,b)=>a+Number(b.received||0)*Number(b.unitPrice||0),0);
-    const batchRev=issItems.reduce((a,b)=>a+Number(b.issued||0)*Number(b.salePrice||0),0);
+    const batchRev=issItems.reduce((a,b)=>a+Number(b.issued||0)*Number(b.salePrice||0),0)+_bb.soldValue;
     const batchProfit=batchRev-batchCost;
     const profitCol=batchProfit>=0?'var(--green)':'var(--red)';
     return `<tr>
@@ -11004,9 +11032,7 @@ function _mriAvailHint(l){
   } else {
     const name=l.itemName==='__other__'?(l.itemNameOther||'').trim().toUpperCase():(l.itemName||'').trim();
     if(name){
-      const rec=approvedArr(DATA.generalInventory).filter(r=>r.itemName===name).reduce((a,b)=>a+Number(b.received||0),0);
-      const iss=approvedArr(DATA.generalIssued).filter(r=>r.itemName===name).reduce((a,b)=>a+Number(b.issued||0),0);
-      bal=rec-iss;
+      bal=genStock(name).bal;
     }
   }
   if(bal===null)return'';
@@ -12051,7 +12077,7 @@ function _stampItemIds0(d){
       let res=null;
       for(let i=0;i<arr.length;i++){
         const r=arr[i];
-        if(!r||typeof r!=='object'||!r.itemName||(pred&&!pred(r)))continue;
+        if(!r||typeof r!=='object'||r._sale||!r.itemName||(pred&&!pred(r)))continue;
         const id=idFor(r.itemName);
         if(id&&r.itemId!==id){if(!res)res=arr.slice();res[i]={...r,itemId:id};}
       }
@@ -20862,7 +20888,7 @@ function stockTagChoices(role,task){
 function stockBatchNames(ref){
   if(!ref||ref.indexOf('com:')!==0)return[];
   const cid=ref.slice(4);
-  return[...new Set([...cRec(cid),...cIss(cid)].map(r=>r.batchName).filter(Boolean))].sort();
+  return comBatchNames(cid).filter(Boolean).sort();
 }
 // Last choice is remembered on this device, per task and overall.
 function _stockTagMem(){try{return JSON.parse(localStorage.getItem(STOCK_TAG_LS)||'{}')||{};}catch(e){return{};}}
@@ -20980,8 +21006,7 @@ function _dedRefs(l,reasonStr){
         sys=cRec(cid).filter(r=>norm(r.batchName)===bn&&r.date<=c.date).reduce((a,r)=>a+Number(r.received||0),0)
           -cIss(cid).filter(i=>norm(i.batchName)===bn&&i.date<=c.date).reduce((a,i)=>a+Number(i.issued||0),0);
       }else{
-        sys=(DATA.generalInventory||[]).filter(r=>norm(r.itemName)===norm(item)&&r.date<=c.date).reduce((a,r)=>a+Number(r.received||0),0)
-          -(DATA.generalIssued||[]).filter(i=>norm(i.itemName)===norm(item)&&i.date<=c.date).reduce((a,i)=>a+Number(i.issued||0),0);
+        sys=genStock(norm(item),{untilDate:c.date}).bal;
       }
       const v=Number(c.physicalCount||0)-sys;
       out.push({kind:'count',icon:'⚖️',text:`Stock count · ${lbl}${isCom&&c.batchName?' · '+norm(c.batchName):''} · ${fmtDate(c.date)} (${when(c.date)}) · counted ${n(c.physicalCount)} vs ${n(sys)} in the system · ${v<0?n(-v)+' short':v>0?n(v)+' extra':'matches'}`});
@@ -23828,9 +23853,7 @@ function exportCSV_GenSummary(){
   const allNames=[...new Set([...(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean),...DATA.generalInventory.map(x=>x.itemName),...DATA.generalIssued.map(x=>x.itemName)])];
   const rows=[_csvRow(['Item','Total Received','Total Issued','Balance','Latest Buy Price','Stock Value'])];
   allNames.forEach(name=>{
-    const rec=DATA.generalInventory.filter(r=>r.itemName===name&&r.condition!=='rejected').reduce((a,b)=>a+Number(b.received||0),0);
-    const iss=DATA.generalIssued.filter(r=>r.itemName===name).reduce((a,b)=>a+Number(b.issued||0),0);
-    const bal=rec-iss;
+    const _gs=genStock(name);const rec=_gs.rec,iss=_gs.out,bal=_gs.bal;
     const latestPP=DATA.generalInventory.filter(r=>r.itemName===name&&Number(r.purchasePrice||0)>0).slice(-1)[0];
     const pp=latestPP?Number(latestPP.purchasePrice):0;
     rows.push(_csvRow([name,rec,iss,bal,pp||'',bal>0&&pp?bal*pp:'']));

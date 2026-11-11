@@ -14,10 +14,20 @@
  *      its own outbox whenever it is online, and downloads the other tills' sales (incrementally, by the server's
  *      createdAt time). Uploading is idempotent: a sale that is already there is simply marked as uploaded.
  *
- * WHAT THE MAIN APP DOES WITH IT (bridge until roadmap step 10)
+ * STOCK (roadmap step 10): stockBook() below is the ONE place stock is worked out, for the till and the main app:
+ *       stock = received − issued − sold + returns        (no stored counters: every figure is summed from records)
+ *   received/issued are the main app's own records, sold comes from this ledger, returns from void/refund records
+ *   (roadmap step 19 feeds them; until then there are none).
+ *
+ * PER-BATCH STOCK (v0.3.36): a till sale of a commodity carries no batch, so batchBook() below allocates each sale line to the
+ *   batches FIFO (oldest stock first), replaying the records in date/time order. Nothing is stored; the per-batch figures
+ *   always add up to the same commodity total stockBook() gives (and the till shows).
+ *
+ * WHAT THE MAIN APP DOES WITH THE LEDGER BESIDES STOCK
  *   issuedRows() turns the sales into rows shaped like generalIssued / commodityIssued rows (flag _sale:true). The
- *   main app overlays them on DATA in memory so stock, reports and customer balances see till sales, and strips them
- *   again whenever DATA is saved or synced. Step 10 replaces this with stock = received − sold + returns.
+ *   main app overlays them on DATA in memory so reports, close-out and customer balances see till sales, and strips
+ *   them again whenever DATA is saved or synced. Stock does NOT depend on that overlay: stockBook ignores _sale rows
+ *   and reads the ledger itself. Roadmap step 23 (Sales History from the ledger) retires the overlay.
  *
  * Plain classic script, no dependencies, one global: Sales. Load it with a normal <script src="sales.js"></script>
  * after gate.js. Add sales.js to the precache list in sw.js, otherwise the pages cannot start offline.
@@ -203,6 +213,127 @@ const Sales = (function () {
     const m = new Map();
     (sales || []).forEach(s => s.lines.forEach(l => m.set(l.itemId, r3((m.get(l.itemId) || 0) + l.qty))));
     return m;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // STOCK  =  received − issued − sold + returns   (roadmap step 10)
+  // ══════════════════════════════════════════════════════════════════════════════
+  // Nothing is stored: every call sums records. src:
+  //   received  main-app receive rows (generalInventory, or one commodity's received rows)   {itemId?, itemName, received, date, time, approvalStatus, condition}
+  //   issued    main-app issue rows (generalIssued / one commodity's issued rows)             {itemId?, itemName, issued, date, time, approvalStatus}
+  //             Rows flagged _sale are the main app's in-memory overlay of THIS ledger and are skipped here, so a
+  //             till sale is counted once, from the ledger, never twice.
+  //   sales     ledger records; every line counts against its itemId ("com:<id>" for a commodity)
+  //   returns   [{itemId | itemName, qty, date?, time?}]: stock coming back (voids / refunds, roadmap step 19)
+  // opts:
+  //   idOfName(name)   id for a row that carries only a name (the main app passes its item-master lookup)
+  //   keyOf(row)       overrides how a received/issued row is keyed (used to total ONE commodity)
+  //   until            'YYYY-MM-DD HH:MM': only records at or before that moment (stock as it was at a stock count)
+  //   untilDate        'YYYY-MM-DD': only records on or before that day
+  //   only             a key: work out just that item (cheaper for a one-off question)
+  //   isApproved(row)  default: no approvalStatus, or 'approved'. Pending and rejected entries never count.
+  // Counted: received rows that are approved and not condition 'rejected'; issued rows that are approved.
+  function stockBook(src, o) {
+    o = o || {};
+    src = src || {};
+    const idOf = o.idOfName || (n => 'name:' + String(n || '').trim().toUpperCase());
+    const ok = o.isApproved || (r => !r.approvalStatus || r.approvalStatus === 'approved');
+    const keyOf = o.keyOf || (r => r.itemId || idOf(r.itemName));
+    const upTo = o.until != null ? String(o.until) : null, upDay = o.untilDate != null ? String(o.untilDate) : null;
+    const within = (date, time) => (upTo == null || (String(date || '') + ' ' + (time || '00:00')) <= upTo) && (upDay == null || String(date || '') <= upDay);
+    const m = new Map();
+    const add = (k, f, n) => {
+      if (!k || (o.only != null && k !== o.only) || !isNum(n)) return;
+      let s = m.get(k); if (!s) { s = { rec: 0, issued: 0, sold: 0, ret: 0 }; m.set(k, s); }
+      s[f] += n;
+    };
+    (src.received || []).forEach(r => { if (r && ok(r) && r.condition !== 'rejected' && within(r.date, r.time)) add(keyOf(r), 'rec', Number(r.received) || 0); });
+    (src.issued || []).forEach(r => { if (r && !r._sale && ok(r) && within(r.date, r.time)) add(keyOf(r), 'issued', Number(r.issued) || 0); });
+    (src.sales || []).forEach(s => { if (s && within(s.date, s.time)) arr(s.lines).forEach(l => add(l.itemId, 'sold', Number(l.qty) || 0)); });
+    (src.returns || []).forEach(x => { if (x && within(x.date, x.time)) add(x.itemId || idOf(x.itemName), 'ret', Number(x.qty) || 0); });
+    const fin = s => ({ rec: r3(s.rec), issued: r3(s.issued), sold: r3(s.sold), ret: r3(s.ret), out: r3(s.issued + s.sold), bal: r3(s.rec - s.issued - s.sold + s.ret) });
+    const none = { rec: 0, issued: 0, sold: 0, ret: 0 };
+    return {
+      get: k => fin(m.get(k) || none),                    // { rec, issued, sold, ret, out (= issued + sold), bal }
+      byName: n => fin(m.get(idOf(n)) || none),
+      keys: () => Array.from(m.keys())
+    };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // PER-BATCH STOCK of ONE commodity  =  the stockBook formula, split by batch
+  // ══════════════════════════════════════════════════════════════════════════════
+  //   batch stock = received(batch) − issued(batch) − sold(batch)      (+ returns once voids exist, roadmap step 19)
+  // A till sale names no batch, so every sale line is ALLOCATED: records are replayed in date/time order (at the same
+  // minute: received, then issued, then sold) and a sale takes from the batch that arrived first and still holds stock,
+  // then the next, and so on (FIFO). If a sale is bigger than everything in stock at that moment, the shortfall goes to
+  // the batch the sale last took from (it shows negative: a visible oversell), else to the newest batch, else to the
+  // pseudo batch BATCH_NAME (no stock was recorded at all yet). The allocation is derived, never stored, so it re-works
+  // itself when a backdated receive is entered. A later cut-off gives the same numbers as the full replay up to then.
+  // src: { received: commodity received rows, issued: commodity issued rows (rows flagged _sale are skipped, sales are
+  //        read from the ledger), sales: ledger records }
+  // opts: cid (required: the commodity id; its sale lines have itemId "com:<cid>"), until / untilDate / isApproved,
+  //       exactly as in stockBook. Same rules as stockBook: approved rows only, received rows with condition 'rejected' skipped.
+  // Returns:
+  //   get(batch)        { rec, issued, sold, out (= issued + sold), bal, soldValue (money taken for what was sold) }
+  //   names()           every batch that has any record, oldest stock first
+  //   total()           the commodity's stock = stockBook(...).bal for the same commodity
+  //   timeline()        { rowId: stock after that row }: a received/issued row gets its OWN batch's stock;
+  //                     a till-sale row (id "<saleId>#<line>") gets the commodity's total stock, as it belongs to no one batch
+  //   allocation(id)    which batches a sale line came from: [{ batch, qty }]
+  function batchBook(src, o) {
+    o = o || {};
+    src = src || {};
+    const key = 'com:' + String(o.cid || '');
+    const ok = o.isApproved || (r => !r.approvalStatus || r.approvalStatus === 'approved');
+    const upTo = o.until != null ? String(o.until) : null, upDay = o.untilDate != null ? String(o.untilDate) : null;
+    const within = (date, time) => (upTo == null || (String(date || '') + ' ' + (time || '00:00')) <= upTo) && (upDay == null || String(date || '') <= upDay);
+    const at = (date, time) => String(date || '') + ' ' + (time || '00:00');
+    const nameOf = r => (r.batchName == null ? '' : String(r.batchName));
+    const EPS = 1e-9;
+    const ev = [];
+    (src.received || []).forEach(r => { if (r && !r._sale && ok(r) && r.condition !== 'rejected' && within(r.date, r.time)) ev.push({ k: 0, at: at(r.date, r.time), id: String(r.id || ''), b: nameOf(r), q: Number(r.received) || 0 }); });
+    (src.issued || []).forEach(r => { if (r && !r._sale && ok(r) && within(r.date, r.time)) ev.push({ k: 1, at: at(r.date, r.time), id: String(r.id || ''), b: nameOf(r), q: Number(r.issued) || 0 }); });
+    (src.sales || []).forEach(s => {
+      if (!s || !within(s.date, s.time)) return;
+      arr(s.lines).forEach((l, i) => { if (l && l.itemId === key) ev.push({ k: 2, at: at(s.date, s.time), id: s.id + '#' + i, q: Number(l.qty) || 0, price: Number(l.price) || 0 }); });
+    });
+    ev.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : (a.k - b.k) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
+
+    const st = new Map(), order = [], lines = new Map(), tl = new Map();
+    let total = 0;
+    const slot = b => { let s = st.get(b); if (!s) { s = { rec: 0, issued: 0, sold: 0, value: 0 }; st.set(b, s); } return s; };
+    const bal = s => s.rec - s.issued - s.sold;
+    ev.forEach(e => {
+      if (e.k === 0) {
+        const s = slot(e.b); if (order.indexOf(e.b) < 0) order.push(e.b);
+        s.rec += e.q; total += e.q; tl.set(e.id, bal(s));
+      } else if (e.k === 1) {
+        const s = slot(e.b); s.issued += e.q; total -= e.q; tl.set(e.id, bal(s));
+      } else {
+        let need = e.q, last = null;
+        const parts = [];
+        const take = (b, q) => {
+          const s = slot(b); s.sold += q; s.value += q * e.price; total -= q; need -= q; last = b;
+          const p = parts.find(x => x.batch === b); if (p) p.qty += q; else parts.push({ batch: b, qty: q });
+        };
+        for (const b of order) { if (need <= EPS) break; const have = bal(slot(b)); if (have > EPS) take(b, Math.min(have, need)); }
+        if (need > EPS) take(last != null ? last : (order.length ? order[order.length - 1] : BATCH_NAME), need);
+        lines.set(e.id, parts.map(p => ({ batch: p.batch, qty: r3(p.qty) })));
+        tl.set(e.id, total);
+      }
+    });
+
+    const fin = s => ({ rec: r3(s.rec), issued: r3(s.issued), sold: r3(s.sold), out: r3(s.issued + s.sold), bal: r3(s.rec - s.issued - s.sold), soldValue: r2(s.value) });
+    const none = { rec: 0, issued: 0, sold: 0, value: 0 };
+    let tlObj = null;
+    return {
+      get: b => fin(st.get(b == null ? '' : String(b)) || none),
+      names: () => { const n = order.slice(); st.forEach((s, b) => { if (n.indexOf(b) < 0) n.push(b); }); return n; },
+      total: () => r3(total),
+      timeline: () => { if (!tlObj) { tlObj = {}; tl.forEach((v, id) => { tlObj[id] = r3(v); }); } return tlObj; },
+      allocation: id => (lines.get(id) || []).map(p => ({ batch: p.batch, qty: p.qty }))
+    };
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
@@ -396,7 +527,7 @@ const Sales = (function () {
     return { append, all, pending, push, pull, importMany };
   }
 
-  return { V, ID_RE, BATCH_NAME, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, linePaid, methodsOf, create, memAdapter, idbAdapter };
+  return { V, ID_RE, BATCH_NAME, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, linePaid, methodsOf, create, memAdapter, idbAdapter };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Sales; // lets Node load it for tests

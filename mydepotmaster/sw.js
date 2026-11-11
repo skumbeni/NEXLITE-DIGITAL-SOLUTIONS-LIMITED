@@ -25,7 +25,68 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.34 (2026-11-11) — Till step 9, the append-only sales ledger (sales.js NEW + pos.html + index.html +
+// Current version: v0.3.39 (2026-11-11) — Till step 13: the till's printed receipt (pos.html).
+//   The till already showed one multi-line branded receipt per basket (logo or initials, brand colour, shop name, district, phone,
+//   receipt number, date, cashier, every line, total, payments, change, balance, customer). This version fixes what stopped it
+//   being a receipt you can hand over:
+//   - BUG: the receipt of a SAVED sale was stamped "PREVIEW — NOT A SALE". finalizeSale passes an empty tag for a real sale, and
+//     showReceipt() turned '' into the preview text (tag||'PREVIEW...'). Now only a missing tag means preview; '' means no stamp.
+//   - A fully paid sale now carries a "PAID IN FULL" tag in the brand colour, next to the existing ON CREDIT / PART PAID tags (not
+//     on practice sales).
+//   - Print layout: @page margin 0, so Chrome adds no URL/date header and footer; the receipt carries its own padding. Compact
+//     spacing so a 9-line basket fits one page. Each item (name + price line) is kept whole across page breaks and the totals,
+//     payments and footer block is kept together, so a long basket breaks between items and the footer is never left alone.
+//     Checked at Letter and at an 80 mm roll width.
+//   - Brand colour: a light brand colour (yellow, pale tones) now gets dark initials and a dark TOTAL instead of white-on-yellow
+//     and yellow-on-white. Dark colours, the default green included, print exactly as before.
+//   - Print sets the page title to "Receipt <number>" while the print dialog is open, so "Save as PDF" proposes that file name; it
+//     is restored after printing.
+//   Files: pos.html + index.html (SW_VERSION only) + sw.js. gate.js, sales.js and database_rules.json are unchanged.
+// Previous: v0.3.38 (2026-11-11) — Till step 12: camera barcode scanning (pos.html).
+//   New camera button in the Sell screen's scan bar. It opens a full-screen scanner that uses the browser's own BarcodeDetector
+//   (Chrome / Samsung Internet on Android, installed PWA included; no library, works offline). The button is only shown where
+//   BarcodeDetector exists; Safari and desktop Chrome on Windows/Linux keep the scan box (USB/Bluetooth scanner or typing).
+//   The camera stays open for a whole basket. Each read goes through the new resolveCode() (pos.html), which the scan box now
+//   uses too, so a camera read follows the same exact barcode/SKU rule: no name search, two items with one code add nothing.
+//   Only a barcode near the middle of the picture counts; two different ones in view add nothing. A code that stays in view is
+//   added once. EAN/UPC/Code 128 are accepted on one frame, other formats must be read twice in a row. A 13-digit read that
+//   starts with 0 also matches the same product stored as a 12-digit UPC-A, and the other way round (camera only). Beep and
+//   vibration on each read, torch button where the camera has one, stock warning in the scanner. Camera is switched off on Done,
+//   Escape, app to background and page hide. Scans count as activity for the idle logout.
+//   Files: pos.html + index.html (SW_VERSION only) + sw.js. gate.js, sales.js and database_rules.json are unchanged.
+// Previous: v0.3.37 (2026-11-11) — Till scanning is exact (pos.html) + version constants brought back in step.
+//   Scan box, on Enter: a code must equal a barcode or SKU exactly (case-insensitive). Before, a code with no exact match fell
+//   back to the typing search and was added if exactly one item was left, so a short or unknown scanned code that sat inside
+//   another item's barcode, SKU or name could add the wrong item. Now a value with no space and a digit in it (4006381333931,
+//   SB-001) counts as a code and never falls back; only words (sugar, coke 500) keep the one-item-left shortcut. If two items
+//   share a code nothing is added and the message names them (the item form and the CSV import already refuse a shared code,
+//   so this only guards data that got in another way). Also: v0.3.36 raised CACHE here but left index.html's SW_VERSION at
+//   v0.3.35, which drives the Median ?_mv= reload, the shell cache name and the version shown in Settings. Both are v0.3.37 now;
+//   always bump them together. Files: pos.html + index.html (SW_VERSION only) + sw.js.
+// Previous: v0.3.36 (2026-11-11) — Commodity stock per BATCH now follows the same formula.
+//   Till sales of a commodity name no batch, so until now they sat in a pseudo batch "TILL SALES" (negative stock) while the
+//   real batches never went down. Sales.batchBook (sales.js, NEW) splits the one formula by batch: batch stock = received -
+//   issued - sold, with each sale line allocated to the batches FIFO (oldest stock first) by replaying the records in date/time
+//   order. Nothing is stored, so a backdated receive simply re-works the allocation; the batches always add up to the commodity
+//   total the till shows (stockBook). A sale bigger than the stock at that moment shows as a negative on the batch it last took
+//   from, and the TILL SALES row only appears if a sale happened before any stock was recorded. index.html now uses it for
+//   batchAvail (variance warnings, Issue and stock-count forms), the Available column on the Received/Issued tables (a till-sale
+//   row shows the commodity's total after the sale), the Variance screen (including stock "at the count date"), the Batch Summary
+//   (sold quantity and sales money now land on the real batch, so batch profit is no longer overstated) and the batch list used
+//   for work-log stock tags. Period reports are flows over a date range, not balances: they already include till sales and are
+//   unchanged. Files: sales.js + index.html + sw.js (pos.html, gate.js and database_rules.json are unchanged).
+// Previous: v0.3.35 (2026-11-11) — Till step 10, ONE stock formula: stock = received - issued - sold + returns.
+//   Sales.stockBook (sales.js) is now the only place stock is worked out; the till (pos.html) and the main app (index.html,
+//   genStock) both call it, so they can never disagree. Nothing is stored: every figure is summed from records. Only approved
+//   entries count (pending and rejected never do), sold is read straight from the ledger (the in-memory _sale overlay rows are
+//   skipped, so a till sale is never counted twice), and returns are a real term, fed by void/refund records from roadmap step 19
+//   (none exist yet). Replaced the copies of the old rec-minus-iss sum behind the dashboard stock cards and alerts, the Inventory
+//   cards and stock value, the Issue form's "Available", stock counts (stock AT the count) and the inventory CSV. Those copies
+//   disagreed: some counted pending entries, some did not. Now one rule, so one item shows one number everywhere.
+//   Period reports (received/issued over a date range) are flows, not balances, and are unchanged. Commodity per-batch stock is
+//   unchanged; the till totals a commodity with the same formula.
+//   Files: sales.js + pos.html + index.html + sw.js (gate.js and database_rules.json are unchanged since v0.3.34).
+// Previous: v0.3.34 (2026-11-11) — Till step 9, the append-only sales ledger (sales.js NEW + pos.html + index.html +
 //   gate.js + database rules). Completing a sale in the till now RECORDS it: one record, sales/{saleId} (saleId = the receipt
 //   number), written once and never changed. It is saved on the phone first (IndexedDB "mdm_sales", with its "to upload"
 //   mark, in one transaction) and only then does the cart empty and the receipt show; if that fails nothing is recorded and
@@ -1903,7 +1964,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.34';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.39';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

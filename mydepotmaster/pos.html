@@ -133,25 +133,30 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 .paper{--acc:#1E8449;max-width:320px;margin:0 auto;padding:20px 18px;background:#fff;color:#111;font:14px/1.4 Arial,Helvetica,sans-serif;border-radius:6px}
 .paper .c{text-align:center}.paper .mu{color:#777;font-size:12px}.paper .b{font-weight:700}
 .paper .logo{display:block;margin:0 auto 6px;height:56px;max-width:140px;object-fit:contain}
-.paper .ini{display:flex;align-items:center;justify-content:center;width:56px;height:56px;margin:0 auto 6px;border-radius:10px;background:var(--acc);color:#fff;font-size:17px;font-weight:900}
+.paper .ini{display:flex;align-items:center;justify-content:center;width:56px;height:56px;margin:0 auto 6px;border-radius:10px;background:var(--acc);color:var(--ink,#fff);font-size:17px;font-weight:900}
 .paper .dep{font-size:18px;font-weight:800;margin-bottom:2px}
 .paper .rule{border:0;border-top:2.5px solid var(--acc);margin:10px 0}
 .paper .dash{border:0;border-top:1px dashed #bbb;margin:10px 0}
 .paper .tag{display:inline-block;margin:6px 0 2px;padding:2px 10px;border:1.5px solid #c0392b;border-radius:6px;color:#c0392b;font-weight:700;font-size:12px}
+.paper .tag.paid{border-color:var(--acct,var(--acc));color:var(--acct,var(--acc))}
 .paper table{width:100%;border-collapse:collapse}
 .paper td{padding:3px 0;vertical-align:top}
 .paper td.r{text-align:right;white-space:nowrap}
 .paper .ln td{padding-top:7px}
 .paper .gt td{font-size:18px;font-weight:800;padding-top:4px}
-.paper .gt td.r{color:var(--acc)}
+.paper .gt td.r{color:var(--acct,var(--acc))}
 .paper .ft{margin-top:12px;text-align:center;font-size:11px;color:#999}
+@page{margin:0}                                  /* no browser header/footer (URL, date) on the printout; the receipt carries its own padding */
 @media print{
   body>*:not(.rovl){display:none!important}
   body{display:block;height:auto;background:#fff;padding:0}
   .rovl{position:static;display:block;background:none;padding:0}
   .rscroll{overflow:visible;padding:0}
   .rbar{display:none!important}
-  .paper{border-radius:0;padding:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .paper{border-radius:0;padding:5mm;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .paper{font-size:13px;line-height:1.3}
+  .paper td{padding:2px 0}.paper .ln td{padding-top:5px}.paper .dash,.paper .rule{margin:7px 0}
+  .paper tr,.paper tbody,.paper .tail{break-inside:avoid}            /* a long basket breaks between items, never through one; the totals block stays whole */
 }
 
 /* ── PAYMENT SCREEN (roadmap step 6) ── */
@@ -207,6 +212,23 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 .h-acts .pri{flex:1;padding:10px 16px}
 .h-acts button:not(.pri){padding:10px 16px}
 .h-empty{text-align:center;color:var(--muted);padding:28px 8px;font-size:14px}
+
+/* ── CAMERA SCANNER (roadmap step 12) ── */
+#cam{min-width:48px;padding:0 12px;font-size:20px;line-height:1}
+.sovl{position:fixed;inset:0;z-index:80;display:flex;flex-direction:column;background:#000;color:#fff}
+.sovl video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+.sovl .sh{position:relative;z-index:2;padding:calc(12px + env(safe-area-inset-top,0px)) 16px 28px;background:linear-gradient(#000c,#0000)}
+.sovl .sh b{font-size:17px}
+.sovl .aim{position:absolute;z-index:1;left:50%;top:46%;width:min(80vw,440px);height:min(38vw,170px);min-height:110px;transform:translate(-50%,-50%);border:3px solid rgba(255,255,255,.9);border-radius:14px;box-shadow:0 0 0 100vmax rgba(0,0,0,.42);pointer-events:none;transition:border-color .15s}
+.sovl .aim.ok{border-color:var(--green)}.sovl .aim.bad{border-color:var(--red)}.sovl .aim.warn{border-color:var(--amber)}
+.sovl .sf{position:relative;z-index:2;margin-top:auto;padding:28px 14px calc(14px + env(safe-area-inset-bottom,0px));background:linear-gradient(#0000,#000d)}
+.sovl .sst{min-height:50px;text-align:center;font-size:17px;font-weight:600;line-height:1.3;overflow-wrap:anywhere}
+.sovl .sst.ok{color:var(--green)}.sovl .sst.bad{color:var(--red)}.sovl .sst.warn{color:var(--amber)}
+.sovl .ssum{margin:2px 0 12px;text-align:center;font-size:14px;color:#cfd6e4}
+.sovl .sbtn{display:flex;gap:10px}
+.sovl .sbtn button{flex:1;padding:14px 16px;font-size:16px;background:rgba(0,0,0,.55)}
+.sovl .sbtn button.pri{background:var(--green)}
+.sovl .sbtn button.on{border-color:var(--amber);color:var(--amber)}
 </style>
 </head>
 <body>
@@ -402,16 +424,17 @@ function idleReset(){
 // file index.html loads. It is written to this phone's IndexedDB first, in one transaction together with its "still to
 // upload" mark, and only then is the receipt shown: a sale is never lost to a dropped signal or a dead battery. Uploading
 // to depots/<depot>/sales/<saleId> is create-only and idempotent, so it simply retries until it works. The same sync also
-// downloads the other tills' sales. Stock on this screen = received - issued (as before) - everything sold through any till.
+// downloads the other tills' sales. Stock on this screen = received - issued - sold + returns, worked out by Sales.stockBook
+// (sales.js), the same function the main app uses, so both always show the same number.
 // The sale is NOT written into DATA, so two tills selling at the same moment cannot overwrite each other.
 const LEDGER=Sales.create({
   depotKey:()=>DATA&&DATA.installId,
   opts:{dateOf:t=>new Date(t).toISOString().slice(0,10)},   // the date rule index.html's today() uses, so Sales History agrees
   adapter:Sales.idbAdapter()
 });
-let SOLD=new Map(),SALES_PENDING=0,SALES_ERR='',SALES_AUTH=false,salesBusy=false;
+let SALES_ALL=[],SALES_PENDING=0,SALES_ERR='',SALES_AUTH=false,salesBusy=false;   // SALES_ALL: every sale record on this phone (own + downloaded)
 async function loadSold(){
-  try{SOLD=Sales.soldById(await LEDGER.all());SALES_PENDING=await LEDGER.pending();}
+  try{SALES_ALL=await LEDGER.all();SALES_PENDING=await LEDGER.pending();}
   catch(e){console.warn('Could not read the sales ledger',e);}
 }
 function paintSales(){
@@ -437,7 +460,7 @@ async function syncSales(){
 
 // ── SELL SCREEN (roadmap step 4: layout) ────────────────────────────────────
 // Reads the item master (DATA.inventoryItems), selling price (DATA.inventoryPrices[name].sellingPrice) and
-// stock (approved received minus approved issued, by itemName, minus everything sold through the ledger, by item id). Commodities are listed
+// stock (received - issued - sold + returns, by item id, through Sales.stockBook in sales.js). Commodities are listed
 // too (see commodityItems). The open cart is autosaved on this device after every change (see LIVE-CART AUTOSAVE
 // below) so a reload or a killed browser does not lose it; the SALE itself is saved by finalizeSale (step 9).
 const COARSE=matchMedia('(pointer:coarse)').matches;   // touch device: keep the soft keyboard down until asked
@@ -462,9 +485,6 @@ function legacyId(name){
   return 'itm_'+h.toString(36);
 }
 const isApproved=r=>!r||!r.approvalStatus||r.approvalStatus==='approved';
-// Till sales are subtracted from the ledger (SOLD). index.html only overlays them on DATA in memory and never saves them there;
-// if a copy ever did leak into the saved data it must not be counted twice.
-const isStock=r=>isApproved(r)&&!(r&&r._sale);
 
 // Commodities (DATA.commodities) are sold from the till too. They are not in the item master, so: stock = approved
 // received minus approved issued, summed over ALL batches of that commodity; price = the selling price set for it in
@@ -478,8 +498,8 @@ function commodityItems(){
       if(!rec.length)rec=DATA.maizeReceived||[];
       if(!iss.length)iss=DATA.maizeIssued||[];
     }
-    rec=rec.filter(isApproved);iss=iss.filter(isStock);
-    const avail=Math.round((rec.reduce((a,r)=>a+Number(r.received||0),0)-iss.reduce((a,r)=>a+Number(r.issued||0),0)-(SOLD.get('com:'+c.id)||0))*1000)/1000;
+    const key='com:'+c.id;      // received - issued - sold + returns, by the shared formula (rows flagged _sale are skipped there, sales are read from the ledger)
+    const avail=Sales.stockBook({received:rec,issued:iss,sales:SALES_ALL,returns:[]},{keyOf:()=>key,only:key}).get(key).bal;
     const unit=String(c.unit||'');
     const o={
       id:'com:'+c.id,kind:'commodity',icon:String(c.icon||''),name:String(c.name),sku:'',barcode:'',
@@ -491,16 +511,17 @@ function commodityItems(){
   });
 }
 function loadCatalog(){
-  const rec=new Map(),iss=new Map();
-  (DATA.generalInventory||[]).filter(isApproved).forEach(r=>rec.set(r.itemName,(rec.get(r.itemName)||0)+Number(r.received||0)));
-  (DATA.generalIssued||[]).filter(isStock).forEach(r=>iss.set(r.itemName,(iss.get(r.itemName)||0)+Number(r.issued||0)));
+  const items=(DATA.inventoryItems||[]).map(x=>typeof x==='string'?{name:x}:x).filter(x=>x&&x.name);
+  const idByName=new Map(items.map(x=>[x.name,x.id||legacyId(x.name)]));
+  // ONE formula for the whole app (sales.js): stock = received - issued - sold + returns. Returns come from void/refund records (step 19).
+  const book=Sales.stockBook({received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:SALES_ALL,returns:[]},{idOfName:n=>idByName.get(n)||legacyId(n)});
   const prices=DATA.inventoryPrices||{};
-  const general=(DATA.inventoryItems||[]).map(x=>typeof x==='string'?{name:x}:x).filter(x=>x&&x.name).map(x=>{
+  const general=items.map(x=>{
     const o={
       id:x.id||legacyId(x.name),kind:'item',name:String(x.name),sku:String(x.sku||''),barcode:String(x.barcode||''),
       unit:String(x.unit||''),per:String(x.unit||''),category:String(x.category||''),min:Number(x.minStock)||0,
       price:Number((prices[x.name]||{}).sellingPrice)||0,
-      avail:Math.round(((rec.get(x.name)||0)-(iss.get(x.name)||0)-(SOLD.get(x.id||legacyId(x.name))||0))*1000)/1000
+      avail:book.get(x.id||legacyId(x.name)).bal
     };
     o.hay=(o.name+' '+o.sku+' '+o.barcode+' '+o.category).toLowerCase();
     return o;
@@ -512,15 +533,36 @@ function matches(q){
   const t=String(q||'').trim().toLowerCase().split(/\s+/).filter(Boolean);
   return t.length?ITEMS.filter(i=>t.every(w=>i.hay.includes(w))):ITEMS;
 }
-function scanMatch(q){
-  const c=String(q||'').trim().toLowerCase();if(!c)return null;
-  return ITEMS.find(i=>(i.barcode&&i.barcode.toLowerCase()===c)||(i.sku&&i.sku.toLowerCase()===c))||null;
+// A scan is EXACT: every item whose barcode or SKU equals the code (case-insensitive). No partial matching, so an unknown
+// code can never turn into some other item. More than one hit means two items share a code: nothing is added.
+function scanMatches(q){
+  const c=String(q||'').trim().toLowerCase();if(!c)return [];
+  return ITEMS.filter(i=>(i.barcode&&i.barcode.toLowerCase()===c)||(i.sku&&i.sku.toLowerCase()===c));
 }
+// A value with no space in it and a digit somewhere (4006381333931, SB-001) is a code, a scan or a typed SKU, never a name:
+// it must match a barcode or SKU exactly. Only words (sugar, coke 500) may fall back to the one-item-left search.
+function looksLikeCode(v){return !/\s/.test(v)&&/\d/.test(v);}
 function say(text,cls,ms){
   MSG.textContent=text||'';MSG.className='msg'+(cls?' '+cls:'');
   clearTimeout(msgT);if(text)msgT=setTimeout(()=>{MSG.textContent='';MSG.className='msg';},ms||2600);
 }
 function focusSearch(){try{Q.focus({preventScroll:true});}catch{Q.focus();}}
+
+// One code -> one item, or the reason it cannot be added. Used by the scan box (Enter) and by the camera, so both follow the
+// same rule: exact barcode or SKU, never a guess. {camera:true}: the value always came from a barcode, so the typing search is
+// off, and a 13-digit read starting with 0 also matches the same product stored as a 12-digit UPC-A (and the other way round).
+function resolveCode(v,o){
+  const cam=!!(o&&o.camera);
+  let hits=scanMatches(v);
+  if(!hits.length&&cam){const alt=/^0\d{12}$/.test(v)?v.slice(1):(/^\d{12}$/.test(v)?'0'+v:'');if(alt)hits=scanMatches(alt);}
+  if(hits.length>1)return {err:'Two items have the code \u201c'+v+'\u201d: '+hits.slice(0,3).map(h=>h.name).join(', ')+(hits.length>3?', \u2026':'')+'. Nothing was added. Ask a manager to fix the barcode in the main app.',ms:7000};
+  let hit=hits[0]||null;
+  if(!hit&&!cam&&!looksLikeCode(v)){const r=matches(v);if(r.length===1)hit=r[0];}   // typing a name: one item left in the list
+  const shown=cam&&v.length>40?v.slice(0,40)+'\u2026':v;
+  if(!hit)return {err:(cam||looksLikeCode(v))?'No item has the code \u201c'+shown+'\u201d.':'No item matches \u201c'+v+'\u201d.'};
+  if(!hit.price)return {err:hit.name+' has no price yet. Set it in the main app under \uD83D\uDCB2 Prices.'};
+  return {hit};
+}
 
 // ── items pane
 function tile(i){
@@ -575,10 +617,20 @@ function makeBasket(pay){
     total:Math.round(lines.reduce((a,l)=>a+l.total,0)*100)/100
   },pay||{});
 }
+// White text on the brand colour (initials box), or near-black when the colour is light, so a yellow or pale brand colour is still
+// readable on paper. The same test picks the colour for the TOTAL and the PAID tag: the brand colour itself, or near-black if it is
+// too light to read on white. Dark colours, including the default green, print exactly as before.
+function brandLight(c){
+  const m=/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(c||'');if(!m)return false;
+  let h=m[1];if(h.length===3)h=h.replace(/./g,x=>x+x);
+  const [r,g,b]=[0,2,4].map(i=>{const v=parseInt(h.substr(i,2),16)/255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4);});
+  return .2126*r+.7152*g+.0722*b>.35;
+}
 function receiptEl(b,tag){
   const di=DATA.depotInfo||{};
   const accent=/^#[0-9a-f]{3,8}$/i.test(di.brandColor||'')?di.brandColor:'#1E8449';
   const paper=el('div','paper');paper.style.setProperty('--acc',accent);
+  if(brandLight(accent)){paper.style.setProperty('--ink','#111');paper.style.setProperty('--acct','#111');}
   if(typeof di.logoDataUrl==='string'&&di.logoDataUrl.startsWith('data:image/')){
     const im=el('img','logo','',{alt:(di.name||'')+' logo'});im.src=di.logoDataUrl;paper.append(im);
   }else{
@@ -600,36 +652,50 @@ function receiptEl(b,tag){
   b.lines.forEach(l=>{
     const r1=el('tr','ln'),c1=el('td','b',l.name,{colspan:'2'});r1.append(c1);
     const r2=el('tr'),q=el('td','mu',fq(l.qty)+(l.unit?' '+l.unit.toLowerCase():'')+' × '+money(l.price)),a=el('td','r b',money(l.total));
-    r2.append(q,a);t.append(r1,r2);
+    r2.append(q,a);const tb=el('tbody');tb.append(r1,r2);t.append(tb);   // one tbody per item so a page break never separates its name from its price
   });
   paper.append(t,el('hr','dash'));
+  const tail=el('div','tail');                    // total, payments and footer stay together on one page when printed
   const tt=el('table'),tr=el('tr','gt');tr.append(el('td','','TOTAL'),el('td','r',money(b.total)));tt.append(tr);
-  paper.append(tt);
-  paper.append(el('div','mu',b.lineCount+(b.lineCount===1?' item':' items')+' · '+fq(b.qtyTotal)+(b.qtyTotal===1?' unit':' units')));
+  tail.append(tt);
+  tail.append(el('div','mu',b.lineCount+(b.lineCount===1?' item':' items')+' · '+fq(b.qtyTotal)+(b.qtyTotal===1?' unit':' units')));
   if(b.payments){                                  // payment lines: cash shows what was handed over, then the change
-    paper.append(el('hr','dash'));
+    tail.append(el('hr','dash'));
     const pt=el('table');
     const prow=(a,v,cls)=>{const r=el('tr',cls||'');r.append(el('td','',a),el('td','r',v));pt.append(r);};
     b.payments.forEach(p=>prow(p.label+(p.ref?' · '+p.ref:''),money(p.method==='cash'?p.tendered:p.amount)));
     if(b.change>0)prow('Change',money(b.change),'b');
     if(b.balance>0)prow('Balance on account',money(b.balance),'b');
-    paper.append(pt);
-    if(b.customerName)paper.append(el('div','mu','Customer: '+b.customerName));
-    if(b.creditStatus&&b.creditStatus!=='paid'){const w=el('div','c');w.append(el('span','tag',b.creditStatus==='credit'?'ON CREDIT':'PART PAID'));paper.append(w);}
+    tail.append(pt);
+    if(b.customerName)tail.append(el('div','mu','Customer: '+b.customerName));
+    if(b.creditStatus&&b.creditStatus!=='paid'){const w=el('div','c');w.append(el('span','tag',b.creditStatus==='credit'?'ON CREDIT':'PART PAID'));tail.append(w);}
+    else if(b.creditStatus==='paid'&&!b.practice){const w=el('div','c');w.append(el('span','tag paid','PAID IN FULL'));tail.append(w);}
   }
-  paper.append(el('hr','rule'),el('div','ft','Thank you for your business!'));
+  tail.append(el('hr','rule'),el('div','ft','Thank you for your business!'));
+  paper.append(tail);
   return paper;
 }
 let ROVL=null,ROPENER=null,ROVL_SALE=false;
 function showReceipt(b,tag,sale){          // sale=true: the receipt of a recorded sale; the cart is already empty then
   if(ROVL||(!sale&&!CART.length))return;
   ROPENER=document.activeElement;
-  const ovl=el('div','rovl','',{role:'dialog','aria-modal':'true','aria-label':'Receipt preview'});
-  const sc=el('div','rscroll');sc.append(receiptEl(b||makeBasket(),tag||'PREVIEW — NOT A SALE'));
+  const bk=b||makeBasket();
+  const ovl=el('div','rovl','',{role:'dialog','aria-modal':'true','aria-label':sale?'Receipt':'Receipt preview'});
+  // tag: undefined = the cart preview; '' = a saved sale (no stamp); anything else is printed as given (e.g. PRACTICE).
+  // It used to be tag||'PREVIEW...', which stamped every SAVED sale's receipt "PREVIEW — NOT A SALE".
+  const sc=el('div','rscroll');sc.append(receiptEl(bk,tag==null?'PREVIEW \u2014 NOT A SALE':tag));
   const bar=el('div','rbar');
   const pr=el('button','pri','Print',{type:'button'}),cl=el('button','','Close',{type:'button'});
-  pr.onclick=()=>window.print();cl.onclick=hideReceipt;
+  pr.onclick=()=>printReceipt(bk);cl.onclick=hideReceipt;
   bar.append(cl,pr);ovl.append(sc,bar);document.body.append(ovl);ROVL=ovl;ROVL_SALE=!!sale;pr.focus();
+}
+// The page title becomes the file name when the cashier chooses "Save as PDF", so it carries the receipt number.
+function printReceipt(b){
+  const t=document.title;
+  document.title='Receipt '+(b&&b.receiptNo?b.receiptNo:'preview');
+  const back=()=>{document.title=t;removeEventListener('afterprint',back);};
+  addEventListener('afterprint',back);
+  try{window.print();}catch{back();}
 }
 function hideReceipt(){
   if(!ROVL)return;ROVL.remove();ROVL=null;ROVL_SALE=false;
@@ -858,7 +924,7 @@ async function finalizeSale(b){
       return;
     }
     // From here the sale exists. Take it out of stock, empty the cart, show the receipt, and upload if there is signal.
-    rec.lines.forEach(l=>SOLD.set(l.itemId,Math.round(((SOLD.get(l.itemId)||0)+l.qty)*1000)/1000));
+    SALES_ALL.push(rec);
     SALES_PENDING++;
     closePay();
     CART=[];renderCart();                          // renderCart also deletes the autosaved copy of this cart
@@ -1153,6 +1219,142 @@ function renderCart(){
 function openCart(){SELL.classList.add('open');CARTBAR.setAttribute('aria-expanded','true');}
 function closeCart(){SELL.classList.remove('open');CARTBAR.setAttribute('aria-expanded','false');if(!COARSE)focusSearch();}
 
+// ── CAMERA SCANNER (roadmap step 12) ─────────────────────────────────────────
+// The phone camera plus the browser's own BarcodeDetector (Chrome and Samsung Internet on Android, installed PWA included).
+// No library, nothing to download, works offline. Safari and desktop Chrome on Windows/Linux do not have it: the camera button
+// is not shown there, and the scan box (USB/Bluetooth scanner, or typing) works as before.
+// The camera stays open so a whole basket is scanned in one go. Every read goes through resolveCode(), the same exact
+// barcode/SKU rule as the scan box, so a camera read can never add an item the scan box would refuse. Only a barcode near the
+// middle of the picture counts, and if two different ones are there nothing is added. A code that stays in view is added once;
+// take it out of view to add it again. The camera is switched off on Done, Escape, when the app goes to the background and
+// when the page closes.
+const CAM_FORMATS=['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','qr_code'];
+const CAM_CHECKED=['ean_13','ean_8','upc_a','upc_e','code_128'];   // have a check digit: one frame is enough. The rest must be read twice in a row.
+let CAMOVL=null,CAM=null;
+const camOk=()=>!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&'BarcodeDetector' in window);
+function camStatus(me,text,cls){if(CAM!==me)return;me.st.textContent=text;me.st.className='sst'+(cls?' '+cls:'');}
+function camSum(me){if(CAM!==me)return;me.sum.textContent=CART.length?CART.length+(CART.length===1?' item':' items')+' \u00B7 '+money(cartTotal()):'Cart is empty';}
+function camFlash(me,cls){if(CAM!==me)return;me.aim.className='aim '+cls;clearTimeout(me.flashT);me.flashT=setTimeout(()=>{if(CAM===me)me.aim.className='aim';},700);}
+function camBeep(me,ok){
+  try{navigator.vibrate&&navigator.vibrate(ok?40:[80,60,80]);}catch{}
+  const c=me.ac;if(!c)return;
+  try{
+    if(c.state==='suspended')c.resume();
+    const o=c.createOscillator(),g=c.createGain(),t=c.currentTime;
+    o.frequency.value=ok?1100:220;g.gain.value=.12;o.connect(g);g.connect(c.destination);
+    o.start(t);o.stop(t+(ok?.09:.22));
+  }catch{}
+}
+function camFail(me,text){camStatus(me,text,'bad');camFlash(me,'bad');}
+async function startCam(){
+  if(CAMOVL)return;
+  if(!camOk()){say('Camera scanning is not available on this browser. Use a scanner or type the code.','bad',5000);return;}
+  const ovl=el('div','sovl','',{role:'dialog','aria-modal':'true','aria-label':'Camera barcode scanner'});
+  const video=el('video','','',{playsinline:'',autoplay:'','aria-hidden':'true'});video.muted=true;
+  const head=el('div','sh');head.append(el('b','','Scan barcodes'));
+  const aim=el('div','aim');
+  const st=el('div','sst','Starting camera\u2026',{role:'status','aria-live':'polite'});
+  const sum=el('div','ssum');
+  const torch=el('button','','Torch',{type:'button'});torch.hidden=true;
+  const done=el('button','pri','Done',{type:'button'});
+  const row=el('div','sbtn');row.append(torch,done);
+  const foot=el('div','sf');foot.append(st,sum,row);
+  ovl.append(video,head,aim,foot);document.body.append(ovl);
+  const me=CAM={video,aim,st,sum,stream:null,det:null,timer:0,flashT:0,ac:null,lastCode:'',seenAt:0,pend:'',pendN:0,multi:false,errs:0};
+  CAMOVL=ovl;done.onclick=stopCam;camSum(me);
+  try{const AC=window.AudioContext||window.webkitAudioContext;if(AC)me.ac=new AC();}catch{}   // made inside the tap, so the beep is allowed
+  let det;
+  try{
+    const sup=await BarcodeDetector.getSupportedFormats();
+    const f=CAM_FORMATS.filter(x=>sup.includes(x));
+    if(!f.length)throw new Error('no formats');
+    det=new BarcodeDetector({formats:f});
+  }catch{if(CAM===me)camFail(me,'Camera scanning is not supported on this device. Use a scanner or type the code.');return;}
+  if(CAM!==me)return;
+  let stream;
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});
+  }catch(e){
+    const n=e&&e.name;
+    camFail(me,n==='NotAllowedError'||n==='SecurityError'?'The camera is blocked. Allow the camera for this app in the phone\u2019s site settings, then try again.'
+      :n==='NotFoundError'||n==='OverconstrainedError'?'No camera found on this device.'
+      :n==='NotReadableError'?'The camera is being used by another app. Close it and try again.':'Could not start the camera.');
+    return;
+  }
+  if(CAM!==me){stream.getTracks().forEach(t=>{try{t.stop();}catch{}});return;}   // Done was tapped while the camera was starting
+  me.stream=stream;me.det=det;
+  const track=stream.getVideoTracks()[0],caps=(track&&track.getCapabilities&&track.getCapabilities())||{};
+  if(caps.focusMode&&caps.focusMode.includes('continuous'))track.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(()=>{});
+  if(caps.torch){
+    let on=false;torch.hidden=false;
+    torch.onclick=async()=>{try{await track.applyConstraints({advanced:[{torch:!on}]});on=!on;torch.classList.toggle('on',on);}catch{}};
+  }
+  video.srcObject=stream;
+  try{await video.play();}catch{}
+  camStatus(me,'Aim at one barcode. Keep scanning, tap Done when finished.','');
+  camTick(me);
+}
+async function camTick(me){
+  if(CAM!==me)return;
+  let found=[];
+  try{
+    if(me.video.readyState>=2&&me.video.videoWidth)found=await me.det.detect(me.video);
+    me.errs=0;
+  }catch{
+    if(++me.errs>=25){camFail(me,'The scanner stopped working. Tap Done and try again.');return;}
+  }
+  if(CAM!==me)return;
+  camRead(me,found);
+  me.timer=setTimeout(()=>camTick(me),120);
+}
+function camRead(me,found){
+  const v=me.video,W=v.videoWidth,H=v.videoHeight,now=Date.now();
+  const seen=new Map();                                  // code -> format, only barcodes near the middle of the picture
+  found.forEach(r=>{
+    const val=String(r.rawValue||'').trim();if(!val)return;
+    const b=r.boundingBox;
+    if(b&&W&&H){const cx=b.x+b.width/2,cy=b.y+b.height/2;if(cx<W*.1||cx>W*.9||cy<H*.25||cy>H*.75)return;}
+    seen.set(val,r.format);
+  });
+  if(!seen.size){
+    me.pend='';me.pendN=0;
+    if(me.multi){me.multi=false;camStatus(me,'Aim at one barcode.','');}
+    if(me.lastCode&&now-me.seenAt>700)me.lastCode='';     // the code left the picture: it can be added again
+    return;
+  }
+  if(seen.size>1){me.multi=true;me.pend='';me.pendN=0;camStatus(me,'Several barcodes in view. Aim at one.','warn');return;}
+  me.multi=false;
+  const [val,fmt]=[...seen][0];
+  if(val===me.lastCode){me.seenAt=now;return;}           // still holding the same item up: added once
+  if(!CAM_CHECKED.includes(fmt)){
+    if(me.pend!==val){me.pend=val;me.pendN=1;return;}
+    if(++me.pendN<2)return;
+  }
+  me.pend='';me.pendN=0;me.lastCode=val;me.seenAt=now;
+  camAccept(me,val);
+}
+function camAccept(me,val){
+  idleReset();                                           // scanning counts as activity: no idle logout in the middle of a basket
+  const r=resolveCode(val,{camera:true});
+  if(r.err){camBeep(me,false);camStatus(me,r.err,'bad');camFlash(me,'bad');return;}
+  const it=r.hit;addItem(it,1);camBeep(me,true);
+  const l=CART.find(x=>x.id===it.id),over=!!l&&l.qty>it.avail;
+  camStatus(me,'\u2713 '+it.name+(l&&l.qty>1?' \u00D7'+fq(l.qty):'')+(over?(it.avail>0?' \u00B7 only '+fq(it.avail)+' in stock':' \u00B7 none in stock'):''),over?'warn':'ok');
+  camFlash(me,over?'warn':'ok');camSum(me);
+}
+function stopCam(){
+  const me=CAM;CAM=null;
+  if(me){
+    clearTimeout(me.timer);clearTimeout(me.flashT);
+    try{me.video.pause();me.video.srcObject=null;}catch{}
+    if(me.stream)me.stream.getTracks().forEach(t=>{try{t.stop();}catch{}});
+    if(me.ac){try{me.ac.close();}catch{}}
+  }
+  if(CAMOVL){CAMOVL.remove();CAMOVL=null;if(!COARSE)focusSearch();}
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)stopCam();});   // release the camera when the app goes to the background
+addEventListener('pagehide',stopCam);
+
 function buildSell(){
   const m=$('main');m.replaceChildren();m.className='on-sell';
   SELL=el('div','sell');
@@ -1162,7 +1364,9 @@ function buildSell(){
   Q=el('input','','',{id:'q',type:'search',placeholder:'Scan barcode or search item',autocomplete:'off',autocapitalize:'off',autocorrect:'off',spellcheck:'false',enterkeyhint:'search','aria-label':'Scan barcode or search item'});
   if(COARSE)Q.setAttribute('inputmode','none');
   const kb=el('button','','\u2328',{id:'kb',type:'button','aria-label':'Show keyboard'});
-  bar.append(Q,kb);
+  bar.append(Q);
+  if(camOk()){const cb=el('button','','\uD83D\uDCF7',{id:'cam',type:'button','aria-label':'Scan with camera'});cb.onclick=startCam;bar.append(cb);}
+  bar.append(kb);
   MSG=el('div','msg','',{role:'status','aria-live':'polite'});
   GRID=el('div','grid');
   HBTN=el('button','sm','Held',{id:'hb',type:'button','aria-label':'Held sales'});HBTN.hidden=true;
@@ -1205,11 +1409,9 @@ function buildSell(){
     if(e.key!=='Enter')return;
     e.preventDefault();
     const v=Q.value.trim();if(!v)return;
-    let hit=scanMatch(v);                                // scanner: exact barcode or SKU, then Enter
-    if(!hit){const r=matches(v);if(r.length===1)hit=r[0];}   // typing: one item left in the list
-    if(!hit){say('No item matches \u201c'+v+'\u201d.','bad');Q.select();return;}
-    if(!hit.price){say(hit.name+' has no price yet. Set it in the main app under \uD83D\uDCB2 Prices.','bad');Q.select();return;}
-    addItem(hit,1);Q.value='';renderGrid();focusSearch();
+    const r=resolveCode(v);                              // scanner: exact barcode or SKU, then Enter
+    if(r.err){say(r.err,'bad',r.ms);Q.select();return;}
+    addItem(r.hit,1);Q.value='';renderGrid();focusSearch();
   });
   // Touch devices: the box keeps focus for a Bluetooth/USB scanner, but the on-screen keyboard stays down
   // until the keyboard button is tapped, so it does not cover the items.
@@ -1223,6 +1425,7 @@ function buildSell(){
   HBTN.onclick=openHeld;
   // A scanner types like a keyboard. If focus is anywhere that is not a text field, send the keystrokes to the box.
   document.addEventListener('keydown',e=>{
+    if(CAMOVL&&e.key==='Escape'){stopCam();return;}
     if(PAYOVL){if(e.key==='Escape')cancelPay();return;}
     if(HOVL){if(e.key==='Escape')closeHeld();return;}
     if(e.key==='Escape'&&ROVL){hideReceipt();return;}
