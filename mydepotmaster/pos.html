@@ -229,6 +229,7 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 .sovl .sbtn button{flex:1;padding:14px 16px;font-size:16px;background:rgba(0,0,0,.55)}
 .sovl .sbtn button.pri{background:var(--green)}
 .sovl .sbtn button.on{border-color:var(--amber);color:var(--amber)}
+button[hidden]{display:none!important}
 </style>
 </head>
 <body>
@@ -236,7 +237,7 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
   <div><b>🧾 Till <span id="tillcode"></span></b><small id="depot"></small></div>
   <div class="hr">
     <div class="pills"><span class="pill" id="p-net"></span><span class="pill" id="p-cloud"></span><span class="pill" id="p-till"></span><span class="pill" id="p-sales"></span><span class="pill" id="p-user"></span></div>
-    <div class="hb"><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
+    <div class="hb"><button class="sm" id="b-mine" type="button" hidden>My sales</button><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
   </div>
 </header>
 <main id="main"></main>
@@ -344,6 +345,7 @@ function card(icon,title,msg,buttons){
   c.append(r);m.append(c);
 }
 const toApp=()=>{location.href='index.html';};
+const isCashier=()=>!!USER&&String(USER.role)==='cashier';   // till roadmap step 14: no main app behind this login, so hints say "ask your admin"
 async function logout(){
   parkOnExit();
   try{sessionStorage.removeItem(SESSION_KEY);}catch{}
@@ -402,7 +404,7 @@ function tillErrText(e){
 let tillBusy=false;
 async function setupTill(){
   if(tillBusy||tillReady()){paintTill();return;}
-  if(!(DATA&&DATA.installId)){TILL_ERR='Till: open the main app online first';paintTill();return;}
+  if(!(DATA&&DATA.installId)){TILL_ERR=isCashier()?'Till: log out and sign in online first':'Till: open the main app online first';paintTill();return;}
   tillBusy=true;TILL_ERR='';paintTill();
   try{await NUM.ensureRegistered();}catch(e){TILL_ERR=tillErrText(e);console.warn('Till code claim failed',e);}
   tillBusy=false;paintTill();
@@ -560,7 +562,7 @@ function resolveCode(v,o){
   if(!hit&&!cam&&!looksLikeCode(v)){const r=matches(v);if(r.length===1)hit=r[0];}   // typing a name: one item left in the list
   const shown=cam&&v.length>40?v.slice(0,40)+'\u2026':v;
   if(!hit)return {err:(cam||looksLikeCode(v))?'No item has the code \u201c'+shown+'\u201d.':'No item matches \u201c'+v+'\u201d.'};
-  if(!hit.price)return {err:hit.name+' has no price yet. Set it in the main app under \uD83D\uDCB2 Prices.'};
+  if(!hit.price)return {err:hit.name+(isCashier()?' has no price yet. Ask your admin to set it.':' has no price yet. Set it in the main app under \uD83D\uDCB2 Prices.')};
   return {hit};
 }
 
@@ -583,7 +585,7 @@ function tile(i){
 function renderGrid(){
   const list=matches(Q.value),frag=document.createDocumentFragment();
   list.slice(0,MAX_TILES).forEach(i=>frag.append(tile(i)));
-  if(!ITEMS.length)frag.append(el('div','note','No items yet. Add items or commodities in the main app, then set their prices under \uD83D\uDCB2 Prices.'));
+  if(!ITEMS.length)frag.append(el('div','note',isCashier()?'No items yet. Ask your admin to add items and set their prices.':'No items yet. Add items or commodities in the main app, then set their prices under \uD83D\uDCB2 Prices.'));
   else if(!list.length)frag.append(el('div','note','No item matches \u201c'+Q.value.trim()+'\u201d.'));
   else if(list.length>MAX_TILES)frag.append(el('div','note','Showing '+MAX_TILES+' of '+list.length+'. Type more to narrow the list.'));
   GRID.replaceChildren(frag);refreshBadges();
@@ -847,7 +849,7 @@ function renderPay(){
   sel.value=PAY.customer;
   sel.onchange=()=>{PAY.customer=sel.value;renderPayFoot(settle(toC(cartTotal()),PAY.tenders));};
   fr.append(fld(S.rem>0&&PAY.onAccount?'Customer (required for credit)':'Customer (optional)',sel));
-  if(S.rem>0&&PAY.onAccount&&!cs.length)fr.append(el('div','pay-note','No customers yet. Add the customer in the main app under Contacts, then come back.'));
+  if(S.rem>0&&PAY.onAccount&&!cs.length)fr.append(el('div','pay-note',isCashier()?'No customers yet. Ask your admin or a manager to add the customer.':'No customers yet. Add the customer in the main app under Contacts, then come back.'));
 
   PAYBODY.replaceChildren(fr);
   renderPayFoot(S);
@@ -1080,6 +1082,122 @@ function renderHeldList(){
     acts.append(go,del);row.append(acts);fr.append(row);
   });
   HBODY.replaceChildren(fr);
+}
+// ── MANAGER PIN TO LEAVE THE TILL (till roadmap step 15) ───────────────────────
+// With "Require a manager PIN to leave the till" on (Settings → Manager PIN, set by the Admin), a Cashier or Staff login must hand
+// the phone to a PIN holder (admin or manager) to use Log out or Main app while a shift is open. NOT asked: idle logout and a logout
+// made in the main app (nobody is there to type a PIN, and the shift is still closed out later), or the cards shown before the
+// till opens. Rules and PIN checking live in gate.js (Gate.pin*), shared with index.html where the PIN is set.
+// shiftOpen() is the ONE place that says "a shift is open". Shifts do not exist yet (roadmap step 16), so for now a Cashier or
+// Staff login that is signed in at the till counts as an open shift. Step 16 replaces this body with the real shift state.
+const PIN_HOLDER_ROLES=Gate.PIN_ROLES;
+function shiftOpen(){return !!USER&&!PIN_HOLDER_ROLES.includes(String(USER.role));}
+let PINOVL=null;
+function exitGuard(go){
+  if(!Gate.pinRequired(DATA,shiftOpen()))return go();
+  askManagerPin(go);
+}
+function closePin(skipFocus){
+  if(!PINOVL)return;
+  PINOVL.remove();PINOVL=null;
+  if(!skipFocus&&!COARSE)focusSearch();
+}
+function askManagerPin(go){
+  if(PINOVL)return;
+  const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Manager PIN'});
+  const box=el('div','pay'),head=el('div','pay-h');
+  const cx=el('button','sm','Cancel',{type:'button'});cx.onclick=()=>closePin();
+  head.append(el('h2','','Manager PIN'),cx);
+  const body=el('div','pay-body'),f=el('label','fld');
+  const inp=el('input','',null,{type:'password',inputmode:'numeric',pattern:'[0-9]*',maxlength:'6',autocomplete:'off','aria-label':'Manager PIN'});
+  f.append(el('span','','A manager must type their PIN to leave the till while a shift is open.'),inp);
+  const err=el('div','pay-err','');
+  body.append(f,err);
+  const foot=el('div','pay-f'),ok=el('button','pri','Unlock',{type:'button'});
+  foot.append(ok);
+  box.append(head,body,foot);ovl.append(box);
+  ovl.addEventListener('click',e=>{if(e.target===ovl)closePin();});
+  inp.addEventListener('input',()=>{inp.value=inp.value.replace(/\D/g,'').slice(0,6);});
+  async function submit(){
+    err.textContent='';
+    const st=Gate.pinLockState(localStorage,Date.now());
+    if(st.locked){err.textContent='Too many wrong PINs. Try again in '+Math.ceil(st.left/1000)+' seconds.';return;}
+    const pin=inp.value;
+    if(!Gate.pinValid(pin)){err.textContent='Type the 4 to 6 digit PIN.';return;}
+    ok.disabled=true;ok.textContent='Checking\u2026';
+    let who=null,bad=false;
+    try{who=await Gate.pinFindApprover(pin,DATA);}catch(e){bad=true;}
+    ok.disabled=false;ok.textContent='Unlock';
+    if(!PINOVL)return;                                   // cancelled while it was checking
+    if(bad){err.textContent='This phone could not check the PIN. Try again, or ask the Admin.';return;}
+    if(who){Gate.pinClear(localStorage);closePin(true);go();return;}
+    const r=Gate.pinFailed(localStorage,Date.now());
+    inp.value='';inp.focus();
+    err.textContent=r.locked?'Too many wrong PINs. Locked for '+Math.ceil(r.left/1000)+' seconds.':'Wrong PIN. '+r.triesLeft+(r.triesLeft===1?' try':' tries')+' left.';
+  }
+  ok.onclick=submit;
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();submit();}});
+  document.body.append(ovl);PINOVL=ovl;
+  const st0=Gate.pinLockState(localStorage,Date.now());
+  if(st0.locked)err.textContent='Too many wrong PINs. Try again in '+Math.ceil(st0.left/1000)+' seconds.';
+  inp.focus();
+}
+
+// ── MY SALES (till roadmap step 14): a cashier's own report ─────────────────────
+// A Cashier login has no main app, so this is the only report it gets: its own sales for the day, from the ledger on this phone
+// (own sales plus the same cashier's sales downloaded from other tills). Day = the ledger's day (UTC, as index.html's today()), so
+// the figures agree with Sales History. Read-only; shown to the 'cashier' role only (the button is hidden for everyone else).
+let MOVL=null,MBODY=null;
+function mineToday(){
+  const me=String((USER&&USER.username)||'').toLowerCase(),today=new Date().toISOString().slice(0,10);
+  return SALES_ALL.filter(s=>s&&s.date===today&&String(s.cashier||'').toLowerCase()===me).sort((a,b)=>(b.at||0)-(a.at||0));
+}
+function openMine(){
+  if(MOVL||PAYOVL||HOVL||PINOVL)return;
+  const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'My sales today'});
+  const box=el('div','pay'),head=el('div','pay-h');
+  const cx=el('button','sm','Close',{type:'button'});cx.onclick=closeMine;
+  head.append(el('h2','','My sales today'),cx);
+  MBODY=el('div','pay-body held-body');
+  box.append(head,MBODY);ovl.append(box);
+  ovl.addEventListener('click',e=>{if(e.target===ovl)closeMine();});
+  document.body.append(ovl);MOVL=ovl;
+  renderMine();
+}
+function closeMine(){
+  if(!MOVL)return;
+  MOVL.remove();MOVL=MBODY=null;
+  if(!COARSE)focusSearch();
+}
+function renderMine(){
+  if(!MBODY)return;
+  const a=mineToday(),fr=document.createDocumentFragment();
+  let total=0,credit=0;const by=new Map();
+  a.forEach(s=>{
+    total+=Number(s.total)||0;credit+=Number(s.balance)||0;
+    (s.payments||[]).forEach(p=>{const k=p.label||p.method||'Payment';by.set(k,(by.get(k)||0)+(Number(p.amount)||0));});
+  });
+  const day=new Date().toISOString().slice(0,10);
+  fr.append(el('div','h-sub',new Date(day+'T00:00:00Z').toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',timeZone:'UTC'})+(USER?' \u00B7 '+USER.username:'')));
+  const sum=el('div','pay-sum');
+  const row=(l,v)=>sum.append(el('span','',l),el('span','r',v));
+  row('Sales',String(a.length));
+  row('Total sold',money(total));
+  by.forEach((v,k)=>row('Collected \u2014 '+k,money(v)));
+  if(credit>0)row('Still owed (credit)',money(credit));
+  fr.append(sum);
+  if(!a.length)fr.append(el('div','h-empty','No sales yet today.'));
+  a.forEach(s=>{
+    const when=el('div');when.append(el('b','',s.time||''),el('span','ag',s.receiptNo));
+    const top=el('div','h-top');top.append(when,el('b','',money(s.total)));
+    const st=s.creditStatus==='credit'?'On credit':(s.creditStatus==='partial'?'Part paid':'Paid');
+    const n=(s.lines||[]).length;
+    const r=el('div','held');
+    r.append(top,el('div','h-sub',st+' \u00B7 '+n+(n===1?' item':' items')+(s.customerName?' \u00B7 '+s.customerName:'')));
+    fr.append(r);
+  });
+  if(SALES_PENDING)fr.append(el('div','h-sub',SALES_PENDING+(SALES_PENDING===1?' sale is':' sales are')+' not uploaded yet \u2014 they go up when there is signal.'));
+  MBODY.replaceChildren(fr);
 }
 // ── LIVE-CART AUTOSAVE ───────────────────────────────────────────────────────
 // Held baskets only protect a sale the cashier parks, or leaves through logout / idle timeout. An OPEN cart used to
@@ -1428,6 +1546,8 @@ function buildSell(){
     if(CAMOVL&&e.key==='Escape'){stopCam();return;}
     if(PAYOVL){if(e.key==='Escape')cancelPay();return;}
     if(HOVL){if(e.key==='Escape')closeHeld();return;}
+    if(PINOVL){if(e.key==='Escape')closePin();return;}
+    if(MOVL){if(e.key==='Escape')closeMine();return;}
     if(e.key==='Escape'&&ROVL){hideReceipt();return;}
     if(e.key==='Escape'&&SELL.classList.contains('open')){closeCart();return;}
     const t=e.target,tag=t&&t.tagName;
@@ -1468,7 +1588,8 @@ async function boot(){
   idleReset();
   try{new BroadcastChannel('mdm_session').onmessage=e=>{if(e.data&&e.data.type==='logout'){parkOnExit();try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}};}catch{}
   addEventListener('storage',e=>{if(e.key==='mdm_session_event'&&e.newValue&&e.newValue.startsWith('logout:')){parkOnExit();try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}});
-  $('b-app').onclick=toApp;$('b-out').onclick=logout;
+  $('b-app').onclick=()=>exitGuard(toApp);$('b-out').onclick=()=>exitGuard(logout);   // the two exits the cashier chooses; idle logout calls logout() directly
+  if(isCashier()){$('b-app').hidden=true;$('b-mine').hidden=false;$('b-mine').onclick=openMine;}   // no main app for a cashier; its own report instead
   await loadSold();                                    // stock = received - issued - sold: the ledger must be read BEFORE the catalog is built
   loadCatalog();
   paintTill();setupTill();paintSales();syncSales();                              // claim this till's code (needs the network once)

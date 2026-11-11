@@ -25,7 +25,46 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.39 (2026-11-11) — Till step 13: the till's printed receipt (pos.html).
+// Current version: v0.3.41 (2026-11-11) — Till roadmap step 15: manager PIN to leave the till (gate.js + index.html + pos.html).
+//   - An admin or manager sets a 4-6 digit PIN in Settings → Account & Security → Manager PIN (asks for their account password;
+//     stored as a salted PBKDF2 record on their user, u.pin; never in clear). Changes are audit-logged (the PIN itself never is).
+//   - The Admin switches on "Require a manager PIN to leave the till while a shift is open" (depotInfo.tillExitPin, off by default,
+//     can only be switched on once someone holds a PIN). Then a Cashier or Staff login in the till gets a PIN pad when it taps Log out
+//     or Main app; an admin or manager PIN unlocks it. Cancel stays in the till. Admin and Manager logins are never asked.
+//   - 5 wrong PINs in a row lock the pad for 1 minute on that phone (counter in localStorage 'mdm_pin_lock').
+//   - NOT asked: idle auto-logout, a logout made in the main app, and the "till unavailable" cards (no till, so no shift).
+//   - Shifts do not exist yet (step 16). shiftOpen() in pos.html is the one place that decides "a shift is open"; until step 16 it
+//     means "a Cashier or Staff login is signed in at the till". Step 16 swaps in the real shift state.
+//   - gate.js gained the shared PIN rules (Gate.pinRecord / pinCheck / pinFindApprover / pinRequired / pinLockState / pinFailed).
+//   - Takes effect on a till phone once it has synced the depot data (the PIN record and the switch travel in it). Before that sync
+//     that phone does not ask. Soft control: the record travels with the depot data, so it stops the casual walk-away, not a
+//     determined attacker with the phone; the real lock-down of data access is step 21.
+//   - Known gap until step 16: a cashier who opens index.html directly (not via the till) can use its Log out card without a PIN.
+//   Files: gate.js + index.html + pos.html + sw.js. sales.js and database_rules.json are unchanged.
+// Previous: v0.3.40 (2026-11-11) — Till roadmap step 14: the Cashier login (index.html + pos.html).
+//   A new role, "Cashier", for the person who only sells. Admin adds it in Settings → Users → Add User (role "Cashier (till only)").
+//   - Signs in and goes straight to the Till (pos.html). Waits for the licence check first, so a suspended / pending / grace account
+//     shows a card with the reason instead of a till that will not open. If the till refuses to open and sends the cashier back, the
+//     card stays (no redirect loop): the guard is a 15-second mark in sessionStorage.
+//   - Sees nothing else: bottom nav, menu, global search and the Assistant are hidden, every tab is forced back to the home card
+//     (showTab and render), and the home card has only Open Till, Log out and Change password. The till's "Main app" button is
+//     hidden for a cashier and replaced by "My sales": today's sales by this cashier (count, total, collected per payment method,
+//     still owed on credit, each sale), from the ledger on the phone, read-only. A full shift report (float, counted cash) is
+//     roadmap steps 16-17.
+//   - The till's own hints that say "in the main app" (no items yet, no price, no customers, till not set up) tell a cashier to ask the
+//     admin / log in online instead, since a cashier has no main app.
+//   - changePw() now writes "Password updated" to the live element: updateData() re-renders the page hosting the card (the cashier's
+//     home card), so the message used to land on a detached node and the cashier saw no confirmation. Same fix helps any role.
+//   - Exempt from the pending-approval rule: stampEntry() stamps a cashier's entries 'approved'. Till sales were already approved
+//     (the ledger overlay in sales.js), and a cashier has no entry forms in the main app, so nothing changes for sales; the rule is
+//     now explicit.
+//   - The cashier's cloud access is the least-privilege 'staff' entry in authorizedUids (_grantAuthorizedUid), which the existing
+//     database rules already allow to create sales. No rules change.
+//   - Per-role auto-logout (Settings) now lists Cashier. Not offered in the Play version (the till is off there).
+//   Limit: this scopes what the cashier SEES. Like the Staff role, the phone still holds the depot's data and the cloud session can
+//   reach the whole depot node; closing that is roadmap step 21 (database rules), not this step.
+//   Files: index.html + pos.html + sw.js. gate.js, sales.js and database_rules.json are unchanged.
+// Previous: v0.3.39 (2026-11-11) — Till step 13: the till's printed receipt (pos.html).
 //   The till already showed one multi-line branded receipt per basket (logo or initials, brand colour, shop name, district, phone,
 //   receipt number, date, cashier, every line, total, payments, change, balance, customer). This version fixes what stopped it
 //   being a receipt you can hand over:
@@ -1964,7 +2003,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.39';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.41';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

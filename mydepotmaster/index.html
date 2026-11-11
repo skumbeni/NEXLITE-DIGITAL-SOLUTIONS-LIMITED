@@ -796,6 +796,11 @@ body.readonly-mode.trial-mode #main-area{padding-top:44px;}
 <button id="global-fullscreen-btn" onclick="toggleAppFullscreen()" title="Full screen" aria-label="Toggle full screen" style="position:fixed;top:max(10px,env(safe-area-inset-top,10px));right:10px;z-index:5000;background:var(--surface,#16213E);border:1px solid var(--border,#2C3E50);border-radius:50%;width:34px;height:34px;display:flex;align-items:center;justify-content:center;color:var(--muted,#8a93a6);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;opacity:.85;box-shadow:0 2px 8px rgba(0,0,0,.3);">
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3M21 8V5a2 2 0 00-2-2h-3M3 16v3a2 2 0 002 2h3M16 21h3a2 2 0 002-2v-3"/></svg>
 </button>
+<style>
+/* Cashier login (till roadmap step 14): nothing but the home card. Class is set by showMainUI() for role "cashier" only. */
+body.cashier-mode #nav,body.cashier-mode #hdr-burger-btn,body.cashier-mode #hdr-menu,body.cashier-mode #hdr-menu-ovl,
+body.cashier-mode #gsearch-fab,body.cashier-mode #copilot-fab{display:none!important}
+</style>
 <div id="app">
 
 
@@ -4088,6 +4093,12 @@ function isManagerRole() {
 function isStaffRole() {
   return USER && USER.role === 'staff';
 }
+// Cashier (till roadmap step 14): a till-only login. Signs in and goes straight to the Till (pos.html); the main app shows it
+// one small card (Open Till, change password, log out) and nothing else — every tab is closed to it (showTab / render below).
+// Its till sales are ledger records, which are always 'approved' (sales.js), so the pending-approval rule never holds them back.
+function isCashierRole() {
+  return !!USER && USER.role === 'cashier';
+}
 // ── STAFF SELF-SCOPE ─────────────────────────────────────────────────────────
 // A 'staff' login only ever sees data tied to its own linked staff profile.
 // These helpers are the single source of truth for that scoping — every
@@ -4120,6 +4131,7 @@ function requireAddPermission(action) {
 function roleLabel(role) {
   if (role === 'admin') return 'ADMIN';
   if (role === 'manager' || role === 'data_entry') return 'MANAGER';
+  if (role === 'cashier') return 'CASHIER';
   return 'STAFF';
 }
 
@@ -4183,7 +4195,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.39';
+const SW_VERSION  = 'v0.3.41';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -5205,7 +5217,9 @@ function stampEntry(rec){
   rec.enteredByRole  = (USER && USER.role) || '';
   if(USER && USER.linkedStaffId) rec.enteredByStaffId = String(USER.linkedStaffId);
   rec.enteredAt      = Date.now();
-  rec.approvalStatus = (USER && USER.role!=='admin') ? 'pending' : 'approved';
+  // Admin and Cashier entries are 'approved' at once. A cashier has no entry forms in the main app (see isCashierRole), so this only
+  // makes the exemption explicit: nothing a cashier records can ever sit in the Pending Approvals list.
+  rec.approvalStatus = (USER && USER.role!=='admin' && USER.role!=='cashier') ? 'pending' : 'approved';
   return rec;
 }
 // Staff profile behind a record's "entered by": the id stamped at entry time,
@@ -5563,6 +5577,7 @@ function _hideMainUI() {
   const fab=document.getElementById('gsearch-fab'); if(fab) fab.style.display='none';
   const cfab=document.getElementById('copilot-fab'); if(cfab) cfab.style.display='none';
   const hms=document.getElementById('hdr-menu-settings-btn'); if(hms) hms.style.display='none';
+  document.body.classList.remove('cashier-mode');
   closeGlobalSearch();
 }
 
@@ -5581,6 +5596,7 @@ function showMainUI() {
   _copilotFabSync();
   const hms=document.getElementById('hdr-menu-settings-btn'); if(hms) hms.style.display= USER?'flex':'none';
   _syncHdrMenuRoleRows();
+  document.body.classList.toggle('cashier-mode', isCashierRole());   // CSS below hides the bottom nav, menu, search and assistant
 }
 
 // Hides/shows hamburger-menu rows to match what this account can actually
@@ -6956,6 +6972,58 @@ function _posReturnUser(){
     return p&&p.u&&Date.now()-p.t<Gate.POS_SESSION_MS?String(p.u).toLowerCase():null;}catch{return null;}
 }
 
+// ── CASHIER LOGIN (till roadmap step 14) ─────────────────────────────────────
+// A cashier signs in and is sent straight to the Till. This page only ever shows them renderCashierHome(): the reason the till
+// will not open (if it will not), an Open Till button, change password and log out.
+const _CASHIER_LAUNCH_KEY='mdm_cashier_launch';
+const _PAGE_T0=Date.now();
+let _cashierAutoStarted=false;
+function _cashierTillBlocker(){            // '' when the till can open, otherwise the reason, in words a cashier can read out to the admin
+  if(window.PLAY_MODE) return 'The till is not available in this version of the app.';
+  if(!hasFeature('pos_till')) return 'The Till is not available on this account. Ask your Admin.';
+  if(isReadOnly()) return 'This account is read-only right now (suspended, pending or in grace period). Ask your Admin.';
+  return '';
+}
+function cashierOpenTill(){
+  if(!isCashierRole()||!USER) return;
+  const why=_cashierTillBlocker();
+  if(why){ alert(why); return; }
+  try{sessionStorage.setItem(_POS_SESSION_KEY,JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now()}));}catch{}
+  try{sessionStorage.setItem(_CASHIER_LAUNCH_KEY,String(Date.now()));}catch{}
+  location.replace('pos.html');            // replace, not assign: the Back button must not return to this page and bounce forward again
+}
+// Runs once per page load, from render(). Waits (up to 6 s) for this sign-in's licence check, so the decision uses the live status,
+// then opens the till. If the till came back here less than 15 s ago (it refused to open) it does not bounce again: the card stays.
+function _cashierAutoTill(){
+  if(_cashierAutoStarted||!isCashierRole()||!USER) return;
+  _cashierAutoStarted=true;
+  let last=0; try{last=Number(sessionStorage.getItem(_CASHIER_LAUNCH_KEY))||0;}catch{}
+  if(Date.now()-last<15000) return;
+  let tries=0;
+  (function go(){
+    if(!isCashierRole()||!USER) return;      // signed out meanwhile
+    const fresh=!!(LICENSE&&LICENSE.checkedAt>=_PAGE_T0);
+    if(!fresh&&tries++<24){ setTimeout(go,250); return; }
+    if(_cashierTillBlocker()){ _renderCache.key=null; render(); return; }   // repaint the card with the reason
+    cashierOpenTill();
+  })();
+}
+function renderCashierHome(){
+  const why=_cashierTillBlocker();
+  const di=DATA.depotInfo||{};
+  return `<div style="max-width:420px;margin:28px auto 40px;padding:0 16px">
+    <div style="text-align:center">
+      <div style="font-size:52px;margin-bottom:8px">🧾</div>
+      <div style="font-family:var(--fh);font-size:26px;font-weight:800;color:var(--white);margin-bottom:4px">${esc(di.name||'Till')}</div>
+      <div style="font-size:17px;color:var(--muted);margin-bottom:20px">Signed in as <strong style="color:var(--text)">${esc(USER.username)}</strong> · ${roleLabel(USER.role)}</div>
+    </div>
+    ${why?`<div class="warn" style="margin-bottom:14px">⚠️ ${esc(why)}</div>`:''}
+    <button class="btn bg" style="width:100%;margin-bottom:10px" onclick="cashierOpenTill()"${window.PLAY_MODE?' disabled':''}>🧾 Open Till</button>
+    <button class="btn bo" style="width:100%;margin-bottom:18px" onclick="doLogout()">Log out</button>
+    ${_renderChangePasswordCard()}
+  </div>`;
+}
+
 function doLogout(){
   openModal(`
     <div class="mtitle">⏏ Log Out</div>
@@ -7244,6 +7312,7 @@ function showTab(tab){
   // Staff logins are self-scoped — never allowed onto company-wide tabs,
   // regardless of how the navigation was triggered.
   if(isStaffRole() && STAFF_BLOCKED_TABS.includes(tab)) tab='dashboard';
+  if(isCashierRole()) tab='dashboard';   // a cashier has no company tabs at all
   const tabChanged = TAB!==tab;
   // Landing on Settings (from another tab) always starts at the category
   // menu, never a sub-page the user happened to be on last time.
@@ -7265,6 +7334,7 @@ let _renderAttempts = 0; // Fix 6: guard against infinite retry on deterministic
 function render(resetScroll=false){
   const c=document.getElementById('content');
   if(!c||!USER) return;
+  if(isCashierRole()&&TAB!=='dashboard') TAB='dashboard';   // belt and braces: some paths set TAB and call render() directly
   DATA=_applySales(DATA);   // till sales overlay (step 9): same object back unless the ledger changed or a path replaced DATA without stamping
   // Fix 1: skip re-render when nothing visible has changed
   const cacheKey = _renderCacheKey();
@@ -7276,7 +7346,10 @@ function render(resetScroll=false){
   // Ensure content area is visible (guards against edge-case where it stayed hidden)
   if(c.style.display==='none') c.style.display='block';
   try {
-    if(TAB==='dashboard') c.innerHTML=isStaffRole()?renderStaffDash():renderDash();
+    if(TAB==='dashboard'){
+      if(isCashierRole()){ c.innerHTML=renderCashierHome(); _cashierAutoTill(); }
+      else c.innerHTML=isStaffRole()?renderStaffDash():renderDash();
+    }
     else if(TAB==='general') c.innerHTML=renderGeneral();
     else if(TAB==='maize') c.innerHTML=renderMaize();
     else if(TAB==='staff') c.innerHTML=renderStaff();
@@ -8096,6 +8169,7 @@ function filterTable(tableId, q){
 
 // ── GLOBAL SEARCH ────────────────────────────────────────────────────────────
 function openGlobalSearch(){
+  if(isCashierRole()) return;   // a cashier sees the till only
   if(!hasFeature('global_search')){ showUpgradePrompt('global_search'); return; }
   const el=document.getElementById('gsearch-overlay');
   if(el){
@@ -19883,6 +19957,88 @@ function _renderChangePasswordCard(){
     </div>`;
 }
 
+// ── MANAGER PIN (till roadmap step 15) ─────────────────────────────────────
+// An admin or manager can hold a 4-6 digit PIN. When the Admin switches on "Require a manager PIN to leave the till", a Cashier or
+// Staff login using the Till has to hand the phone to a PIN holder to use Log out / Main app while a shift is open (pos.html asks:
+// exitGuard there). The PIN is kept as a salted PBKDF2 record on the user (u.pin, built by Gate.pinRecord), never in clear. It is
+// a different thing from the admin's Recovery PIN, which resets a forgotten admin password.
+function _myUserRec(){ return (DATA.users||[]).find(u=>u.username===(USER||{}).username)||null; }
+function _canHoldPin(){ return !!USER&&(USER.role==='admin'||isManagerRole()); }
+function _mpinMsg(html){ const m=document.getElementById('mpin-msg'); if(m) m.innerHTML=html; }   // looked up when called: updateData() re-renders the card
+function _renderManagerPinCard(){
+  if(!_canHoldPin()) return '';
+  const me=_myUserRec(), has=!!(me&&me.pin&&me.pin.h);
+  const holders=Gate.pinHolders(DATA).map(u=>u.username);
+  const on=!!(DATA.depotInfo||{}).tillExitPin;
+  const when=has&&me.pin.at?new Date(me.pin.at).toLocaleDateString():'';
+  return `
+    <div class="sh">Manager PIN</div>
+    <div class="card">
+      <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">
+        Your PIN lets you unlock the till when a cashier has to leave it: they hand you the phone and you type it. Use 4 to 6 digits. It is not your password and not the Recovery PIN.
+      </div>
+      ${has?`<div class="ok-msg" style="margin-bottom:12px">✅ You have a PIN${when?` (set ${esc(when)})`:''}. Enter a new one below to change it.</div>`
+           :`<div class="warn" style="margin-bottom:12px">⚠️ You have not set a PIN yet.</div>`}
+      <div id="mpin-msg"></div>
+      <div class="fw"><div class="fl">Your account password</div><input class="fi" type="password" id="mpin-pw" autocomplete="current-password"/></div>
+      <div class="fw"><div class="fl">New PIN (4 to 6 digits)</div><input class="fi" type="password" id="mpin-new" inputmode="numeric" maxlength="6" autocomplete="one-time-code"/></div>
+      <div class="fw"><div class="fl">Confirm PIN</div><input class="fi" type="password" id="mpin-conf" inputmode="numeric" maxlength="6" autocomplete="one-time-code"/></div>
+      <button class="btn bg" onclick="saveManagerPin()">🔒 Save My PIN</button>
+      ${has?`<button class="btn bo" style="margin-top:8px;width:100%" onclick="removeManagerPin()">Remove my PIN (enter your password above)</button>`:''}
+      ${USER.role==='admin'?`
+      <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px">
+        <label style="display:flex;gap:12px;align-items:flex-start;font-size:17px;line-height:1.5;cursor:pointer">
+          <input type="checkbox" id="mpin-req" ${on?'checked':''} onchange="setTillExitPin(this.checked)" style="width:24px;height:24px;flex-shrink:0;margin-top:2px"/>
+          <span>Require a manager PIN to leave the till while a shift is open</span>
+        </label>
+        <div style="font-size:16px;color:var(--muted);margin-top:8px;line-height:1.6">Applies to Cashier and Staff logins using the Till. Takes effect on each till phone after it syncs. PINs set: ${holders.length?esc(holders.join(', ')):'none yet'}.</div>
+      </div>`:''}
+    </div>`;
+}
+async function _mpinCheckPassword(){
+  const pw=document.getElementById('mpin-pw')?.value||'';
+  const me=_myUserRec();
+  if(!pw) return {ok:false,err:'Enter your account password.'};
+  if(!me) return {ok:false,err:'Account not found.'};
+  let good=false; try{ good=await verifyPassword(pw,me.password); }catch{}
+  return good?{ok:true}:{ok:false,err:'Incorrect password.'};
+}
+async function saveManagerPin(){
+  if(!_canHoldPin()) return;
+  const p1=document.getElementById('mpin-new')?.value||'', p2=document.getElementById('mpin-conf')?.value||'';
+  if(!Gate.pinValid(p1)) return _mpinMsg('<div class="err-box">PIN must be 4 to 6 digits, numbers only.</div>');
+  if(p1!==p2) return _mpinMsg('<div class="err-box">PINs do not match.</div>');
+  const chk=await _mpinCheckPassword();
+  if(!chk.ok) return _mpinMsg(`<div class="err-box">${esc(chk.err)}</div>`);
+  let rec; try{ rec=await Gate.pinRecord(p1); }catch(e){ return _mpinMsg(`<div class="err-box">${esc((e&&e.message)||'Could not save the PIN on this phone.')}</div>`); }
+  const who=USER.username;
+  updateData(d=>({...d,users:d.users.map(u=>u.username===who?{...u,pin:rec}:u)}));
+  logAuditEvent('UPDATE','Manager PIN',`PIN set for ${who}`);
+  _mpinMsg('<div class="ok-msg">✅ PIN saved.</div>');
+}
+async function removeManagerPin(){
+  if(!_canHoldPin()) return;
+  const me=_myUserRec();
+  if(!(me&&me.pin)) return _mpinMsg('<div class="err-box">You have no PIN to remove.</div>');
+  const chk=await _mpinCheckPassword();
+  if(!chk.ok) return _mpinMsg(`<div class="err-box">${esc(chk.err)}</div>`);
+  const who=USER.username;
+  updateData(d=>({...d,users:d.users.map(u=>{ if(u.username!==who) return u; const {pin,...rest}=u; return rest; })}));
+  logAuditEvent('DELETE','Manager PIN',`PIN removed for ${who}`);
+  const none=!Gate.pinHolders(DATA).length&&!!(DATA.depotInfo||{}).tillExitPin;
+  _mpinMsg(`<div class="ok-msg">✅ PIN removed.</div>${none?'<div class="warn" style="margin-top:8px">⚠️ No PINs are set now, so the till will not ask for one.</div>':''}`);
+}
+function setTillExitPin(on){
+  if(!USER||USER.role!=='admin') return;
+  if(on&&!Gate.pinHolders(DATA).length){
+    const cb=document.getElementById('mpin-req'); if(cb) cb.checked=false;
+    return _mpinMsg('<div class="err-box">Set a PIN first (yours, or ask a manager to set theirs), then switch this on.</div>');
+  }
+  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),tillExitPin:!!on}}));
+  logAuditEvent('UPDATE','Till exit PIN',on?'Required to leave the till while a shift is open':'Not required');
+  _mpinMsg(`<div class="ok-msg">✅ ${on?'The till will ask for a manager PIN before a cashier can leave it.':'The till will no longer ask for a PIN.'}</div>`);
+}
+
 // Settings helper — Login History. Read-only. Non-admins see their own last
 // 3 sessions. Admins see every account's last 3 sessions, grouped by user,
 // since Admin already manages passwords/roles for the whole team elsewhere
@@ -20024,7 +20180,7 @@ function _renderCompanyInfoCard(){
 const SETTINGS_CATS = {
   admin: [
     {id:'account-security', icon:'🔐', label:'Account & Security', desc:'Password, recovery, users & permissions',
-      match:['Change Password','Login History','Recovery PIN','Recovery Email','User Accounts','Role Permissions','Fingerprint Login','Stay Signed In']},
+      match:['Change Password','Manager PIN','Login History','Recovery PIN','Recovery Email','User Accounts','Role Permissions','Fingerprint Login','Stay Signed In']},
     {id:'company-billing', icon:'🏢', label:'Company & Billing', desc:'Plan, license, company info, branding & policies',
       match:['My Plan','License & Connection','Company Information','Branding','Staff & Records Policy']},
     {id:'appearance', icon:'🎨', label:'Appearance', desc:'Theme, text size, currency & dashboard widgets',
@@ -20038,7 +20194,7 @@ const SETTINGS_CATS = {
     {id:'preferences', icon:'🎨', label:'Preferences', desc:'Text size, theme, currency & dashboard',
       match:['Company Information','Display Preferences','Dashboard Widgets']},
     {id:'account-help', icon:'🔐', label:'Account & Help', desc:'Password, fingerprint, install, support & legal',
-      match:['Fingerprint Login','Stay Signed In','Change Password','Login History','Install on This Phone','Help & Documentation','Contact & Support','Legal']},
+      match:['Fingerprint Login','Stay Signed In','Change Password','Manager PIN','Login History','Install on This Phone','Help & Documentation','Contact & Support','Legal']},
   ],
 };
 
@@ -20162,6 +20318,7 @@ function _renderStaffSettings(){
     ${_renderBioSection()}
     ${_renderStaySignedInSection()}
     ${_renderChangePasswordCard()}
+    ${_renderManagerPinCard()}
     ${_renderLoginHistoryCard()}
     ${_renderInstallAppCard()}
     ${_renderHelpDocsCard()}
@@ -20374,7 +20531,7 @@ function _renderAdminSettings(){
       <div class="fw" style="margin-top:14px;border-top:1px solid var(--border);padding-top:14px">
         <div class="fl">Per-Role Timeout Overrides <span style="font-size:15px;color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">(optional — overrides global above per role)</span></div>
         <div style="font-size:16px;color:var(--muted);margin-bottom:8px;line-height:1.6">Leave blank to use the global setting. Useful for giving Admins a longer session while Manager/Staff users log out quickly.</div>
-        ${['admin','data_entry','staff'].map(role=>{
+        ${['admin','data_entry','staff','cashier'].map(role=>{
           const byRole=(DATA.depotInfo||{}).autoLogoutMinutesByRole||{};
           const cur=byRole[role]||'';
           const label=roleLabel(role).charAt(0)+roleLabel(role).slice(1).toLowerCase();
@@ -20396,6 +20553,8 @@ function _renderAdminSettings(){
     ${_renderStaySignedInSection()}
 
     ${_renderChangePasswordCard()}
+
+    ${_renderManagerPinCard()}
 
     ${_renderLoginHistoryCard()}
 
@@ -21295,7 +21454,9 @@ async function changePw(){
   const hashed = await hashPassword(np);
   // See NOTE near doRecoveryAutomatic() — same Phase 1 gap.
   updateData(d=>({...d,users:d.users.map(u=>u.username===target?{...u,password:hashed,authMigrated:false}:u)}));
-  msg.innerHTML='<div class="ok-msg">✅ Password updated!</div>';
+  // updateData() above re-renders the page that hosts this card (the cashier's home card), so `msg` may be detached: write to the live element.
+  const _m=document.getElementById('pw-msg')||msg;
+  _m.innerHTML='<div class="ok-msg">✅ Password updated!</div>';
   document.getElementById('pw-new').value='';document.getElementById('pw-conf').value='';
 }
 function _onAddUserRoleChange(){
@@ -21325,9 +21486,10 @@ function addUser(preStaffId){
       <select class="fi" id="au-role" onchange="_onAddUserRoleChange()" ${preStaff?'disabled':''}>
         <option value="data_entry">Manager</option>
         <option value="staff"${preStaff?' selected':''}>Staff</option>
+        ${window.PLAY_MODE?'':'<option value="cashier">Cashier (till only)</option>'}
         <option value="admin">Admin</option>
       </select>
-      <div style="font-size:15px;color:var(--muted);margin-top:6px;line-height:1.6">Manager: can add records (stock, staff logs, sales) but not edit/delete or access full Settings. Staff: view-only — dashboards, own earnings, and can clock themselves in (not out). Manager and Staff both get a personal Settings tab (password, theme, text size) but not company-wide settings.</div>
+      <div style="font-size:15px;color:var(--muted);margin-top:6px;line-height:1.6">Manager: can add records (stock, staff logs, sales) but not edit/delete or access full Settings. Staff: view-only — dashboards, own earnings, and can clock themselves in (not out). Manager and Staff both get a personal Settings tab (password, theme, text size) but not company-wide settings. Cashier: signs in straight to the Till and sees nothing else except their own sales for the day and a change-password box; their sales never wait for approval.</div>
     </div>
     <div class="fw" id="au-linked-staff-wrap" style="display:${preStaff?'':'none'}">
       <div class="fl">Link to Staff Profile <span style="color:var(--red)">*</span></div>
@@ -22472,7 +22634,7 @@ function savePerRoleTimeout(){
   const msg=document.getElementById('per-role-timeout-msg');
   const valid=[0,5,10,15,20,30,60];
   const byRole={...(DATA.depotInfo||{}).autoLogoutMinutesByRole||{}};
-  for(const role of ['admin','data_entry','staff']){
+  for(const role of ['admin','data_entry','staff','cashier']){
     const el=document.getElementById('per-role-timeout-'+role);
     const val=Number(el?.value||0);
     if(!valid.includes(val)){if(msg)msg.innerHTML='<div class="err-box">Invalid selection.</div>';return;}
@@ -27775,7 +27937,7 @@ async function runReconciliation(){
 function _copilotFabSync(){
   const fab = document.getElementById('copilot-fab');
   if(!fab) return;
-  fab.style.display = hasFeature('ai_copilot') ? 'flex' : 'none';
+  fab.style.display = (hasFeature('ai_copilot') && !isCashierRole()) ? 'flex' : 'none';
 }
 
 // ══ END DEPOT ASSISTANT ════════════════════════════════════
