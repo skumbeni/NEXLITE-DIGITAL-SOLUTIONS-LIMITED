@@ -25,7 +25,14 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.45 (2026-11-12) — Till roadmap step 18: discounts with caps or a manager PIN (sales.js + shifts.js + pos.html + index.html + database_rules.json).
+// Current version: v0.3.46 (2026-11-12) — Landing page refresh (index.html + sw.js).
+//   - New landing page: top bar with Sign in, hero with a sample till receipt, then the Till (scan, cash / MTN Money / Airtel Money / card,
+//     credit sales, hold and resume, numbered receipts, discount limits), shifts and cash-up, and the rest of the app's features, plan cards
+//     built from TIER_META / _TIER_BULLETS (renderLandingPricing), a closing sign-up call to action and the support links.
+//   - The 30-day trial wording is no longer shown on the landing page or the Plans & Pricing page. Trial logic, the signup note and the
+//     in-app trial banners are unchanged. The Text size control moved to the landing page footer.
+//   - No new files, no database_rules.json change. gate.js, sales.js, shifts.js and pos.html are unchanged.
+// Previous: v0.3.45 (2026-11-12) — Till roadmap step 18: discounts with caps or a manager PIN (sales.js + shifts.js + pos.html + index.html + database_rules.json).
 //   - The Admin switches discounts on in Settings -> Till discounts (OFF by default, so nothing changes until then): "a cashier may give up to X% of the
 //     basket" (default 5) and "nobody may give more than Y%, even with a PIN" (default 20, never above 90). depotInfo.discountOn / discountCapPct / discountMaxPct.
 //   - The till shows a Discount button in the cart (only when switched on). One discount for the whole basket, as a percentage or an amount, with an optional
@@ -2073,7 +2080,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.45';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.46';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
