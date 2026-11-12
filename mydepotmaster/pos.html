@@ -230,14 +230,22 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 .sovl .sbtn button.pri{background:var(--green)}
 .sovl .sbtn button.on{border-color:var(--amber);color:var(--amber)}
 button[hidden]{display:none!important}
+
+/* ── SHIFTS (roadmap step 16) ── */
+.pay-sum .bad{color:var(--red)}
+.shv{min-height:22px;margin:-2px 0 10px;font-size:16px;font-weight:700}
+.shv.ok{color:var(--green)}.shv.bad{color:var(--red)}.shv.warn{color:var(--amber)}
+.shbtns{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.shbtns button{width:100%;padding:12px 16px}
+.cart-f .hint.warn{color:var(--amber)}
 </style>
 </head>
 <body>
 <header id="hdr" hidden>
   <div><b>🧾 Till <span id="tillcode"></span></b><small id="depot"></small></div>
   <div class="hr">
-    <div class="pills"><span class="pill" id="p-net"></span><span class="pill" id="p-cloud"></span><span class="pill" id="p-till"></span><span class="pill" id="p-sales"></span><span class="pill" id="p-user"></span></div>
-    <div class="hb"><button class="sm" id="b-mine" type="button" hidden>My sales</button><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
+    <div class="pills"><span class="pill" id="p-shift"></span><span class="pill" id="p-net"></span><span class="pill" id="p-cloud"></span><span class="pill" id="p-till"></span><span class="pill" id="p-sales"></span><span class="pill" id="p-user"></span></div>
+    <div class="hb"><button class="sm" id="b-shift" type="button">Shift</button><button class="sm" id="b-mine" type="button" hidden>My sales</button><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
   </div>
 </header>
 <main id="main"></main>
@@ -245,6 +253,7 @@ button[hidden]{display:none!important}
 <!-- Shared gating rules (same file index.html loads). Plain synchronous script, before the inline script below. -->
 <script src="gate.js"></script>
 <script src="sales.js"></script>
+<script src="shifts.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-check-compat.js" defer></script>
@@ -408,6 +417,7 @@ async function setupTill(){
   tillBusy=true;TILL_ERR='';paintTill();
   try{await NUM.ensureRegistered();}catch(e){TILL_ERR=tillErrText(e);console.warn('Till code claim failed',e);}
   tillBusy=false;paintTill();
+  loadShift().then(()=>{paintShift();if(SHOVL&&!SHBUSY)renderShift();});         // a registered till can now open (or already has) a shift
   if(PAYOVL&&PAYFOOT&&PAY)renderPayFoot(settle(toC(cartTotal()),PAY.tenders));   // a payment screen left open: unlock Complete
 }
 
@@ -440,8 +450,9 @@ async function loadSold(){
   catch(e){console.warn('Could not read the sales ledger',e);}
 }
 function paintSales(){
-  if(SALES_ERR)setPill('p-sales','Sales: '+SALES_ERR,'bad');
-  else if(SALES_PENDING)setPill('p-sales','Sales: '+SALES_PENDING+(!navigator.onLine?' waiting for signal':(SALES_AUTH?' waiting (no cloud session)':' uploading')),'warn');
+  const waiting=SALES_PENDING+SHIFTS_PENDING;            // shift records (step 16) go up the same way, so they count here too
+  if(SALES_ERR||SHIFT_ERR)setPill('p-sales','Sales: '+(SALES_ERR||SHIFT_ERR),'bad');
+  else if(waiting)setPill('p-sales','Sales: '+waiting+(!navigator.onLine?' waiting for signal':(SALES_AUTH?' waiting (no cloud session)':' uploading')),'warn');
   else setPill('p-sales','Sales: all uploaded','ok');
 }
 // Upload this till's sales, then fetch the others'. Safe to call as often as you like; one run at a time.
@@ -860,8 +871,13 @@ function renderPayFoot(S){
   const go=el('button','pri','',{type:'button'});
   go.textContent=S.rem<=0?'Complete sale':(PAY.onAccount?'Complete \u2014 '+money(fromC(S.rem))+' on account':'Complete sale');
   const needTill=!PAY.practice&&!tillReady();
-  go.disabled=!payReady(S)||needTill||FINALIZING;go.onclick=completePay;
+  const needShift=!PAY.practice&&!needTill&&shiftState()!=='mine';   // step 16: a real sale needs an open shift of the person logged in
+  go.disabled=!payReady(S)||needTill||needShift||FINALIZING;go.onclick=completePay;
   F.append(go);
+  if(needShift){
+    F.append(el('div','pay-note',shiftState()==='other'?'The shift open on this till is '+SHIFT.open.cashier+'\u2019s. It must be closed before you can sell. You can still run a practice sale.':'No shift is open. Open one to take real sales. You can still run a practice sale.'));
+    const sb=el('button','sm','Go to shift',{type:'button'});sb.style.cssText='margin:8px auto 0;display:block';sb.onclick=()=>{closePay();openShiftSheet();};F.append(sb);
+  }
   if(needTill){
     F.append(el('div','pay-note','This till has no receipt code yet. It must go online once to get one. You can still run a practice sale.'));
     const rt=el('button','sm','Set up this till now',{type:'button'});rt.style.margin='8px auto 0';rt.style.display='block';rt.onclick=setupTill;F.append(rt);
@@ -892,6 +908,25 @@ function completePay(){
 // "to upload" mark in ONE transaction. Only when that has succeeded does the cart empty, stock drop and the receipt show;
 // if it fails nothing is recorded, the cart and the payments stay as they were, and the cashier can simply try again (the
 // number already taken is skipped, which leaves a gap, never a repeat). A practice basket (practice:true) skips all of this.
+// Step 16: the whole decision runs inside the shift lock (a second tab cannot close the shift between the check and the save). The
+// sale is stamped with the shift it belongs to. No shift, or someone else's shift, and nothing is taken or recorded.
+async function recordSale(b){
+  const id=tillIdNow(),cur=id?await SHIFTLG.current(id):null;
+  if(!cur)return {err:'No shift is open on this till. Open a shift, then try again. The sale was not completed.'};
+  if(!sameUser(cur.open.cashier,USER&&USER.username))return {err:'The shift open on this till is '+cur.open.cashier+'\u2019s. It must be closed before you can sell. The sale was not completed.'};
+  let r;
+  try{r=await NUM.next();}
+  catch(e){
+    console.warn('Receipt number failed',e);
+    return {err:NUM_MSG[e&&e.code]||'Could not take a receipt number. The sale was not completed. Try again.'};
+  }
+  b.receiptNo=r.receiptNo;b.tillId=r.tillId;b.till=r.code;b.seq=r.seq;b.shiftId=cur.open.shiftId;
+  try{return {rec:await LEDGER.append(b)};}
+  catch(e){
+    console.warn('Sale not saved',e);
+    return {err:(e&&e.code==='INVALID')?e.message+'. Nothing was recorded.':(SALE_MSG[e&&e.code]||'The sale could not be saved. Nothing was recorded. Try again.')};
+  }
+}
 let FINALIZING=false,PAYERR='';
 const NUM_MSG={
   NOT_REGISTERED:'This till has no receipt code yet. Go online once, then tap \u201cSet up this till now\u201d.',
@@ -910,21 +945,9 @@ async function finalizeSale(b){
   try{
     if(b.practice){closePay();showReceipt(b,'PRACTICE \u2014 NOT A SALE');return;}
     if(isReadOnly()){PAYERR='The till is read-only right now. The sale was not completed.';return;}
-    let r;
-    try{r=await NUM.next();}
-    catch(e){
-      console.warn('Receipt number failed',e);
-      PAYERR=NUM_MSG[e&&e.code]||'Could not take a receipt number. The sale was not completed. Try again.';
-      return;
-    }
-    b.receiptNo=r.receiptNo;b.tillId=r.tillId;b.till=r.code;b.seq=r.seq;
-    let rec;
-    try{rec=await LEDGER.append(b);}
-    catch(e){
-      console.warn('Sale not saved',e);
-      PAYERR=(e&&e.code==='INVALID')?e.message+'. Nothing was recorded.':(SALE_MSG[e&&e.code]||'The sale could not be saved. Nothing was recorded. Try again.');
-      return;
-    }
+    const out=await withShiftLock(()=>recordSale(b));   // step 16: shift check, receipt number and ledger append, one at a time
+    if(out.err){PAYERR=out.err;return;}
+    const rec=out.rec;
     // From here the sale exists. Take it out of stock, empty the cart, show the receipt, and upload if there is signal.
     SALES_ALL.push(rec);
     SALES_PENDING++;
@@ -1088,10 +1111,10 @@ function renderHeldList(){
 // the phone to a PIN holder (admin or manager) to use Log out or Main app while a shift is open. NOT asked: idle logout and a logout
 // made in the main app (nobody is there to type a PIN, and the shift is still closed out later), or the cards shown before the
 // till opens. Rules and PIN checking live in gate.js (Gate.pin*), shared with index.html where the PIN is set.
-// shiftOpen() is the ONE place that says "a shift is open". Shifts do not exist yet (roadmap step 16), so for now a Cashier or
-// Staff login that is signed in at the till counts as an open shift. Step 16 replaces this body with the real shift state.
+// shiftOpen() is the ONE place that says "a shift is open" for this rule. Since step 16 it is the real thing: the person logged in
+// has an open shift on this till (see SHIFTS below) and is not a PIN holder. Closing the shift is the way out that needs no PIN.
 const PIN_HOLDER_ROLES=Gate.PIN_ROLES;
-function shiftOpen(){return !!USER&&!PIN_HOLDER_ROLES.includes(String(USER.role));}
+function shiftOpen(){return !!shiftMine()&&!isHolder(USER);}
 let PINOVL=null;
 function exitGuard(go){
   if(!Gate.pinRequired(DATA,shiftOpen()))return go();
@@ -1153,7 +1176,7 @@ function mineToday(){
   return SALES_ALL.filter(s=>s&&s.date===today&&String(s.cashier||'').toLowerCase()===me).sort((a,b)=>(b.at||0)-(a.at||0));
 }
 function openMine(){
-  if(MOVL||PAYOVL||HOVL||PINOVL)return;
+  if(MOVL||PAYOVL||HOVL||PINOVL||SHOVL)return;
   const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'My sales today'});
   const box=el('div','pay'),head=el('div','pay-h');
   const cx=el('button','sm','Close',{type:'button'});cx.onclick=closeMine;
@@ -1185,6 +1208,8 @@ function renderMine(){
   row('Total sold',money(total));
   by.forEach((v,k)=>row('Collected \u2014 '+k,money(v)));
   if(credit>0)row('Still owed (credit)',money(credit));
+  const sh=shiftMine();
+  if(sh){const sm=Shifts.summary(sh.open,SALES_ALL);row('Shift '+sh.open.shiftId,'since '+sh.open.time);row('Float',money(sm.float));row('Cash sales this shift',money(sm.cashSales));row('Cash that should be in the drawer',money(sm.expectedCash));}
   fr.append(sum);
   if(!a.length)fr.append(el('div','h-empty','No sales yet today.'));
   a.forEach(s=>{
@@ -1198,6 +1223,265 @@ function renderMine(){
   });
   if(SALES_PENDING)fr.append(el('div','h-sub',SALES_PENDING+(SALES_PENDING===1?' sale is':' sales are')+' not uploaded yet \u2014 they go up when there is signal.'));
   MBODY.replaceChildren(fr);
+}
+// ── SHIFTS (till roadmap step 16) ───────────────────────────────────────────────
+// A shift is one cashier on this till: "Open shift" (the FLOAT, the cash already in the drawer) to "Close shift" (the cash COUNTED).
+// Both are append-only records kept by shifts.js, uploaded like sales (shifts/{id}, shiftCloses/{id}). A real sale needs an open
+// shift of the person logged in; every sale carries its shiftId. Expected cash = float + the CASH taken on that shift's sales
+// (change already left out); the difference to the count is saved with the close. A practice sale needs no shift.
+// One shift per till at a time. A shift left open (idle logout, phone put away) is still there at the next login: the same cashier
+// carries on; anyone else must have an admin or manager close it first (they count the drawer; the record says it was forced).
+// Opening and closing are checked under a lock together with taking a sale, so a second tab cannot sell into a shift that has
+// just been closed. Cash in and out of the drawer during a shift (refunds, pay-outs) comes with step 19; shifts.js already
+// takes it as `out`. X and Z reports are step 17.
+const SHIFTLG=Shifts.create({
+  depotKey:()=>DATA&&DATA.installId,
+  opts:{dateOf:t=>new Date(t).toISOString().slice(0,10)},   // the same date rule as the sales ledger
+  adapter:Shifts.idbAdapter()
+});
+let SHIFT=null,SHIFT_ALL=[],SHIFTS_PENDING=0,SHIFT_ERR='',shiftsBusy=false,shiftPrompted=false;   // SHIFT: {open,close:null} for THIS till, or null
+let SHOVL=null,SHBODY=null,SHTTL=null,SHDONE=null,SHVIEW='',SHBUSY=false,SHOPENING=false,SHBC=null;
+const SHIFT_MSG={
+  NOT_REGISTERED:'This till has no receipt code yet. Go online once, then try again.',
+  STORAGE:'This phone could not save the shift (storage full or blocked). Nothing was recorded. Free some space and try again.',
+  NO_DEPOT:'This till does not know its depot yet. Open the main app online once, then try again.',
+  BAD_FLOAT:'Type the float as an amount, for example 200 or 150.50. Type 0 if the drawer is empty.',
+  BAD_COUNT:'Type the cash you counted as an amount, for example 1250 or 980.50. Type 0 if the drawer is empty.'
+};
+const sameUser=(a,b)=>String(a||'').toLowerCase()===String(b||'').toLowerCase();
+function isHolder(u){return !!u&&PIN_HOLDER_ROLES.includes(String(u.role));}
+function tillIdNow(){const t=NUM.peek();return t&&t.registered?t.tillId:'';}
+function shiftMine(){return SHIFT&&USER&&sameUser(SHIFT.open.cashier,USER.username)?SHIFT:null;}
+function shiftState(){return !SHIFT?'none':(shiftMine()?'mine':'other');}   // none: no shift on this till; mine: the person logged in; other: someone else's
+function amt(v){                                   // "200", "1,250.50" -> number; anything else -> NaN
+  const s=String(v==null?'':v).replace(/[\s,]/g,'');
+  if(!/^\d*\.?\d{0,2}$/.test(s)||s===''||s==='.')return NaN;
+  const n=Number(s);return n>=0&&n<=1e9?n:NaN;
+}
+function lastFloat(){                              // the float this till opened its last shift with: a sensible starting figure
+  const t=NUM.peek(),code=t&&t.code;let f=0,at=0;
+  SHIFT_ALL.forEach(e=>{if(e&&e.type==='open'&&e.till===code&&e.at>at){at=e.at;f=Number(e.float)||0;}});
+  return f;
+}
+async function loadShift(){
+  try{
+    SHIFT_ALL=await SHIFTLG.all();SHIFTS_PENDING=await SHIFTLG.pending();
+    const id=tillIdNow();SHIFT=id?Shifts.openShiftOf(SHIFT_ALL,id):null;
+  }catch(e){console.warn('Could not read the shifts',e);}
+}
+function withShiftLock(fn){                        // one shift/sale decision at a time across every tab on this phone
+  const d=(DATA&&DATA.installId)||'local';
+  if(navigator.locks&&navigator.locks.request)return navigator.locks.request('mdm_shift_'+d,{mode:'exclusive'},()=>fn());
+  return fn();
+}
+function notifyShift(){try{if(SHBC)SHBC.postMessage('changed');}catch{}}
+function paintShift(){
+  const st=shiftState(),b=$('b-shift'),h=$('shint');
+  if(st==='mine')setPill('p-shift','Shift '+SHIFT.open.shiftId.slice(5)+' \u00B7 since '+SHIFT.open.time,'ok');
+  else if(st==='other')setPill('p-shift','Shift open: '+SHIFT.open.cashier,'warn');
+  else setPill('p-shift','No shift open','warn');
+  if(b)b.textContent=st==='mine'?'Close shift':(st==='other'?'Shift':'Open shift');
+  if(h){
+    h.textContent=st==='mine'?'':(st==='other'?'The shift on this till is '+SHIFT.open.cashier+'\u2019s. It must be closed before you can sell.':'No shift is open. Tap \u201COpen shift\u201D at the top to take real sales.');
+    h.className='hint'+(st==='mine'?'':' warn');
+  }
+  paintSales();
+}
+// Upload this till's shift records, then fetch the other tills' (same rules as syncSales).
+async function syncShifts(){
+  if(shiftsBusy||!navigator.onLine||!(DATA&&DATA.installId))return;
+  shiftsBusy=true;
+  try{
+    const up=await SHIFTLG.push(CLOUD);
+    SHIFT_ERR=(up.left&&up.error&&up.error!=='NETWORK'&&up.error!=='NO_AUTH')?'shift upload problem ('+up.error+')':'';
+    try{await SHIFTLG.pull(CLOUD);}catch(e){console.warn('Shift download failed',e);}
+    await loadShift();
+  }catch(e){console.warn('Shift sync failed',e);}
+  finally{shiftsBusy=false;paintShift();}
+}
+const syncAll=()=>{syncSales();syncShifts();};
+
+function openShiftSheet(){
+  if(SHOVL||SHOPENING||PAYOVL||HOVL||PINOVL||MOVL||CAMOVL)return;
+  SHOPENING=true;
+  (async()=>{
+    try{await loadSold();await loadShift();paintShift();}finally{SHOPENING=false;}
+    if(SHOVL||PAYOVL||HOVL||PINOVL||MOVL||CAMOVL)return;
+    const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Shift'});
+    const box=el('div','pay'),head=el('div','pay-h');
+    SHTTL=el('h2','','Shift');
+    const cx=el('button','sm','Close',{type:'button'});cx.onclick=closeShiftSheet;
+    head.append(SHTTL,cx);
+    SHBODY=el('div','pay-body held-body');
+    box.append(head,SHBODY);ovl.append(box);
+    ovl.addEventListener('click',e=>{if(e.target===ovl&&!SHBUSY)closeShiftSheet();});
+    document.body.append(ovl);SHOVL=ovl;SHDONE=null;SHVIEW='';
+    renderShift();
+  })();
+}
+function closeShiftSheet(){
+  if(!SHOVL||SHBUSY)return;
+  SHOVL.remove();SHOVL=SHBODY=SHTTL=null;SHDONE=null;SHVIEW='';
+  if(!COARSE)focusSearch();
+}
+function maybePromptShift(){                       // once per page load: a till without a shift opens straight onto "Open shift"
+  if(shiftPrompted||shiftState()==='mine')return;
+  shiftPrompted=true;openShiftSheet();
+}
+function renderShift(){
+  if(!SHBODY)return;
+  if(SHDONE)return renderShiftDone();
+  const st=shiftState();
+  if(st==='mine')return renderClose(SHIFT,false);
+  if(st==='other')return (SHVIEW==='force'&&isHolder(USER))?renderClose(SHIFT,true):renderOther();
+  renderOpen();
+}
+function shiftBtn(label,cls,fn){const b=el('button',cls,label,{type:'button'});b.onclick=fn;return b;}
+
+function renderOpen(){
+  SHTTL.textContent='Open shift';
+  const fr=document.createDocumentFragment();
+  if(!tillReady()){
+    fr.append(el('div','h-sub',TILL_ERR||'This till has no receipt code yet. It must go online once before a shift can open.'));
+    const rt=el('div','shbtns');rt.append(shiftBtn('Set up this till now','pri',setupTill));fr.append(rt);
+    SHBODY.replaceChildren(fr);return;
+  }
+  fr.append(el('div','h-sub','Opening for '+USER.username+'. Count the cash in the drawer and type it as the float. When the shift is closed, every cash sale is added to it and checked against your count.'));
+  const inp=el('input','',null,{type:'text',inputmode:'decimal',autocomplete:'off','aria-label':'Opening float'});
+  const lf=lastFloat();inp.value=lf>0?String(lf):'';inp.placeholder='0.00';
+  const err=el('div','pay-err','',{role:'alert'});
+  fr.append(fld('Opening float (cash already in the drawer)',inp),err);
+  const go=el('button','pri','Open shift',{type:'button'}),row=el('div','shbtns');
+  row.append(go);fr.append(row);
+  SHBODY.replaceChildren(fr);
+  async function submit(){
+    err.textContent='';
+    const f=amt(inp.value);
+    if(isNaN(f)){err.textContent=SHIFT_MSG.BAD_FLOAT;inp.focus();return;}
+    SHBUSY=true;go.disabled=true;go.textContent='Opening\u2026';
+    let failed='';
+    try{
+      await withShiftLock(()=>SHIFTLG.open(NUM.peek(),{username:String(USER.username),role:String(USER.role||'')},f));
+    }catch(e){
+      console.warn('Shift not opened',e);
+      if(e&&e.code==='ALREADY_OPEN')failed='A shift is already open on this till.';
+      else failed=(e&&e.code==='INVALID')?e.message+'. Nothing was recorded.':(SHIFT_MSG[e&&e.code]||'The shift could not be opened. Nothing was recorded. Try again.');
+    }
+    SHBUSY=false;
+    await loadShift();notifyShift();paintShift();
+    if(failed){if(SHBODY){if(shiftState()!=='none')renderShift();else{go.disabled=false;go.textContent='Open shift';err.textContent=failed;}}return;}
+    closeShiftSheet();
+    say('Shift opened','ok',3500);
+    syncShifts();
+  }
+  go.onclick=submit;
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();submit();}});
+  setTimeout(()=>{try{inp.focus();inp.select();}catch{}},0);
+}
+
+function renderOther(){
+  SHTTL.textContent='Shift open';
+  const o=SHIFT.open,fr=document.createDocumentFragment();
+  fr.append(el('div','h-sub','This till already has an open shift: '+o.shiftId+', opened by '+o.cashier+' on '+o.date+' at '+o.time+' with a float of '+money(o.float)+'. Nobody can take sales on this till until it is closed.'));
+  const row=el('div','shbtns');
+  if(isHolder(USER)){
+    fr.append(el('div','h-sub','As '+USER.role+' you can close it: count the cash in that drawer and type it in. The record shows that you closed it.'));
+    row.append(shiftBtn('Close '+o.cashier+'\u2019s shift','pri',()=>{SHVIEW='force';renderShift();}));
+  }else fr.append(el('div','h-sub','Ask an admin or manager to close it, or have '+o.cashier+' sign in and close it.'));
+  fr.append(row);
+  SHBODY.replaceChildren(fr);
+}
+
+function renderClose(sh,forced){
+  SHTTL.textContent='Close shift';
+  const o=sh.open,sm=Shifts.summary(o,SALES_ALL),fr=document.createDocumentFragment();
+  fr.append(el('div','h-sub',(forced?'Closing '+o.cashier+'\u2019s shift. Count the cash in their drawer. ':'')+o.shiftId+' \u00B7 opened '+o.time+' by '+o.cashier));
+  const sum=el('div','pay-sum');
+  const row=(l,v,c)=>sum.append(el('span','',l),el('span','r'+(c?' '+c:''),v));
+  row('Sales',String(sm.saleCount));
+  row('Total sold',money(sm.total));
+  Shifts.METHODS.forEach(m=>{if(m!=='cash'&&sm.byMethod[m]>0)row('Collected \u2014 '+METHODS[m].label,money(sm.byMethod[m]));});
+  if(sm.credit>0)row('Left unpaid (credit)',money(sm.credit));
+  row('Float',money(sm.float));
+  row('Cash sales',money(sm.cashSales));
+  row('Cash that should be in the drawer',money(sm.expectedCash));
+  fr.append(sum);
+  const cnt=el('input','',null,{type:'text',inputmode:'decimal',autocomplete:'off','aria-label':'Cash counted'});cnt.placeholder='0.00';
+  const vr=el('div','shv','',{role:'status','aria-live':'polite'});
+  const note=el('input','',null,{type:'text',maxlength:'300',autocomplete:'off','aria-label':'Reason for the difference'});
+  const err=el('div','pay-err','',{role:'alert'});
+  fr.append(fld('Cash counted in the drawer (notes and coins, including the float)',cnt),vr,fld('Reason for any difference (optional)',note),err);
+  const held=readHeld().length;
+  if(held)fr.append(el('div','h-sub',held+(held===1?' held sale stays':' held sales stay')+' parked. They are sold in the next shift, at that day\u2019s prices.'));
+  const go=el('button','pri','Close shift',{type:'button'}),btns=el('div','shbtns');
+  btns.append(go);fr.append(btns);
+  SHBODY.replaceChildren(fr);
+  const upd=()=>{
+    const c=amt(cnt.value);
+    if(isNaN(c)){vr.textContent='';vr.className='shv';return;}
+    const v=Shifts.varianceOf(sm,c);
+    vr.textContent=v===0?'Balanced':(v<0?'Short by '+money(-v):'Over by '+money(v));
+    vr.className='shv '+(v===0?'ok':(v<0?'bad':'warn'));
+  };
+  cnt.addEventListener('input',upd);
+  async function submit(){
+    err.textContent='';
+    const c=amt(cnt.value);
+    if(isNaN(c)){err.textContent=SHIFT_MSG.BAD_COUNT;cnt.focus();return;}
+    if(CART.length||PAYOVL){err.textContent='Finish or hold the sale in the cart first, then close the shift.';return;}
+    const v=Shifts.varianceOf(sm,c);
+    if(!confirm(v===0?'Close this shift? This cannot be undone.':'Close this shift with the cash '+(v<0?'short by ':'over by ')+money(Math.abs(v))+'? This cannot be undone.'))return;
+    SHBUSY=true;go.disabled=true;go.textContent='Closing\u2026';
+    let rec=null,failed='';
+    try{
+      rec=await withShiftLock(async()=>{
+        const sales=await LEDGER.all();                    // everything on this phone, read fresh: another tab may have sold meanwhile
+        const cur=await SHIFTLG.current(o.tillId);
+        if(!cur||cur.open.shiftId!==o.shiftId){const x=new Error('closed');x.code='ALREADY_CLOSED';throw x;}
+        return SHIFTLG.close(cur,sales,c,{username:String(USER.username),role:String(USER.role||'')},note.value.trim());
+      });
+    }catch(e){
+      console.warn('Shift not closed',e);
+      if(e&&e.code==='ALREADY_CLOSED')failed='This shift was already closed (maybe on another tab).';
+      else failed=(e&&e.code==='INVALID')?e.message+'. Nothing was recorded.':(SHIFT_MSG[e&&e.code]||'The shift could not be closed. Nothing was recorded. Try again.');
+    }
+    SHBUSY=false;
+    await loadSold();await loadShift();notifyShift();paintShift();
+    if(failed){
+      if(SHBODY){
+        if(SHIFT&&SHIFT.open.shiftId===o.shiftId){go.disabled=false;go.textContent='Close shift';err.textContent=failed;}   // still open: say why, keep what was typed
+        else renderShift();                                                                                        // gone (closed on another tab): show what is true now
+      }
+      return;
+    }
+    SHDONE=rec;SHVIEW='';
+    if(SHBODY)renderShift();
+    syncShifts();
+  }
+  go.onclick=submit;
+  cnt.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();submit();}});
+  setTimeout(()=>{try{cnt.focus();}catch{}},0);
+}
+
+function renderShiftDone(){
+  const r=SHDONE,fr=document.createDocumentFragment();
+  SHTTL.textContent='Shift closed';
+  fr.append(el('div','h-sub',r.shiftId+' \u00B7 closed '+r.time+(r.forced?' by '+r.closedBy:'')));
+  const sum=el('div','pay-sum');
+  const row=(l,v,c)=>sum.append(el('span','',l),el('span','r'+(c?' '+c:''),v));
+  row('Sales',String(r.saleCount));
+  row('Total sold',money(r.total));
+  row('Cash expected',money(r.expectedCash));
+  row('Cash counted',money(r.countedCash));
+  row('Difference',r.variance===0?'Balanced':(r.variance<0?'Short '+money(-r.variance):'Over '+money(r.variance)),r.variance===0?'ok':(r.variance<0?'bad':'amb'));
+  fr.append(sum);
+  if(r.note)fr.append(el('div','h-sub','Note: '+r.note));
+  const btns=el('div','shbtns');
+  btns.append(shiftBtn('Open a new shift','pri',()=>{SHDONE=null;SHVIEW='';renderShift();}));
+  if(!isCashier())btns.append(shiftBtn('Main app','',()=>exitGuard(toApp)));
+  btns.append(shiftBtn('Log out','',()=>exitGuard(logout)));
+  fr.append(btns);
+  SHBODY.replaceChildren(fr);
 }
 // ── LIVE-CART AUTOSAVE ───────────────────────────────────────────────────────
 // Held baskets only protect a sale the cashier parks, or leaves through logout / idle timeout. An OPEN cart used to
@@ -1505,7 +1789,7 @@ function buildSell(){
   const prv=el('button','sec','Preview receipt',{id:'prv',type:'button'});prv.disabled=true;prv.onclick=()=>showReceipt();
   const hld=el('button','sec','Hold sale',{id:'hld',type:'button'});hld.disabled=true;hld.onclick=()=>{if(holdCart())closeCart();};
   const secrow=el('div','sec-row');secrow.append(prv,hld);
-  foot.append(tot,secrow,CHARGE,el('div','hint','Sales are not saved yet. That is the next step.'));
+  foot.append(tot,secrow,CHARGE,el('div','hint','',{id:'shint'}));
   cart.append(grab,head,LINES,foot);
   // phone: bar that opens the sheet, and the dimmed backdrop behind it
   CARTBAR=el('button','cartbar','',{id:'cartbar',type:'button','aria-controls':'cart','aria-expanded':'false'});
@@ -1547,6 +1831,7 @@ function buildSell(){
     if(PAYOVL){if(e.key==='Escape')cancelPay();return;}
     if(HOVL){if(e.key==='Escape')closeHeld();return;}
     if(PINOVL){if(e.key==='Escape')closePin();return;}
+    if(SHOVL){if(e.key==='Escape')closeShiftSheet();return;}
     if(MOVL){if(e.key==='Escape')closeMine();return;}
     if(e.key==='Escape'&&ROVL){hideReceipt();return;}
     if(e.key==='Escape'&&SELL.classList.contains('open')){closeCart();return;}
@@ -1559,6 +1844,8 @@ function buildSell(){
   document.addEventListener('visibilitychange',async()=>{
     if(document.visibilityState!=='visible')return;
     const d=await loadData();if(!d)return;DATA=d;loadCatalog();
+    await loadShift();paintShift();                     // another tab may have opened or closed the shift
+    if(PAYOVL&&PAYFOOT&&PAY)renderPayFoot(settle(toC(cartTotal()),PAY.tenders));
     CART.forEach(l=>{const it=BYID.get(l.id);if(it){l.unit=it.unit;l.per=it.per;}});
     const rc=await recoverDrafts(false);                // a tab that died while this one was in the background
     renderGrid();renderCart();renderHeldBtn();if(HOVL)renderHeldList();
@@ -1582,8 +1869,8 @@ async function boot(){
   $('depot').textContent=di.name||'';
   setPill('p-user',USER.username+(USER.role?' · '+USER.role:''));
   $('hdr').hidden=false;netPill();cloudPill();
-  addEventListener('online',()=>{netPill();cloudPill();setupTill();syncSales();paintSales();});addEventListener('offline',()=>{netPill();paintSales();});
-  setInterval(syncSales,60000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncSales();});
+  addEventListener('online',()=>{netPill();cloudPill();setupTill();syncAll();paintSales();});addEventListener('offline',()=>{netPill();paintSales();});
+  setInterval(syncAll,60000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncAll();});
   ['pointerdown','keydown','touchstart','scroll'].forEach(e=>document.addEventListener(e,idleReset,{passive:true,capture:true}));
   idleReset();
   try{new BroadcastChannel('mdm_session').onmessage=e=>{if(e.data&&e.data.type==='logout'){parkOnExit();try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}};}catch{}
@@ -1591,12 +1878,17 @@ async function boot(){
   $('b-app').onclick=()=>exitGuard(toApp);$('b-out').onclick=()=>exitGuard(logout);   // the two exits the cashier chooses; idle logout calls logout() directly
   if(isCashier()){$('b-app').hidden=true;$('b-mine').hidden=false;$('b-mine').onclick=openMine;}   // no main app for a cashier; its own report instead
   await loadSold();                                    // stock = received - issued - sold: the ledger must be read BEFORE the catalog is built
+  await loadShift();
+  try{SHBC=new BroadcastChannel('mdm_shift');SHBC.onmessage=async()=>{await loadShift();paintShift();if(SHOVL&&!SHBUSY)renderShift();if(PAYOVL&&PAYFOOT&&PAY)renderPayFoot(settle(toC(cartTotal()),PAY.tenders));};}catch{}
+  $('b-shift').onclick=openShiftSheet;
   loadCatalog();
-  paintTill();setupTill();paintSales();syncSales();                              // claim this till's code (needs the network once)
+  paintTill();setupTill();paintSales();syncAll();                              // claim this till's code (needs the network once)
   TAB=await claimTab();
   const rc=await recoverDrafts(true);                   // BEFORE buildSell: its first renderCart would delete our draft
   buildSell();
+  paintShift();
   if(rc.restored||rc.adopted){const n=draftNotice(rc);say(n.join('. ')+'.',rc.notes.length?'warn':'ok',7000);if(rc.restored)openCart();}
+  maybePromptShift();                                   // no shift yet (or someone else's): open straight onto the shift sheet
 }
 boot();
 </script>

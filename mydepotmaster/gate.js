@@ -419,80 +419,11 @@ const Gate = (function () {
     };
   }
 
-  // ── MANAGER PIN (till roadmap step 15) ─────────────────────────────────────
-  // An admin or manager may hold a 4-6 digit PIN, stored on their user record as a salted PBKDF2 record (never the PIN itself).
-  // When the Admin turns on depotInfo.tillExitPin, a till login that is not a PIN holder must have one typed to leave the till
-  // while a shift is open (pos.html). Both pages use these functions, so what index.html saves is exactly what pos.html checks.
-  // This is an operating control, not a vault: the record travels in the depot data like every other user field, so a short
-  // numeric PIN can be guessed offline by someone who extracts it. It stops the casual walk-away, and the 5-tries lock below
-  // stops guessing at the till itself.
-  const PIN_ROLES     = ['admin', 'manager', 'data_entry'];   // who may hold a PIN (data_entry is the legacy Manager role)
-  const PIN_RE        = /^[0-9]{4,6}$/;
-  const PIN_ITER      = 100000;
-  const PIN_MAX_TRIES = 5;                                    // wrong PINs in a row before the till locks the pad
-  const PIN_LOCK_MS   = 60 * 1000;
-  const PIN_LOCK_KEY  = 'mdm_pin_lock';                       // { n: wrong in a row, until: ms } in localStorage, per device
-
-  function pinValid(pin) { return typeof pin === 'string' && PIN_RE.test(pin); }
-  function _hex(bytes) { return Array.from(new Uint8Array(bytes), b => b.toString(16).padStart(2, '0')).join(''); }
-  function _unhex(h) { const a = new Uint8Array(h.length >> 1); for (let i = 0; i < a.length; i++) a[i] = parseInt(h.substr(i * 2, 2), 16) || 0; return a; }
-  function _same(a, b) {                                      // compares in constant time for equal-length strings
-    if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
-    let d = 0; for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
-    return d === 0;
-  }
-  async function _pinDerive(pin, saltHex, iter, env) {
-    const sub = (env && env.subtle) || (typeof crypto !== 'undefined' && crypto.subtle);
-    if (!sub) throw _err('NO_CRYPTO', 'This phone cannot check PINs (it needs a secure connection)');
-    const key = await sub.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
-    return _hex(await sub.deriveBits({ name: 'PBKDF2', salt: _unhex(saltHex), iterations: iter, hash: 'SHA-256' }, key, 256));
-  }
-  // → { s: salt, h: hash, it: rounds, at: when set }
-  async function pinRecord(pin, env) {
-    if (!pinValid(pin)) throw _err('BAD_PIN', 'A PIN is 4 to 6 digits');
-    const s = _hex(((env && env.rand) || _defaultRand)(16));
-    return { s, h: await _pinDerive(pin, s, PIN_ITER, env), it: PIN_ITER, at: (env && env.now ? env.now() : Date.now()) };
-  }
-  async function pinCheck(pin, rec, env) {
-    if (!pinValid(pin) || !rec || typeof rec.s !== 'string' || typeof rec.h !== 'string') return false;
-    const it = Number(rec.it) > 0 ? Number(rec.it) : PIN_ITER;
-    return _same(await _pinDerive(pin, rec.s, it, env), rec.h);
-  }
-  function pinHolders(data) {
-    return ((data && data.users) || []).filter(u => u && PIN_ROLES.includes(u.role) && u.pin && typeof u.pin.s === 'string' && typeof u.pin.h === 'string');
-  }
-  // → { username, role } of the holder whose PIN this is, or null
-  async function pinFindApprover(pin, data, env) {
-    if (!pinValid(pin)) return null;
-    for (const u of pinHolders(data)) { if (await pinCheck(pin, u.pin, env)) return { username: u.username, role: u.role }; }
-    return null;
-  }
-  // Does leaving the till need a PIN right now? Only when the Admin switched it on, someone holds a PIN to type, and a shift is open.
-  function pinRequired(data, shiftOpen) {
-    return !!shiftOpen && !!((data && data.depotInfo) || {}).tillExitPin && pinHolders(data).length > 0;
-  }
-  function _readLock(storage) { try { return JSON.parse(storage.getItem(PIN_LOCK_KEY) || 'null') || {}; } catch { return {}; } }
-  function pinLockState(storage, now) {
-    const r = _readLock(storage), until = Number(r.until) || 0, n = Number(r.n) || 0;
-    return until > now ? { locked: true, left: until - now, n } : { locked: false, left: 0, n };
-  }
-  // Call after a wrong PIN. A lock that has run out starts the count again.
-  function pinFailed(storage, now) {
-    const r = _readLock(storage), until0 = Number(r.until) || 0;
-    const n = (until0 > 0 && until0 <= now ? 0 : (Number(r.n) || 0)) + 1;
-    const until = n >= PIN_MAX_TRIES ? now + PIN_LOCK_MS : 0;
-    try { storage.setItem(PIN_LOCK_KEY, JSON.stringify({ n, until })); } catch {}
-    return { locked: until > now, left: until ? until - now : 0, n, triesLeft: Math.max(0, PIN_MAX_TRIES - n) };
-  }
-  function pinClear(storage) { try { storage.removeItem(PIN_LOCK_KEY); } catch {} }
-
   return {
     TRIAL_MS, SUB_GRACE_MS, TIER_ORDER, TIER_FEATURES, TRIAL_TIER, READ_ONLY_STATUSES, KEYS, POS_SESSION_MS,
     computeEffectiveStatus, tierFeatureSet: _tierFeatureSet,
     statusOf, isSelfSuspended, tierOf, hasFeature, isReadOnly, reconcile,
     receiptNumbering, restCloud, newTillCode, newTillId, RC_ALPHABET,
-    PIN_ROLES, PIN_MAX_TRIES, PIN_LOCK_MS, pinValid, pinRecord, pinCheck, pinHolders, pinFindApprover, pinRequired,
-    pinLockState, pinFailed, pinClear,
   };
 })();
 

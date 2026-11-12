@@ -25,7 +25,27 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.41 (2026-11-11) — Till roadmap step 15: manager PIN to leave the till (gate.js + index.html + pos.html).
+// Current version: v0.3.42 (2026-11-11) — Till roadmap step 16: open and close shifts, expected versus counted cash (shifts.js NEW + pos.html + sales.js + database_rules.json).
+//   - A shift is one cashier on one till: Open shift (the float, the cash already in the drawer) -> sales -> Close shift (the cash counted).
+//     Header button + pill: "Open shift" / "Close shift". A till with no shift opens straight onto the Open shift sheet (Close = browse only).
+//   - A real sale needs an open shift of the person logged in; every sale record now carries shiftId (sales.js, optional: older sales have none).
+//     A practice sale needs no shift. Checked again, under a lock, at the moment of saving, so a second tab cannot sell into a shift just closed.
+//   - Close: shows sales, total, money by method, credit, float, cash sales and "cash that should be in the drawer" (= float + CASH taken on that
+//     shift's sales, change already out). The cashier types the count; short / over / balanced shows live; optional reason. The close record keeps
+//     expected, counted, variance, totals, first/last receipt. Final: no edit, no reopen.
+//   - One shift per till at a time. A shift left open (idle logout, phone put away) is still there at next login: the same cashier carries on; anyone
+//     else is blocked and an admin or manager can close it for them (record says forced:true, closedBy). The float for the next shift starts at the last one.
+//   - Step 15 now uses the real thing: shiftOpen() = the person logged in has an open shift on this till and is not an admin/manager. Closing the shift is
+//     the way out that needs no PIN. A cashier blocked by someone else's shift is not asked for a PIN.
+//   - Records: shifts/{id} (open) and shiftCloses/{id} (close), create-only, uploaded and downloaded like sales (IndexedDB "mdm_shifts", own database).
+//     Rules: database_rules.json needs publishing, it adds shifts, shiftCloses and the optional shiftId on sales. Until published, shift and sale uploads
+//     that carry a shiftId are refused by the cloud, retry and wait in the outbox; nothing is lost on the phone.
+//   - Also: the stale cart hint "Sales are not saved yet" is gone (it now shows the shift hint). shifts.js is in the precache list.
+//   - Not in this step: X/Z reports and print (17), cash refunds / pay-outs in the drawer (19, shifts.js already takes them as `out`), audit-log lines (20),
+//     the management view of shifts in the main app (22/23). Known limit: a till whose browser storage was cleared gets a new identity and an open shift
+//     of the old one stays open in the records (an admin closes it with step 22).
+//   Files: shifts.js (new) + pos.html + sales.js + database_rules.json + sw.js + index.html (SW_VERSION only). gate.js is unchanged.
+// Previous: v0.3.41 (2026-11-11) — Till roadmap step 15: manager PIN to leave the till (gate.js + index.html + pos.html).
 //   - An admin or manager sets a 4-6 digit PIN in Settings → Account & Security → Manager PIN (asks for their account password;
 //     stored as a salted PBKDF2 record on their user, u.pin; never in clear). Changes are audit-logged (the PIN itself never is).
 //   - The Admin switches on "Require a manager PIN to leave the till while a shift is open" (depotInfo.tillExitPin, off by default,
@@ -2003,7 +2023,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.41';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.42';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
@@ -2059,6 +2079,7 @@ self.addEventListener('install', e => {
         .then(() => cache.add('manifest.json').catch(() => {})) // manifest (best-effort)
         .then(() => cache.add('gate.js').catch(() => {}))       // shared gating rules: index.html AND pos.html need it to start offline
         .then(() => cache.add('sales.js').catch(() => {}))      // the sales ledger: index.html AND pos.html need it to start offline
+        .then(() => cache.add('shifts.js').catch(() => {}))     // the shift ledger (step 16): pos.html needs it to start offline
         .then(() => cache.add('pos.html').catch(() => {}))      // the till page (best-effort; index.html also adds it)
         .then(() => cache.add(FONTS_CSS).catch(() => {}))       // fonts (best-effort, may fail offline)
       )

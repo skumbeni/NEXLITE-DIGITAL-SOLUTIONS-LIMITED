@@ -40,6 +40,7 @@ const Sales = (function () {
   const ID_RE   = /^[A-HJ-KM-NP-Z2-9]{4}-[0-9]{6,9}$/;   // receipt number = sale id
   const TILL_RE = /^[A-HJ-KM-NP-Z2-9]{4}$/;
   const TID_RE  = /^[0-9a-f]{24}$/;
+  const SID_RE  = /^[A-HJ-KM-NP-Z2-9]{4}-S[0-9]{4,9}$/;   // shift id (shifts.js, roadmap step 16)
   const STATUS  = ['paid', 'partial', 'credit'];
   const METHODS = ['cash', 'mtn', 'airtel', 'card'];
   const MAX_LINES = 200, MAX_PAYMENTS = 20;
@@ -63,6 +64,7 @@ const Sales = (function () {
   //   v:1, id, receiptNo, tillId, till, seq,            id === receiptNo; till = 4-char code; tillId = long random id
   //   at, date, time,                                    epoch ms; date/time as the main app writes them
   //   cashier, cashierRole,
+  //   shiftId (optional; step 16: the shift this sale was taken in, e.g. K7F2-S0001; sales before step 16 have none),
   //   lines:[{itemId, kind:'item'|'commodity', name, unit, qty, price, total}],   price copied at the moment of sale
   //   lineCount, qtyTotal, total,
   //   payments:[{method, label, amount, tendered, ref}],                          absent for a pure credit sale
@@ -79,6 +81,7 @@ const Sales = (function () {
       v: V, id: String(b.receiptNo), receiptNo: String(b.receiptNo), tillId: String(b.tillId), till: String(b.till), seq: Number(b.seq),
       at, date: dateOf(at), time: timeOf(at),
       cashier: str(b.cashier, 80), cashierRole: str(b.cashierRole, 20),
+      shiftId: str(b.shiftId, 24),
       lines: arr(b.lines).map(l => ({
         itemId: str(l.itemId, 80), kind: l.kind === 'commodity' ? 'commodity' : 'item', name: str(l.name, 200), unit: str(l.unit, 40),
         qty: Number(l.qty), price: Number(l.price), total: Number(l.total)
@@ -92,6 +95,7 @@ const Sales = (function () {
       amountPaid: Number(b.amountPaid), change: Number(b.change), balance: Number(b.balance),
       creditStatus: String(b.creditStatus), customerId: str(b.customerId, 80), customerName: str(b.customerName, 200)
     };
+    if (!rec.shiftId) delete rec.shiftId;                // no shift (a sale from before step 16): the field is simply absent
     return JSON.parse(JSON.stringify(rec));              // plain data only: what is stored here is what the cloud will hold
   }
 
@@ -105,6 +109,7 @@ const Sales = (function () {
     if (!isNum(s.at) || s.at <= 0) return 'bad time';
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.date)) || !/^\d{2}:\d{2}$/.test(String(s.time))) return 'bad date';
     if (typeof s.cashier !== 'string' || s.cashier.length > 80) return 'bad cashier';
+    if (s.shiftId !== undefined && (!SID_RE.test(String(s.shiftId)) || String(s.shiftId).slice(0, 4) !== s.till)) return 'bad shift id';
     const lines = s.lines;
     if (!Array.isArray(lines) || !lines.length || lines.length > MAX_LINES) return 'bad lines';
     let sum = 0, qty = 0;
