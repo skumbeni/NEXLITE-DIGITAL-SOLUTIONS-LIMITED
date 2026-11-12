@@ -25,7 +25,34 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.42 (2026-11-11) — Till roadmap step 16: open and close shifts, expected versus counted cash (shifts.js NEW + pos.html + sales.js + database_rules.json).
+// Current version: v0.3.44 (2026-11-12) — Till roadmap step 17 follow-up: a shift that crosses UTC midnight is counted on ONE day (shifts.js + index.html).
+//   - FIX: a shift that ran across UTC midnight (02:00 Zambia time) was listed on both days' close-outs, so its variance and its count were added into both days,
+//     while its sales sit on the days they were taken. Now a shift is listed on exactly one day: the day it was CLOSED (when its drawer was counted), or the day it
+//     was OPENED while it is still open. Sales are not touched: each stays on the date it was taken, so the day's sales and cash figures are unchanged.
+//   - A shift opened on an earlier day and closed today shows "(opened <date>)" in the close-out and on the printed day Z, with one line saying it is counted in full
+//     on the day it was closed (its count includes cash taken on the earlier day). The saved close-out keeps openedDate for each shift; older records have none and print as before.
+//   - A shift left open from an earlier day stays the amber "Also still open from an earlier day" warning. It is no longer also a "NOT CLOSED" row in the record of a later day.
+//   - shifts.js: dayReport() only. No new records: database_rules.json, gate.js, sales.js and pos.html are unchanged.
+//   - Still not in: cash paid out of the drawer (19), manager PIN for reprints / discounts (18), reprinting the Z of any earlier shift and the shift list for managers (22/23).
+//   Files: shifts.js + index.html (close-out, SW_VERSION) + sw.js.
+// Previous: v0.3.43 (2026-11-12) — Till roadmap step 17: X and Z reports, and the daily close-out becomes the day's Z (shifts.js + pos.html + index.html).
+//   - X report: a printable reading of the shift that is open now (sales, items, money by method, float, cash that should be in the drawer). Records nothing,
+//     changes nothing, any number of times. Button "X report (does not close)" in the shift sheet; an admin or manager can also take it for another cashier's open shift.
+//   - Z report: the final figures of a closed shift, taken from its shiftCloses record (so it equals what was counted), plus the item list from the ledger.
+//     "Z report (print)" appears right after Close shift; "Reprint last Z report" (marked COPY) is on the Open shift screen. The shift id is its number: no Z counter exists.
+//     If the phone does not hold every sale of that shift, the totals still print and the item list is left out rather than shown wrong.
+//   - Both use the receipt paper (logo, brand colour, print rules, Save as PDF). pos.html: paperTop() is now shared by receipt and reports.
+//   - shifts.js: report('X'|'Z'), dayReport(date, ...), itemsOf(): pure functions, nothing stored. No new records, so database_rules.json is unchanged.
+//   - Main app (index.html loads shifts.js and reads the shift records, synced every minute with the sales): the daily close-out is now the DAY'S Z.
+//     FIX: expected cash used to treat every paid till sale as cash, so MTN, Airtel and card sales inflated it. It is now the cash payment lines of the till's sales
+//     + the main app's own cash issues. Mobile money, card and credit are shown separately. Commodity sales at the till are now included (they were not before).
+//     The day cannot be closed while a shift opened that day is still open ("Close out anyway" for a shift that cannot be closed; the record lists those shifts).
+//     An empty cash-counted box is refused (it used to save as 0). The saved record keeps the old fields and adds zRef ('Z-' + date), till figures and one line per shift.
+//     "Print Z report" on the closed card prints the saved day Z (shifts, difference per shift, items). Audit line extended.
+//   - Not in this step: cash paid out of the drawer (19), manager PIN for reprints / discounts (18), shift list for managers (22/23).
+//     Known limit: a shift that spans UTC midnight (02:00 Zambia time) is listed on both days but its sales land on the day they were taken.
+//   Files: shifts.js + pos.html + index.html (loads shifts.js, close-out, SW_VERSION) + sw.js. gate.js, sales.js and database_rules.json are unchanged.
+// Previous: v0.3.42 (2026-11-11) — Till roadmap step 16: open and close shifts, expected versus counted cash (shifts.js NEW + pos.html + sales.js + database_rules.json).
 //   - A shift is one cashier on one till: Open shift (the float, the cash already in the drawer) -> sales -> Close shift (the cash counted).
 //     Header button + pill: "Open shift" / "Close shift". A till with no shift opens straight onto the Open shift sheet (Close = browse only).
 //   - A real sale needs an open shift of the person logged in; every sale record now carries shiftId (sales.js, optional: older sales have none).
@@ -2023,7 +2050,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.42';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.44';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

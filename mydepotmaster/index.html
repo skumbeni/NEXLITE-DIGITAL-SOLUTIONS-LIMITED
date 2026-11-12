@@ -1333,6 +1333,8 @@ body.cashier-mode #gsearch-fab,body.cashier-mode #copilot-fab{display:none!impor
 <script src="gate.js"></script>
 <!-- The append-only sales ledger (roadmap step 9). Same file pos.html loads. Plain synchronous script after gate.js; keep sales.js in the sw.js precache list. -->
 <script src="sales.js"></script>
+<!-- The shift ledger (till roadmap steps 16-17): open/close records and the X / Z / day report maths. Same file pos.html loads. Keep shifts.js in the sw.js precache list. -->
+<script src="shifts.js"></script>
 <script>
 
 // TEMP DEBUG: add ?acdebug=1 to the URL to see App Check token diagnostics as toasts.
@@ -4195,7 +4197,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.42';
+const SW_VERSION  = 'v0.3.44';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -8573,6 +8575,8 @@ function renderGenSales(){
         </div>
       </div>
       ${todayClose.notes?`<div style="margin-top:8px;font-size:15px;color:var(--muted)">${esc(todayClose.notes)}</div>`:''}
+      ${_closeZLine(todayClose)}
+      <button onclick="printDailyZ('${esc(todayClose.id)}')" style="width:100%;margin-top:10px;background:transparent;border:1.5px solid var(--green);border-radius:10px;padding:10px;color:var(--green);font-family:var(--fh);font-size:16px;font-weight:700;cursor:pointer">🖨 Print Z report</button>
     </div>`
   :`${USER.role==='admin'&&todaySales.length>0?`
     <button onclick="openDailyCloseOut()" style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:var(--surface);border:1.5px dashed var(--green);border-radius:12px;padding:12px;color:var(--green);font-family:var(--fh);font-size:17px;font-weight:700;cursor:pointer;margin-bottom:12px;touch-action:manipulation">
@@ -8698,29 +8702,92 @@ function printSaleReceipt(id){
   _pdfPrint(html, `Receipt #${rno}`);
 }
 
-function openDailyCloseOut(){
+// ── DAILY CLOSE-OUT = THE DAY'S Z REPORT (till roadmap step 17) ───────────────────────────────────────────────────
+// Extends dailyCloseOuts. The old close-out treated every PAID sale as cash, so an MTN, Airtel or card sale at the till inflated
+// "expected cash". Now the expected cash is what was really taken in cash:
+//     expected cash = cash on the till's sales of the day (Shifts.dayReport: the CASH payment lines, change already out)
+//                   + cash on the main app's own issues of the day (paid + part-paid; they carry no payment method, as before)
+// Mobile-money and card money, and credit, are shown but are not in the drawer. The float is left out: it is the tills' own money, and
+// each shift's count of it is already in that shift's Z report (counted - expected, kept in the shiftCloses record).
+// The day cannot be closed out while a till shift OPENED TODAY is still open (its drawer is not counted yet); "Close out anyway" is the
+// admin's way out for a shift that cannot be closed (a till whose browser storage was wiped), and the record says which shifts were left.
+// Shifts opened on an earlier day and still open are only a warning. The saved record keeps the old fields (id, date, closedAt,
+// expectedCash, actualCash, variance, notes, closedBy) and adds zRef ('Z-' + date), the till figures and one line per shift, so
+// older records and the AI context keep working. Nothing here edits a shift or a sale.
+const _r2=n=>Math.round((Number(n)||0)*100)/100;
+function _closeFigures(dateStr){
+  const day=Shifts.dayReport(dateStr,_shiftEv,_SALE_LIST||[]);
+  const app=(DATA.generalIssued||[]).filter(x=>x.date===dateStr&&!x._sale);
+  const paid=app.filter(x=>(x.creditStatus||'paid')==='paid').reduce((a,b)=>a+Number(b.issued||0)*Number(b.sellingPrice||0),0);
+  const part=app.filter(x=>x.creditStatus==='partial').reduce((a,b)=>a+Number(b.partialPaid||0),0);
+  const appCash=_r2(paid+part);
+  return {day,appCash,appCount:app.length,expectedCash:_r2(day.cashSales+appCash)};
+}
+// One muted line for the closed card: what the saved close-out says about the tills (nothing for a record from before step 17).
+function _closeZLine(z){
+  if(!z||!z.zRef)return '';
+  const bits=[esc(z.zRef)];
+  if(z.shifts&&z.shifts.length)bits.push(z.shifts.length+' till shift'+(z.shifts.length!==1?'s':''));
+  const bm=z.byMethod||{};
+  if(Number(bm.mtn)>0)bits.push('MTN '+zm(bm.mtn));
+  if(Number(bm.airtel)>0)bits.push('Airtel '+zm(bm.airtel));
+  if(Number(bm.card)>0)bits.push('Card '+zm(bm.card));
+  if(Number(z.credit)>0)bits.push('Credit '+zm(z.credit));
+  return `<div style="margin-top:8px;font-size:14px;color:var(--muted)">${bits.join(' · ')}</div>`;
+}
+
+async function openDailyCloseOut(force){
   if(!requireAdmin('close out daily sales'))return;
-  const todayStr=today();
-  const todaySales=DATA.generalIssued.filter(x=>x.date===todayStr);
-  const expectedCash=todaySales.filter(x=>(x.creditStatus||'paid')==='paid').reduce((a,b)=>a+Number(b.issued||0)*Number(b.sellingPrice||0),0);
-  const partialCash=todaySales.filter(x=>x.creditStatus==='partial').reduce((a,b)=>a+Number(b.partialPaid||0),0);
-  const totalExpected=expectedCash+partialCash;
-  const txCount=todaySales.length;
+  try{await salesReload();await shiftsReload();}catch(e){}
+  const todayStr=today(),F=_closeFigures(todayStr),D=F.day,openN=D.openToday;
+  const rowH=(l,v,st)=>`<div>${l}</div><div style="text-align:right;font-weight:700;${st||''}">${v}</div>`;
+  if(openN.length&&force!==true){
+    openModal(`
+      <div class="mtitle" style="font-size:20px">⛔ Shifts still open — ${fmtDate(todayStr)}</div>
+      <div style="font-size:14px;color:var(--muted);margin-bottom:12px;line-height:1.6">Close every till shift first, so each drawer is counted and each shift's Z report is final.</div>
+      <div style="display:grid;gap:6px;margin-bottom:12px">${openN.map(x=>`<div style="background:var(--surface2);border-radius:10px;padding:9px 12px;font-size:15px"><b>${esc(x.shiftId)}</b> · ${esc(x.cashier)}<br><span style="color:var(--muted);font-size:14px">open since ${esc(x.openedTime)} · float ${zm(x.float)}</span></div>`).join('')}</div>
+      <div style="font-size:14px;color:var(--muted);margin-bottom:14px;line-height:1.6">Open the Till, tap Shift, then Close shift. An admin or manager can close another cashier's shift.</div>
+      <div class="mact">
+        <button class="btn bo" style="flex:1" onclick="closeModal()">OK</button>
+        <button class="btn" style="flex:1;background:transparent;color:var(--red);border:1.5px solid var(--red)" onclick="openDailyCloseOut(true)">Close out anyway</button>
+      </div>
+    `);
+    return;
+  }
+  const txCount=D.saleCount+F.appCount;
+  const L=[];
+  if(D.saleCount){
+    L.push(rowH('Till sales ('+D.saleCount+')',zm(D.total)));
+    L.push(rowH('&nbsp;· Cash',zm(D.byMethod.cash)));
+    [['mtn','MTN Money'],['airtel','Airtel Money'],['card','Card']].forEach(([k,l])=>{if(D.byMethod[k]>0)L.push(rowH('&nbsp;· '+l+' <span style="color:var(--muted)">(not in the drawer)</span>',zm(D.byMethod[k])));});
+    if(D.credit>0)L.push(rowH('&nbsp;· On credit',zm(D.credit),'color:var(--amber)'));
+  }
+  if(F.appCount)L.push(rowH('Main-app issues, cash ('+F.appCount+')',zm(F.appCash)));
+  L.push(rowH('Expected cash',zm(F.expectedCash),'color:var(--green)'));
+  const closed=D.shifts.filter(x=>x.closed);
+  const shH=closed.length?`
+    <div style="font-size:13px;font-weight:700;color:var(--muted);margin:12px 0 5px;letter-spacing:.05em">TILL SHIFTS (Z REPORTS)</div>
+    <div style="display:grid;gap:4px;margin-bottom:6px">${closed.map(x=>{const v=x.variance;return`<div style="display:flex;justify-content:space-between;gap:8px;font-size:14px"><span>${esc(x.shiftId)} · ${esc(x.cashier)}${x.forced?' <span style="color:var(--muted)">(closed by '+esc(x.closedBy)+')</span>':''}${x.openedDate!==x.closedDate?' <span style="color:var(--muted)">(opened '+esc(fmtDate(x.openedDate))+')</span>':''}</span><span style="font-weight:700;white-space:nowrap;color:${v===0?'var(--green)':v<0?'var(--red)':'var(--amber)'}">${v===0?'balanced':(v<0?'short ':'over ')+zm(Math.abs(v))}</span></div>`;}).join('')}</div>
+    <div style="font-size:13px;color:var(--muted);margin-bottom:6px">The tills handed in ${zm(D.counted)} (their counts less the floats).</div>${closed.some(x=>x.openedDate!==x.closedDate)?'<div style="font-size:13px;color:var(--muted);margin-bottom:6px">A shift that began on an earlier day is counted here, in full, because it was closed today. Its sales stay on the days they were taken.</div>':''}`:'';
+  const warnH=(openN.length?`<div style="background:rgba(231,76,60,.12);border:1.5px solid var(--red);border-radius:10px;padding:9px 12px;font-size:14px;margin-bottom:12px;color:var(--red)">⚠️ Not counted, still open: ${openN.map(x=>esc(x.shiftId)).join(', ')}</div>`:'')
+    +(D.openEarlier.length?`<div style="font-size:13px;color:var(--amber);margin-bottom:10px">Also still open from an earlier day: ${D.openEarlier.map(x=>esc(x.shiftId)+' ('+esc(x.openedDate)+')').join(', ')}</div>`:'');
+  const noShiftH=D.noShift?`<div style="font-size:13px;color:var(--muted);margin-bottom:8px">${D.noShift} till sale${D.noShift!==1?'s':''} today belong${D.noShift===1?'s':''} to no shift (taken before shifts existed).</div>`:'';
   openModal(`
     <div class="mtitle" style="font-size:20px">🔒 Close Out — ${fmtDate(todayStr)}</div>
-    <div style="font-size:14px;color:var(--muted);margin-bottom:14px;line-height:1.6">
-      ${txCount} transaction${txCount!==1?'s':''} recorded today.<br>
-      Expected cash from paid sales: <strong style="color:var(--green)">${zm(totalExpected)}</strong>
-    </div>
-    <div class="fw">
+    <div style="font-size:14px;color:var(--muted);margin-bottom:12px;line-height:1.6">${txCount} transaction${txCount!==1?'s':''} recorded today. Reference <strong>Z-${esc(todayStr)}</strong></div>
+    ${warnH}
+    <div style="display:grid;grid-template-columns:1fr auto;gap:5px 10px;font-size:15px">${L.join('')}</div>
+    ${shH}${noShiftH}
+    <div class="fw" style="margin-top:12px">
       <div class="fl" style="font-weight:700">Actual Cash Counted <span style="color:var(--red)">*</span></div>
       <input class="fi" type="number" id="co-actual" placeholder="0.00" step="0.01" inputmode="decimal" oninput="
-        const exp=${totalExpected};
+        const exp=${F.expectedCash};
         const act=Number(this.value||0);
         const v=act-exp;
         const el=document.getElementById('co-variance-hint');
         if(el)el.innerHTML=v===0?'<span style=color:var(--green)>✅ EXACT</span>':v>0?'<span style=color:var(--amber)>⚠️ OVER by '+zm(v)+'</span>':'<span style=color:var(--red)>🔴 SHORT by '+zm(Math.abs(v))+'</span>';
       "/>
+      <div style="margin-top:4px;font-size:13px;color:var(--muted)">The day's cash takings. Leave any float out.</div>
       <div id="co-variance-hint" style="margin-top:4px;font-size:14px;font-weight:700"></div>
     </div>
     <div class="fw">
@@ -8729,29 +8796,91 @@ function openDailyCloseOut(){
     </div>
     <div class="mact">
       <button class="btn bo" style="flex:1" onclick="closeModal()">Cancel</button>
-      <button class="btn bg" style="flex:2" onclick="saveDailyCloseOut(${totalExpected})">🔒 Confirm Close Out</button>
+      <button class="btn bg" style="flex:2" onclick="saveDailyCloseOut(${openN.length?1:0})">🔒 Confirm Close Out</button>
     </div>
   `);
 }
 
-function saveDailyCloseOut(expectedCash){
+function saveDailyCloseOut(ignoreOpen){
   if(!requireAdmin('close out daily sales'))return;
-  const actual=Number(document.getElementById('co-actual')?.value||0);
-  if(!actual&&actual!==0){showToast('⚠️ Enter actual cash counted');return;}
+  const raw=document.getElementById('co-actual')?.value;
+  if(raw===undefined||String(raw).trim()===''){showToast('⚠️ Enter actual cash counted');return;}
+  const actual=Number(raw);
+  if(!isFinite(actual)||actual<0){showToast('⚠️ Enter actual cash counted');return;}
   const notes=uc(document.getElementById('dco-notes')?.value||'');
-  const todayStr=today();
+  const todayStr=today(),F=_closeFigures(todayStr),D=F.day,expectedCash=F.expectedCash;
+  if(D.openToday.length&&!ignoreOpen){showToast('⚠️ A till shift was opened meanwhile. Close it first.');return;}
+  const variance=_r2(actual-expectedCash);
+  const left=D.openToday.map(x=>x.shiftId);
   const payload={
     id:uid(), date:todayStr, closedAt:nowTime(),
-    expectedCash, actualCash:actual,
-    variance:actual-expectedCash, notes,
-    closedBy:USER.username||'admin'
+    expectedCash, actualCash:actual, variance, notes,
+    closedBy:USER.username||'admin',
+    zRef:'Z-'+todayStr,
+    tillSales:D.saleCount, tillTotal:D.total, tillCash:D.cashSales, appCash:F.appCash,
+    byMethod:D.byMethod, credit:D.credit,
+    shifts:D.shifts.map(x=>({shiftId:x.shiftId,cashier:x.cashier,openedDate:x.openedDate,closed:x.closed,float:x.float,expectedCash:x.expectedCash,countedCash:x.countedCash,variance:x.variance,forced:x.forced})),
+    shiftVariance:D.shiftVariance
   };
-  if(!confirm(`Confirm Close Out:\nExpected: ${zm(expectedCash)}\nActual: ${zm(actual)}\nVariance: ${zm(actual-expectedCash)}\n\nThis records the daily close for ${fmtDate(todayStr)}. Proceed?`))return;
+  if(left.length)payload.openShifts=left;
+  if(!confirm(`Confirm Close Out ${payload.zRef}:\nExpected cash: ${zm(expectedCash)}\nActual: ${zm(actual)}\nVariance: ${zm(variance)}${left.length?`\n\nNOT COUNTED (still open): ${left.join(', ')}`:''}\n\nThis records the daily close for ${fmtDate(todayStr)}. Proceed?`))return;
   updateData(d=>({...d,dailyCloseOuts:[...(d.dailyCloseOuts||[]).filter(x=>x.date!==todayStr),payload]}));
-  logAuditEvent('CREATE','Daily Close Out',`Date: ${todayStr} · Expected: ${zm(expectedCash)} · Actual: ${zm(actual)} · Variance: ${zm(actual-expectedCash)}`);
+  const bm=D.byMethod;
+  logAuditEvent('CREATE','Daily Close Out',`${payload.zRef} · Expected: ${zm(expectedCash)} · Actual: ${zm(actual)} · Variance: ${zm(variance)} · Till shifts: ${D.shifts.filter(x=>x.closed).length} (variance ${zm(D.shiftVariance)})`
+    +(bm.mtn>0||bm.airtel>0||bm.card>0?` · MTN ${zm(bm.mtn)} · Airtel ${zm(bm.airtel)} · Card ${zm(bm.card)}`:'')
+    +(left.length?` · Closed out with shifts still open: ${left.join(', ')}`:''));
   closeModal();
   showToast('✅ Daily close out saved');
   GTAB='sales'; render();
+}
+
+// Print the day's Z report from the SAVED close-out (so it is always the figures that were signed off). The item list is recomputed
+// from the ledger and only shown when it adds up to the saved till total (a phone that has not downloaded every sale of the day
+// would otherwise print a list that disagrees with the totals).
+function printDailyZ(id){
+  const z=(DATA.dailyCloseOuts||[]).find(x=>x.id===id);
+  if(!z){showToast('⚠️ Close-out not found');return;}
+  const ref=z.zRef||('Z-'+z.date);
+  const td=(c,cls)=>`<td${cls?` class="${cls}"`:''}>${c}</td>`;
+  const tbl=(head,rows,numFrom)=>`<table><thead><tr>${head.map((h,i)=>`<th${i>=numFrom?' class="num"':''}>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr${r._cls?` class="${r._cls}"`:''}>${r.c.map((c,i)=>td(c,i>=numFrom?'num':'')).join('')}</tr>`).join('')}</tbody></table>`;
+  const sec=t=>`<div class="pay-section-title">${esc(t)}</div>`;
+  let h=_getBrandedHeader('Z Report — '+fmtDate(z.date));
+  h+=tbl(['Close-out','Detail'],[
+    {c:['Reference',esc(ref)]},{c:['Date',esc(fmtDate(z.date))]},{c:['Closed',esc((z.closedAt||'—')+' by '+(z.closedBy||'—'))]}
+  ],1);
+  if(z.zRef){
+    const bm=z.byMethod||{},rows=[];
+    rows.push({c:['Till sales ('+Number(z.tillSales||0)+')',zm(z.tillTotal||0)]});
+    rows.push({c:['· Cash',zm(bm.cash||0)]});
+    [['mtn','MTN Money'],['airtel','Airtel Money'],['card','Card']].forEach(([k,l])=>{if(Number(bm[k])>0)rows.push({c:['· '+l+' (not in the drawer)',zm(bm[k])]});});
+    if(Number(z.credit)>0)rows.push({c:['· Left on credit',zm(z.credit)]});
+    if(Number(z.appCash)>0)rows.push({c:['Main-app issues, cash',zm(z.appCash)]});
+    h+=sec('Sales')+tbl(['Source','Amount'],rows,1);
+  }
+  const v=_r2(Number(z.actualCash||0)-Number(z.expectedCash||0));
+  h+=sec('Cash')+tbl(['Cash','Amount'],[
+    {c:['Expected cash',zm(z.expectedCash||0)]},
+    {c:['Actual cash counted',zm(z.actualCash||0)]},
+    {c:[v===0?'Balanced':(v<0?'SHORT':'OVER'),v===0?'—':zm(Math.abs(v))],_cls:'total-row'}
+  ],1);
+  if(z.shifts&&z.shifts.length){
+    h+=sec('Till shifts')+tbl(['Shift','Cashier','Float','Expected','Counted','Difference'],z.shifts.map(x=>x.closed
+      ?{c:[esc(x.shiftId),esc(x.cashier)+(x.forced?' (closed by manager)':'')+(x.openedDate&&x.openedDate!==z.date?' (opened '+esc(fmtDate(x.openedDate))+')':''),zm(x.float),zm(x.expectedCash),zm(x.countedCash),x.variance===0?'balanced':(x.variance<0?'short ':'over ')+zm(Math.abs(x.variance))]}
+      :{c:[esc(x.shiftId),esc(x.cashier),zm(x.float),'—','—','NOT CLOSED']}),2);
+  }
+  if(z.openShifts&&z.openShifts.length)h+=`<div style="margin:10px 0;padding:8px 10px;border:1.5px solid #c0392b;color:#c0392b;font-weight:700">Closed out with shifts still open (not counted): ${esc(z.openShifts.join(', '))}</div>`;
+  if(z.zRef){
+    const its=Shifts.itemsOf((_SALE_LIST||[]).filter(x=>x.date===z.date));
+    const sumC=its.reduce((a,i)=>a+Math.round(i.total*100),0);
+    if(its.length&&sumC===Math.round(Number(z.tillTotal||0)*100)){
+      const MAXI=40;
+      h+=sec('Items sold at the till')+tbl(['Item','Qty','Value'],its.slice(0,MAXI).map(i=>({c:[esc(i.name),esc(String(+Number(i.qty).toFixed(3))+(i.unit?' '+i.unit.toLowerCase():'')),zm(i.total)]})),1);
+      if(its.length>MAXI)h+=`<div style="font-size:9pt;color:#777">…and ${its.length-MAXI} smaller items (included in the totals).</div>`;
+    }
+  }
+  if(z.notes)h+=`<div style="margin:10px 0;font-size:10pt"><b>Notes:</b> ${esc(z.notes)}</div>`;
+  h+=`<div class="sig-row"><div class="sig-box">Closed by</div><div class="sig-box">Checked by</div></div>`+_pdfFooter(esc(ref));
+  _pdfPrint(h,'Z Report '+ref,'Z_Report_'+ref);
 }
 
 function renderGenSummary(){
@@ -9154,6 +9283,29 @@ async function salesSync(){
     try{await L.pull(C);}catch(e){console.warn('[MDM] sales download failed',e);}
   }finally{_salesBusy=false;}
   await salesRefresh();
+}
+// ── Shift records (till roadmap steps 16-17) ─────────────────────────────────────────────────────────────────────
+// The till (pos.html) opens and closes shifts (shifts.js: IndexedDB "mdm_shifts" + depots/<depot>/shifts and shiftCloses). The main
+// app only READS them, for the day's Z report in the daily close-out. Like the sales ledger they never touch the DATA blob.
+// var, not let, for the same early-call reason as _salesLedger above.
+var _shiftLedger=null,_shiftEv=[],_shiftBusy=false;
+function _shifts(){return _shiftLedger||(_shiftLedger=Shifts.create({depotKey:()=>DATA&&DATA.installId,opts:{dateOf:t=>new Date(t).toISOString().slice(0,10)},adapter:Shifts.idbAdapter()}));}
+async function shiftsReload(){
+  try{
+    if(!DATA||!DATA.installId)return;
+    const depot=DATA.installId,list=await _shifts().all();
+    if(depot===DATA.installId)_shiftEv=list;
+  }catch(e){console.warn('[MDM] shift records unavailable',e);}
+}
+async function shiftsSync(){
+  if(_shiftBusy||!navigator.onLine||!USER||!DATA||!DATA.installId)return;
+  _shiftBusy=true;
+  try{
+    const L=_shifts(),C=_salesCloud();
+    try{await L.push(C);}catch(e){console.warn('[MDM] shift upload failed',e);}
+    try{await L.pull(C);}catch(e){console.warn('[MDM] shift download failed',e);}
+  }finally{_shiftBusy=false;}
+  await shiftsReload();
 }
 // ── ONE stock formula (roadmap step 10) ──────────────────────────────────────────────────────────────────────────
 //     stock = received - issued - sold + returns        no stored counters: every figure is summed from records
@@ -23195,6 +23347,7 @@ setInterval(()=>{
   if (!navigator.onLine || !USER) return;
   _receiptRegister();   // claim this device's till code once (no-op afterwards)
   salesSync();          // till ledger: upload anything queued, download the other tills' sales (never touches the DATA blob)
+  shiftsSync();         // till shifts: the same for shift opens/closes (read here for the day's Z report)
   fetchNotifications(); // badge/inbox refresh — safe even with a modal open, doesn't touch DATA
   const ovl = document.getElementById('modal-ovl');
   if (ovl && ovl.style.display === 'flex') return; // don't interrupt active data entry

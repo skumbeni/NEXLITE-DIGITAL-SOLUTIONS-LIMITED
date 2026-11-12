@@ -27,6 +27,14 @@
  * on one phone that open at the same moment compute the same shiftId, and the store's key makes the second one fail with
  * EXISTS: they cannot both win.
  *
+ * X AND Z REPORTS (roadmap step 17)
+ *   Nothing new is stored. A report is worked out from the records every time, so it can never disagree with them.
+ *     report('X', ...)  one OPEN shift, read-only, as often as wanted. Changes nothing.
+ *     report('Z', ...)  one CLOSED shift: the figures frozen in its close record, plus the item list from the ledger.
+ *     dayReport(...)    every sale of one date and every shift COUNTED on it, across tills: what the main app's daily close-out shows and keeps.
+ *   The Z of a shift IS its shiftCloses record (append-only), so there is no Z counter to collide: its number is the shiftId.
+ *   The day's Z reference is 'Z-' + the date.
+ *
  * Plain classic script, no dependencies, one global: Shifts. Load it with a normal <script src="shifts.js"></script> after
  * gate.js and sales.js. Add shifts.js to the precache list in sw.js, otherwise the till cannot start offline.
  * Storage and network are injected, so Node can test this file (see create(env) and memAdapter()).
@@ -186,6 +194,110 @@ const Shifts = (function () {
   }
   // variance of a count against the summary, in money (negative = short)
   const varianceOf = (sum, counted) => (toC(counted) - toC(sum.expectedCash)) / 100;
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // X AND Z REPORTS (roadmap step 17) — pure functions, nothing is stored
+  // ══════════════════════════════════════════════════════════════════════════════
+  // What was sold in a list of sales, one row per item: [{ itemId, name, unit, qty, total }], biggest value first.
+  function itemsOf(sales) {
+    const m = new Map();
+    (sales || []).forEach(s => { if (s) arr(s.lines).forEach(l => {
+      const k = String(l.itemId);
+      const x = m.get(k) || { itemId: k, name: String(l.name || ''), unit: String(l.unit || ''), qty: 0, c: 0 };
+      x.qty = Math.round((x.qty + (Number(l.qty) || 0)) * 1000) / 1000;
+      x.c += toC(l.total);
+      m.set(k, x);
+    }); });
+    return Array.from(m.values()).map(x => ({ itemId: x.itemId, name: x.name, unit: x.unit, qty: x.qty, total: x.c / 100 }))
+      .sort((a, b) => (b.total - a.total) || a.name.localeCompare(b.name));
+  }
+
+  // One shift's report.  kind 'X' (shift open) or 'Z' (shift closed).
+  //   open   the shift's open record     sales   the ledger's records     o.close  its close record (needed for Z)
+  //   o.out  cash paid out of the drawer so far (X only; step 19)           o.now    time the report is taken (X)
+  // 'Z' takes every figure from the close record, because that is what was counted and signed off; the item list comes from the
+  // ledger. itemsComplete says whether that list adds up to the Z's total: a phone that has not downloaded every sale of the
+  // shift (a Z reprinted on another device) would otherwise print a list that disagrees with the totals, so it reports false.
+  function report(kind, open, sales, o) {
+    o = o || {};
+    if (kind !== 'X' && kind !== 'Z') throw err('BAD_KIND', 'A report is X or Z');
+    if (!open) throw err('NO_SHIFT', 'No shift to report on');
+    const mine = (sales || []).filter(s => s && s.shiftId === open.shiftId).sort((a, b) => (a.at - b.at) || a.id.localeCompare(b.id));
+    const items = itemsOf(mine);
+    const base = { kind, shiftId: open.shiftId, till: open.till, tillId: open.tillId, cashier: open.cashier, openedAt: open.at, openedDate: open.date, openedTime: open.time };
+    let r;
+    if (kind === 'Z') {
+      const c = o.close;
+      if (!c) throw err('NO_CLOSE', 'This shift is not closed yet');
+      const by = {}; METHODS.forEach(m => { by[m] = r2(Number((c.byMethod || {})[m]) || 0); });
+      r = Object.assign(base, {
+        closedAt: c.at, closedDate: c.date, closedTime: c.time, closedBy: c.closedBy, forced: !!c.forced,
+        saleCount: c.saleCount, total: c.total, credit: c.credit, byMethod: by,
+        float: c.float, cashSales: c.cashSales, cashOut: c.cashOut, expectedCash: c.expectedCash,
+        countedCash: c.countedCash, variance: c.variance, firstReceipt: c.firstReceipt, lastReceipt: c.lastReceipt, note: c.note || ''
+      });
+    } else {
+      const sm = summary(open, sales, { out: o.out });
+      r = Object.assign(base, {
+        takenAt: o.now || Date.now(), closedAt: null, closedBy: '', forced: false,
+        saleCount: sm.saleCount, total: sm.total, credit: sm.credit, byMethod: sm.byMethod,
+        float: sm.float, cashSales: sm.cashSales, cashOut: sm.cashOut, expectedCash: sm.expectedCash,
+        countedCash: null, variance: null, firstReceipt: sm.firstReceipt, lastReceipt: sm.lastReceipt, note: ''
+      });
+    }
+    let sumC = 0, qty = 0, change = 0;
+    items.forEach(i => { sumC += toC(i.total); qty += i.qty; });
+    mine.forEach(s => { change += toC(s.change); });
+    r.items = items;
+    r.qtyTotal = Math.round(qty * 1000) / 1000;
+    r.changeGiven = change / 100;
+    r.itemsComplete = mine.length === r.saleCount && sumC === toC(r.total);
+    return r;
+  }
+
+  // Everything of one date (YYYY-MM-DD, the ledger's own day), across all tills the phone knows about.
+  //   events  shift opens and closes (create(env).all())    sales  the ledger's records
+  // Returns the day's sales by method, the shifts counted on the day, and which shifts are still open.
+  // ONE SHIFT, ONE DAY. A sale belongs to the date it was taken (its own `date`), so a shift that runs across UTC midnight (02:00
+  // Zambia time) sells on two dates. The shift itself is listed on exactly one: the date it was CLOSED, because that is when its drawer
+  // was counted and its variance became final; a shift still open is listed on the date it was OPENED. So a variance and a count are
+  // never added into two days, and the close-out made after the count is the one that carries it. A closed shift's count covers ALL of
+  // its sales, including cash taken on the earlier date; row.openedDate !== row.closedDate tells the caller that this is such a shift.
+  //   openToday   shifts opened on this date and not closed (the main app refuses a day close-out while there are any)
+  //   openEarlier shifts opened on an earlier date and still open (a warning, not a block: a till whose storage was wiped can leave one)
+  //   cashSales   cash taken on the day's sales (cash payment lines; the float and the change given back are not in it)
+  //   shiftVariance  sum of the closed shifts' variances (negative = short);  counted  sum of their counts less floats
+  function dayReport(date, events, sales) {
+    const list = shiftsOf(events);
+    const day = (sales || []).filter(s => s && s.date === date);
+    const by = {}; METHODS.forEach(m => { by[m] = 0; });
+    let total = 0, credit = 0, change = 0, noShift = 0;
+    day.forEach(s => {
+      total += toC(s.total); credit += toC(s.balance); change += toC(s.change);
+      if (!s.shiftId) noShift++;
+      arr(s.payments).forEach(p => { if (by[p.method] != null) by[p.method] += toC(p.amount); });
+    });
+    const row = x => ({
+      shiftId: x.open.shiftId, till: x.open.till, cashier: x.open.cashier, openedDate: x.open.date, openedTime: x.open.time,
+      closed: !!x.close, closedDate: x.close ? x.close.date : '', closedTime: x.close ? x.close.time : '',
+      closedBy: x.close ? x.close.closedBy : '', forced: x.close ? !!x.close.forced : false,
+      float: x.open.float, expectedCash: x.close ? x.close.expectedCash : null,
+      countedCash: x.close ? x.close.countedCash : null, variance: x.close ? x.close.variance : null
+    });
+    const dayOfShift = x => (x.close ? x.close.date : x.open.date);   // the ONE day a shift is listed on
+    const inDay = list.filter(x => dayOfShift(x) === date);
+    const rows = inDay.map(row);
+    const openNow = list.filter(x => !x.close);
+    let varC = 0, countedC = 0;
+    rows.forEach(r => { if (r.closed) { varC += toC(r.variance); countedC += toC(r.countedCash) - toC(r.float); } });
+    const o = {}; METHODS.forEach(m => { o[m] = by[m] / 100; });
+    return {
+      date, saleCount: day.length, total: total / 100, credit: credit / 100, byMethod: o,
+      cashSales: by.cash / 100, nonCash: (by.mtn + by.airtel + by.card) / 100, changeGiven: change / 100, noShift,
+      shifts: rows, openToday: openNow.filter(x => x.open.date === date).map(row), openEarlier: openNow.filter(x => x.open.date < date).map(row),
+      shiftVariance: varC / 100, counted: countedC / 100, items: itemsOf(day)
+    };
+  }
 
   // ══════════════════════════════════════════════════════════════════════════════
   // STORAGE ADAPTERS — every method is async; d = depot key
@@ -414,7 +526,7 @@ const Shifts = (function () {
     return { all, pending, current, open, close, push, pull };
   }
 
-  return { V, SID_RE, METHODS, openRecord, closeRecord, validateOpen, validateClose, forCloud, fromCloud, shiftsOf, openShiftOf, summary, varianceOf, create, memAdapter, idbAdapter };
+  return { V, SID_RE, METHODS, openRecord, closeRecord, validateOpen, validateClose, forCloud, fromCloud, shiftsOf, openShiftOf, summary, varianceOf, itemsOf, report, dayReport, create, memAdapter, idbAdapter };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Shifts; // lets Node load it for tests

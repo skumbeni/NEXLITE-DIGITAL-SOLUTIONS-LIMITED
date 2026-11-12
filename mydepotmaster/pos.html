@@ -146,6 +146,9 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 .paper .gt td{font-size:18px;font-weight:800;padding-top:4px}
 .paper .gt td.r{color:var(--acct,var(--acc))}
 .paper .ft{margin-top:12px;text-align:center;font-size:11px;color:#999}
+.paper .sec{margin:10px 0 3px;font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#555}
+.paper .sig{display:flex;gap:16px;margin-top:26px;font-size:11px;color:#777}.paper .sig span{flex:1;border-top:1px solid #999;padding-top:3px}
+.paper .tag+.tag{margin-left:6px}
 @page{margin:0}                                  /* no browser header/footer (URL, date) on the printout; the receipt carries its own padding */
 @media print{
   body>*:not(.rovl){display:none!important}
@@ -639,7 +642,7 @@ function brandLight(c){
   const [r,g,b]=[0,2,4].map(i=>{const v=parseInt(h.substr(i,2),16)/255;return v<=.03928?v/12.92:Math.pow((v+.055)/1.055,2.4);});
   return .2126*r+.7152*g+.0722*b>.35;
 }
-function receiptEl(b,tag){
+function paperTop(){                            // logo or initials, depot name, district, phone: the head of every printed paper
   const di=DATA.depotInfo||{};
   const accent=/^#[0-9a-f]{3,8}$/i.test(di.brandColor||'')?di.brandColor:'#1E8449';
   const paper=el('div','paper');paper.style.setProperty('--acc',accent);
@@ -653,6 +656,10 @@ function receiptEl(b,tag){
   paper.append(el('div','c dep',di.name||'Shop Inventory & Sales Manager'));
   if(di.district)paper.append(el('div','c mu',di.district));
   if(di.contactPhone)paper.append(el('div','c mu','Tel: '+di.contactPhone));
+  return paper;
+}
+function receiptEl(b,tag){
+  const paper=paperTop();
   paper.append(el('hr','rule'),el('div','c mu','SALES RECEIPT'));
   if(b.receiptNo){const no=el('div','c b','#'+b.receiptNo);no.style.fontSize='16px';paper.append(no);}
   else if(!b.practice)paper.append(el('div','c mu','Receipt number is given when the sale is saved'));
@@ -1233,7 +1240,7 @@ function renderMine(){
 // carries on; anyone else must have an admin or manager close it first (they count the drawer; the record says it was forced).
 // Opening and closing are checked under a lock together with taking a sale, so a second tab cannot sell into a shift that has
 // just been closed. Cash in and out of the drawer during a shift (refunds, pay-outs) comes with step 19; shifts.js already
-// takes it as `out`. X and Z reports are step 17.
+// takes it as `out`. X and Z reports (step 17) are further down, after renderShiftDone.
 const SHIFTLG=Shifts.create({
   depotKey:()=>DATA&&DATA.installId,
   opts:{dateOf:t=>new Date(t).toISOString().slice(0,10)},   // the same date rule as the sales ledger
@@ -1352,7 +1359,10 @@ function renderOpen(){
   const err=el('div','pay-err','',{role:'alert'});
   fr.append(fld('Opening float (cash already in the drawer)',inp),err);
   const go=el('button','pri','Open shift',{type:'button'}),row=el('div','shbtns');
-  row.append(go);fr.append(row);
+  row.append(go);
+  const lz=lastClosedHere();
+  if(lz)row.append(shiftBtn('Reprint last Z report ('+lz.open.shiftId+')','',()=>showShiftReport(lz.open.shiftId,'Z',true)));
+  fr.append(row);
   SHBODY.replaceChildren(fr);
   async function submit(){
     err.textContent='';
@@ -1387,6 +1397,7 @@ function renderOther(){
   if(isHolder(USER)){
     fr.append(el('div','h-sub','As '+USER.role+' you can close it: count the cash in that drawer and type it in. The record shows that you closed it.'));
     row.append(shiftBtn('Close '+o.cashier+'\u2019s shift','pri',()=>{SHVIEW='force';renderShift();}));
+    row.append(shiftBtn('X report for '+o.cashier,'',()=>showShiftReport(o.shiftId,'X')));
   }else fr.append(el('div','h-sub','Ask an admin or manager to close it, or have '+o.cashier+' sign in and close it.'));
   fr.append(row);
   SHBODY.replaceChildren(fr);
@@ -1414,7 +1425,7 @@ function renderClose(sh,forced){
   const held=readHeld().length;
   if(held)fr.append(el('div','h-sub',held+(held===1?' held sale stays':' held sales stay')+' parked. They are sold in the next shift, at that day\u2019s prices.'));
   const go=el('button','pri','Close shift',{type:'button'}),btns=el('div','shbtns');
-  btns.append(go);fr.append(btns);
+  btns.append(go,shiftBtn('X report (does not close)','',()=>showShiftReport(o.shiftId,'X')));fr.append(btns);
   SHBODY.replaceChildren(fr);
   const upd=()=>{
     const c=amt(cnt.value);
@@ -1477,12 +1488,122 @@ function renderShiftDone(){
   fr.append(sum);
   if(r.note)fr.append(el('div','h-sub','Note: '+r.note));
   const btns=el('div','shbtns');
-  btns.append(shiftBtn('Open a new shift','pri',()=>{SHDONE=null;SHVIEW='';renderShift();}));
+  btns.append(shiftBtn('Z report (print)','pri',()=>showShiftReport(r.shiftId,'Z',false)));
+  btns.append(shiftBtn('Open a new shift','',()=>{SHDONE=null;SHVIEW='';renderShift();}));
   if(!isCashier())btns.append(shiftBtn('Main app','',()=>exitGuard(toApp)));
   btns.append(shiftBtn('Log out','',()=>exitGuard(logout)));
   fr.append(btns);
   SHBODY.replaceChildren(fr);
 }
+// ── X AND Z REPORTS (till roadmap step 17) ─────────────────────────────────────
+// X report: a reading of the shift that is open right now (sales, money by method, cash that should be in the drawer). It records
+//   nothing and changes nothing, so it can be taken as often as wanted. The cashier gets it for their own shift; an admin or manager
+//   can also take it for someone else's open shift on this till.
+// Z report: the final figures of a CLOSED shift. They are the close record itself (shiftCloses/{id}), so the Z cannot differ from what was
+//   counted and signed off, and it has no number of its own: the shift id is its number. Printed right after Close shift, and the last
+//   one on this till can be reprinted from the Open shift screen (marked COPY).
+// Both are worked out from the ledger on this phone each time (Shifts.report). If a Z is printed on a phone that has not downloaded
+// every sale of that shift, the totals stay correct and the item list is left out rather than shown wrong.
+// The report uses the receipt's paper (logo, brand colour, print rules), so it prints the same way: Print, then the browser's print
+// dialog, which also gives \"Save as PDF\". The main app's day close-out (index.html) adds the day's Z over all tills.
+let RPOVL=null,RPOPENER=null;
+function lastClosedHere(){                          // this till's newest closed shift, or null
+  const id=tillIdNow();if(!id)return null;
+  const l=Shifts.shiftsOf(SHIFT_ALL).filter(x=>x.close&&x.open.tillId===id);
+  return l.length?l[l.length-1]:null;
+}
+const fdt=ms=>{const d=new Date(ms);return d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+' \u00B7 '+d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});};
+function reportEl(r,copy){
+  const Z=r.kind==='Z',paper=paperTop();
+  paper.append(el('hr','rule'),el('div','c mu',Z?'Z REPORT \u2014 SHIFT CLOSE':'X REPORT \u2014 SHIFT READING'));
+  const no=el('div','c b',r.shiftId);no.style.fontSize='16px';paper.append(no);
+  const tg=el('div','c');tg.append(el('span',Z?'tag paid':'tag',Z?'FINAL \u2014 SHIFT CLOSED':'READING ONLY \u2014 SHIFT STILL OPEN'));
+  if(copy)tg.append(el('span','tag','COPY'));
+  paper.append(tg);
+  paper.append(el('div','c mu','Till '+r.till+' \u00B7 Cashier: '+r.cashier));
+  paper.append(el('div','c mu','Opened '+fdt(r.openedAt)));
+  paper.append(el('div','c mu',Z?'Closed '+fdt(r.closedAt)+(r.forced?' by '+r.closedBy:''):'Taken '+fdt(r.takenAt)));
+  paper.append(el('hr','dash'));
+  const row=(t,a,v,cls)=>{const x=el('tr',cls||'');x.append(el('td','',a),el('td','r',v));t.append(x);};
+  let t=el('table');
+  paper.append(el('div','sec','Sales'));
+  row(t,'Sales',String(r.saleCount));
+  if(r.itemsComplete)row(t,'Items sold',fq(r.qtyTotal));
+  row(t,'Total sold',money(r.total),'b');
+  if(r.credit>0)row(t,'Left unpaid (credit)',money(r.credit));
+  paper.append(t);
+  if(r.firstReceipt)paper.append(el('div','mu','Receipts '+r.firstReceipt+(r.lastReceipt&&r.lastReceipt!==r.firstReceipt?' to '+r.lastReceipt:'')));
+  paper.append(el('div','sec','Money collected'));
+  t=el('table');
+  let coll=0;
+  Shifts.METHODS.forEach(m=>{coll+=Math.round((Number(r.byMethod[m])||0)*100);if(m==='cash'||r.byMethod[m]>0)row(t,METHODS[m].label,money(r.byMethod[m]));});
+  row(t,'Total collected',money(coll/100),'b');
+  paper.append(t);
+  paper.append(el('div','sec','Cash drawer'));
+  t=el('table');
+  row(t,'Float (cash at the start)',money(r.float));
+  row(t,'+ Cash sales',money(r.cashSales));
+  if(r.cashOut>0)row(t,'\u2212 Cash paid out',money(r.cashOut));
+  row(t,'Cash expected',money(r.expectedCash),'b');
+  if(Z){
+    row(t,'Cash counted',money(r.countedCash),'b');
+    row(t,r.variance===0?'Balanced':(r.variance<0?'SHORT':'OVER'),r.variance===0?'\u2014':money(Math.abs(r.variance)),'b');
+  }else row(t,'Cash counted','not counted yet');
+  paper.append(t);
+  if(r.note)paper.append(el('div','mu','Note: '+r.note));
+  paper.append(el('hr','dash'),el('div','sec','Items sold'));
+  if(!r.itemsComplete)paper.append(el('div','mu','Item list left out: this phone does not hold every sale of this shift yet. The totals above are correct.'));
+  else if(!r.items.length)paper.append(el('div','mu','No items sold.'));
+  else{
+    const it=el('table'),MAXI=60;
+    r.items.slice(0,MAXI).forEach(i=>{
+      const r1=el('tr','ln');r1.append(el('td','b',i.name,{colspan:'2'}));
+      const r2=el('tr');r2.append(el('td','mu',fq(i.qty)+(i.unit?' '+i.unit.toLowerCase():'')),el('td','r b',money(i.total)));
+      const tb=el('tbody');tb.append(r1,r2);it.append(tb);     // one tbody per item so a page break never splits a name from its figures
+    });
+    paper.append(it);
+    if(r.items.length>MAXI)paper.append(el('div','mu','\u2026and '+(r.items.length-MAXI)+' smaller items. The totals above include them.'));
+  }
+  if(Z){const sg=el('div','sig');sg.append(el('span','','Cashier'),el('span','','Checked by'));paper.append(sg);}
+  paper.append(el('hr','rule'),el('div','ft',Z?'Final figures of shift '+r.shiftId:'X report \u00B7 nothing was closed or changed'));
+  return paper;
+}
+function showReport(r,copy){
+  if(RPOVL||ROVL)return;
+  RPOPENER=document.activeElement;
+  const ovl=el('div','rovl','',{role:'dialog','aria-modal':'true','aria-label':r.kind+' report'});
+  ovl.style.zIndex='80';                              // above the shift sheet (.povl is 70)
+  const sc=el('div','rscroll');sc.append(reportEl(r,copy));
+  const bar=el('div','rbar'),pr=el('button','pri','Print',{type:'button'}),cl=el('button','','Close',{type:'button'});
+  pr.onclick=()=>printReport(r);cl.onclick=hideReport;
+  bar.append(cl,pr);ovl.append(sc,bar);document.body.append(ovl);RPOVL=ovl;pr.focus();
+}
+function hideReport(){
+  if(!RPOVL)return;RPOVL.remove();RPOVL=null;
+  try{if(RPOPENER&&document.contains(RPOPENER))RPOPENER.focus();}catch{}
+}
+function printReport(r){                              // the page title is the file name when the cashier picks \"Save as PDF\"
+  const t=document.title;
+  document.title=r.kind+' report '+r.shiftId;
+  const back=()=>{document.title=t;removeEventListener('afterprint',back);};
+  addEventListener('afterprint',back);
+  try{window.print();}catch{back();}
+}
+// kind 'X' or 'Z'; copy = this Z is a reprint. Reads the ledger fresh first: another tab may have sold or closed meanwhile.
+async function showShiftReport(shiftId,kind,copy){
+  if(RPOVL||ROVL)return;
+  try{await loadSold();await loadShift();}catch(e){console.warn('Could not refresh before the report',e);}
+  const cur=Shifts.shiftsOf(SHIFT_ALL).find(x=>x.open.shiftId===shiftId);
+  if(!cur){say('That shift is not on this phone.','warn',4000);return;}
+  if(cur.close){
+    if(kind==='X')say('That shift was closed meanwhile. This is its Z report.','warn',4500);
+    showReport(Shifts.report('Z',cur.open,SALES_ALL,{close:cur.close}),kind==='X'?true:!!copy);
+    return;
+  }
+  if(kind==='Z'){say('That shift is not closed yet.','warn',4000);return;}
+  showReport(Shifts.report('X',cur.open,SALES_ALL,{now:Date.now()}),false);
+}
+
 // ── LIVE-CART AUTOSAVE ───────────────────────────────────────────────────────
 // Held baskets only protect a sale the cashier parks, or leaves through logout / idle timeout. An OPEN cart used to
 // live in memory alone, so a reload (including the update reload), a killed browser or a dead battery lost it. Now every
@@ -1828,6 +1949,7 @@ function buildSell(){
   // A scanner types like a keyboard. If focus is anywhere that is not a text field, send the keystrokes to the box.
   document.addEventListener('keydown',e=>{
     if(CAMOVL&&e.key==='Escape'){stopCam();return;}
+    if(RPOVL){if(e.key==='Escape')hideReport();return;}
     if(PAYOVL){if(e.key==='Escape')cancelPay();return;}
     if(HOVL){if(e.key==='Escape')closeHeld();return;}
     if(PINOVL){if(e.key==='Escape')closePin();return;}
