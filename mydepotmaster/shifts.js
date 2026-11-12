@@ -245,12 +245,14 @@ const Shifts = (function () {
         countedCash: null, variance: null, firstReceipt: sm.firstReceipt, lastReceipt: sm.lastReceipt, note: ''
       });
     }
-    let sumC = 0, qty = 0, change = 0;
+    let sumC = 0, qty = 0, change = 0, disc = 0, discN = 0;
     items.forEach(i => { sumC += toC(i.total); qty += i.qty; });
-    mine.forEach(s => { change += toC(s.change); });
+    mine.forEach(s => { change += toC(s.change); const d = toC(s.discount); if (d > 0) { disc += d; discN++; } });
     r.items = items;
     r.qtyTotal = Math.round(qty * 1000) / 1000;
     r.changeGiven = change / 100;
+    r.discountGiven = disc / 100;            // roadmap step 18: already taken off `total`, shown so a manager can see how much was given
+    r.discountCount = discN;
     r.itemsComplete = mine.length === r.saleCount && sumC === toC(r.total);
     return r;
   }
@@ -271,9 +273,10 @@ const Shifts = (function () {
     const list = shiftsOf(events);
     const day = (sales || []).filter(s => s && s.date === date);
     const by = {}; METHODS.forEach(m => { by[m] = 0; });
-    let total = 0, credit = 0, change = 0, noShift = 0;
+    let total = 0, credit = 0, change = 0, noShift = 0, disc = 0, discN = 0;
     day.forEach(s => {
       total += toC(s.total); credit += toC(s.balance); change += toC(s.change);
+      const d = toC(s.discount); if (d > 0) { disc += d; discN++; }
       if (!s.shiftId) noShift++;
       arr(s.payments).forEach(p => { if (by[p.method] != null) by[p.method] += toC(p.amount); });
     });
@@ -294,6 +297,7 @@ const Shifts = (function () {
     return {
       date, saleCount: day.length, total: total / 100, credit: credit / 100, byMethod: o,
       cashSales: by.cash / 100, nonCash: (by.mtn + by.airtel + by.card) / 100, changeGiven: change / 100, noShift,
+      discountGiven: disc / 100, discountCount: discN,    // already taken off `total` (step 18)
       shifts: rows, openToday: openNow.filter(x => x.open.date === date).map(row), openEarlier: openNow.filter(x => x.open.date < date).map(row),
       shiftVariance: varC / 100, counted: countedC / 100, items: itemsOf(day)
     };

@@ -23,6 +23,15 @@
  *   batches FIFO (oldest stock first), replaying the records in date/time order. Nothing is stored; the per-batch figures
  *   always add up to the same commodity total stockBook() gives (and the till shows).
  *
+ * DISCOUNTS (roadmap step 18): a discount is part of the sale record, never a separate edit. Each line may carry `discount` (money off
+ *   that line); line.total is the amount AFTER the discount, so total, the Z report's item list, stock value and every report that sums
+ *   line totals stay right without knowing about discounts. The header carries `discount` (the sum of the lines'), `discountBy` (who
+ *   allowed it: the cashier within their own limit, or the manager whose PIN approved more) and `discountReason`. A sale with no
+ *   discount has none of these fields, exactly as before. The till gives a discount on the whole basket; it is shared out over the
+ *   lines in whole ngwee (discountSplit), so a line can carry a discount even though the cashier never typed one for it.
+ *   The policy (Settings -> Till discounts) lives in depotInfo: discountOn, discountCapPct (what a cashier may give alone),
+ *   discountMaxPct (the most anyone may give, even with a PIN). discountJudge() is the one place that decides who may give what.
+ *
  * WHAT THE MAIN APP DOES WITH THE LEDGER BESIDES STOCK
  *   issuedRows() turns the sales into rows shaped like generalIssued / commodityIssued rows (flag _sale:true). The
  *   main app overlays them on DATA in memory so reports, close-out and customer balances see till sales, and strips
@@ -82,10 +91,15 @@ const Sales = (function () {
       at, date: dateOf(at), time: timeOf(at),
       cashier: str(b.cashier, 80), cashierRole: str(b.cashierRole, 20),
       shiftId: str(b.shiftId, 24),
-      lines: arr(b.lines).map(l => ({
-        itemId: str(l.itemId, 80), kind: l.kind === 'commodity' ? 'commodity' : 'item', name: str(l.name, 200), unit: str(l.unit, 40),
-        qty: Number(l.qty), price: Number(l.price), total: Number(l.total)
-      })),
+      lines: arr(b.lines).map(l => {
+        const o = {
+          itemId: str(l.itemId, 80), kind: l.kind === 'commodity' ? 'commodity' : 'item', name: str(l.name, 200), unit: str(l.unit, 40),
+          qty: Number(l.qty), price: Number(l.price), total: Number(l.total)
+        };
+        const d = Number(l.discount);
+        if (isNum(d) && d > 0) o.discount = d;           // absent unless a discount was given on this line
+        return o;
+      }),
       lineCount: Number(b.lineCount), qtyTotal: Number(b.qtyTotal), total: Number(b.total),
       payments: arr(b.payments).map(p => {
         const o = { method: String(p.method), label: str(p.label, 40), amount: Number(p.amount), ref: str(p.ref, 100) };
@@ -96,6 +110,8 @@ const Sales = (function () {
       creditStatus: String(b.creditStatus), customerId: str(b.customerId, 80), customerName: str(b.customerName, 200)
     };
     if (!rec.shiftId) delete rec.shiftId;                // no shift (a sale from before step 16): the field is simply absent
+    const dsum = rec.lines.reduce((a, l) => a + toC(l.discount), 0);
+    if (dsum > 0) { rec.discount = dsum / 100; rec.discountBy = str(b.discountBy, 80); rec.discountReason = str(b.discountReason, 60); }
     return JSON.parse(JSON.stringify(rec));              // plain data only: what is stored here is what the cloud will hold
   }
 
@@ -112,17 +128,27 @@ const Sales = (function () {
     if (s.shiftId !== undefined && (!SID_RE.test(String(s.shiftId)) || String(s.shiftId).slice(0, 4) !== s.till)) return 'bad shift id';
     const lines = s.lines;
     if (!Array.isArray(lines) || !lines.length || lines.length > MAX_LINES) return 'bad lines';
-    let sum = 0, qty = 0;
+    let sum = 0, qty = 0, dsum = 0;
     for (const l of lines) {
       if (!l || typeof l.itemId !== 'string' || !l.itemId || l.itemId.length > 80) return 'bad item id';
       if (l.kind !== 'item' && l.kind !== 'commodity') return 'bad item kind';
       if ((l.kind === 'commodity') !== /^com:./.test(l.itemId)) return 'item kind does not match its id';
       if (typeof l.name !== 'string' || !l.name || l.name.length > 200) return 'bad item name';
       if (!isNum(l.qty) || !(l.qty > 0) || !isNum(l.price) || l.price < 0 || !isNum(l.total) || l.total < 0) return 'bad line amounts';
-      if (Math.abs(l.total - r2(l.price * l.qty)) > 0.005) return 'line total does not match price × qty';
-      sum += toC(l.total); qty += l.qty;
+      const dsc = l.discount === undefined ? 0 : l.discount;
+      if (!isNum(dsc) || dsc < 0 || Math.abs(dsc * 100 - Math.round(dsc * 100)) > 1e-6) return 'bad line discount';
+      const gross = r2(l.price * l.qty);
+      if (dsc > gross + 0.005) return 'a line discount is more than the line';
+      if (Math.abs(l.total - r2(gross - dsc)) > 0.005) return dsc ? 'line total does not match price × qty less the discount' : 'line total does not match price × qty';
+      sum += toC(l.total); qty += l.qty; dsum += toC(dsc);
     }
     if (!isNum(s.total) || toC(s.total) !== sum) return 'total does not match the lines';
+    const hd = s.discount === undefined ? 0 : s.discount;
+    if (!isNum(hd) || hd < 0 || toC(hd) !== dsum) return 'discount does not match the lines';
+    if (hd > 0) {
+      if (typeof s.discountBy !== 'string' || !s.discountBy || s.discountBy.length > 80) return 'a discount needs the person who allowed it';
+      if (typeof s.discountReason !== 'string' || s.discountReason.length > 60) return 'bad discount reason';
+    }
     if (s.lineCount !== lines.length) return 'bad line count';
     if (!isNum(s.qtyTotal) || Math.abs(s.qtyTotal - r3(qty)) > 0.0015) return 'bad quantity total';
     const pays = s.payments === undefined ? [] : s.payments;
@@ -159,9 +185,74 @@ const Sales = (function () {
     if (rec.payments !== undefined) rec.payments = arr(rec.payments);
     if (rec.payments === undefined || !rec.payments.length) rec.payments = [];
     ['customerId', 'customerName', 'cashierRole'].forEach(k => { if (rec[k] == null) rec[k] = ''; });
+    if (rec.discount !== undefined && rec.discountReason == null) rec.discountReason = '';
     rec.lines.forEach(l => { if (l && l.unit == null) l.unit = ''; });
     rec.payments.forEach(p => { if (p && p.ref == null) p.ref = ''; });
     return { rec: validate(rec) ? null : rec, createdAt };
+  }
+
+  // The price per unit actually charged on a line. Without a discount it is the list price, untouched. With one it is total / qty, so
+  // the main app's "issued x selling price" and a batch's sold value come to what was really taken (not the list value).
+  function netPrice(l) {
+    const q = Number(l.qty), d = Number(l.discount);
+    return d > 0 && q > 0 ? (Number(l.total) || 0) / q : Number(l.price) || 0;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // DISCOUNTS (roadmap step 18) — pure functions, shared by the till and Node tests
+  // ══════════════════════════════════════════════════════════════════════════════
+  // Percentages are worked in basis points (1% = 100) and money in ngwee, so a limit is compared as whole numbers.
+  //   policy = discountPolicy(depotInfo):  { on, capBP, maxBP }
+  //     on      Settings -> Till discounts is switched on (default OFF: until the Admin switches it on the till offers no discount)
+  //     capBP   what a Cashier or Staff login may give alone, as a share of the basket's value before discount (default 5%)
+  //     maxBP   the most anyone may give, with or without a PIN (default 20%, never below the cap, never above 90%)
+  const DISC_MAX_PCT = 90;
+  function discountPolicy(depotInfo) {
+    const di = depotInfo || {};
+    const pct = (v, d, hi) => { const n = typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN); return isFinite(n) && n >= 0 && n <= hi ? n : d; };
+    const cap = Math.round(pct(di.discountCapPct, 5, DISC_MAX_PCT) * 100);
+    const max = Math.round(pct(di.discountMaxPct, 20, DISC_MAX_PCT) * 100);
+    return { on: di.discountOn === true, capBP: cap, maxBP: Math.max(cap, max) };
+  }
+  const pctText = bp => String(Math.round(bp) / 100);
+
+  // Shares a discount over the lines. grossC = each line's value before discount in ngwee.
+  //   kind 'pct': value is a percentage (up to 2 decimals); each line gets its share rounded DOWN, so the total never goes above the
+  //               percentage typed (a limit of 5% can never be tipped over by rounding).
+  //   kind 'amt': value is money off the whole basket (capped at the basket); shared in proportion to the lines, whole ngwee, the
+  //               spare ngwee going to the largest remainders, so no line is ever given more than it is worth.
+  // Returns { lines: ngwee per line, total: ngwee }.
+  function discountSplit(grossC, kind, value) {
+    const out = grossC.map(() => 0), G = grossC.reduce((a, g) => a + g, 0), v = Number(value);
+    if (!out.length || !(v > 0) || !(G > 0)) return { lines: out, total: 0 };
+    if (kind === 'pct') {
+      const bp = Math.round(Math.min(v, 100) * 100);
+      grossC.forEach((g, i) => { const x = g * bp; out[i] = (x - (x % 10000)) / 10000; });
+    } else {
+      const D = Math.min(Math.round(v * 100), G), Gb = BigInt(G), Db = BigInt(D);
+      const q = grossC.map(g => (BigInt(g) * Db) / Gb), rem = grossC.map((g, i) => BigInt(g) * Db - q[i] * Gb);
+      let spare = D - q.reduce((a, x) => a + Number(x), 0);
+      grossC.forEach((g, i) => { out[i] = Number(q[i]); });
+      grossC.map((g, i) => i).sort((a, b) => (rem[a] === rem[b] ? a - b : (rem[a] > rem[b] ? -1 : 1))).forEach(i => { if (spare > 0 && out[i] < grossC[i]) { out[i]++; spare--; } });
+    }
+    return { lines: out, total: out.reduce((a, x) => a + x, 0) };
+  }
+
+  // Who may give how much.  p = { grossC, discC, policy, holder, apBP }
+  //   grossC/discC  the basket's value before discount, and the discount, in ngwee
+  //   holder        the person at the till is an Admin or Manager: they may give up to the maximum on their own
+  //   apBP          a manager PIN approved a discount up to this many basis points of the basket (0 = none)
+  // -> { ok:true, bp, approved? } | { need:'pin', bp } | { err, code }.   bp = the discount as basis points, rounded UP.
+  function discountJudge(p) {
+    const pol = p.policy;
+    if (!pol || !pol.on) return { err: 'Discounts are switched off.', code: 'OFF' };
+    if (!(p.discC > 0)) return { ok: true, bp: 0 };
+    if (!(p.grossC > 0) || p.discC > p.grossC) return { err: 'The discount is more than the basket.', code: 'TOO_BIG' };
+    const bp = Math.ceil(p.discC * 10000 / p.grossC);
+    if (bp > pol.maxBP) return { err: 'That is more than the most this depot allows (' + pctText(pol.maxBP) + '%).', code: 'OVER_MAX', bp };
+    if (bp <= (p.holder ? pol.maxBP : pol.capBP)) return { ok: true, bp };
+    if ((p.apBP || 0) >= bp) return { ok: true, bp, approved: true };
+    return { need: 'pin', bp };
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
@@ -204,9 +295,9 @@ const Sales = (function () {
         };
         if (l.kind === 'commodity') {
           const cid = l.itemId.slice(4);
-          (com[cid] || (com[cid] = [])).push(Object.assign(base, { batchName: BATCH_NAME, transporter: '', salePrice: l.price }));
+          (com[cid] || (com[cid] = [])).push(Object.assign(base, { batchName: BATCH_NAME, transporter: '', salePrice: netPrice(l) }));
         } else {
-          gen.push(Object.assign(base, { itemName: l.name, itemId: l.itemId, sellingPrice: l.price, unit: l.unit }));
+          gen.push(Object.assign(base, { itemName: l.name, itemId: l.itemId, sellingPrice: netPrice(l), unit: l.unit }));
         }
       });
     });
@@ -301,7 +392,7 @@ const Sales = (function () {
     (src.issued || []).forEach(r => { if (r && !r._sale && ok(r) && within(r.date, r.time)) ev.push({ k: 1, at: at(r.date, r.time), id: String(r.id || ''), b: nameOf(r), q: Number(r.issued) || 0 }); });
     (src.sales || []).forEach(s => {
       if (!s || !within(s.date, s.time)) return;
-      arr(s.lines).forEach((l, i) => { if (l && l.itemId === key) ev.push({ k: 2, at: at(s.date, s.time), id: s.id + '#' + i, q: Number(l.qty) || 0, price: Number(l.price) || 0 }); });
+      arr(s.lines).forEach((l, i) => { if (l && l.itemId === key) ev.push({ k: 2, at: at(s.date, s.time), id: s.id + '#' + i, q: Number(l.qty) || 0, price: netPrice(l) }); });
     });
     ev.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : (a.k - b.k) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
 
@@ -532,7 +623,7 @@ const Sales = (function () {
     return { append, all, pending, push, pull, importMany };
   }
 
-  return { V, ID_RE, BATCH_NAME, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, linePaid, methodsOf, create, memAdapter, idbAdapter };
+  return { V, ID_RE, BATCH_NAME, DISC_MAX_PCT, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, linePaid, methodsOf, netPrice, discountPolicy, discountSplit, discountJudge, pctText, create, memAdapter, idbAdapter };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Sales; // lets Node load it for tests

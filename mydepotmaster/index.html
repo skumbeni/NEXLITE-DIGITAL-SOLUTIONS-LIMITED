@@ -4197,7 +4197,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.44';
+const SW_VERSION  = 'v0.3.45';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -8761,6 +8761,7 @@ async function openDailyCloseOut(force){
     L.push(rowH('&nbsp;· Cash',zm(D.byMethod.cash)));
     [['mtn','MTN Money'],['airtel','Airtel Money'],['card','Card']].forEach(([k,l])=>{if(D.byMethod[k]>0)L.push(rowH('&nbsp;· '+l+' <span style="color:var(--muted)">(not in the drawer)</span>',zm(D.byMethod[k])));});
     if(D.credit>0)L.push(rowH('&nbsp;· On credit',zm(D.credit),'color:var(--amber)'));
+    if(D.discountGiven>0)L.push(rowH('&nbsp;· Discounts given ('+D.discountCount+') <span style="color:var(--muted)">(already taken off)</span>',zm(D.discountGiven)));
   }
   if(F.appCount)L.push(rowH('Main-app issues, cash ('+F.appCount+')',zm(F.appCash)));
   L.push(rowH('Expected cash',zm(F.expectedCash),'color:var(--green)'));
@@ -8817,7 +8818,7 @@ function saveDailyCloseOut(ignoreOpen){
     expectedCash, actualCash:actual, variance, notes,
     closedBy:USER.username||'admin',
     zRef:'Z-'+todayStr,
-    tillSales:D.saleCount, tillTotal:D.total, tillCash:D.cashSales, appCash:F.appCash,
+    tillSales:D.saleCount, tillTotal:D.total, tillCash:D.cashSales, appCash:F.appCash, tillDiscount:D.discountGiven,
     byMethod:D.byMethod, credit:D.credit,
     shifts:D.shifts.map(x=>({shiftId:x.shiftId,cashier:x.cashier,openedDate:x.openedDate,closed:x.closed,float:x.float,expectedCash:x.expectedCash,countedCash:x.countedCash,variance:x.variance,forced:x.forced})),
     shiftVariance:D.shiftVariance
@@ -8854,6 +8855,7 @@ function printDailyZ(id){
     rows.push({c:['· Cash',zm(bm.cash||0)]});
     [['mtn','MTN Money'],['airtel','Airtel Money'],['card','Card']].forEach(([k,l])=>{if(Number(bm[k])>0)rows.push({c:['· '+l+' (not in the drawer)',zm(bm[k])]});});
     if(Number(z.credit)>0)rows.push({c:['· Left on credit',zm(z.credit)]});
+    if(Number(z.tillDiscount)>0)rows.push({c:['· Discounts given (already taken off)',zm(z.tillDiscount)]});
     if(Number(z.appCash)>0)rows.push({c:['Main-app issues, cash',zm(z.appCash)]});
     h+=sec('Sales')+tbl(['Source','Amount'],rows,1);
   }
@@ -9342,7 +9344,8 @@ function _printSaleBasket(sid){
     ?`<img src="${depot.logoDataUrl}" style="height:56px;max-width:140px;object-fit:contain;display:block;margin:0 auto 6px" alt="${esc(depot.name||'')} logo">`
     :`<div style="width:56px;height:56px;border-radius:10px;background:${esc(accent)};color:#fff;font-size:17px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto 6px">${esc(initials)}</div>`;
   const payLabel=s.creditStatus==='paid'?'PAID - SETTLED IN FULL':s.creditStatus==='partial'?`PARTIAL - ${zm(s.amountPaid)} PAID, ${zm(s.balance)} DUE`:'CREDIT - ON ACCOUNT';
-  const lines=s.lines.map(l=>`<tr><td colspan="3" class="bold">${esc(l.name)}</td></tr><tr><td class="muted">${Number(l.qty).toLocaleString()} ${esc(l.unit||'')}</td><td class="right muted">x ${zm(l.price)}</td><td class="right bold">${zm(l.total)}</td></tr>`).join('');
+  const lines=s.lines.map(l=>`<tr><td colspan="3" class="bold">${esc(l.name)}</td></tr><tr><td class="muted">${Number(l.qty).toLocaleString()} ${esc(l.unit||'')}</td><td class="right muted">x ${zm(l.price)}</td><td class="right bold">${zm(Math.round(l.price*l.qty*100)/100)}</td></tr>`).join('');
+  const gross=s.lines.reduce((a,l)=>a+Math.round(l.price*l.qty*100),0)/100;
   const pays=(s.payments||[]).map(p=>`<tr><td class="muted">${esc(p.label||p.method)}${p.ref?' ('+esc(p.ref)+')':''}</td><td class="right muted">${zm(p.amount)}</td></tr>`).join('')
     +(s.change>0?`<tr><td class="muted">Change</td><td class="right muted">${zm(s.change)}</td></tr>`:'');
   const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Receipt #${esc(s.receiptNo)}</title><style>
@@ -9360,7 +9363,7 @@ function _printSaleBasket(sid){
   <div class="center muted">${fmtDate(s.date)} ${esc(s.time||'')}${s.cashier?' - '+esc(s.cashier):''}</div>
   ${s.customerName?`<div class="center muted" style="margin-top:4px">Customer: <strong>${esc(s.customerName)}</strong></div>`:''}
   <hr><table>${lines}</table><hr>
-  <table><tr><td class="bold total">TOTAL</td><td class="right bold total" style="color:${esc(accent)}">${zm(s.total)}</td></tr>${pays}</table>
+  <table>${s.discount>0?`<tr><td class="muted">Subtotal</td><td class="right muted">${zm(gross)}</td></tr><tr><td>Discount</td><td class="right">\u2212${zm(s.discount)}</td></tr>`:''}<tr><td class="bold total">TOTAL</td><td class="right bold total" style="color:${esc(accent)}">${zm(s.total)}</td></tr>${pays}</table>
   <div class="pay">${payLabel}</div><div class="brand-hr"></div>
   <div class="footer">Thank you for your business!<br>${esc(depot.name||'Shop Inventory & Sales Manager')} - Powered by Shop Inventory & Sales Manager</div></body></html>`;
   _pdfPrint(html,`Receipt #${s.receiptNo}`);
@@ -20191,6 +20194,45 @@ function setTillExitPin(on){
   _mpinMsg(`<div class="ok-msg">✅ ${on?'The till will ask for a manager PIN before a cashier can leave it.':'The till will no longer ask for a PIN.'}</div>`);
 }
 
+// ── TILL DISCOUNTS (till roadmap step 18) ──────────────────────────────────
+// Admin only, OFF until switched on. The till (pos.html) offers a discount on a whole basket only when depotInfo.discountOn is true.
+// A Cashier or Staff login may give up to discountCapPct of the basket on their own; more, up to discountMaxPct, needs a manager PIN
+// (the one set under Manager PIN above); nobody may give more than discountMaxPct. Admin and Manager logins give up to discountMaxPct
+// themselves. The rules are Sales.discountJudge() in sales.js, the same code the till runs. Takes effect on each till phone after it syncs.
+function _renderTillDiscountCard(){
+  if(!USER||USER.role!=='admin') return '';
+  const pol=Sales.discountPolicy(DATA.depotInfo), noPin=!Gate.pinHolders(DATA).length;
+  return `
+    <div class="sh">Till discounts</div>
+    <div class="card">
+      <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">
+        Let the till give a discount on a whole basket, as a percentage or an amount. A Cashier or Staff login can give up to the first limit on their own. More than that, up to the second limit, needs a manager's PIN. Nobody can go past the second limit. Admin and Manager logins can give up to the second limit themselves. Every discount is saved on the sale with who allowed it.
+      </div>
+      <div id="tdisc-msg"></div>
+      <label style="display:flex;gap:12px;align-items:flex-start;font-size:17px;line-height:1.5;cursor:pointer;margin-bottom:12px">
+        <input type="checkbox" id="tdisc-on" ${pol.on?'checked':''} style="width:24px;height:24px;flex-shrink:0;margin-top:2px"/>
+        <span>Allow discounts at the till</span>
+      </label>
+      <div class="fw"><div class="fl">A cashier may give up to (% of the basket)</div><input class="fi" type="number" id="tdisc-cap" inputmode="decimal" min="0" max="${Sales.DISC_MAX_PCT}" step="0.01" value="${Sales.pctText(pol.capBP)}"/></div>
+      <div class="fw"><div class="fl">Nobody may give more than (%, even with a PIN)</div><input class="fi" type="number" id="tdisc-max" inputmode="decimal" min="0" max="${Sales.DISC_MAX_PCT}" step="0.01" value="${Sales.pctText(pol.maxBP)}"/></div>
+      ${pol.on&&noPin?`<div class="warn" style="margin-bottom:12px">⚠️ No manager PIN is set, so a discount above the cashier limit cannot be approved. Set a PIN under Manager PIN above.</div>`:''}
+      <button class="btn bg" onclick="saveTillDiscounts()">Save discount limits</button>
+    </div>`;
+}
+function _tdMsg(html){ const m=document.getElementById('tdisc-msg'); if(m) m.innerHTML=html; }   // looked up when called: updateData() re-renders the card
+function saveTillDiscounts(){
+  if(!USER||USER.role!=='admin') return;
+  const on=!!document.getElementById('tdisc-on')?.checked, hi=Sales.DISC_MAX_PCT;
+  const rd=id=>{ const v=String(document.getElementById(id)?.value||'').trim(), n=Number(v); return v!==''&&isFinite(n)?n:NaN; };
+  const cap=rd('tdisc-cap'), max=rd('tdisc-max');
+  if(!(cap>=0&&cap<=hi)||!(max>=0&&max<=hi)) return _tdMsg(`<div class="err-box">Type each limit as a percentage from 0 to ${hi}.</div>`);
+  if(max<cap) return _tdMsg('<div class="err-box">The maximum cannot be lower than the cashier limit.</div>');
+  const r2=x=>Math.round(x*100)/100, noPin=!Gate.pinHolders(DATA).length;
+  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),discountOn:on,discountCapPct:r2(cap),discountMaxPct:r2(max)}}));
+  logAuditEvent('UPDATE','Till discounts',on?`On · cashier limit ${r2(cap)}% · maximum ${r2(max)}%`:'Off');
+  _tdMsg(`<div class="ok-msg">✅ ${on?`The till will offer discounts: a cashier up to ${r2(cap)}%, a manager PIN up to ${r2(max)}%.`:'The till will not offer discounts.'}</div>${on&&noPin?'<div class="warn" style="margin-top:8px">⚠️ No manager PIN is set yet, so cashiers cannot go above their own limit.</div>':''}`);
+}
+
 // Settings helper — Login History. Read-only. Non-admins see their own last
 // 3 sessions. Admins see every account's last 3 sessions, grouped by user,
 // since Admin already manages passwords/roles for the whole team elsewhere
@@ -20470,7 +20512,7 @@ function _renderStaffSettings(){
     ${_renderBioSection()}
     ${_renderStaySignedInSection()}
     ${_renderChangePasswordCard()}
-    ${_renderManagerPinCard()}
+    ${_renderManagerPinCard()}${_renderTillDiscountCard()}
     ${_renderLoginHistoryCard()}
     ${_renderInstallAppCard()}
     ${_renderHelpDocsCard()}
@@ -20706,7 +20748,7 @@ function _renderAdminSettings(){
 
     ${_renderChangePasswordCard()}
 
-    ${_renderManagerPinCard()}
+    ${_renderManagerPinCard()}${_renderTillDiscountCard()}
 
     ${_renderLoginHistoryCard()}
 

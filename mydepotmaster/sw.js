@@ -25,7 +25,30 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.44 (2026-11-12) — Till roadmap step 17 follow-up: a shift that crosses UTC midnight is counted on ONE day (shifts.js + index.html).
+// Current version: v0.3.45 (2026-11-12) — Till roadmap step 18: discounts with caps or a manager PIN (sales.js + shifts.js + pos.html + index.html + database_rules.json).
+//   - The Admin switches discounts on in Settings -> Till discounts (OFF by default, so nothing changes until then): "a cashier may give up to X% of the
+//     basket" (default 5) and "nobody may give more than Y%, even with a PIN" (default 20, never above 90). depotInfo.discountOn / discountCapPct / discountMaxPct.
+//   - The till shows a Discount button in the cart (only when switched on). One discount for the whole basket, as a percentage or an amount, with an optional
+//     reason. A Cashier or Staff login gives up to X% alone; more, up to Y%, asks for a manager PIN on the same PIN pad as step 15 and the approver is saved;
+//     an Admin or Manager login gives up to Y% alone; nobody gives more than Y%. With no PIN set, a cashier simply cannot go above X%.
+//   - The discount is shared over the lines in whole ngwee and saved on the sale: each line's `discount`, the sale's `discount`, `discountBy` (who allowed it)
+//     and `discountReason`. line.total is the amount AFTER the discount, so the sale total, the Z report's item list, stock value and the main app's revenue
+//     (issued x selling price: the overlay now carries the price actually charged) all stay right. A sale with no discount has none of these fields.
+//   - A percentage is rounded down per line, so a limit of 5% can never be tipped over by rounding. A PIN approves a percentage: adding items keeps it;
+//     removing items so the same amount becomes a bigger share takes it off, with a message. It is checked again when Charge opens and when payment
+//     completes, and a policy switched off or tightened takes it off too. It is NOT kept when a sale is held, resumed or restored after a reload (it must be
+//     allowed again), and the till says so.
+//   - Receipt (till preview and print, and Sales History print): lines at their value before the discount, then Subtotal, Discount, TOTAL. The reason is
+//     not printed. X and Z reports, the day close-out and the saved day Z show "Discounts given", already inside the total.
+//   - sales.js: validate() checks the line discounts, that the sale's discount equals their sum, and that a discount names who allowed it; Sales.discountPolicy /
+//     discountSplit / discountJudge are the rules, shared by the till and the tests. shifts.js: report() and dayReport() add discountGiven / discountCount.
+//   - database_rules.json MUST BE PUBLISHED: sales/{id} gains optional discount, discountReason, discountBy, and lines/{i} an optional discount (never more
+//     than price x qty). Until it is published, only a sale WITH a discount is refused by the cloud (it stays on the phone and is retried); every other sale uploads as before.
+//   - Soft control, like step 15: the PIN is checked on the phone against the PIN records that travel with the depot data. It stops the casual over-discount,
+//     not a determined attacker with the phone; the cloud rules cannot know the cap (it is a setting), they only keep the numbers consistent.
+//   - Not in this step: a discount on one line (the record already allows it), the discount in the Audit log (step 20), a discount on a void/refund (step 19).
+//   Files: sales.js + shifts.js + pos.html + index.html (Settings, receipt, close-out, SW_VERSION) + database_rules.json + sw.js. gate.js is unchanged.
+// Previous: v0.3.44 (2026-11-12) — Till roadmap step 17 follow-up: a shift that crosses UTC midnight is counted on ONE day (shifts.js + index.html).
 //   - FIX: a shift that ran across UTC midnight (02:00 Zambia time) was listed on both days' close-outs, so its variance and its count were added into both days,
 //     while its sales sit on the days they were taken. Now a shift is listed on exactly one day: the day it was CLOSED (when its drawer was counted), or the day it
 //     was OPENED while it is still open. Sales are not touched: each stays on the date it was taken, so the day's sales and cash figures are unchanged.
@@ -2050,7 +2073,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.44';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.45';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

@@ -204,6 +204,13 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 #hb{flex:none;margin:0 12px 6px 0;padding:7px 12px;white-space:nowrap;border-color:var(--amber);color:var(--amber)}
 .cart-f .sec-row{display:flex;gap:8px;margin-bottom:8px}
 .cart-f .sec-row .sec{flex:1;width:auto;margin:0;padding:10px 8px}
+.drow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;font-size:14px}
+.drow[hidden]{display:none}
+.drow .dv{color:var(--amber);font-weight:700;text-align:right}
+.dchips{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px}
+.dchips button{padding:8px 14px;font-size:14px;border-radius:10px}
+.dstat{margin:6px 0 4px;font-size:13px;text-align:center;line-height:1.45;min-height:19px}
+.dstat.ok{color:var(--green)}.dstat.pin{color:var(--amber)}.dstat.no{color:var(--red)}
 .pay-body.held-body{padding-bottom:calc(16px + env(safe-area-inset-bottom,0px))}
 .held{padding:12px 0;border-bottom:1px solid var(--border)}
 .held:last-child{border-bottom:0}
@@ -616,22 +623,32 @@ function refreshBadges(){
 // ── cart
 // A line total is rounded to 2 decimals once, and the basket total is the sum of those rounded line totals,
 // so the lines printed on the receipt always add up to the total printed under them.
+// Step 18: lineTotal is a line's value BEFORE any discount; the basket's discount (DISC, below) is shared out over the lines in
+// whole ngwee, and cartTotal() is what the customer pays after it. With no discount nothing differs from before.
 const lineTotal=l=>Math.round(l.price*l.qty*100)/100;
-const cartTotal=()=>Math.round(CART.reduce((a,l)=>a+lineTotal(l),0)*100)/100;
+const cartGross=()=>Math.round(CART.reduce((a,l)=>a+lineTotal(l),0)*100)/100;
+const cartTotal=()=>(Math.round(cartGross()*100)-discSplit().total)/100;
 
 // ── BASKET: the cart frozen into one record = one receipt ─────────────────────
 // This is the shape sales.js stores as sales/{saleId}: header + lines, with the selling price copied
 // onto each line at the moment of sale (so editing a price later never changes an old receipt). receiptNo, tillId,
 // till and seq are stamped when the sale is completed (step 8), and finalizeSale saves it (step 9).
 function makeBasket(pay){
-  const lines=CART.map(l=>({itemId:l.id,kind:l.kind||'item',name:l.name,unit:l.unit,qty:l.qty,price:l.price,total:lineTotal(l)}));
-  return Object.assign({
+  const sp=discSplit();
+  const lines=CART.map((l,i)=>{
+    const o={itemId:l.id,kind:l.kind||'item',name:l.name,unit:l.unit,qty:l.qty,price:l.price,total:(toC(lineTotal(l))-sp.lines[i])/100};
+    if(sp.lines[i]>0)o.discount=sp.lines[i]/100;       // step 18: line.total is AFTER the discount, line.discount is what came off
+    return o;
+  });
+  const b=Object.assign({
     id:null,receiptNo:null,at:Date.now(),
     cashier:USER?String(USER.username):'',cashierRole:USER?String(USER.role||''):'',
     lines,lineCount:lines.length,
     qtyTotal:Math.round(lines.reduce((a,l)=>a+l.qty,0)*1000)/1000,
-    total:Math.round(lines.reduce((a,l)=>a+l.total,0)*100)/100
+    total:Math.round(lines.reduce((a,l)=>a+Math.round(l.total*100),0))/100
   },pay||{});
+  if(sp.total>0&&DISC){b.discount=sp.total/100;b.discountBy=DISC.by||'';b.discountReason=DISC.reason||'';}
+  return b;
 }
 // White text on the brand colour (initials box), or near-black when the colour is light, so a yellow or pale brand colour is still
 // readable on paper. The same test picks the colour for the TOTAL and the PAID tag: the brand colour itself, or near-black if it is
@@ -671,12 +688,19 @@ function receiptEl(b,tag){
   const t=el('table');
   b.lines.forEach(l=>{
     const r1=el('tr','ln'),c1=el('td','b',l.name,{colspan:'2'});r1.append(c1);
-    const r2=el('tr'),q=el('td','mu',fq(l.qty)+(l.unit?' '+l.unit.toLowerCase():'')+' × '+money(l.price)),a=el('td','r b',money(l.total));
+    const r2=el('tr'),q=el('td','mu',fq(l.qty)+(l.unit?' '+l.unit.toLowerCase():'')+' × '+money(l.price)),a=el('td','r b',money(Math.round(l.price*l.qty*100)/100));
     r2.append(q,a);const tb=el('tbody');tb.append(r1,r2);t.append(tb);   // one tbody per item so a page break never separates its name from its price
   });
   paper.append(t,el('hr','dash'));
   const tail=el('div','tail');                    // total, payments and footer stay together on one page when printed
-  const tt=el('table'),tr=el('tr','gt');tr.append(el('td','','TOTAL'),el('td','r',money(b.total)));tt.append(tr);
+  const tt=el('table');
+  if(b.discount>0){                                // step 18: what the lines add up to, what came off, then the total below
+    const gross=b.lines.reduce((a,l)=>a+Math.round(l.price*l.qty*100),0)/100,rs=el('tr'),rd=el('tr');
+    rs.append(el('td','mu','Subtotal'),el('td','r mu',money(gross)));
+    rd.append(el('td','','Discount'),el('td','r','\u2212'+money(b.discount)));
+    tt.append(rs,rd);
+  }
+  const tr=el('tr','gt');tr.append(el('td','','TOTAL'),el('td','r',money(b.total)));tt.append(tr);
   tail.append(tt);
   tail.append(el('div','mu',b.lineCount+(b.lineCount===1?' item':' items')+' · '+fq(b.qtyTotal)+(b.qtyTotal===1?' unit':' units')));
   if(b.payments){                                  // payment lines: cash shows what was handed over, then the change
@@ -751,6 +775,7 @@ function fld(label,input){const w=el('label','fld');w.append(el('span','',label)
 
 function openPay(){
   if(!CART.length||PAYOVL)return;
+  if(!reconcileDisc()){renderCart();return;}          // step 18: a discount that is no longer allowed comes off first
   if(isReadOnly()){say('The till is read-only right now.','bad');return;}
   if(toC(cartTotal())<=0){say('Nothing to charge.','bad');return;}
   PAY={method:'cash',tenders:[],onAccount:false,customer:'',practice:false};
@@ -899,6 +924,7 @@ function renderPayFoot(S){
 }
 function completePay(){
   if(!PAY||FINALIZING)return;
+  if(!reconcileDisc()){renderCart();renderPay();return;}   // step 18: the total changed; the payments entered stay, the screen is redrawn
   const S=settle(toC(cartTotal()),PAY.tenders);
   if(!payReady(S))return;
   const cust=customers().find(c=>c.id===PAY.customer);
@@ -982,6 +1008,110 @@ function setQty(id,q){
 }
 function clearCart(){CART=[];renderCart();}
 
+// ── DISCOUNT (till roadmap step 18) ─────────────────────────────────────────────
+// One discount for the whole basket, as a percentage or an amount, switched on by the Admin (Settings -> Till discounts; OFF by
+// default). It is shared out over the lines in whole ngwee (Sales.discountSplit) and saved on the sale: each line's discount, the
+// total, who allowed it and an optional reason. The rules are Sales.discountJudge(): a Cashier or Staff login may give up to the
+// cashier limit alone; more, up to the maximum, needs a manager PIN (the same PIN pad as step 15; the approver is recorded); an
+// Admin or Manager login gives up to the maximum alone; nobody gives more than the maximum. With no PIN set, a discount above the
+// cashier limit simply cannot be approved. A PIN approves a percentage ceiling, so adding items keeps it; removing items so that the
+// same amount becomes a larger share takes it off. The discount is checked again whenever the basket changes, when Charge opens and
+// when payment completes. It is NOT kept when a sale is held, resumed from Held, or restored after a reload: it must be allowed again.
+let DISC=null,DOVL=null;              // DISC: {kind:'pct'|'amt', value, reason, by (who allowed it), apBP (percentage a PIN approved, in basis points; 0 = none)}
+const DISC_LOST='the discount was not kept, apply it again';
+const discPolicy=()=>Sales.discountPolicy(DATA&&DATA.depotInfo);
+const grossLinesC=()=>CART.map(l=>toC(lineTotal(l)));
+function discSplit(){
+  if(!DISC||!CART.length)return {lines:CART.map(()=>0),total:0};
+  return Sales.discountSplit(grossLinesC(),DISC.kind,DISC.value);
+}
+// true when nothing changed; false when the discount had to come off (it says why).
+function reconcileDisc(){
+  if(!DISC)return true;
+  if(!CART.length){DISC=null;return true;}
+  const sp=discSplit();
+  if(!(sp.total>0)){DISC=null;return true;}
+  const j=Sales.discountJudge({grossC:grossLinesC().reduce((a,b)=>a+b,0),discC:sp.total,policy:discPolicy(),holder:isHolder(USER),apBP:DISC.apBP||0});
+  if(j.ok)return true;
+  DISC=null;
+  say('The discount was taken off. '+(j.err||'It is now more than you may give without a manager PIN. Apply it again.'),'warn',7000);
+  return false;
+}
+const approverName=w=>String(typeof w==='string'?w:(w&&(w.username||w.name))||'manager PIN').slice(0,80);
+function closeDisc(){if(!DOVL)return;DOVL.remove();DOVL=null;if(!COARSE)focusSearch();}
+function openDisc(){
+  if(DOVL||PAYOVL||HOVL||PINOVL||SHOVL||MOVL||RPOVL||ROVL||CAMOVL||!CART.length)return;
+  const pol=discPolicy();
+  if(!pol.on){say('Discounts are not switched on for this depot.','bad');return;}
+  if(isReadOnly()){say('The till is read-only right now.','bad');return;}
+  const gross=grossLinesC(),G=gross.reduce((a,b)=>a+b,0),holder=isHolder(USER),own=holder?pol.maxBP:pol.capBP;
+  let kind=DISC?DISC.kind:'pct';
+  const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Discount'});
+  const box=el('div','pay'),head=el('div','pay-h');
+  const cx=el('button','sm','Cancel',{type:'button'});cx.onclick=closeDisc;
+  head.append(el('h2','','Discount'),cx);
+  const body=el('div','pay-body'),foot=el('div','pay-f');
+  const due=el('div','pay-due');due.append(el('span','','Basket'),el('b','',money(G/100)));body.append(due);
+  body.append(el('div','pay-note mu',holder?'You may give up to '+Sales.pctText(pol.maxBP)+'% on your own.':'You may give up to '+Sales.pctText(own)+'% on your own. More, up to '+Sales.pctText(pol.maxBP)+'%, needs a manager PIN.'));
+  const mt=el('div','methods');mt.style.gridTemplateColumns='1fr 1fr';
+  const bP=el('button','','% off',{type:'button'}),bA=el('button','','Amount off',{type:'button'});mt.append(bP,bA);body.append(mt);
+  const inp=el('input','','',{type:'number',inputmode:'decimal',min:'0',step:'0.01','aria-label':'Discount'});
+  if(DISC)inp.value=DISC.value;
+  const fv=fld('',inp),lab=fv.firstChild;body.append(fv);
+  const chips=el('div','dchips');body.append(chips);
+  const rs=el('input','','',{type:'text',maxlength:'60',autocomplete:'off','aria-label':'Reason for the discount'});
+  rs.value=DISC?DISC.reason:'';body.append(fld('Reason (optional)',rs));
+  const pv=el('div','pay-sum'),st=el('div','dstat','',{role:'status','aria-live':'polite'});body.append(pv,st);
+  const ok=el('button','pri','Apply discount',{type:'button'}),rm=el('button','sm','Remove discount',{type:'button'});
+  foot.append(ok);if(DISC){rm.style.cssText='margin:8px auto 0;display:block';foot.append(rm);}
+  box.append(head,body,foot);ovl.append(box);
+  ovl.addEventListener('click',e=>{if(e.target===ovl)closeDisc();});
+  function calc(){
+    const v=Number(inp.value),sp=Sales.discountSplit(gross,kind,v);
+    return {v,sp,j:Sales.discountJudge({grossC:G,discC:sp.total,policy:pol,holder,apBP:(DISC&&DISC.apBP)||0})};
+  }
+  function setKind(k){
+    kind=k;bP.className=k==='pct'?'on':'';bA.className=k==='amt'?'on':'';
+    lab.textContent=k==='pct'?'Percentage off the basket':'Amount off the basket';
+    inp.step=k==='pct'?'0.01':'0.01';inp.max=k==='pct'?'100':'';
+    chips.replaceChildren();
+    if(k==='pct')[5,10,15,20].filter(p=>p*100<=pol.maxBP).forEach(p=>{
+      const c=el('button','',p+'%',{type:'button'});c.onclick=()=>{inp.value=p;upd();};chips.append(c);
+    });
+    upd();
+  }
+  function upd(){
+    const {sp,j}=calc(),has=sp.total>0;
+    const row=(a,b)=>[el('span','',a),el('span','r',b)];
+    pv.replaceChildren(...row('Discount',has?'\u2212'+money(sp.total/100):money(0)),...row('New total',money((G-sp.total)/100)));
+    let msg='',cls='',label='Apply discount',can=has;
+    if(has&&j.err){msg=j.err;cls='no';can=false;}
+    else if(has&&j.need){msg='That is '+Sales.pctText(j.bp)+'%, more than you may give on your own. A manager must type their PIN.';cls='pin';label='Ask for manager PIN';}
+    else if(has&&j.ok){msg=Sales.pctText(j.bp)+'% off'+(j.approved&&DISC&&DISC.by?' \u00B7 allowed by '+DISC.by:'');cls='ok';}
+    st.textContent=msg;st.className='dstat '+cls;ok.textContent=label;ok.disabled=!can;
+  }
+  function apply(){
+    const {v,sp,j}=calc();if(!(sp.total>0)||j.err)return;
+    const reason=rs.value.trim().slice(0,60);
+    if(j.ok){
+      DISC={kind,value:v,reason,by:j.approved&&DISC?DISC.by:String(USER.username),apBP:j.approved&&DISC?DISC.apBP:0};
+      closeDisc();renderCart();say('Discount applied.','ok');return;
+    }
+    if(j.need)askManagerPin(who=>{
+      const nm=approverName(who);
+      DISC={kind,value:v,reason,by:nm,apBP:j.bp};
+      closeDisc();renderCart();say('Discount allowed by '+nm+'.','ok');
+    },'That is '+Sales.pctText(j.bp)+'% off. A manager must type their PIN to allow it.','Allow discount');
+  }
+  bP.onclick=()=>{if(kind!=='pct'){inp.value='';setKind('pct');}};bA.onclick=()=>{if(kind!=='amt'){inp.value='';setKind('amt');}};
+  inp.oninput=upd;ok.onclick=apply;
+  rm.onclick=()=>{DISC=null;closeDisc();renderCart();say('Discount removed.','ok');};
+  inp.onkeydown=rs.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();if(!ok.disabled)apply();}};
+  document.body.append(ovl);DOVL=ovl;
+  setKind(kind);
+  inp.focus();
+}
+
 // ── HELD / PARKED SALES (roadmap step 7) ─────────────────────────────────────
 // "Hold sale" parks the cart so the next customer can be served; "Held (n)" beside the search box lists the parked
 // baskets and brings one back. A held basket is NOT a sale: nothing is recorded, no stock moves and no receipt number
@@ -1027,21 +1157,22 @@ function holdCart(quiet){
   if(a.length>=HELD_MAX){say('Too many held sales ('+HELD_MAX+'). Resume or discard one first.','bad');return false;}
   a.push(cartAsHeld());
   if(!writeHeld(a)){say('Could not hold the sale: no storage space left on this device.','bad');return false;}
+  const hadDisc=!!DISC;
   CART=[];renderCart();renderHeldBtn();
-  if(!quiet)say('Sale held. Serve the next customer.','ok');
+  if(!quiet)say('Sale held. Serve the next customer.'+(hadDisc?' Its discount is not kept: apply it again when you resume.':''),'ok');
   return true;
 }
 function parkOnExit(){try{if(CART&&CART.length)holdCart(true);}catch{}}
 function resumeHeld(id){
   const a=readHeld(),i=a.findIndex(h=>h.id===id);   // read fresh: another till tab may have resumed it already
   if(i<0){say('That held sale was already resumed or discarded.','bad');renderHeldBtn();renderHeldList();return;}
-  const h=a.splice(i,1)[0],parked=CART.length>0;
+  const h=a.splice(i,1)[0],parked=CART.length>0,hadDisc=!!DISC;
   if(parked)a.push(cartAsHeld());                   // one out, one in: never over the limit
   if(!writeHeld(a)){say('Could not resume: no storage space left on this device.','bad');return;}
-  const r=repriceLines(h.lines);CART=r.lines;
+  const r=repriceLines(h.lines);CART=r.lines;DISC=null;   // step 18: the discount of the sale that was open is not carried over
   closeHeld();renderCart();renderHeldBtn();openCart();
   const note=priceNotes(r,'held');
-  if(parked)note.push('the sale you had open is now held');
+  if(parked)note.push('the sale you had open is now held'+(hadDisc?' without its discount':''));
   say('Held sale resumed'+(note.length?'. '+note.join('. '):'')+'.',r.repriced||r.unlisted.length?'warn':'ok',note.length?7000:null);
 }
 // Lines coming back from storage (a held basket, a restored cart) are re-read from the Price List, exactly as if the
@@ -1132,7 +1263,7 @@ function closePin(skipFocus){
   PINOVL.remove();PINOVL=null;
   if(!skipFocus&&!COARSE)focusSearch();
 }
-function askManagerPin(go){
+function askManagerPin(go,msg,label){            // go(who) runs after a PIN holder's PIN was typed; step 18 reuses the pad for discounts
   if(PINOVL)return;
   const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Manager PIN'});
   const box=el('div','pay'),head=el('div','pay-h');
@@ -1140,10 +1271,10 @@ function askManagerPin(go){
   head.append(el('h2','','Manager PIN'),cx);
   const body=el('div','pay-body'),f=el('label','fld');
   const inp=el('input','',null,{type:'password',inputmode:'numeric',pattern:'[0-9]*',maxlength:'6',autocomplete:'off','aria-label':'Manager PIN'});
-  f.append(el('span','','A manager must type their PIN to leave the till while a shift is open.'),inp);
+  f.append(el('span','',msg||'A manager must type their PIN to leave the till while a shift is open.'),inp);
   const err=el('div','pay-err','');
   body.append(f,err);
-  const foot=el('div','pay-f'),ok=el('button','pri','Unlock',{type:'button'});
+  const foot=el('div','pay-f'),ok=el('button','pri',label||'Unlock',{type:'button'});
   foot.append(ok);
   box.append(head,body,foot);ovl.append(box);
   ovl.addEventListener('click',e=>{if(e.target===ovl)closePin();});
@@ -1157,10 +1288,10 @@ function askManagerPin(go){
     ok.disabled=true;ok.textContent='Checking\u2026';
     let who=null,bad=false;
     try{who=await Gate.pinFindApprover(pin,DATA);}catch(e){bad=true;}
-    ok.disabled=false;ok.textContent='Unlock';
+    ok.disabled=false;ok.textContent=label||'Unlock';
     if(!PINOVL)return;                                   // cancelled while it was checking
     if(bad){err.textContent='This phone could not check the PIN. Try again, or ask the Admin.';return;}
-    if(who){Gate.pinClear(localStorage);closePin(true);go();return;}
+    if(who){Gate.pinClear(localStorage);closePin(true);go(who);return;}
     const r=Gate.pinFailed(localStorage,Date.now());
     inp.value='';inp.focus();
     err.textContent=r.locked?'Too many wrong PINs. Locked for '+Math.ceil(r.left/1000)+' seconds.':'Wrong PIN. '+r.triesLeft+(r.triesLeft===1?' try':' tries')+' left.';
@@ -1530,6 +1661,7 @@ function reportEl(r,copy){
   row(t,'Sales',String(r.saleCount));
   if(r.itemsComplete)row(t,'Items sold',fq(r.qtyTotal));
   row(t,'Total sold',money(r.total),'b');
+  if(r.itemsComplete&&r.discountGiven>0)row(t,'Discounts given ('+r.discountCount+'), already off the total',money(r.discountGiven));
   if(r.credit>0)row(t,'Left unpaid (credit)',money(r.credit));
   paper.append(t);
   if(r.firstReceipt)paper.append(el('div','mu','Receipts '+r.firstReceipt+(r.lastReceipt&&r.lastReceipt!==r.firstReceipt?' to '+r.lastReceipt:'')));
@@ -1623,7 +1755,7 @@ function saveDraft(){
   if(!TAB)return;                                   // before boot has claimed a tab id
   try{
     if(!CART.length){localStorage.removeItem(draftKey(TAB));return;}
-    localStorage.setItem(draftKey(TAB),JSON.stringify({v:1,tab:TAB,at:Date.now(),by:USER?String(USER.username):'',
+    localStorage.setItem(draftKey(TAB),JSON.stringify({v:1,tab:TAB,at:Date.now(),by:USER?String(USER.username):'',disc:DISC?1:0,
       lines:CART.map(l=>({id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:l.price,qty:l.qty}))}));
   }catch{}                                          // storage full or blocked: the cart still works, it just is not saved
 }
@@ -1673,13 +1805,15 @@ async function recoverDrafts(boot){
     if(k===mine){
       if(!boot)continue;                                                              // our own live draft
       if(!CART.length&&String(d.by||'').toLowerCase()===me){
-        const r=repriceLines(lines);CART=r.lines;out.restored=r.lines.length;out.notes=priceNotes(r,'saved');continue;
+        const r=repriceLines(lines);CART=r.lines;out.restored=r.lines.length;out.notes=priceNotes(r,'saved');
+        if(d.disc)out.notes.push(DISC_LOST);continue;
       }
       // someone else's cart, or this tab already has items: park it below
     }else{
       const dead=live?!live.has(LOCK_PFX+d.tab):Date.now()-(Number(d.at)||0)>HELD_OLD_MS;
       if(!dead)continue;                                                              // another tab is still using it
     }
+    if(d.disc&&!out.notes.includes(DISC_LOST))out.notes.push(DISC_LOST);
     adopt.push({id:'r_'+String(d.tab)+'_'+String(d.at),at:Number(d.at)||Date.now(),by:String(d.by||''),rec:true,
       lines:lines.map(l=>({id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:Number(l.price),qty:Number(l.qty)})),key:k});
   }
@@ -1723,6 +1857,7 @@ function lineEl(l){
   return row;
 }
 function renderCart(){
+  reconcileDisc();                               // step 18: a discount the basket no longer justifies comes off before anything is drawn
   const lines=document.createDocumentFragment();
   if(!CART.length)lines.append(el('div','empty','Scan a barcode or tap an item to start a sale.'));
   CART.forEach(l=>lines.append(lineEl(l)));
@@ -1731,6 +1866,10 @@ function renderCart(){
   $('tot').textContent=money(tot);
   CHARGE.disabled=!n;CHARGE.textContent=n?'Charge '+money(tot):'Charge';
   $('clr').hidden=!n;$('prv').disabled=!n;$('hld').disabled=!n;
+  const dT=discSplit().total;
+  $('dsc-row').hidden=!(n&&discPolicy().on);
+  $('dsc').textContent=dT>0?'Change discount':'Discount';
+  $('dsv').textContent=dT>0?'\u2212'+money(dT/100)+' ('+Sales.pctText(Math.round(dT*10000/Math.max(1,toC(cartGross()))))+'%)':'';
   if(!n&&!ROVL_SALE)hideReceipt();               // a recorded sale's receipt stays up after the cart is emptied
   CARTBAR.classList.toggle('has',n>0);
   $('cb-a').textContent=n?n+(n===1?' item':' items'):'Cart is empty';
@@ -1910,7 +2049,9 @@ function buildSell(){
   const prv=el('button','sec','Preview receipt',{id:'prv',type:'button'});prv.disabled=true;prv.onclick=()=>showReceipt();
   const hld=el('button','sec','Hold sale',{id:'hld',type:'button'});hld.disabled=true;hld.onclick=()=>{if(holdCart())closeCart();};
   const secrow=el('div','sec-row');secrow.append(prv,hld);
-  foot.append(tot,secrow,CHARGE,el('div','hint','',{id:'shint'}));
+  const drow=el('div','drow','',{id:'dsc-row'}),dbtn=el('button','sm','Discount',{id:'dsc',type:'button'});dbtn.onclick=openDisc;
+  drow.hidden=true;drow.append(dbtn,el('span','dv','',{id:'dsv'}));      // shown only when the Admin has switched discounts on
+  foot.append(drow,tot,secrow,CHARGE,el('div','hint','',{id:'shint'}));
   cart.append(grab,head,LINES,foot);
   // phone: bar that opens the sheet, and the dimmed backdrop behind it
   CARTBAR=el('button','cartbar','',{id:'cartbar',type:'button','aria-controls':'cart','aria-expanded':'false'});
@@ -1953,6 +2094,7 @@ function buildSell(){
     if(PAYOVL){if(e.key==='Escape')cancelPay();return;}
     if(HOVL){if(e.key==='Escape')closeHeld();return;}
     if(PINOVL){if(e.key==='Escape')closePin();return;}
+    if(DOVL){if(e.key==='Escape')closeDisc();return;}
     if(SHOVL){if(e.key==='Escape')closeShiftSheet();return;}
     if(MOVL){if(e.key==='Escape')closeMine();return;}
     if(e.key==='Escape'&&ROVL){hideReceipt();return;}
