@@ -25,7 +25,10 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.48 (2026-11-13) — Settings fix (index.html, sw.js).
+// Current version: v0.3.52 (2026-11-13) — Till auto-print on built-in thermal printers (pos.html, index.html SW_VERSION only, sw.js).
+//   - Till header > Printer: choose Browser print dialog (as before) or RawBT thermal (ESC/POS, 58/80 mm), switch on auto-print after each sale, Test print.
+//   - Settings are per device (localStorage mdm_till_printer). No database or rules change.
+// Previous: v0.3.48 (2026-11-13) — Settings fix (index.html, sw.js).
 //   - The Till discounts card (step 18) was hidden from every Settings category, so the Admin could never switch discounts on
 //     and the till never offered them. It now shows under Settings > Account & Security, after Manager PIN. No data or rules change.
 // Previous: v0.3.47 (2026-11-12) — Email-based accounts, editable company location (index.html, sw.js, database_rules.json, mdm-admin.html, mdm-mail.gs).
@@ -2090,7 +2093,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.51';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.52';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

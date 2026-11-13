@@ -258,7 +258,7 @@ button[hidden]{display:none!important}
   <div><b>🧾 Till <span id="tillcode"></span></b><small id="depot"></small></div>
   <div class="hr">
     <div class="pills"><span class="pill" id="p-shift"></span><span class="pill" id="p-net"></span><span class="pill" id="p-cloud"></span><span class="pill" id="p-till"></span><span class="pill" id="p-sales"></span><span class="pill" id="p-user"></span></div>
-    <div class="hb"><button class="sm" id="b-shift" type="button">Shift</button><button class="sm" id="b-mine" type="button" hidden>My sales</button><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
+    <div class="hb"><button class="sm" id="b-print" type="button">Printer</button><button class="sm" id="b-shift" type="button">Shift</button><button class="sm" id="b-mine" type="button" hidden>My sales</button><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
   </div>
 </header>
 <main id="main"></main>
@@ -782,11 +782,14 @@ function showReceipt(b,tag,sale){          // sale=true: the receipt of a record
   const sc=el('div','rscroll');sc.append(receiptEl(bk,tag==null?'PREVIEW \u2014 NOT A SALE':tag));
   const bar=el('div','rbar');
   const pr=el('button','pri','Print',{type:'button'}),cl=el('button','','Close',{type:'button'});
-  pr.onclick=()=>printReceipt(bk);cl.onclick=hideReceipt;
+  pr.onclick=()=>printReceipt(bk,tag==null?'PREVIEW \u2014 NOT A SALE':tag);cl.onclick=hideReceipt;
   bar.append(cl,pr);ovl.append(sc,bar);document.body.append(ovl);ROVL=ovl;ROVL_SALE=!!sale;pr.focus();
 }
 // The page title becomes the file name when the cashier chooses "Save as PDF", so it carries the receipt number.
-function printReceipt(b){
+function printReceipt(b,tag,auto){
+  const pf=prefs();
+  if(pf.mode==='rawbt'){try{sendRaw(escposReceipt(b,tag,pf));}catch{say('Could not send to RawBT.','bad');}return;}
+  if(auto)return;                                  // the browser's print dialog is never opened by itself
   const t=document.title;
   document.title='Receipt '+(b&&b.receiptNo?b.receiptNo:'preview');
   const back=()=>{document.title=t;removeEventListener('afterprint',back);};
@@ -796,6 +799,77 @@ function printReceipt(b){
 function hideReceipt(){
   if(!ROVL)return;ROVL.remove();ROVL=null;ROVL_SALE=false;
   try{if(ROPENER&&document.contains(ROPENER))ROPENER.focus();}catch{}
+}
+// ── PRINTER: built-in thermal printers on Android POS terminals ──────────────
+// Route per device (localStorage): 'browser' = the print dialog as before; 'rawbt' = ESC/POS bytes handed to the free RawBT app, which prints
+// to the terminal's printer with no dialog, so a saved sale can print by itself. Chrome only allows that hand-off right after a tap, so
+// auto-print runs straight after Charge; if it is ever blocked, the receipt stays on screen and Print still works.
+const PRK='mdm_till_printer';
+function prefs(){let o=null;try{o=JSON.parse(localStorage.getItem(PRK)||'null');}catch{}return Object.assign({mode:'browser',cols:32,auto:false},o||{});}
+const asc=s=>String(s==null?'':s).replace(/[\u00a0\u202f\u2009]/g,' ').replace(/\u00d7/g,'x').replace(/[\u00b7\u2022]/g,'-').replace(/[\u2212\u2013\u2014]/g,'-').replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\x20-\x7e]/g,'?');
+function escposReceipt(b,tag,pf){
+  const W=pf.cols,B=[27,64];                       // ESC @ = reset
+  const txt=s=>{s=asc(s);for(let i=0;i<s.length;i++)B.push(s.charCodeAt(i));};
+  const ln=s=>{txt(s);B.push(10);},al=n=>B.push(27,97,n),bd=n=>B.push(27,69,n),hi=n=>B.push(29,33,n);
+  const wrap=s=>{s=asc(s);const o=[];while(s.length>W){let k=s.lastIndexOf(' ',W);if(k<1)k=W;o.push(s.slice(0,k));s=s.slice(k).trim();}o.push(s);return o;};
+  const lr=(l,r)=>{l=asc(l);r=asc(r);if(l.length+r.length+1>W){wrap(l).forEach(ln);al(2);ln(r);al(0);}else ln(l+' '.repeat(W-l.length-r.length)+r);};
+  const ctr=s=>{al(1);wrap(s).forEach(ln);al(0);},rule=c=>ln(c.repeat(W));
+  const di=DATA.depotInfo||{};
+  bd(1);hi(1);ctr(di.name||'Shop Inventory & Sales Manager');hi(0);bd(0);
+  if(di.district)ctr(di.district);
+  if(di.contactPhone)ctr('Tel: '+di.contactPhone);
+  rule('-');ctr('SALES RECEIPT');
+  if(b.receiptNo){bd(1);ctr('#'+b.receiptNo);bd(0);}
+  if(tag)ctr('['+tag+']');
+  const d=new Date(b.at);
+  ctr(d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+' '+d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}));
+  if(b.cashier)ctr('Served by: '+b.cashier);
+  rule('-');
+  b.lines.forEach(l=>{bd(1);wrap(l.name).forEach(ln);bd(0);lr(fq(l.qty)+(l.unit?' '+l.unit.toLowerCase():'')+' x '+money(l.price),money(Math.round(l.price*l.qty*100)/100));});
+  rule('-');
+  if(b.discount>0){lr('Subtotal',money(b.lines.reduce((a,l)=>a+Math.round(l.price*l.qty*100),0)/100));lr('Discount','-'+money(b.discount));}
+  bd(1);hi(1);lr('TOTAL',money(b.total));hi(0);bd(0);
+  ln(b.lineCount+(b.lineCount===1?' item':' items')+' / '+fq(b.qtyTotal)+(b.qtyTotal===1?' unit':' units'));
+  if(b.payments){
+    rule('-');
+    b.payments.forEach(x=>lr(x.label+(x.ref?' - '+x.ref:''),money(x.method==='cash'?x.tendered:x.amount)));
+    if(b.change>0)lr('Change',money(b.change));
+    if(b.balance>0)lr('Balance on account',money(b.balance));
+    if(b.customerName)ln('Customer: '+b.customerName);
+    if(b.creditStatus&&b.creditStatus!=='paid')ctr(b.creditStatus==='credit'?'** ON CREDIT **':'** PART PAID **');
+    else if(b.creditStatus==='paid'&&!b.practice)ctr('** PAID IN FULL **');
+  }
+  rule('-');ctr('Thank you for your business!');
+  B.push(27,100,4);                                // ESC d 4: feed 4 lines so the text clears the tear bar
+  return Uint8Array.from(B);
+}
+function sendRaw(u8){
+  let s='';for(let i=0;i<u8.length;i+=0x8000)s+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));
+  location.href='intent:base64,'+btoa(s)+'#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+}
+let PRNOVL=null;
+function openPrinter(){
+  if(PRNOVL)return;
+  const pf=prefs();
+  const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Printer'});
+  const box=el('div','pay'),head=el('div','pay-h'),cx=el('button','sm','Close',{type:'button'});
+  const shut=()=>{ovl.remove();PRNOVL=null;};cx.onclick=shut;
+  head.append(el('h2','','Printer'),cx);
+  const body=el('div','pay-body');
+  const sel=(label,opts,val)=>{const f=el('label','fld'),s=el('select');opts.forEach(o=>{const e=el('option','',o[1],{value:o[0]});if(String(o[0])===String(val))e.selected=true;s.append(e);});f.append(el('span','',label),s);body.append(f);return s;};
+  const mode=sel('Print with',[['browser','Browser print dialog'],['rawbt','RawBT thermal printer (needs the RawBT app)']],pf.mode);
+  const cols=sel('Paper',[[32,'58 mm'],[48,'80 mm']],pf.cols);
+  const af=el('label','fld'),au=el('input','',null,{type:'checkbox'});au.checked=!!pf.auto;
+  af.append(au,el('span','',' Print each receipt automatically after the sale (RawBT only)'));body.append(af);
+  body.append(el('div','mu','RawBT: install the free app, set its printer to this terminal\u2019s built-in printer, then use Test print.'));
+  const foot=el('div','pay-f'),test=el('button','sec','Test print',{type:'button'}),ok=el('button','pri','Save',{type:'button'});
+  const read=()=>{const o={mode:mode.value,cols:+cols.value,auto:au.checked};try{localStorage.setItem(PRK,JSON.stringify(o));}catch{}return o;};
+  test.onclick=()=>{const o=read();if(o.mode!=='rawbt'){say('Choose RawBT first.','bad');return;}
+    sendRaw(escposReceipt({at:Date.now(),receiptNo:'TEST',cashier:USER?String(USER.username):'',lines:[{name:'Test item',qty:1,unit:'',price:1}],lineCount:1,qtyTotal:1,total:1},'TEST PRINT',o));};
+  ok.onclick=()=>{read();shut();say('Printer settings saved','ok',2500);};
+  foot.append(test,ok);box.append(head,body,foot);ovl.append(box);
+  ovl.addEventListener('click',e=>{if(e.target===ovl)shut();});
+  document.body.append(ovl);PRNOVL=ovl;
 }
 // ── PAYMENT (roadmap step 6) ─────────────────────────────────────────────────
 // Charge opens one payment screen for the basket. Tenders: cash (amount received, change worked out), MTN Money and
@@ -1040,6 +1114,7 @@ async function finalizeSale(b){
     CART=[];renderCart();                          // renderCart also deletes the autosaved copy of this cart
     loadCatalog();renderGrid();paintSales();
     showReceipt(b,'',true);
+    if(prefs().auto)printReceipt(b,'',true);        // thermal auto-print: only in RawBT mode, see PRINTER below
     say('Sale '+b.receiptNo+' saved','ok',3500);
     syncSales();
   }finally{
@@ -2197,6 +2272,7 @@ async function boot(){
   await loadShift();
   try{SHBC=new BroadcastChannel('mdm_shift');SHBC.onmessage=async()=>{await loadShift();paintShift();if(SHOVL&&!SHBUSY)renderShift();if(PAYOVL&&PAYFOOT&&PAY)renderPayFoot(settle(toC(cartTotal()),PAY.tenders));};}catch{}
   $('b-shift').onclick=openShiftSheet;
+  $('b-print').onclick=openPrinter;
   loadCatalog();
   paintTill();setupTill();paintSales();syncAll();                              // claim this till's code (needs the network once)
   TAB=await claimTab();
