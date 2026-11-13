@@ -114,8 +114,11 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
   header .hr{display:contents}
   header>div:first-child{flex:1;min-width:0}
   header .hb{order:2}
-  header .pills{order:3;width:100%;flex-wrap:nowrap;overflow:hidden;gap:5px}
-  .pill{font-size:11px;padding:2px 8px;white-space:nowrap}
+  /* status pills: one row you can swipe sideways (was overflow:hidden, so the last pills were cut off and could not be reached) */
+  header .pills{order:3;width:100%;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;touch-action:pan-x;scrollbar-width:none;gap:5px;padding-bottom:2px}
+  header .pills::-webkit-scrollbar{display:none}
+  .pill{font-size:11px;padding:2px 8px;white-space:nowrap;flex:0 0 auto}
+  header .pills .pill:last-child{margin-right:12px}
 }
 @media (prefers-reduced-motion:reduce){.cart,.scrim{transition:none!important}}
 
@@ -381,8 +384,57 @@ async function cloudPill(){
   try{
     await window._fbAuthSdkReady;
     const u=firebase.auth().currentUser;
-    setPill('p-cloud',u?'Cloud: signed in':'Cloud: no session',u?'ok':'bad');
+    setPill('p-cloud',u?'Cloud: signed in':'Cloud: no session \u00b7 tap to fix',u?'ok':'bad');
+    const pe=$('p-cloud');pe.onclick=u?null:reconnectCloud;pe.style.cursor=u?'':'pointer';   // no session: tapping the pill asks for the password
   }catch{setPill('p-cloud','Cloud: unavailable','bad');}
+}
+// ── RECONNECT CLOUD ─────────────────────────────────────────────────────────────
+// A till has no cloud session when its login was a fingerprint / "stay signed in" / offline one (only a typed password can sign in
+// to Firebase) or after a logout (logout signs the SDK out). Without a session, sales cannot upload. Tapping the red pill asks for
+// the password once, signs in with the same account index.html uses, then uploads whatever is waiting.
+const AUTH_DOMAIN='mdm-depot.internal';            // same synthetic e-mail domain as index.html (_authEmailFor)
+let CLOUDOVL=null;
+function closeCloud(){if(CLOUDOVL){CLOUDOVL.remove();CLOUDOVL=null;}}
+function reconnectCloud(){
+  if(CLOUDOVL||!USER)return;
+  const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Reconnect cloud'});
+  const box=el('div','pay'),head=el('div','pay-h');
+  const cx=el('button','sm','Cancel',{type:'button'});cx.onclick=closeCloud;
+  head.append(el('h2','','Reconnect cloud'),cx);
+  const body=el('div','pay-body'),f=el('label','fld');
+  const inp=el('input','',null,{type:'password',autocomplete:'current-password',autocapitalize:'none',spellcheck:'false','aria-label':'Your password'});
+  f.append(el('span','','Type the password for '+String(USER.username)+' to connect this till to the cloud, so its sales can upload.'),inp);
+  const err=el('div','pay-err','');
+  body.append(f,err);
+  const foot=el('div','pay-f'),ok=el('button','pri','Connect',{type:'button'});
+  foot.append(ok);box.append(head,body,foot);ovl.append(box);
+  ovl.addEventListener('click',e=>{if(e.target===ovl)closeCloud();});
+  async function submit(){
+    err.textContent='';
+    const pw=inp.value;
+    if(!pw){err.textContent='Type your password.';return;}
+    if(!navigator.onLine){err.textContent='No signal. Go online and try again.';return;}
+    ok.disabled=true;ok.textContent='Connecting\u2026';
+    let msg='';
+    try{
+      await window._fbAuthSdkReady;
+      await firebase.auth().signInWithEmailAndPassword(String(USER.username).trim().toLowerCase()+'@'+AUTH_DOMAIN,pw);
+    }catch(e){
+      const c=e&&e.code;
+      msg=(c==='auth/wrong-password'||c==='auth/invalid-credential'||c==='auth/invalid-login-credentials')?'Wrong password.'
+        :c==='auth/user-not-found'?'This login has no cloud account yet. Ask the Admin.'
+        :c==='auth/too-many-requests'?'Too many tries. Wait a few minutes and try again.'
+        :c==='auth/network-request-failed'?'No signal. Try again.'
+        :'Could not connect ('+(c||'error')+').';
+    }
+    ok.disabled=false;ok.textContent='Connect';
+    if(!CLOUDOVL)return;                              // cancelled while connecting
+    if(msg){err.textContent=msg;inp.value='';inp.focus();return;}
+    closeCloud();cloudPill();setupTill();syncAll();paintSales();
+  }
+  ok.onclick=submit;
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();submit();}});
+  document.body.append(ovl);CLOUDOVL=ovl;inp.focus();
 }
 // Shared with the next steps (sales writes, sync): the same Firebase token and depot key index.html uses.
 window.POS={

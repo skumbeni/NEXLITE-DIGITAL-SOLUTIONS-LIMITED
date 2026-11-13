@@ -2090,7 +2090,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.48';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.51';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

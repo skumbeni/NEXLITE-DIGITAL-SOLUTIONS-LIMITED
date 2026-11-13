@@ -419,11 +419,109 @@ const Gate = (function () {
     };
   }
 
+  // ═════════════════════════════════════════════════════════════════
+  // MANAGER PIN — shared by index.html (sets it, Settings → Manager PIN) and pos.html (asks for it at the till).
+  // The PIN is stored on the user as u.pin = { v, s, i, h, at }: a salted PBKDF2/SHA-256 record, never the PIN itself.
+  //   s = salt (hex), i = iterations, h = derived key (hex), at = when it was set (ms).
+  // Holders are the Admin and Manager roles ('manager' and the legacy 'data_entry'). 5 wrong PINs in a row lock the pad
+  // for 1 minute on that phone (counter kept in localStorage under PIN_LOCK_KEY). Soft control, not a security boundary.
+  // ═════════════════════════════════════════════════════════════════
+  const PIN_ROLES     = Object.freeze(['admin', 'manager', 'data_entry']);
+  const PIN_ITER      = 100000;
+  const PIN_MAX_TRIES = 5;
+  const PIN_LOCK_MS   = 60 * 1000;
+  const PIN_LOCK_KEY  = 'mdm_pin_lock';
+
+  function pinValid(p) { return typeof p === 'string' && /^\d{4,6}$/.test(p); }
+
+  function _hex(u8) { return Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join(''); }
+  function _unhex(s) {
+    if (typeof s !== 'string' || s.length % 2 || /[^0-9a-f]/i.test(s)) throw _err('BAD_RECORD', 'Bad PIN record');
+    const out = new Uint8Array(s.length / 2);
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(s.substr(i * 2, 2), 16);
+    return out;
+  }
+  async function _pinDerive(pin, saltHex, iterations) {
+    if (typeof crypto === 'undefined' || !crypto.subtle || !crypto.subtle.deriveBits) {
+      throw _err('NO_CRYPTO', 'This phone cannot store or check a PIN (secure crypto is unavailable). Update the browser and use HTTPS.');
+    }
+    const key  = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: _unhex(saltHex), iterations, hash: 'SHA-256' }, key, 256);
+    return _hex(new Uint8Array(bits));
+  }
+  function _sameHex(a, b) {                          // constant-time compare of two equal-length hex strings
+    if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    return d === 0;
+  }
+
+  // Build the record to store on the user. Async; throws on a bad PIN or when the phone has no PBKDF2.
+  async function pinRecord(pin, now) {
+    if (!pinValid(pin)) throw _err('BAD_PIN', 'PIN must be 4 to 6 digits, numbers only.');
+    const s = _hex(_defaultRand(16));
+    const h = await _pinDerive(pin, s, PIN_ITER);
+    return { v: 1, s, i: PIN_ITER, h, at: typeof now === 'number' ? now : Date.now() };
+  }
+
+  // Does `pin` match this stored record? Resolves true/false; rejects only when the phone cannot do PBKDF2.
+  async function pinCheck(pin, rec) {
+    if (!pinValid(pin) || !rec || typeof rec.h !== 'string' || typeof rec.s !== 'string') return false;
+    const it = Number(rec.i);
+    if (!(it >= 1000 && it <= 5000000)) return false;
+    let h; try { h = await _pinDerive(pin, rec.s, it); } catch (e) { if (e && e.code === 'NO_CRYPTO') throw e; return false; }
+    return _sameHex(h, rec.h);
+  }
+
+  // Users who hold a PIN: an Admin or Manager role with a stored PIN record.
+  function pinHolders(data) {
+    const users = data && Array.isArray(data.users) ? data.users : [];
+    return users.filter(u => u && PIN_ROLES.includes(String(u.role)) && u.pin && typeof u.pin.h === 'string' && u.pin.h);
+  }
+
+  // Whose PIN is this? Returns { username, role } of the holder it belongs to, or null. Every holder is checked so the
+  // time taken does not reveal which one matched.
+  async function pinFindApprover(pin, data) {
+    if (!pinValid(pin)) return null;
+    let found = null;
+    for (const u of pinHolders(data)) {
+      if (await pinCheck(pin, u.pin) && !found) found = { username: String(u.username || ''), role: String(u.role) };
+    }
+    return found;
+  }
+
+  // Must the till ask for a PIN now? Only when the Admin switched it on, a shift is open, and somebody holds a PIN.
+  function pinRequired(data, shiftOpen) {
+    return !!shiftOpen && !!(data && data.depotInfo && data.depotInfo.tillExitPin) && pinHolders(data).length > 0;
+  }
+
+  // Wrong-PIN counter on this phone. `storage` is localStorage (or any getItem/setItem/removeItem object).
+  function _lockRead(storage) {
+    try { const o = JSON.parse(storage.getItem(PIN_LOCK_KEY) || 'null'); if (o && typeof o === 'object') return { n: Number(o.n) || 0, until: Number(o.until) || 0 }; } catch (e) {}
+    return { n: 0, until: 0 };
+  }
+  function _lockWrite(storage, o) { try { storage.setItem(PIN_LOCK_KEY, JSON.stringify(o)); } catch (e) {} }
+  function pinLockState(storage, now) {
+    const o = _lockRead(storage), left = Math.max(0, o.until - now);
+    return { locked: left > 0, left, triesLeft: Math.max(0, PIN_MAX_TRIES - o.n) };
+  }
+  function pinFailed(storage, now) {                 // call after a wrong PIN
+    const o = _lockRead(storage);
+    if (o.until > now) return { locked: true, left: o.until - now, triesLeft: 0 };
+    const n = o.n + 1;
+    if (n >= PIN_MAX_TRIES) { _lockWrite(storage, { n: 0, until: now + PIN_LOCK_MS }); return { locked: true, left: PIN_LOCK_MS, triesLeft: 0 }; }
+    _lockWrite(storage, { n, until: 0 });
+    return { locked: false, left: 0, triesLeft: PIN_MAX_TRIES - n };
+  }
+  function pinClear(storage) { try { storage.removeItem(PIN_LOCK_KEY); } catch (e) {} }
+
+
   return {
     TRIAL_MS, SUB_GRACE_MS, TIER_ORDER, TIER_FEATURES, TRIAL_TIER, READ_ONLY_STATUSES, KEYS, POS_SESSION_MS,
     computeEffectiveStatus, tierFeatureSet: _tierFeatureSet,
     statusOf, isSelfSuspended, tierOf, hasFeature, isReadOnly, reconcile,
     receiptNumbering, restCloud, newTillCode, newTillId, RC_ALPHABET,
+    PIN_ROLES, pinValid, pinRecord, pinCheck, pinHolders, pinFindApprover, pinRequired, pinLockState, pinFailed, pinClear,
   };
 })();
 
