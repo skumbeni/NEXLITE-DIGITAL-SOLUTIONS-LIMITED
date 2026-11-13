@@ -805,17 +805,18 @@ function hideReceipt(){
 // to the terminal's printer with no dialog, so a saved sale can print by itself. Chrome only allows that hand-off right after a tap, so
 // auto-print runs straight after Charge; if it is ever blocked, the receipt stays on screen and Print still works.
 const PRK='mdm_till_printer';
-function prefs(){let o=null;try{o=JSON.parse(localStorage.getItem(PRK)||'null');}catch{}return Object.assign({mode:'browser',cols:0,auto:false},o||{});}
+function prefs(){let o=null;try{o=JSON.parse(localStorage.getItem(PRK)||'null');}catch{}return Object.assign({mode:'browser',cols:0,size:1,auto:false},o||{});}
 const asc=s=>String(s==null?'':s).replace(/[\u00a0\u202f\u2009]/g,' ').replace(/\u00d7/g,'x').replace(/[\u00b7\u2022]/g,'-').replace(/[\u2212\u2013\u2014]/g,'-').replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\x20-\x7e]/g,'?');
 function escposReceipt(b,tag,pf){
-  const W=pf.cols||(Math.min(screen.width,screen.height)<=600?32:48),B=[27,64];   // cols 0 = auto: a handheld terminal (small screen) is 58 mm                       // ESC @ = reset
+  const sz=pf.size==null?1:pf.size|0,SC=[0,1,17][sz]||0,base=pf.cols||(Math.min(screen.width,screen.height)<=600?32:48),W=sz===2?base>>1:base,B=[27,64,27,77,0];   // ESC M 0 = Font A (the larger one); size 2 doubles the width, so half the characters fit   // cols 0 = auto: a handheld terminal (small screen) is 58 mm                       // ESC @ = reset
   const txt=s=>{s=asc(s);for(let i=0;i<s.length;i++)B.push(s.charCodeAt(i));};
   const ln=s=>{txt(s);B.push(10);},al=n=>B.push(27,97,n),bd=n=>B.push(27,69,n),hi=n=>B.push(29,33,n);
+  hi(SC);
   const wrap=s=>{s=asc(s);const o=[];while(s.length>W){let k=s.lastIndexOf(' ',W);if(k<1)k=W;o.push(s.slice(0,k));s=s.slice(k).trim();}o.push(s);return o;};
   const lr=(l,r)=>{l=asc(l);r=asc(r);if(l.length+r.length+1>W){wrap(l).forEach(ln);al(2);ln(r);al(0);}else ln(l+' '.repeat(W-l.length-r.length)+r);};
   const ctr=s=>{al(1);wrap(s).forEach(ln);al(0);},rule=c=>ln(c.repeat(W));
   const di=DATA.depotInfo||{};
-  bd(1);hi(1);ctr(di.name||'Shop Inventory & Sales Manager');hi(0);bd(0);
+  bd(1);hi(sz?SC:1);ctr(di.name||'Shop Inventory & Sales Manager');hi(SC);bd(0);
   if(di.district)ctr(di.district);
   if(di.contactPhone)ctr('Tel: '+di.contactPhone);
   if(tag==='TEST PRINT'){ln('123456789012345678901234567890123456789012345678');ln('Using '+W+' characters per line');}   // the ruler wraps where the paper ends: 32 = 58 mm, 48 = 80 mm
@@ -829,7 +830,7 @@ function escposReceipt(b,tag,pf){
   b.lines.forEach(l=>{bd(1);wrap(l.name).forEach(ln);bd(0);lr(fq(l.qty)+(l.unit?' '+l.unit.toLowerCase():'')+' x '+money(l.price),money(Math.round(l.price*l.qty*100)/100));});
   rule('-');
   if(b.discount>0){lr('Subtotal',money(b.lines.reduce((a,l)=>a+Math.round(l.price*l.qty*100),0)/100));lr('Discount','-'+money(b.discount));}
-  bd(1);hi(1);lr('TOTAL',money(b.total));hi(0);bd(0);
+  bd(1);hi(sz?SC:1);lr('TOTAL',money(b.total));hi(SC);bd(0);
   ln(b.lineCount+(b.lineCount===1?' item':' items')+' / '+fq(b.qtyTotal)+(b.qtyTotal===1?' unit':' units'));
   if(b.payments){
     rule('-');
@@ -860,11 +861,12 @@ function openPrinter(){
   const sel=(label,opts,val)=>{const f=el('label','fld'),s=el('select');opts.forEach(o=>{const e=el('option','',o[1],{value:o[0]});if(String(o[0])===String(val))e.selected=true;s.append(e);});f.append(el('span','',label),s);body.append(f);return s;};
   const mode=sel('Print with',[['browser','Browser print dialog'],['rawbt','RawBT thermal printer (needs the RawBT app)']],pf.mode);
   const cols=sel('Paper',[[0,'Auto (58 mm on a handheld terminal)'],[32,'58 mm'],[48,'80 mm']],pf.cols);
+  const siz=sel('Text size',[[0,'Normal'],[1,'Large (taller)'],[2,'Extra large (wider and taller)']],pf.size==null?1:pf.size);
   const af=el('label','fld'),au=el('input','',null,{type:'checkbox'});au.checked=!!pf.auto;
   af.append(au,el('span','',' Print each receipt automatically after the sale (RawBT only)'));body.append(af);
   body.append(el('div','mu','RawBT: install the free app, set its printer to this terminal\u2019s built-in printer, then use Test print. Paper is not read from the printer: Auto assumes 58 mm on a handheld, so set RawBT\u2019s paper width to match.'));
   const foot=el('div','pay-f'),test=el('button','sec','Test print',{type:'button'}),ok=el('button','pri','Save',{type:'button'});
-  const read=()=>{const o={mode:mode.value,cols:+cols.value,auto:au.checked};try{localStorage.setItem(PRK,JSON.stringify(o));}catch{}return o;};
+  const read=()=>{const o={mode:mode.value,cols:+cols.value,size:+siz.value,auto:au.checked};try{localStorage.setItem(PRK,JSON.stringify(o));}catch{}return o;};
   test.onclick=()=>{const o=read();if(o.mode!=='rawbt'){say('Choose RawBT first.','bad');return;}
     sendRaw(escposReceipt({at:Date.now(),receiptNo:'TEST',cashier:USER?String(USER.username):'',lines:[{name:'Test item',qty:1,unit:'',price:1}],lineCount:1,qtyTotal:1,total:1},'TEST PRINT',o));};
   ok.onclick=()=>{read();shut();say('Printer settings saved','ok',2500);};

@@ -25,7 +25,8 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.53 (2026-11-13) — Printer paper width: new Auto option (default; 58 mm on a handheld), Test print adds a width ruler (pos.html, index.html SW_VERSION only, sw.js).
+// Current version: v0.3.54 (2026-11-13) — Printer text size: Font A forced, new Text size setting (default Large) (pos.html, index.html SW_VERSION only, sw.js).
+// Previous: v0.3.53 (2026-11-13) — Printer paper width: new Auto option (default; 58 mm on a handheld), Test print adds a width ruler (pos.html, index.html SW_VERSION only, sw.js).
 // Previous: v0.3.52 (2026-11-13) — Till auto-print on built-in thermal printers (pos.html, index.html SW_VERSION only, sw.js).
 //   - Till header > Printer: choose Browser print dialog (as before) or RawBT thermal (ESC/POS, 58/80 mm), switch on auto-print after each sale, Test print.
 //   - Settings are per device (localStorage mdm_till_printer). No database or rules change.
@@ -2094,7 +2095,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.53';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.54';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
