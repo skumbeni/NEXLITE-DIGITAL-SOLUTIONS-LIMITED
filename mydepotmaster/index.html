@@ -32,7 +32,7 @@ window.PLAY_MODE=p;if(p)document.documentElement.classList.add('play-mode');})()
      COPILOT_PROXY_ENDPOINT further down in this file (search for
      "DEPOT ASSISTANT"). Do not put the raw Gemini key back in this file —
      it's public source and gets scraped/revoked within minutes. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' blob: https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.gstatic.com/; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; connect-src https://*.firebaseio.com https://firebaseinstallations.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://firebaseappcheck.googleapis.com https://fonts.googleapis.com https://fonts.gstatic.com https://www.google.com/recaptcha/ https://recaptcha.google.com https://mdm-copilot-proxy.chongogoodson0.workers.dev https://open.er-api.com https://api.ipify.org; img-src 'self' data: blob: https:; worker-src 'self' blob:; manifest-src 'self' blob:; frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com; frame-ancestors 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' blob: https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://www.gstatic.com/; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com data:; connect-src https://script.google.com https://script.googleusercontent.com https://*.firebaseio.com https://firebaseinstallations.googleapis.com https://securetoken.googleapis.com https://identitytoolkit.googleapis.com https://firebaseappcheck.googleapis.com https://fonts.googleapis.com https://fonts.gstatic.com https://www.google.com/recaptcha/ https://recaptcha.google.com https://mdm-copilot-proxy.chongogoodson0.workers.dev https://open.er-api.com https://api.ipify.org; img-src 'self' data: blob: https:; worker-src 'self' blob:; manifest-src 'self' blob:; frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com; frame-ancestors 'none';">
 <!-- ──────────────────────────────────────────────────────────────────────── -->
 <!-- OpenGraph / Social sharing -->
 <meta property="og:title" content="Shop Inventory & Sales Manager"/>
@@ -1986,7 +1986,7 @@ function esc(str) {
 //   createdAt, trialStart, depotName, district, province, country, requestedPlan.
 //   Any other field (tier, activeUntil, contactName ...) is operator-only, and one bad
 //   field makes the rules reject the whole record.
-// - licenseContacts/<id>: contactName, contactPhone, createdAt (server time). Create-only,
+// - licenseContacts/<id>: contactEmail (required), createdAt (server time). Create-only,
 //   and only BEFORE depots/<id> exists. Readable by the operator only — never put contact
 //   details in licenses/ (that node is public).
 // - depots/<id>/authorizedUids/<uid>: 'admin' | 'staff' (legacy: true). A brand-new depot
@@ -3797,6 +3797,175 @@ const _TIER_BULLETS = {
   ],
 };
 
+// ── EMAIL ADDRESS, VERIFICATION AND MAIL SERVICE ─────────────────────────────
+// Every email (welcome + verification code, password-recovery code, subscription approval or
+// rejection) is sent from support@nexlitedigitalsolutionslimited.digital by the Google Apps Script
+// web app in mdm-mail.gs. Deploy it, then paste its Web app URL into MAIL_ENDPOINT below.
+// While MAIL_ENDPOINT is empty the app says plainly that email sending is not switched on.
+const MAIL_ENDPOINT = 'https://script.google.com/macros/s/AKfycby9WIKyhsgmzE0TPhzW1gcQRupjt2F02bjsvLOp97bHvGhUrT1gie0YfKvDETyIzGvk1Q/exec';
+const SUPPORT_EMAIL = 'support@nexlitedigitalsolutionslimited.digital';
+const _EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function _emailOk(e) { return typeof e === 'string' && e.length <= 254 && _EMAIL_RE.test(e); }
+function isMailConfigured() { return /^https:\/\/script\.google\.com\/macros\//.test(MAIL_ENDPOINT); }
+const _MAIL_ERR = {
+  MAIL_NOT_CONFIGURED: 'Email sending is not switched on yet. Contact support.',
+  OFFLINE: 'You need an internet connection to do this.',
+  RATE_LIMIT: 'Too many codes requested. Wait an hour or contact support.',
+  CODE_EXPIRED: 'That code has expired. Ask for a new one.',
+  WRONG_CODE: 'That code is not correct.',
+  TOO_MANY_TRIES: 'Too many wrong attempts. Ask for a new code.',
+  UNKNOWN_COMPANY: 'This company is not registered online yet. Try again when connected.',
+  BAD_EMAIL: 'Enter a valid email address.'
+};
+function _mailErrText(e) { return _MAIL_ERR[(e && e.message) || ''] || 'Could not reach the email service. Try again.'; }
+async function _mailCall(action, body) {
+  if (!isMailConfigured()) throw new Error('MAIL_NOT_CONFIGURED');
+  if (!navigator.onLine) throw new Error('OFFLINE');
+  const res = await _fetchWithTimeout(MAIL_ENDPOINT, {
+    method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ action, ...body })
+  }, 25000);
+  let j; try { j = await res.json(); } catch (_) { throw new Error('MAIL_ERROR'); }
+  if (!j || !j.ok) { const e = new Error((j && j.error) || 'MAIL_ERROR'); e.left = j && j.left; throw e; }
+  return j;
+}
+
+// The signed-in account's email and whether it is verified. "Verified" is tied to the address:
+// changing the address clears it.
+function _myUserRec() { return (DATA.users || []).find(u => u.username === (USER || {}).username) || null; }
+function _myEmail() {
+  const u = _myUserRec() || {};
+  const email = String(u.recoveryEmail || (u.role === 'admin' ? (DATA.depotInfo || {}).recoveryEmail : '') || '').trim().toLowerCase();
+  return { email, verified: !!email && u.emailVerified === true && (u.emailVerifiedFor || '') === email };
+}
+function _saveMyEmailRaw(email) {
+  const em = String(email || '').trim().toLowerCase(), me = (USER || {}).username, adm = USER && USER.role === 'admin';
+  updateData(d => ({ ...d,
+    users: (d.users || []).map(u => u.username === me ? { ...u, recoveryEmail: em, emailVerified: false, emailVerifiedFor: '' } : u),
+    depotInfo: adm ? { ...(d.depotInfo || {}), recoveryEmail: em } : d.depotInfo }));
+  const u = _myUserRec(); if (u) USER = Object.freeze({ ...u });
+}
+function _evMark(email) {
+  const em = String(email || '').toLowerCase(), now = Date.now(), me = (USER || {}).username, adm = USER && USER.role === 'admin';
+  updateData(d => ({ ...d,
+    users: (d.users || []).map(u => u.username === me ? { ...u, recoveryEmail: em, emailVerified: true, emailVerifiedFor: em, emailVerifiedAt: now } : u),
+    depotInfo: adm ? { ...(d.depotInfo || {}), recoveryEmail: em } : d.depotInfo }));
+  const u = _myUserRec(); if (u) USER = Object.freeze({ ...u });
+}
+
+// Verification dialog: add email (if none) > send code > enter code.
+let _evState = { email: '', sent: false, kind: 'verify', busy: false, nextAt: 0 };
+let _evPromptedFor = '';
+function _evRender(msg, isErr) {
+  const s = _evState;
+  const note = msg ? `<div class="${isErr ? 'err-box' : 'ok-msg'}" style="margin-bottom:12px">${esc(msg)}</div>` : '';
+  let inner;
+  if (!isMailConfigured()) {
+    inner = `<div class="warn" style="margin-bottom:14px">Email sending is not switched on yet. Contact support at ${esc(SUPPORT_EMAIL)}.</div>
+      <div class="mact"><button class="btn bo" onclick="closeModal()">Close</button></div>`;
+  } else if (!s.email) {
+    inner = `<div style="font-size:17px;color:var(--muted);line-height:1.7;margin-bottom:12px">Add your email address. We use it for account recovery and for messages about your account.</div>${note}
+      <div class="fw"><div class="fl">Email Address <span style="color:var(--red)">*</span></div>
+        <input class="fi" type="email" id="ev-email" placeholder="your@email.com" autocapitalize="none" autocomplete="email" spellcheck="false" style="text-transform:none"/></div>
+      <div class="mact"><button class="btn bg" onclick="evSaveEmail()">Send code</button><button class="btn bo" onclick="closeModal()">Later</button></div>`;
+  } else if (!s.sent) {
+    inner = `<div style="font-size:17px;color:var(--muted);line-height:1.7;margin-bottom:12px">We will email a 6-digit code to <strong style="color:var(--text)">${esc(s.email)}</strong>. Wrong address? Close this and change it in Settings → Recovery Email.</div>${note}
+      <div class="mact"><button class="btn bg" onclick="evSend()">Send code</button><button class="btn bo" onclick="closeModal()">Later</button></div>`;
+  } else {
+    inner = `<div style="font-size:17px;color:var(--muted);line-height:1.7;margin-bottom:12px">Enter the 6-digit code sent to <strong style="color:var(--text)">${esc(s.email)}</strong>. It expires in 10 minutes. Check your spam folder if it does not arrive.</div>${note}
+      <div class="fw"><div class="fl">Verification Code</div>
+        <input class="fi" id="ev-code" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code" style="letter-spacing:6px;font-size:24px;text-align:center"/></div>
+      <div class="mact"><button class="btn bg" onclick="evCheck()">Verify</button><button class="btn bo" onclick="evSend()">Resend</button></div>
+      <button class="btn bo bsm" style="width:100%;margin-top:8px" onclick="closeModal()">Later</button>`;
+  }
+  openModal(`<div class="mtitle">📧 Verify your email</div>${inner}`);
+  setTimeout(() => { const el = document.getElementById(s.sent ? 'ev-code' : 'ev-email'); if (el) el.focus(); }, 50);
+}
+function evOpen(kind) {
+  const cur = _myEmail();
+  _evState = { email: cur.email, sent: false, kind: kind || 'verify', busy: false, nextAt: 0 };
+  _evRender();
+  if (kind === 'signup' && cur.email && isMailConfigured()) evSend();
+}
+function evSaveEmail() {
+  const em = (document.getElementById('ev-email')?.value || '').trim().toLowerCase();
+  if (!_emailOk(em)) { _evRender('Enter a valid email address.', true); return; }
+  _saveMyEmailRaw(em); _evState.email = em; evSend();
+}
+async function evSend() {
+  const s = _evState; if (s.busy) return;
+  if (Date.now() < s.nextAt) { _evRender('Please wait a moment before asking for another code.', true); return; }
+  s.busy = true; _evRender('Sending…');
+  try {
+    const id = depotKey();
+    try {   // already verified on another device? then skip the code
+      const st = await _mailCall('verify_status', { installId: id, email: s.email });
+      if (st.verified) { _evMark(s.email); s.busy = false; closeModal(); showToast('✅ Email verified'); return; }
+    } catch (_) {}
+    await _mailCall('verify_send', { installId: id, email: s.email, purpose: s.kind === 'signup' ? 'signup' : 'verify', name: (DATA.depotInfo || {}).name || '' });
+    s.sent = true; s.nextAt = Date.now() + 60000; s.busy = false;
+    _evRender('We sent a 6-digit code to ' + s.email + '.');
+  } catch (e) { s.busy = false; _evRender(_mailErrText(e), true); }
+}
+async function evCheck() {
+  const s = _evState; if (s.busy) return;
+  const code = (document.getElementById('ev-code')?.value || '').replace(/\D/g, '');
+  if (code.length !== 6) { _evRender('Enter the 6-digit code from the email.', true); return; }
+  s.busy = true;
+  try {
+    await _mailCall('verify_check', { installId: depotKey(), email: s.email, code, purpose: s.kind === 'signup' ? 'signup' : 'verify' });
+    _evMark(s.email); s.busy = false; closeModal(); showToast('✅ Email verified');
+  } catch (e) { s.busy = false; _evRender(_mailErrText(e) + (e.left != null ? ' ' + e.left + ' tries left.' : ''), true); }
+}
+// After every sign-in (once per session per user): prompt anyone whose email is missing or unverified.
+// Existing accounts get the same prompt as new ones. Skipped while the mandatory setup dialog is open.
+function evPromptIfNeeded(tries) {
+  if (!USER || _evPromptedFor === USER.username) return;
+  if (!isMailConfigured()) return;
+  const ov = document.getElementById('modal-ovl');
+  if (document.getElementById('ds-name') || (ov && ov.style.display === 'flex')) {
+    if ((tries || 0) < 6) setTimeout(() => evPromptIfNeeded((tries || 0) + 1), 3000);
+    return;
+  }
+  _evPromptedFor = USER.username;
+  if (_myEmail().verified) return;
+  const kind = window._evNextKind || 'verify'; window._evNextKind = '';
+  evOpen(kind);
+}
+
+// Settings card (admin and staff): the account's own email.
+function _renderEmailCard() {
+  const cur = _myEmail(), isAdm = USER && USER.role === 'admin';
+  const status = !cur.email ? `<div class="warn" style="margin-bottom:12px">⚠️ No email set. Add one so your account can be recovered.</div>`
+    : cur.verified ? `<div class="ok-msg" style="margin-bottom:12px">✅ ${esc(cur.email)} is verified.</div>`
+    : `<div class="warn" style="margin-bottom:12px">⚠️ ${esc(cur.email)} is not verified yet.</div>`;
+  return `
+    <div class="sh">Recovery Email</div>
+    <div class="card">
+      <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">
+        ${isAdm ? 'Your email resets your admin password with a code, and receives messages about your subscription requests.' : 'Your email is used for account recovery and messages about your account.'}
+        Messages come from ${esc(SUPPORT_EMAIL)}.
+      </div>
+      ${status}
+      <div id="rec-email-set-msg"></div>
+      <div class="fw"><div class="fl">Email Address</div>
+        <input class="fi" type="email" id="rec-email-new" placeholder="your@email.com" autocapitalize="none" autocomplete="email" spellcheck="false" style="text-transform:none" value="${esc(cur.email)}"/>
+      </div>
+      <button class="btn bg" onclick="saveMyEmail()">📧 Save Email</button>
+      ${cur.email && !cur.verified ? `<button class="btn bo" style="margin-top:8px" onclick="evOpen('verify')">✉️ Verify now</button>` : ''}
+    </div>`;
+}
+function saveMyEmail() {
+  const raw = (document.getElementById('rec-email-new')?.value || '').trim().toLowerCase();
+  const msg = document.getElementById('rec-email-set-msg'); if (msg) msg.innerHTML = '';
+  if (!_emailOk(raw)) { if (msg) msg.innerHTML = '<div class="err-box">⚠️ Enter a valid email address.</div>'; return; }
+  const apply = () => {
+    if (raw !== _myEmail().email) _saveMyEmailRaw(raw);
+    if (!_myEmail().verified) evOpen('verify'); else showToast('✅ Email saved');
+  };
+  if (USER && USER.role === 'admin') requireAdminPassword('set recovery email', apply); else apply();
+}
+
 // ── SUBSCRIPTION APPLICATION FORM ────────────────────────────────────────────
 // Writes to Firebase: subscriptionRequests/<installId>/<timestamp>
 // Admin app reads from this path to process upgrade requests.
@@ -3806,7 +3975,7 @@ function openSubscriptionForm(planTier) {
   const tm    = TIER_META[planTier] || TIER_META.growth;
   const acc   = planTier === 'starter' ? 'var(--amber)' : planTier === 'growth' ? 'var(--blue)' : planTier === 'pro' ? 'var(--green)' : '#a78bfa';
   const di    = DATA.depotInfo || {};
-  const defaultPhone = di.contactPhone || '';
+  const _em = _myEmail();
 
   openModal(`
     <div class="mtitle" style="font-size:21px;margin-bottom:4px">📋 Upgrade Application</div>
@@ -3823,8 +3992,9 @@ function openSubscriptionForm(planTier) {
       <input class="fi" id="sub-key" value="${esc(key)}" readonly style="color:var(--blue);font-family:var(--fm);cursor:default;opacity:.8"/>
     </div>
     <div class="fw">
-      <div class="fl">Phone Number <span style="color:var(--red)">*</span></div>
-      <input class="fi" id="sub-phone" type="tel" placeholder="E.G. 0977123456" value="${esc(defaultPhone)}" inputmode="tel"/>
+      <div class="fl">Email Address <span style="color:var(--red)">*</span></div>
+      <input class="fi" id="sub-email" type="email" placeholder="your@email.com" value="${esc(_em.email)}" autocapitalize="none" spellcheck="false" style="text-transform:none"/>
+      <div style="font-size:15px;color:var(--muted);margin-top:5px;line-height:1.6">We email you here when your application is approved or rejected.${_em.email && !_em.verified ? ' <span style="color:var(--amber)">This address is not verified yet.</span>' : ''}</div>
     </div>
     <div class="fw">
       <div class="fl">Payment Method <span style="color:var(--red)">*</span></div>
@@ -3863,14 +4033,14 @@ function openSubscriptionForm(planTier) {
 
 async function submitSubscriptionRequest(planTier) {
   const key    = depotKey();
-  const phone  = (document.getElementById('sub-phone')?.value || '').trim();
+  const email  = (document.getElementById('sub-email')?.value || '').trim().toLowerCase();
   const method = document.getElementById('sub-method')?.value || '';
   const txid   = (document.getElementById('sub-txid')?.value || '').trim();
   const err    = document.getElementById('sub-err');
   const btn    = document.getElementById('sub-submit-btn');
 
   err.style.display = 'none';
-  if (!phone)  { err.style.display='block'; err.textContent='⚠️ Enter your phone number.'; return; }
+  if (!_emailOk(email)) { err.style.display='block'; err.textContent='⚠️ Enter a valid email address. We use it to tell you if your application is approved or rejected.'; return; }
   if (!method) { err.style.display='block'; err.textContent='⚠️ Select a payment method.'; return; }
   if (!txid)   { err.style.display='block'; err.textContent='⚠️ Enter the transaction ID or reference.'; return; }
 
@@ -3893,7 +4063,8 @@ async function submitSubscriptionRequest(planTier) {
     country:     _fbStr(di.country, 200),
     requestedPlan: _fbStr(planTier, 40),
     planLabel:   _fbStr((TIER_META[planTier] || {}).label || planTier, 80),
-    phone:       _fbStr(phone, 40),
+    email:       _fbStr(email, 254),
+    emailVerified: !!(_myEmail().verified && _myEmail().email === email),
     paymentMethod: _fbStr(method, 40),
     transactionId: _fbStr(txid, 100),
     submittedAt:   Date.now(),
@@ -4226,7 +4397,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.46';
+const SW_VERSION  = 'v0.3.48';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -5628,6 +5799,7 @@ function showMainUI() {
   const hms=document.getElementById('hdr-menu-settings-btn'); if(hms) hms.style.display= USER?'flex':'none';
   _syncHdrMenuRoleRows();
   document.body.classList.toggle('cashier-mode', isCashierRole());   // CSS below hides the bottom nav, menu, search and assistant
+  setTimeout(function(){ try{ evPromptIfNeeded(); }catch(e){ console.warn('email prompt:', e); } }, 1200);
 }
 
 // Hides/shows hamburger-menu rows to match what this account can actually
@@ -5717,6 +5889,7 @@ function showLanding() {
 }
 
 function showLoginScreen() {
+  _evPromptedFor = '';
   _hideAllOverlays();
   _hideMainUI();
   document.getElementById('login-screen').style.display = 'flex';
@@ -5840,13 +6013,18 @@ function _recAutoLoad() {
     <div class="rec-option rec-opt-blue" style="margin-bottom:14px">
       <div class="rec-opt-label" style="color:var(--blue)">📧 Option ${hasPin ? '2 — ' : ''}Recovery Email</div>
       <div style="font-size:17px;color:var(--muted);line-height:1.7;margin-bottom:10px">
-        Confirm the recovery email registered for this account:<br>
+        ${isMailConfigured() ? 'We will email a code to the recovery email registered for this account:' : 'Confirm the recovery email registered for this account:'}<br>
         <span style="font-family:monospace;color:var(--blue);font-size:18px">${esc(maskEmail(adminEmail))}</span>
       </div>
       <div class="err-box" id="rec-email-err" style="display:none;margin-bottom:10px"></div>
+      ${isMailConfigured() ? `
+      <button class="btn bo bsm" id="rec-send-code" style="width:100%;margin-bottom:10px" onclick="recSendCode()">📨 Send me a code</button>
+      <div class="fw"><div class="fl">6-digit Code</div>
+        <input class="fi" id="rec-email-code" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code"/>
+      </div>` : `
       <div class="fw"><div class="fl">Your Recovery Email</div>
         <input class="fi" type="email" id="rec-email-input" placeholder="Type your full email address" autocapitalize="none" autocomplete="email" spellcheck="false" style="text-transform:none"/>
-      </div>
+      </div>`}
       <div class="fw"><div class="fl">New Password</div>
         <input class="fi" type="password" id="rec-enp1" placeholder="New password (min 8 chars)" autocomplete="new-password"/>
       </div>
@@ -5876,12 +6054,15 @@ async function doRecoveryAutomatic(mode) {
 
   if (mode === 'email') {
     const inputEmail = (document.getElementById('rec-email-input')?.value || '').trim().toLowerCase();
+    const mailOn = isMailConfigured();
+    const codeIn = (document.getElementById('rec-email-code')?.value || '').replace(/\D/g, '');
     const np1 = document.getElementById('rec-enp1')?.value || '';
     const np2 = document.getElementById('rec-enp2')?.value || '';
     const err = document.getElementById('rec-email-err');
     err.style.display = 'none';
 
-    if (!inputEmail)        { err.style.display='block'; err.textContent='⚠️ Enter your recovery email address.'; return; }
+    if (!mailOn && !inputEmail) { err.style.display='block'; err.textContent='⚠️ Enter your recovery email address.'; return; }
+    if (mailOn && codeIn.length !== 6) { err.style.display='block'; err.textContent='⚠️ Enter the 6-digit code we emailed you. Tap "Send me a code" first.'; return; }
     if (np1.length < 8)     { err.style.display='block'; err.textContent='New password must be at least 8 characters.'; return; }
     if (np1 !== np2)        { err.style.display='block'; err.textContent='❌ Passwords do not match.'; return; }
 
@@ -5889,13 +6070,17 @@ async function doRecoveryAutomatic(mode) {
     const storedEmail = admins.map(u => (u.recoveryEmail || '').toLowerCase()).find(e => e) ||
                         ((DATA.depotInfo || {}).recoveryEmail || '').toLowerCase();
 
-    if (!storedEmail || inputEmail !== storedEmail) {
+    if (!storedEmail || (!mailOn && inputEmail !== storedEmail)) {
       await _recBfFail();
       err.style.display = 'block';
       err.textContent = '❌ Email does not match. Please check and try again.';
       return;
     }
 
+    if (mailOn) {
+      try { await _mailCall('verify_check', { installId: DATA.installId || '', email: storedEmail, code: codeIn, purpose: 'recovery' }); }
+      catch (me) { await _recBfFail(); err.style.display='block'; err.textContent='❌ ' + _mailErrText(me); return; }
+    }
     await _recBfOk();
     const hashed = await hashPassword(np1);
     // NOTE (Phase 1 known gap): this resets the password without the old one,
@@ -5946,6 +6131,22 @@ async function doRecoveryAutomatic(mode) {
   document.getElementById('recovery-screen').style.display = 'none';
   showLoginScreen();
   setTimeout(() => showToast('✅ Password reset! Please sign in with your new password.'), 300);
+}
+
+async function recSendCode() {
+  const err = document.getElementById('rec-email-err'), btn = document.getElementById('rec-send-code');
+  if (err) err.style.display = 'none';
+  const stored = ((DATA.users || []).filter(u => u.role === 'admin').map(u => (u.recoveryEmail || '').toLowerCase()).find(e => e) ||
+                  ((DATA.depotInfo || {}).recoveryEmail || '')).toLowerCase();
+  const fail = m => { if (err) { err.style.display = 'block'; err.textContent = m; } };
+  if (!stored || !DATA.installId) { fail('⚠️ No recovery email is set for this company.'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Sending…'; }
+  try {
+    await _mailCall('verify_send', { installId: DATA.installId, email: stored, purpose: 'recovery', name: (DATA.depotInfo || {}).name || '' });
+    if (err) { err.style.display = 'block'; err.className = 'ok-msg'; err.textContent = '✅ Code sent. It expires in 10 minutes.'; }
+    if (btn) btn.textContent = '📨 Send a new code';
+  } catch (e) { fail('❌ ' + _mailErrText(e)); if (btn) btn.textContent = '📨 Send me a code'; }
+  if (btn) btn.disabled = false;
 }
 
 function recoverGoBack() {
@@ -6015,27 +6216,6 @@ async function saveRecoveryPin() {
   });
 }
 
-function saveRecoveryEmail() {
-  if (!requireAdmin('set recovery email')) return;
-  const raw = (document.getElementById('rec-email-new')?.value || '').trim().toLowerCase();
-  const msg = document.getElementById('rec-email-set-msg');
-  msg.innerHTML = '';
-  if (raw && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
-    msg.innerHTML = '<div class="err-box">⚠️ Email format looks invalid. Please check it.</div>'; return;
-  }
-  requireAdminPassword('set recovery email', ()=>{
-    // Save on admin user record and depotInfo
-    updateData(d => ({
-      ...d,
-      depotInfo: {...(d.depotInfo||{}), recoveryEmail: raw},
-      users: (d.users||[]).map(u => u.role === 'admin' ? {...u, recoveryEmail: raw} : u)
-    }));
-    msg.innerHTML = raw
-      ? '<div class="ok-msg">✅ Recovery email saved.</div>'
-      : '<div class="ok-msg">✅ Recovery email cleared.</div>';
-  });
-}
-
 function startSignUp() {
   const overlay = document.createElement('div');
   overlay.id = 'signup-warning-overlay';
@@ -6046,35 +6226,15 @@ function startSignUp() {
       <div style="font-family:var(--fh);font-size:25px;font-weight:800;color:var(--white);text-align:center;margin-bottom:6px">Before You Continue</div>
       <div style="font-size:18px;color:var(--muted);text-align:center;margin-bottom:20px;line-height:1.6">Please read this carefully before creating your account.</div>
       <div style="background:var(--surface);border:1.5px solid #F39C1255;border-radius:12px;padding:16px 14px;margin-bottom:18px">
-        <div style="font-size:17px;font-weight:700;color:#F39C12;letter-spacing:.06em;margin-bottom:10px">🔒 PERMANENT COMPANY DETAILS</div>
-        <div style="font-size:18px;color:#c8d8e8;line-height:1.8">The following details <strong style="color:var(--white)">cannot be changed</strong> after your account is created. They form your unique company identity and license identifier:</div>
-        <div style="margin-top:12px;display:flex;flex-direction:column;gap:8px">
-          <div style="display:flex;align-items:center;gap:10px;background:#0d1f35;border-radius:8px;padding:9px 12px">
-            <span style="font-size:21px">🏢</span>
-            <div>
-              <div style="font-size:17px;font-weight:700;color:var(--white);letter-spacing:.04em">COMPANY NAME</div>
-              <div style="font-size:16px;color:var(--muted)">Your company or business name (e.g. LUSAKA COMPANY)</div>
-            </div>
-          </div>
-          <div style="display:flex;align-items:center;gap:10px;background:#0d1f35;border-radius:8px;padding:9px 12px">
-            <span style="font-size:21px">📍</span>
-            <div>
-              <div style="font-size:17px;font-weight:700;color:var(--white);letter-spacing:.04em">DISTRICT</div>
-              <div style="font-size:16px;color:var(--muted)">Your district location (e.g. MANSA DISTRICT)</div>
-            </div>
-          </div>
-          <div style="display:flex;align-items:center;gap:10px;background:#0d1f35;border-radius:8px;padding:9px 12px">
-            <span style="font-size:21px">🌍</span>
-            <div>
-              <div style="font-size:17px;font-weight:700;color:var(--white);letter-spacing:.04em">COUNTRY</div>
-              <div style="font-size:16px;color:var(--muted)">Your country (e.g. KENYA, GHANA, NIGERIA)</div>
-            </div>
-          </div>
+        <div style="font-size:17px;font-weight:700;color:#F39C12;letter-spacing:.06em;margin-bottom:10px">🔒 PERMANENT COMPANY NAME</div>
+        <div style="font-size:18px;color:#c8d8e8;line-height:1.8">Your <strong style="color:var(--white)">company name</strong> cannot be changed after your account is created. It forms your unique company identity and license identifier.</div>
+        <div style="margin-top:12px;display:flex;align-items:center;gap:10px;background:#0d1f35;border-radius:8px;padding:9px 12px">
+          <span style="font-size:21px">🏢</span>
+          <div><div style="font-size:17px;font-weight:700;color:var(--white);letter-spacing:.04em">COMPANY NAME</div><div style="font-size:16px;color:var(--muted)">Your company or business name (e.g. LUSAKA COMPANY)</div></div>
         </div>
       </div>
-      <div style="font-size:17px;color:var(--muted);text-align:center;line-height:1.7;margin-bottom:20px">
-        Make sure all details are correct and spelled exactly as you want them — they <strong style="color:#F39C12">cannot be edited later</strong>.
-      </div>
+      <div style="font-size:17px;color:var(--muted);text-align:center;line-height:1.7;margin-bottom:12px">Spell the name exactly as you want it. It <strong style="color:#F39C12">cannot be edited later</strong>.</div>
+      <div style="font-size:17px;color:var(--muted);text-align:center;line-height:1.7;margin-bottom:20px">Country, province and district help set up your company, but you can <strong style="color:var(--text)">edit them later</strong> in Settings. Editing them never changes your company identity or license.</div>
       <div style="display:flex;flex-direction:column;gap:10px">
         <button id="swо-confirm-btn" style="background:var(--green);color:#000;border:none;border-radius:12px;padding:14px;font-size:20px;font-weight:700;cursor:pointer;letter-spacing:.02em">
           ✅ I Understand — Continue
@@ -6114,7 +6274,7 @@ function renderSignupStep() {
       <button class="signup-back" onclick="showLanding()">← Back</button>
       ${prog}
       <div style="font-family:var(--fh);font-size:31px;font-weight:800;color:var(--white);margin-bottom:6px">🏢 Company Details</div>
-      <div style="font-size:18px;color:var(--muted);margin-bottom:22px;line-height:1.7">Tell us about your company. These details are permanent and become your unique identifier.</div>
+      <div style="font-size:18px;color:var(--muted);margin-bottom:22px;line-height:1.7">Tell us about your company. Your company name becomes your permanent company identity. Country, province and district can be edited later in Settings.</div>
       <div id="su-err1" class="err-box" style="display:none"></div>
       <div class="fw"><div class="fl">Company Name <span style="color:var(--red)">*</span></div>
         <input class="fi" id="su-name" placeholder="E.G. MANSA COMPANY" oninput="this.value=this.value.toUpperCase()" value="${esc(_signupData.name||'')}"/></div>
@@ -6124,10 +6284,6 @@ function renderSignupStep() {
         <div id="su-province-wrap">${provinceFieldHtml('su', _signupData.countryCode, _signupData.province)}</div></div>
       <div class="fw"><div class="fl">District <span style="color:var(--red)">*</span></div>
         <input class="fi" id="su-district" placeholder="E.G. MANSA DISTRICT" oninput="this.value=this.value.toUpperCase()" value="${esc(_signupData.district||'')}"/></div>
-      <div class="fw"><div class="fl">Contact Person Name <span style="color:var(--red)">*</span></div>
-        <input class="fi" id="su-contact" placeholder="E.G. JOHN BANDA" oninput="this.value=this.value.toUpperCase()" value="${esc(_signupData.contactName||'')}"/></div>
-      <div class="fw"><div class="fl">Contact Phone <span style="color:var(--red)">*</span></div>
-        <input class="fi" id="su-phone" type="tel" placeholder="E.G. 0977123456" autocomplete="tel" value="${esc(_signupData.contactPhone||'')}"/></div>
       <div class="fw play-hide"><div class="fl">Plan Interested In <span style="color:var(--red)">*</span></div>
         <select class="fi" id="su-plan" style="cursor:pointer">
           <option value="" disabled ${!_signupData.requestedPlan?'selected':''}>— Select a plan —</option>
@@ -6155,9 +6311,9 @@ function renderSignupStep() {
       <div class="fw"><div class="fl">Confirm Password <span style="color:var(--red)">*</span></div>
         <input class="fi" type="password" id="su-pass2" placeholder="Repeat password" autocomplete="new-password"/></div>
       <div class="fw">
-        <div class="fl">Recovery Email <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— optional</span></div>
+        <div class="fl">Email Address <span style="color:var(--red)">*</span></div>
         <input class="fi" type="email" id="su-email" placeholder="your@email.com" autocapitalize="none" autocomplete="email" spellcheck="false" style="text-transform:none" value="${esc(_signupData.recoveryEmail||'')}"/>
-        <div style="font-size:16px;color:var(--muted);margin-top:5px;line-height:1.6">Used only for account recovery. Stored privately on this device.</div>
+        <div style="font-size:16px;color:var(--muted);margin-top:5px;line-height:1.6">We use this email for your welcome message, password recovery, and approval or rejection of subscription requests. You will confirm it with a code right after signing up.</div>
       </div>
       <div class="fw"><div class="fl">Currency <span style="color:var(--red)">*</span></div>
         <select class="fi" id="su-currency">${currencyOptionsHtml(_signupData.currency)}</select>
@@ -6182,24 +6338,16 @@ function signupStep1Next() {
   const country     = (countryByCode(countryCode)||{}).name ? uc((countryByCode(countryCode)||{}).name) : '';
   const province    = uc(document.getElementById('su-province')?.value||'');
   const district    = uc(document.getElementById('su-district')?.value);
-  const contactName = uc(document.getElementById('su-contact')?.value);
-  const contactPhone= (document.getElementById('su-phone')?.value||'').trim();
   const requestedPlan = window.PLAY_MODE ? 'none' : (document.getElementById('su-plan')?.value||'').trim();
   const err = document.getElementById('su-err1');
   const missing = [];
   if (!name)         missing.push('Company Name');
   if (!country)      missing.push('Country');
   if (!district)     missing.push('District');
-  if (!contactName)  missing.push('Contact Person Name');
-  if (!contactPhone) missing.push('Contact Phone');
   if (!requestedPlan) missing.push('Plan Interested In');
   if (missing.length) { err.style.display='block'; err.textContent='Please fill in: '+missing.join(', '); return; }
-  // Basic phone sanity check
-  if (!/^[0-9+()\s\-]{7,20}$/.test(contactPhone)) {
-    err.style.display='block'; err.textContent='⚠️ Enter a valid phone number.'; return;
-  }
   err.style.display='none';
-  _signupData = {..._signupData, name, countryCode, country, province, district, contactName, contactPhone, requestedPlan};
+  _signupData = {..._signupData, name, countryCode, country, province, district, requestedPlan};
   _signupStep = 2;
   renderSignupStep();
 }
@@ -6257,9 +6405,8 @@ async function signupFinish() {
   if (!suCurrency) { err.style.display='block'; err.textContent='Please enter a currency (e.g. ZMW, USD).'; return; }
   if (pass.length < 8) { err.style.display='block'; err.textContent='Password must be at least 8 characters.'; return; }
   if (pass !== pass2) { err.style.display='block'; err.textContent='Passwords do not match.'; return; }
-  if (emailRaw && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailRaw)) {
-    err.style.display='block'; err.textContent='⚠️ Recovery email format looks invalid. Please check it or leave it blank.'; return;
-  }
+  if (!emailRaw) { err.style.display='block'; err.textContent='⚠️ Enter your email address.'; return; }
+  if (!_emailOk(emailRaw)) { err.style.display='block'; err.textContent='⚠️ That email address does not look right. Please check it.'; return; }
   if (!tos) { err.style.display='block'; err.textContent='Please accept the Terms of Service.'; return; }
   err.style.display='none';
 
@@ -6341,8 +6488,7 @@ async function signupFinish() {
       // BEFORE the Auth sign-up / authorizedUids / depots writes below.
       try {
         await fbSet('licenseContacts/' + newInstallId, {
-          contactName:  _fbStr(_signupData.contactName, 200),
-          contactPhone: _fbStr(_signupData.contactPhone, 40),
+          contactEmail: _fbStr(emailRaw, 254),
           createdAt: {'.sv': 'timestamp'}
         });
       } catch(fe) { console.warn('Firebase contact register failed:', fe.message); }
@@ -6371,7 +6517,7 @@ async function signupFinish() {
     // ── SAVE LOCALLY ONLY AFTER FIREBASE CONFIRMED ───────────────────────────
 
     const fresh = JSON.parse(JSON.stringify(DEFAULT));
-    fresh.users = [{ username, password: hashed, role: 'admin', recoveryEmail: emailRaw || '', ..._newUserAuth }];
+    fresh.users = [{ username, password: hashed, role: 'admin', recoveryEmail: emailRaw, emailVerified: false, ..._newUserAuth }];
     fresh.depotInfo = { name: _signupData.name, district: _signupData.district, province: _signupData.province, country: _signupData.country, setupDone: true, recoveryEmail: emailRaw || '' };
     fresh.currency = suCurrency;
     fresh.commodities=[];
@@ -6379,6 +6525,7 @@ async function signupFinish() {
     fresh.installId = newInstallId;
     fresh.trialStart = now;
     fresh._v = 1;
+    window._evNextKind = 'signup';   // first prompt after sign-in sends the welcome + verification code
 
     DATA = Object.assign({}, fresh);
     sv(DATA);
@@ -7261,7 +7408,7 @@ function showDepotSetupModal(){
     <div class="mtitle">🏢 Company Setup</div>
     <div style="background:var(--surface2);border:1px solid var(--green);border-radius:10px;padding:11px 14px;margin-bottom:18px;font-size:18px;color:var(--green);line-height:1.7">
       Welcome! Please fill in your company details to continue.<br>
-      <span style="color:var(--muted)">These details are permanent and used as your unique app identifier.</span>
+      <span style="color:var(--muted)">Your company name is permanent and forms your company identity. Country, province and district can be edited later in Settings.</span>
     </div>
     <div id="ds-err" style="display:none;background:#2d0a0a;border:1px solid var(--red);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:18px;color:var(--red)"></div>
     <div class="fw">
@@ -7304,7 +7451,7 @@ function saveDepotSetup(){
     return;
   }
   errEl.style.display='none';
-  updateData(d=>({...d,depotInfo:{name,district,province,country,setupDone:true}}));
+  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),name,district,province,country,setupDone:true}}));
   applyDepotInfo();
   // Restore backdrop close behaviour for future modals
   const ovl=document.getElementById('modal-ovl');
@@ -20349,18 +20496,50 @@ function _renderLegalCard(){
     </div>`;
 }
 
-// Settings helper — read-only Company Information card. Safe for every role
-// since none of the fields here are editable from this view anyway.
+// Settings helper — read-only Company Information card for non-admin accounts.
 function _renderCompanyInfoCard(){
+  const di = DATA.depotInfo || {};
+  const row = (l, v) => `<div class="fw"><div class="fl">${l}</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:var(--surface2)">${esc(v || '—')}</div></div>`;
   return `
     <div class="sh">Company Information</div>
     <div class="card">
-      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:17px;color:var(--muted)">🔒 Company name, district and country are set once during initial setup and cannot be changed. These are used as your unique license identifier.</div>
-      <div class="fw"><div class="fl">Company Name</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).name||'—'}</div></div>
-      <div class="fw"><div class="fl">District</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).district||'—'}</div></div>
-      ${(DATA.depotInfo||{}).province?`<div class="fw"><div class="fl">Province / State</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).province}</div></div>`:''}
-      <div class="fw"><div class="fl">Country</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).country||'—'}</div></div>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:17px;color:var(--muted)">🔒 The company name is permanent. Location details are managed by your Admin.</div>
+      ${row('Company Name', di.name)}${row('District', di.district)}${di.province ? row('Province / State', di.province) : ''}${row('Country', di.country)}
     </div>`;
+}
+// Admin version: the company name forms the company identity and license and stays locked. Country, province
+// and district were only COPIED into the license record at signup, so they can be edited here without
+// affecting the company identity (installId) or the license. Edits stay in the company data; nothing is
+// written to licenses/ or licenseContacts/.
+function _renderCompanyEditCard(){
+  const di = DATA.depotInfo || {}, cc = codeForCountryName(di.country);
+  return `
+    <div class="sh">Company Information</div>
+    <div class="card">
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:17px;color:var(--muted);line-height:1.6">🔒 The company name forms your company identity and license and cannot be changed. The details below can be edited any time. Editing them never changes your company identity or license.</div>
+      <div class="fw"><div class="fl">Company Name</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:var(--surface2)">${esc(di.name || '—')}</div></div>
+      <div id="cd-msg"></div>
+      <div class="fw"><div class="fl">Country</div><select class="fi" id="cd-country" onchange="onCountryFieldChange('cd')">${countryOptionsHtml(cc)}</select></div>
+      <div class="fw"><div class="fl">Province / State <span style="color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0">— optional</span></div><div id="cd-province-wrap">${provinceFieldHtml('cd', cc, di.province)}</div></div>
+      <div class="fw"><div class="fl">District</div><input class="fi" id="cd-district" value="${esc(di.district || '')}" oninput="this.value=this.value.toUpperCase()"/></div>
+      <button class="btn bg" onclick="saveCompanyDetails()">💾 Save Company Details</button>
+    </div>`;
+}
+function saveCompanyDetails(){
+  if(!requireAdmin('edit company details')) return;
+  const msg = document.getElementById('cd-msg'); if(msg) msg.innerHTML = '';
+  const cc = document.getElementById('cd-country')?.value || '';
+  const country = cc ? uc((countryByCode(cc) || {}).name || '') : '';
+  const province = uc(document.getElementById('cd-province')?.value || '');
+  const district = uc(document.getElementById('cd-district')?.value || '');
+  const missing = []; if(!country) missing.push('Country'); if(!district) missing.push('District');
+  if(missing.length){ if(msg) msg.innerHTML = '<div class="err-box">Please fill in: ' + esc(missing.join(', ')) + '</div>'; return; }
+  const di = DATA.depotInfo || {};
+  if(country === di.country && province === (di.province || '') && district === di.district){ showToast('No changes to save'); return; }
+  updateData(d => ({...d, depotInfo: {...(d.depotInfo || {}), district, province, country}}));
+  logAuditEvent('UPDATE', 'Company Details', `District: ${district} · Province: ${province || '—'} · Country: ${country}`);
+  applyDepotInfo();
+  showToast('✅ Company details updated');
 }
 
 // ══════════════════════════════════════════════════════════
@@ -20381,8 +20560,8 @@ function _renderCompanyInfoCard(){
 // or re-deriving any of the section markup/logic.
 const SETTINGS_CATS = {
   admin: [
-    {id:'account-security', icon:'🔐', label:'Account & Security', desc:'Password, recovery, users & permissions',
-      match:['Change Password','Manager PIN','Login History','Recovery PIN','Recovery Email','User Accounts','Role Permissions','Fingerprint Login','Stay Signed In']},
+    {id:'account-security', icon:'🔐', label:'Account & Security', desc:'Password, PIN, till discounts, recovery, users & permissions',
+      match:['Change Password','Manager PIN','Till discounts','Login History','Recovery PIN','Recovery Email','User Accounts','Role Permissions','Fingerprint Login','Stay Signed In']},
     {id:'company-billing', icon:'🏢', label:'Company & Billing', desc:'Plan, license, company info, branding & policies',
       match:['My Plan','License & Connection','Company Information','Branding','Staff & Records Policy']},
     {id:'appearance', icon:'🎨', label:'Appearance', desc:'Theme, text size, currency & dashboard widgets',
@@ -20396,7 +20575,7 @@ const SETTINGS_CATS = {
     {id:'preferences', icon:'🎨', label:'Preferences', desc:'Text size, theme, currency & dashboard',
       match:['Company Information','Display Preferences','Dashboard Widgets']},
     {id:'account-help', icon:'🔐', label:'Account & Help', desc:'Password, fingerprint, install, support & legal',
-      match:['Fingerprint Login','Stay Signed In','Change Password','Manager PIN','Login History','Install on This Phone','Help & Documentation','Contact & Support','Legal']},
+      match:['Recovery Email','Fingerprint Login','Stay Signed In','Change Password','Manager PIN','Login History','Install on This Phone','Help & Documentation','Contact & Support','Legal']},
   ],
 };
 
@@ -20484,6 +20663,7 @@ function _renderStaffSettings(){
   return `
     ${statusBanner()}
     ${_renderCompanyInfoCard()}
+    ${_renderEmailCard()}
     <div class="sh">Display Preferences</div>
     <div class="card">
       <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">Adjust the text size to suit your screen. Changes apply instantly and are remembered across sessions.</div>
@@ -20543,14 +20723,7 @@ function _renderAdminSettings(){
     ${!DATA.currency&&USER.role==='admin'?`<div class="warn" style="margin-bottom:12px">⚠️ No currency set. Go to <strong>Display Preferences → Currency</strong> below to set your currency (e.g. ZMW, USD, KES).</div>`:''}
     ${statusBanner()}
     ${renderLicenseCard()}
-    <div class="sh">Company Information</div>
-    <div class="card">
-      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:17px;color:var(--muted)">🔒 Company name, district and country are set once during initial setup and cannot be changed. These are used as your unique license identifier.</div>
-      <div class="fw"><div class="fl">Company Name</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).name||'—'}</div></div>
-      <div class="fw"><div class="fl">District</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).district||'—'}</div></div>
-      ${(DATA.depotInfo||{}).province?`<div class="fw"><div class="fl">Province / State</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).province}</div></div>`:''}
-      <div class="fw"><div class="fl">Country</div><div class="fi" style="opacity:.6;cursor:not-allowed;background:#050e1a">${(DATA.depotInfo||{}).country||'—'}</div></div>
-    </div>
+    ${_renderCompanyEditCard()}
     <div class="sh">Branding ${hasFeature('custom_branding')?'':'🔒'}</div>
     <div class="card">
       ${!hasFeature('custom_branding')?`
@@ -20779,22 +20952,7 @@ function _renderAdminSettings(){
       <button class="btn bg" onclick="saveRecoveryPin()">🔑 Save Recovery PIN</button>
     </div>
 
-    <div class="sh">Recovery Email</div>
-    <div class="card">
-      <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">
-        A recovery email lets you reset your admin password from the login screen — even if you forget your Recovery PIN. Stored privately on this device.
-      </div>
-      ${((DATA.users||[]).find(u=>u.role==='admin')||{}).recoveryEmail || (DATA.depotInfo||{}).recoveryEmail
-        ? `<div class="ok-msg" style="margin-bottom:12px">✅ Recovery email is set. You can update it below.</div>`
-        : `<div class="warn" style="margin-bottom:12px">⚠️ No recovery email set. Add one below for an extra recovery option.</div>`
-      }
-      <div id="rec-email-set-msg"></div>
-      <div class="fw"><div class="fl">Recovery Email</div>
-        <input class="fi" type="email" id="rec-email-new" placeholder="your@email.com" autocapitalize="none" autocomplete="email" spellcheck="false" style="text-transform:none"
-          value="${esc(((DATA.users||[]).find(u=>u.role==='admin')||{}).recoveryEmail || (DATA.depotInfo||{}).recoveryEmail || '')}"/>
-      </div>
-      <button class="btn bg" onclick="saveRecoveryEmail()">📧 Save Recovery Email</button>
-    </div>
+    ${_renderEmailCard()}
 
     ${USER.role==='admin'?`
     <div class="sh">User Accounts</div>
@@ -21684,6 +21842,10 @@ function addUser(preStaffId){
     <div class="fw"><div class="fl">Username <span style="color:var(--red)">*</span></div>
       <input class="fi" id="au-user" placeholder="e.g. dataentry1" autocapitalize="none" autocomplete="off" style="text-transform:none" value="${esc(suggestedUser)}"/>
     </div>
+    <div class="fw"><div class="fl">Email Address <span style="color:var(--red)">*</span></div>
+      <input class="fi" type="email" id="au-email" placeholder="their@email.com" autocapitalize="none" spellcheck="false" style="text-transform:none"/>
+      <div style="font-size:15px;color:var(--muted);margin-top:6px;line-height:1.6">Used to recover this login. They will be asked to verify it the first time they sign in.</div>
+    </div>
     <div class="fw"><div class="fl">Role <span style="color:var(--red)">*</span></div>
       <select class="fi" id="au-role" onchange="_onAddUserRoleChange()" ${preStaff?'disabled':''}>
         <option value="data_entry">Manager</option>
@@ -21721,6 +21883,9 @@ async function _confirmAddUser(){
   const pass2 = document.getElementById('au-pass2')?.value||'';
   const err = document.getElementById('au-err');
   err.style.display='none';
+  const auEmail = (document.getElementById('au-email')?.value||'').trim().toLowerCase();
+  if(!_emailOk(auEmail)){ err.style.display='block'; err.textContent='⚠️ Enter a valid email address for this user.'; return; }
+  window._auEmail = auEmail;
   if(!username){ err.style.display='block'; err.textContent='⚠️ Enter a username.'; return; }
   if(!/^[a-z0-9_]+$/.test(username)){ err.style.display='block'; err.textContent='⚠️ Username can only contain letters, numbers and underscores.'; return; }
   // Local duplicate check — case-insensitive within this depot
@@ -21796,7 +21961,7 @@ async function _finishAddUser(username, role, pass, linkedStaffId, err){
     } catch(ae) { console.warn('Firebase Auth signup failed for sub-user (will migrate on first login):', ae.message); }
   }
 
-  updateData(d=>({...d,users:[...(d.users||[]),{username,password:hashed,role,...(linkedStaffId?{linkedStaffId}:{}),..._newUserAuth}]}));
+  updateData(d=>({...d,users:[...(d.users||[]),{username,password:hashed,role,recoveryEmail:(window._auEmail||''),emailVerified:false,...(linkedStaffId?{linkedStaffId}:{}),..._newUserAuth}]}));
   closeModal();
   showToast('✅ User "'+username+'" added.');
 }

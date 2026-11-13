@@ -25,7 +25,17 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.46 (2026-11-12) — Landing page refresh (index.html + sw.js).
+// Current version: v0.3.48 (2026-11-13) — Settings fix (index.html, sw.js).
+//   - The Till discounts card (step 18) was hidden from every Settings category, so the Admin could never switch discounts on
+//     and the till never offered them. It now shows under Settings > Account & Security, after Manager PIN. No data or rules change.
+// Previous: v0.3.47 (2026-11-12) — Email-based accounts, editable company location (index.html, sw.js, database_rules.json, mdm-admin.html, mdm-mail.gs).
+//   - Signup no longer collects a contact name or phone. Email is required and is the only contact detail (licenseContacts/<id>/contactEmail).
+//   - Email is verified with a 6-digit code sent from support@nexlitedigitalsolutionslimited.digital by the Google Apps Script mailer (mdm-mail.gs).
+//     Existing accounts and staff logins are prompted after sign-in until verified. Admin password recovery now uses an emailed code.
+//   - Subscription applications carry the email (replaces phone). The admin app can reject an application and emails approvals and rejections.
+//   - Company name stays permanent (it is the identity). Country, province and district are editable in Settings and never touch licenses/<id>.
+//   - Needs: deploy mdm-mail.gs and paste its URL into MAIL_ENDPOINT (index.html and mdm-admin.html); PUBLISH the new database_rules.json.
+// Previous: v0.3.46 (2026-11-12) — Landing page refresh (index.html + sw.js).
 //   - New landing page: top bar with Sign in, hero with a sample till receipt, then the Till (scan, cash / MTN Money / Airtel Money / card,
 //     credit sales, hold and resume, numbered receipts, discount limits), shifts and cash-up, and the rest of the app's features, plan cards
 //     built from TIER_META / _TIER_BULLETS (renderLandingPricing), a closing sign-up call to action and the support links.
@@ -2080,7 +2090,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.46';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.48';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
