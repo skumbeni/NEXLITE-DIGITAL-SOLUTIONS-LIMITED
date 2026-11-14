@@ -39,6 +39,21 @@
  *   The Z of a shift IS its shiftCloses record (append-only), so there is no Z counter to collide: its number is the shiftId.
  *   The day's Z reference is 'Z-' + the date.
  *
+ * THE TILL'S AUDIT TRAIL (roadmap step 20)
+ *   The Audit log in the main app is DATA.auditLog, written by logAuditEvent(). The till cannot write to it: DATA is one blob,
+ *   last write wins, so two phones writing audit lines into it would lose some. The till's events therefore reach the Audit log
+ *   by the same route as its sales: append-only records outside the blob. Two kinds, and the main app joins them with DATA.auditLog
+ *   when it shows or exports the log (auditEntries() below turns both into the shape logAuditEvent writes):
+ *     1. Events that ALREADY have a record are not written twice. They are read straight from it, so the log can never disagree with
+ *        the ledger and a line cannot go missing:  shift opened (shifts/), shift closed, forced or not, with the cash variance
+ *        (shiftCloses/), a discount given and who allowed it (the sale in sales/), a void or refund with reason and approver (returns/).
+ *     2. Events that leave NO record are written as audit records:   tillAudit/{id}   id = <till code>-A<time><3 random>, create-only
+ *          x_report   an X report was taken            z_report   a Z report was shown or reprinted (what:'copy' for a reprint)
+ *          exit_ok    a manager PIN let a cashier leave the till (approver)
+ *          pin_fail   a wrong manager PIN was typed (what = what it was for)       pin_lock   the pad locked after 5 wrong PINs
+ *        A PIN is never stored, only who typed a wrong one, when, and what for. Same store as shifts ("mdm_shifts", stores ev/outbox/meta),
+ *        same outbox and download, so no new database and no schema change. shiftsOf() / openShiftOf() skip them.
+ *
  * Plain classic script, no dependencies, one global: Shifts. Load it with a normal <script src="shifts.js"></script> after
  * gate.js and sales.js. Add shifts.js to the precache list in sw.js, otherwise the till cannot start offline.
  * Storage and network are injected, so Node can test this file (see create(env) and memAdapter()).
@@ -53,8 +68,10 @@ const Shifts = (function () {
   const MAX_MONEY = 1e9;
   const PAGE = 300, MAX_PAGES = 40;
   const OVERLAP_MS = 60000;
-  const OPEN = 'open', CLOSE = 'close';
-  const COLL = { open: 'shifts', close: 'shiftCloses' };    // cloud collection of each kind
+  const OPEN = 'open', CLOSE = 'close', AUDIT = 'audit';
+  const COLL = { open: 'shifts', close: 'shiftCloses', audit: 'tillAudit' };    // cloud collection of each kind
+  const AID_RE = /^[A-HJ-KM-NP-Z2-9]{4}-A[0-9a-z]{9,16}$/;                       // audit record id (step 20)
+  const AUDIT_EVENTS = ['x_report', 'z_report', 'exit_ok', 'pin_fail', 'pin_lock'];
 
   const isNum = x => typeof x === 'number' && isFinite(x);
   const r2 = n => Math.round(n * 100) / 100;
@@ -143,6 +160,42 @@ const Shifts = (function () {
   // expected cash is never negative in the record (a drawer cannot hold less than nothing): if payouts ever exceed float + cash
   // sales, the record says 0 and the variance carries the rest.
 
+  // AUDIT: { v:1, type:'audit', id, till, tillId, at, date, time, user, role, event, shiftId?, what?, approver?, note? }
+  //   user/role: who was signed in at the till.  event: one of AUDIT_EVENTS.  shiftId: the shift on the till, when there is one.
+  //   what: what the event was about, a few words ('leave the till', 'allow a discount', 'copy').  approver: exit_ok only, the PIN holder.
+  //   note: a short extra ('2 wrong PINs in a row').  Nothing secret goes in: never a PIN.
+  const auditId = (till, at, rnd) => till + '-A' + Math.round(at).toString(36).padStart(8, '0') + rnd;
+  function auditRecord(b, opts) {
+    opts = opts || {};
+    const at = Math.round(Number(b.at));
+    const dateOf = opts.dateOf || (t => new Date(t).toISOString().slice(0, 10));
+    const timeOf = opts.timeOf || (t => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); });
+    const rnd = String(b.rnd == null ? '' : b.rnd).toLowerCase().replace(/[^0-9a-z]/g, '').slice(0, 4);
+    const o = {
+      v: V, type: AUDIT, id: auditId(String(b.till), at, rnd), till: String(b.till), tillId: String(b.tillId),
+      at, date: dateOf(at), time: timeOf(at), user: str(b.user, 80), role: str(b.role, 20), event: String(b.event)
+    };
+    if (b.shiftId) o.shiftId = str(b.shiftId, 24);
+    if (b.what) o.what = str(b.what, 40);
+    if (b.approver) o.approver = str(b.approver, 80);
+    if (b.note) o.note = str(b.note, 200);
+    return JSON.parse(JSON.stringify(o));
+  }
+  function validateAudit(s) {
+    if (!s || typeof s !== 'object' || s.type !== AUDIT) return 'not an audit record';
+    if (!AID_RE.test(String(s.id))) return 'bad audit id';
+    if (!TILL_RE.test(String(s.till)) || String(s.id).slice(0, 4) !== s.till) return 'bad till code';
+    if (!TID_RE.test(String(s.tillId))) return 'bad till id';
+    if (!isNum(s.at) || s.at <= 0) return 'bad time';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.date)) || !/^\d{2}:\d{2}$/.test(String(s.time))) return 'bad date';
+    if (typeof s.user !== 'string' || !s.user || s.user.length > 80) return 'bad user';
+    if (typeof s.role !== 'string' || s.role.length > 20) return 'bad role';
+    if (AUDIT_EVENTS.indexOf(s.event) < 0) return 'bad event';
+    if (s.shiftId !== undefined && !SID_RE.test(String(s.shiftId))) return 'bad shift id';
+    for (const [k, n] of [['what', 40], ['approver', 80], ['note', 200]]) if (s[k] !== undefined && (typeof s[k] !== 'string' || s[k].length > n)) return 'bad ' + k;
+    return '';
+  }
+
   function forCloud(rec) { const o = Object.assign({}, rec, { createdAt: { '.sv': 'timestamp' } }); delete o.id; delete o.type; return o; }
   function fromCloud(kind, id, o) {
     if (!o || typeof o !== 'object') return { rec: null, createdAt: 0 };
@@ -154,7 +207,8 @@ const Shifts = (function () {
     if (kind === OPEN && rec.cashierRole == null) rec.cashierRole = '';
     if (kind === CLOSE && rec.closedByRole == null) rec.closedByRole = '';
     if (kind === CLOSE && rec.byMethod) METHODS.forEach(m => { if (rec.byMethod[m] == null) rec.byMethod[m] = 0; });
-    const bad = kind === OPEN ? validateOpen(rec) : validateClose(rec);
+    if (kind === AUDIT && rec.role == null) rec.role = '';
+    const bad = kind === OPEN ? validateOpen(rec) : kind === CLOSE ? validateClose(rec) : validateAudit(rec);
     return { rec: bad ? null : rec, createdAt };
   }
 
@@ -325,6 +379,71 @@ const Shifts = (function () {
       shifts: rows, openToday: openNow.filter(x => x.open.date === date).map(row), openEarlier: openNow.filter(x => x.open.date < date).map(row),
       shiftVariance: varC / 100, counted: countedC / 100, items: itemsOf(day)
     };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // THE TILL'S LINES FOR THE AUDIT LOG (roadmap step 20) — a pure function, nothing is stored
+  // ══════════════════════════════════════════════════════════════════════════════
+  // events  shift records and audit records (create(env).all())    sales  the sales ledger    returns  the voids and refunds
+  // o.money  how to write an amount (the main app passes its zm); default is two decimals.
+  // Returns entries shaped exactly like the ones logAuditEvent() writes into DATA.auditLog, plus src:'till', oldest first:
+  //   { id, ts (ISO), date, time, user, role, action, entity, detail, src }
+  // The id is built from the record's own id, so the same record is always the same entry, whoever builds the list.
+  //   OPEN  Till Shift     CLOSE  Till Shift (variance; forced = closed by someone other than the opener)
+  //   DISCOUNT  Till Sale  (every sale with a discount: who allowed it, the reason)
+  //   VOID / REFUND  Till Sale  (reason, who allowed it, money back)
+  //   REPORT  X Report / Z Report      APPROVE  Till Exit PIN      DENY  Manager PIN (wrong PIN / pad locked)
+  function auditEntries(events, sales, returns, o) {
+    o = o || {};
+    const money = typeof o.money === 'function' ? o.money : (n => (Number(n) || 0).toFixed(2));
+    const out = [];
+    const add = (id, at, date, time, user, role, action, entity, detail) => {
+      if (!isNum(at) || at <= 0) return;
+      out.push({ id, ts: new Date(at).toISOString(), date: String(date || ''), time: String(time || ''), user: user ? String(user) : '\u2014', role: role ? String(role) : '', action, entity, detail, src: 'till' });
+    };
+    const opens = new Map();
+    (events || []).forEach(e => { if (e && e.type === OPEN) opens.set(e.shiftId, e); });
+    const who = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+    (events || []).forEach(e => {
+      if (!e) return;
+      if (e.type === OPEN) {
+        add('T:open:' + e.id, e.at, e.date, e.time, e.cashier, e.cashierRole, 'OPEN', 'Till Shift',
+          e.shiftId + ' \u00B7 Till ' + e.till + ' \u00B7 Float: ' + money(e.float));
+      } else if (e.type === CLOSE) {
+        const op = opens.get(e.shiftId), v = Number(e.variance) || 0;
+        const vs = toC(v) === 0 ? 'balanced' : v < 0 ? 'SHORT ' + money(-v) : 'OVER ' + money(v);
+        add('T:close:' + e.id, e.at, e.date, e.time, e.closedBy, e.closedByRole, 'CLOSE', 'Till Shift',
+          e.shiftId + ' \u00B7 Expected: ' + money(e.expectedCash) + ' \u00B7 Counted: ' + money(e.countedCash) + ' \u00B7 ' + vs
+          + (e.forced ? ' \u00B7 FORCED: closed by ' + e.closedBy + (op ? ' for ' + op.cashier + '\u2019s shift' : '') : '')
+          + (e.note ? ' \u00B7 Note: ' + e.note : ''));
+      } else if (e.type === AUDIT) {
+        const sh = e.shiftId ? ' \u00B7 Shift: ' + e.shiftId : '', nt = e.note ? ' \u00B7 ' + e.note : '';
+        if (e.event === 'x_report') add('T:audit:' + e.id, e.at, e.date, e.time, e.user, e.role, 'REPORT', 'X Report', 'X report taken' + sh + nt);
+        else if (e.event === 'z_report') add('T:audit:' + e.id, e.at, e.date, e.time, e.user, e.role, 'REPORT', 'Z Report', (e.what === 'copy' ? 'Z report reprinted (COPY)' : 'Z report shown') + sh + nt);
+        else if (e.event === 'exit_ok') add('T:audit:' + e.id, e.at, e.date, e.time, e.user, e.role, 'APPROVE', 'Till Exit PIN',
+          (e.approver || 'A manager') + ' allowed ' + e.user + ' to ' + (e.what || 'leave the till') + sh + nt);
+        else if (e.event === 'pin_fail') add('T:audit:' + e.id, e.at, e.date, e.time, e.user, e.role, 'DENY', 'Manager PIN', 'Wrong PIN typed to ' + (e.what || 'unlock the pad') + sh + nt);
+        else if (e.event === 'pin_lock') add('T:audit:' + e.id, e.at, e.date, e.time, e.user, e.role, 'DENY', 'Manager PIN', 'PIN pad locked after too many wrong PINs (to ' + (e.what || 'unlock the pad') + ')' + sh + nt);
+      }
+    });
+    (sales || []).forEach(s => {
+      if (!s || !(toC(s.discount) > 0)) return;
+      const gross = (toC(s.total) + toC(s.discount)) / 100, pct = Math.round(toC(s.discount) / (toC(s.total) + toC(s.discount)) * 10000) / 100;
+      const by = String(s.discountBy || '');
+      add('T:disc:' + s.id, s.at, s.date, s.time, s.cashier, s.cashierRole, 'DISCOUNT', 'Till Sale',
+        (s.receiptNo || s.id) + ' \u00B7 ' + money(s.discount) + ' off ' + money(gross) + ' (' + pct + '%) \u00B7 Allowed by: ' + (by || '\u2014') + (by && !who(by, s.cashier) ? ' (manager PIN)' : '')
+        + (s.discountReason ? ' \u00B7 Reason: ' + s.discountReason : ''));
+    });
+    (returns || []).forEach(r => {
+      if (!r) return;
+      const isVoid = r.kind === 'void';
+      add('T:ret:' + r.id, r.at, r.date, r.time, r.cashier, r.cashierRole, isVoid ? 'VOID' : 'REFUND', 'Till Sale',
+        r.id + ' on sale ' + r.saleId + ' \u00B7 ' + money(r.total) + (isVoid ? ' (whole sale)' : ' (' + (r.lineCount || '?') + ' line' + (r.lineCount === 1 ? '' : 's') + ')')
+        + ' \u00B7 Reason: ' + (r.reason || '\u2014') + ' \u00B7 Allowed by: ' + (r.approvedBy || '\u2014')
+        + (Number(r.refunded) > 0 ? ' \u00B7 Paid back: ' + money(r.refunded) : '') + (Number(r.creditApplied) > 0 ? ' \u00B7 Off customer balance: ' + money(r.creditApplied) : '')
+        + (r.note ? ' \u00B7 ' + r.note : ''));
+    });
+    return out.sort((a, b) => a.ts.localeCompare(b.ts) || a.id.localeCompare(b.id));
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
@@ -503,9 +622,30 @@ const Shifts = (function () {
       return rec;
     }
 
-    // Upload this device's outbox. Opens go before closes (a close is only valid once its open is in the cloud).
+    // Record something the till did that leaves no other record (step 20; see THE TILL'S AUDIT TRAIL above). event is one of
+    // AUDIT_EVENTS; extra = { shiftId?, what?, approver?, note? }; who = { username, role }. Throws like open() and close() do, so the
+    // caller decides what to do: the till treats it as best effort and never lets a failed log stop a sale or a PIN.
+    async function log(till, who, event, extra, now) {
+      const d = need();
+      if (!till || !till.code || !till.tillId || !till.registered) throw err('NOT_REGISTERED', 'This till has not claimed its code yet');
+      if (!who || !who.username) throw err('NO_USER', 'Nobody is signed in');
+      const x = extra || {};
+      for (let attempt = 0; attempt < 3; attempt++) {         // two entries in the same millisecond differ by their random tail
+        const rnd = env.opts && typeof env.opts.rand === 'function' ? env.opts.rand() : Math.random().toString(36).slice(2, 5).padEnd(3, '0');
+        const rec = auditRecord({ till: till.code, tillId: till.tillId, at: now || Date.now(), user: who.username, role: who.role, event,
+          shiftId: x.shiftId, what: x.what, approver: x.approver, note: x.note, rnd }, env.opts);
+        const bad = validateAudit(rec);
+        if (bad) throw err('INVALID', 'The audit entry is not valid: ' + bad);
+        try { await A.add(d, AUDIT, rec); return rec; }
+        catch (e) { if (!(e && e.code === 'EXISTS')) throw e; }
+      }
+      throw err('EXISTS', 'Could not find a free audit number');
+    }
+
+    // Upload this device's outbox. Opens go before closes (a close is only valid once its open is in the cloud); audit records last.
     async function push(cloud) {
-      const d = need(), queue = (await A.outbox(d)).sort((a, b) => (a.kind === b.kind ? 0 : a.kind === OPEN ? -1 : 1));
+      const rank = k => (k === OPEN ? 0 : k === CLOSE ? 1 : 2);
+      const d = need(), queue = (await A.outbox(d)).sort((a, b) => rank(a.kind) - rank(b.kind));
       let sent = 0, lastErr = '';
       for (const q of queue) {
         const rec = await A.get(d, q.kind, q.id);
@@ -547,14 +687,14 @@ const Shifts = (function () {
       return { added, bad };
     }
     async function pull(cloud) {
-      const a = await pullKind(cloud, OPEN), b = await pullKind(cloud, CLOSE);
-      return { added: a.added + b.added, bad: a.bad + b.bad };
+      const a = await pullKind(cloud, OPEN), b = await pullKind(cloud, CLOSE), c = await pullKind(cloud, AUDIT);   // audit last: if its rules are not published yet, the shifts above are already in
+      return { added: a.added + b.added + c.added, bad: a.bad + b.bad + c.bad };
     }
 
-    return { all, pending, current, open, close, push, pull };
+    return { all, pending, current, open, close, log, push, pull };
   }
 
-  return { V, SID_RE, METHODS, openRecord, closeRecord, validateOpen, validateClose, forCloud, fromCloud, shiftsOf, openShiftOf, summary, varianceOf, itemsOf, report, dayReport, returnsSummary, create, memAdapter, idbAdapter };
+  return { V, SID_RE, AID_RE, METHODS, AUDIT_EVENTS, openRecord, closeRecord, auditRecord, validateOpen, validateClose, validateAudit, forCloud, fromCloud, shiftsOf, openShiftOf, summary, varianceOf, itemsOf, report, dayReport, returnsSummary, auditEntries, create, memAdapter, idbAdapter };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Shifts; // lets Node load it for tests

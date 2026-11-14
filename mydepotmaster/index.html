@@ -1449,22 +1449,24 @@ window._acShow = function (msg) {
 
 // ── BUILT-IN PRINTER (Android POS terminals with a thermal printer) ──────────────────────────────────────────────
 // One per-device switch (Settings > Printer), kept in the same localStorage key the Till uses (mdm_till_printer), so the Till and
-// the main app always agree. mode 'rawbt' = "Built-in printer" is ON: the page is turned into plain ESC/POS text and handed to the
-// free RawBT app, which prints on the terminal's own printer with no print dialog. Chrome only allows that hand-off right after a
-// tap, so every call below runs straight from the Print button. Off = the browser print dialog, exactly as before.
+// the main app always agree. mode 'rawbt' = "Built-in printer" is ON: the page is handed to the free RawBT app, which prints on the terminal's
+// own printer with no print dialog. Two print styles (look, Settings > Printer > Print style): plain ESC/POS TEXT (_prnBuildHtml: fast and sharp,
+// no logo) or a PICTURE of the page (_prnKit: logo, tables and layout kept). Auto = receipts as text, documents as pictures. Long jobs go in parts.
+// Chrome only allows the hand-off right after a tap, so every call below runs straight from the Print button. Off = the browser print dialog.
 const _PRK='mdm_till_printer';
-function _prnPrefs(){let o=null;try{o=JSON.parse(localStorage.getItem(_PRK)||'null');}catch(e){}return Object.assign({mode:'browser',cols:0,size:1,auto:false},o||{});}
+function _prnPrefs(){let o=null;try{o=JSON.parse(localStorage.getItem(_PRK)||'null');}catch(e){}return Object.assign({mode:'browser',cols:0,size:1,auto:false,look:'auto'},o||{});}
 function _prnSave(patch){try{localStorage.setItem(_PRK,JSON.stringify(Object.assign(_prnPrefs(),patch)));return true;}catch(e){return false;}}
 function _prnOn(){return _prnPrefs().mode==='rawbt';}
 // characters per line: 58 mm = 32, 80 mm = 48; Auto = 58 mm on a handheld (small screen). Extra large text is twice as wide.
 function _prnWidth(pf){pf=pf||_prnPrefs();const sz=pf.size==null?1:pf.size|0,base=pf.cols||(Math.min(screen.width,screen.height)<=600?32:48);return sz===2?base>>1:base;}
 function _prnAsc(s){return String(s==null?'':s).replace(/[\u00a0\u202f\u2009]/g,' ').replace(/\u00d7/g,'x').replace(/[\u00b7\u2022]/g,'-').replace(/[\u2212\u2013\u2014]/g,'-').replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"').replace(/\u2026/g,'...').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\x20-\x7e]/g,'');}
-// Turns a print page (receipt, slip, report, payslip) into ESC/POS bytes: headings centred, tables as "label ..... amount" rows,
-// rules as dashes, logos and buttons left out. Only the text of the page is printed.
+// TEXT style: turns a print page (receipt, slip, report, payslip) into ESC/POS bytes: headings centred, tables as "label ..... amount" rows,
+// rules as dashes, logos and buttons left out. Only the text of the page is printed. The result carries .marks (see _prnSplit).
 function _prnBuildHtml(html,pf){
   pf=pf||_prnPrefs();
   const sz=pf.size==null?1:pf.size|0,SC=[0,1,17][sz]||0,W=_prnWidth(pf),B=[27,64,27,77,0];          // ESC @ reset, ESC M 0 = Font A (the larger one)
-  const ln=s=>{s=_prnAsc(s);for(let i=0;i<s.length;i++)B.push(s.charCodeAt(i));B.push(10);},al=n=>B.push(27,97,n),bd=n=>B.push(27,69,n),hi=n=>B.push(29,33,n);
+  const MK=[],S={a:0,b:0,h:0};                                            // MK: after each line, where a long job may be cut, with the print state there
+  const ln=s=>{s=_prnAsc(s);for(let i=0;i<s.length;i++)B.push(s.charCodeAt(i));B.push(10);MK.push([B.length,S.a,S.b,S.h]);},al=n=>{S.a=n;B.push(27,97,n);},bd=n=>{S.b=n;B.push(27,69,n);},hi=n=>{S.h=n;B.push(29,33,n);};
   hi(SC);
   const wrap=s=>{s=_prnAsc(s).replace(/\s+/g,' ').trim();const o=[];while(s.length>W){let k=s.lastIndexOf(' ',W);if(k<1)k=W;o.push(s.slice(0,k));s=s.slice(k).trim();}o.push(s);return o;};
   const lr=(l,r,ind)=>{l=' '.repeat(ind||0)+_prnAsc(l).replace(/\s+/g,' ').trim();r=_prnAsc(r).replace(/\s+/g,' ').trim();if(l.length+r.length+1>W){wrap(l).forEach(ln);al(2);ln(r);al(0);}else ln(l+' '.repeat(W-l.length-r.length)+r);};
@@ -1511,19 +1513,183 @@ function _prnBuildHtml(html,pf){
   flush(0,false);
   rule('-');
   B.push(27,100,4);                                                      // ESC d 4: feed 4 lines so the text clears the tear bar
-  return Uint8Array.from(B);
+  const out=Uint8Array.from(B);out.marks=MK;return out;
 }
-// RawBT hand-off: bytes -> intent URL (same hand-off the Till uses). '' when the page is too long for one hand-off.
-function _prnUrl(u8){
-  if(!u8||!u8.length||u8.length>200000)return '';
-  let s='';for(let i=0;i<u8.length;i+=0x8000)s+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));
-  return 'intent:base64,'+btoa(s)+'#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+// ── PRINT KIT: picture printing + RawBT hand-off, one part at a time ────────────────────────────────────────────
+// Self-contained on purpose: the document window gets a copy of this function's source (see _pdfPrint), so it must not use anything
+// declared outside it. `win` is the window that carries the tap; the hand-off (location.href = intent) has to run from that window.
+function _prnKit(win){
+  var doc=win.document;
+  var MAXPART=200000, MAXPARTS=20, MAXROWS=48000, SLICE=1200, BAND=200;   // bytes per hand-off, parts per job, picture rows, CSS px per slice, rows per raster command
+  var STORE='https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter';
+  function prefs(){var o=null;try{o=JSON.parse(win.localStorage.getItem('mdm_till_printer')||'null');}catch(e){}o=o||{};return{cols:o.cols|0,size:o.size==null?1:(o.size|0),look:o.look||'auto'};}
+  function dots(pf){var base=pf.cols||(Math.min(win.screen.width,win.screen.height)<=600?32:48);return base*12;}   // 58 mm = 384 dots, 80 mm = 576
+  // bytes -> RawBT intent URL. If RawBT is not installed, Chrome opens its Play Store page instead of doing nothing.
+  function url(u8){var s='';for(var i=0;i<u8.length;i+=0x8000)s+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));
+    return 'intent:base64,'+win.btoa(s)+'#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.browser_fallback_url='+encodeURIComponent(STORE)+';end;';}
+  function cat(list){var n=0,i;for(i=0;i<list.length;i++)n+=list[i].length;var o=new Uint8Array(n),p=0;for(i=0;i<list.length;i++){o.set(list[i],p);p+=list[i].length;}return o;}
+
+  // ── the hand-off, part by part. Chrome only lets a page open the printer app right after a tap, so part 1 goes at once and every
+  // further part waits for its own tap on the bar below.
+  var bar=null,cur=null;
+  function nav(u){if(win.__prnNav)win.__prnNav(u);else win.location.href=u;}
+  function hide(){if(bar&&bar.parentNode)bar.parentNode.removeChild(bar);bar=null;}
+  function show(msg,label){
+    hide();bar=doc.createElement('div');
+    bar.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:2147483647;background:#111;color:#fff;padding:12px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;font:600 16px/1.4 system-ui,Arial,sans-serif;box-shadow:0 -2px 12px rgba(0,0,0,.4)';
+    var t=doc.createElement('span');t.style.cssText='flex:1 1 180px';t.textContent=msg;
+    var go=doc.createElement('button');go.textContent=label;go.style.cssText='font:inherit;padding:10px 16px;border:0;border-radius:8px;background:#27AE60;color:#fff;cursor:pointer';
+    go.onclick=function(){step();};
+    var no=doc.createElement('button');no.textContent='Stop';no.style.cssText='font:inherit;padding:10px 14px;border:1px solid #888;border-radius:8px;background:transparent;color:#fff;cursor:pointer';
+    no.onclick=function(){cur=null;hide();};
+    bar.appendChild(t);bar.appendChild(go);bar.appendChild(no);doc.body.appendChild(bar);
+  }
+  function step(){
+    if(!cur)return;var i=cur.i++,n=cur.p.length;
+    nav(cur.p[i]);
+    if(cur.i<n)show('Part '+cur.i+' of '+n+' sent to the printer. Wait for it to finish, then tap for the next part.','Print part '+(cur.i+1));
+    else{cur=null;hide();}
+  }
+  // t0 = when the person tapped. A Chrome tap only stays valid for about 5 seconds, so a slow render asks for one more tap instead.
+  function send(parts,t0){
+    hide();if(!parts||!parts.length)return false;cur={p:parts,i:0};
+    if(t0&&Date.now()-t0>3500){show('Ready to print'+(parts.length>1?' ('+parts.length+' parts)':'')+'.','Print');return true;}
+    step();return true;
+  }
+
+  // ── picture printing: the page is drawn, then sent as black-and-white dots (ESC/POS raster), so logos, tables and colours survive.
+  function clean(html,extra){
+    var d=new win.DOMParser().parseFromString(String(html||''),'text/html');
+    Array.prototype.forEach.call(d.querySelectorAll('script,noscript,button,input,select,textarea,iframe,template,.no-print,.pdf-toolbar,.pdf-toolbar-spacer,[hidden]'),function(e){e.parentNode&&e.parentNode.removeChild(e);});
+    Array.prototype.forEach.call(d.querySelectorAll('style'),function(s){s.textContent=s.textContent.replace(/@media\s+print/gi,'@media all');});   // what the page asks for on paper
+    // the printer sets the width: no page margins, no max-width, white ground, no screen-only shadows
+    var o=d.createElement('style');
+    o.textContent='html,body{width:auto!important;max-width:none!important;min-height:0!important;margin:0!important;background:#fff!important;box-shadow:none!important}body{padding:2px 4px!important}*{box-shadow:none!important;text-shadow:none!important;animation:none!important}img{max-width:100%}'+(extra||'');
+    (d.body||d.documentElement).appendChild(o);
+    return '<!DOCTYPE html>'+d.documentElement.outerHTML;
+  }
+  function pack(G,D,rows){                                       // grey levels -> 1 bit per dot, in raster commands of BAND rows
+    var rb=D>>3,bands=[],y,x,b,j,o,n,c,r0;
+    for(y=0;y<rows;y+=BAND){
+      n=Math.min(BAND,rows-y);c=new Uint8Array(8+rb*n);c[0]=29;c[1]=118;c[2]=48;c[3]=0;c[4]=rb&255;c[5]=rb>>8;c[6]=n&255;c[7]=n>>8;o=8;
+      for(r0=0;r0<n;r0++){var base=(y+r0)*D;for(x=0;x<rb;x++){b=0;for(j=0;j<8;j++)b=(b<<1)|(G[base+x*8+j]<128?1:0);c[o++]=b;}}
+      bands.push(c);
+    }
+    return bands;
+  }
+  function dither(G,D,x0,y0,x1,y1){                              // Atkinson dither inside a photo or logo, so it keeps its shape
+    var w=x1-x0,h=y1-y0,f=new Float32Array(w*h),x,y,i,old,nw,e;
+    for(y=0;y<h;y++)for(x=0;x<w;x++)f[y*w+x]=G[(y0+y)*D+x0+x];
+    function add(xx,yy,v){if(xx>=0&&xx<w&&yy<h)f[yy*w+xx]+=v;}
+    for(y=0;y<h;y++)for(x=0;x<w;x++){i=y*w+x;old=f[i];nw=old<128?0:255;e=(old-nw)/8;f[i]=nw;add(x+1,y,e);add(x+2,y,e);add(x-1,y+1,e);add(x,y+1,e);add(x+1,y+1,e);add(x,y+2,e);}
+    for(y=0;y<h;y++)for(x=0;x<w;x++)G[(y0+y)*D+x0+x]=f[y*w+x]<128?0:255;
+  }
+  function picture(html,pf,extra){
+    pf=pf||prefs();
+    return new Promise(function(resolve,reject){
+      var D=dots(pf),k0=[1.25,1.5,2][pf.size]||1.5,done=false,fr=doc.createElement('iframe');
+      var timer=setTimeout(function(){fail(new Error('timeout'));},20000);
+      function end(){clearTimeout(timer);if(fr.parentNode)fr.parentNode.removeChild(fr);}
+      function fail(e){if(done)return;done=true;end();reject(e);}
+      fr.setAttribute('sandbox','allow-same-origin');
+      fr.style.cssText='position:fixed;left:-10000px;top:0;border:0;visibility:hidden;width:'+Math.round(D/k0)+'px;height:1px';
+      fr.onload=function(){
+        if(done)return;
+        var idoc=fr.contentDocument;if(!idoc||!idoc.body)return fail(new Error('no document'));
+        var imgs=Array.prototype.slice.call(idoc.images);
+        Promise.all(imgs.map(function(im){return im.complete?0:new Promise(function(r){im.onload=im.onerror=r;});}).concat([idoc.fonts&&idoc.fonts.ready])).then(function(){
+          try{
+            var root=idoc.documentElement,body=idoc.body;
+            function measure(L){fr.style.width=L+'px';return{w:Math.max(root.scrollWidth,body.scrollWidth),h:Math.max(root.scrollHeight,body.scrollHeight)};}
+            var cols=0;Array.prototype.forEach.call(idoc.querySelectorAll('tr'),function(r){cols=Math.max(cols,r.cells.length);});
+            var k=k0;if(cols>=9)k=Math.min(k,.85);else if(cols>=6)k=Math.min(k,1);else if(cols>=4)k=Math.min(k,1.25);   // wide tables need a wider page
+            var L=Math.round(D/k),m=measure(L);
+            if(m.w>L){L=m.w;k=D/L;m=measure(L);}                         // something wider than the paper: shrink the page to fit
+            var H=m.h,rows=Math.ceil(H*k);
+            if(rows>MAXROWS)return fail(new Error('too long'));
+            var xhtml=new win.XMLSerializer().serializeToString(root);
+            var G=new Uint8Array(D*rows),cv=doc.createElement('canvas'),y=0;
+            var rects=imgs.map(function(im){var r=im.getBoundingClientRect();return[Math.max(0,Math.floor(r.left*k)),Math.max(0,Math.floor(r.top*k)),Math.min(D,Math.ceil(r.right*k)),Math.min(rows,Math.ceil(r.bottom*k))];}).filter(function(r){return r[2]-r[0]>=24&&r[3]-r[1]>=24;});
+            cv.width=D;
+            (function next(){
+              if(done)return;
+              if(y>=H){
+                rects.forEach(function(r){dither(G,D,r[0],r[1],r[2],r[3]);});
+                var last=rows;while(last>0){var row=(last-1)*D,ink=false;for(var x=0;x<D;x++)if(G[row+x]<128){ink=true;break;}if(ink)break;last--;}   // drop blank paper at the end
+                if(!last)return fail(new Error('blank'));
+                var bands=pack(G,D,last),parts=[],part=[],size=0;
+                bands.forEach(function(b){if(size&&size+b.length>MAXPART){parts.push(part);part=[];size=0;}part.push(b);size+=b.length;});
+                parts.push(part);
+                if(parts.length>MAXPARTS)return fail(new Error('too long'));
+                var urls=parts.map(function(p,i){return url(cat([Uint8Array.of(27,64)].concat(p,i===parts.length-1?[Uint8Array.of(27,100,4)]:[])));});   // ESC @ first; ESC d 4 feeds the paper out after the last part
+                done=true;end();return resolve(urls);
+              }
+              var sh=Math.min(SLICE,H-y),ph=Math.max(1,Math.round(sh*k)),oy=Math.round(y*k);
+              var svg='<svg xmlns="http://www.w3.org/2000/svg" width="'+L+'" height="'+sh+'"><foreignObject x="0" y="'+(-y)+'" width="'+L+'" height="'+H+'">'+xhtml+'</foreignObject></svg>';
+              var im=new win.Image();
+              im.onload=function(){
+                try{
+                  cv.height=ph;var cx=cv.getContext('2d',{willReadFrequently:true});
+                  cx.fillStyle='#fff';cx.fillRect(0,0,D,ph);cx.drawImage(im,0,0,D,ph);
+                  var px=cx.getImageData(0,0,D,ph).data,n=Math.min(ph,rows-oy),i,x,yy,W1=D+1,R=12;
+                  var lum=new Uint8Array(D*n),I=new Uint32Array(W1*(n+1));
+                  for(i=0;i<D*n;i++)lum[i]=(px[i*4]*77+px[i*4+1]*151+px[i*4+2]*28)>>8;
+                  for(yy=0;yy<n;yy++){var rs=0;for(x=0;x<D;x++){rs+=lum[yy*D+x];I[(yy+1)*W1+x+1]=I[yy*W1+x+1]+rs;}}
+                  // black if dark, or clearly darker than its surroundings (grey text on white); white text on a dark fill stays white
+                  for(yy=0;yy<n;yy++){var y0=Math.max(0,yy-R),y1=Math.min(n,yy+R+1);
+                    for(x=0;x<D;x++){var v=lum[yy*D+x],blk=1;
+                      if(v>=100){var x0=Math.max(0,x-R),x1=Math.min(D,x+R+1),s=I[y1*W1+x1]-I[y0*W1+x1]-I[y1*W1+x0]+I[y0*W1+x0];blk=v*(x1-x0)*(y1-y0)<s*0.85?1:0;}
+                      G[(oy+yy)*D+x]=blk?0:255;}}
+                  rects.forEach(function(r){for(yy=Math.max(r[1],oy);yy<Math.min(r[3],oy+n);yy++)for(x=r[0];x<r[2];x++)G[yy*D+x]=lum[(yy-oy)*D+x];});   // photos and logos keep their grey for the dither
+                  y+=sh;next();
+                }catch(e){fail(e);}
+              };
+              im.onerror=function(){fail(new Error('draw'));};
+              im.src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(svg);
+            })();
+          }catch(e){fail(e);}
+        });
+      };
+      fr.srcdoc=clean(html,extra);
+      doc.body.appendChild(fr);
+    });
+  }
+  return{prefs:prefs,dots:dots,url:url,send:send,picture:picture,hide:hide};
 }
-function _prnUrlFromHtml(html){try{return _prnUrl(_prnBuildHtml(html));}catch(e){return '';}}   // also called by the document window (see _pdfPrint)
-function _prnPrintHtml(html){
-  const u=_prnUrlFromHtml(html);
-  if(!u){showToast('⚠️ Could not send to the printer');return false;}
-  location.href=u;return true;
+let _prnKi=null;
+function _prnK(){return _prnKi||(_prnKi=_prnKit(window));}   // made on first use: it needs document.body
+// A long text job is cut into parts of at most 200 000 bytes, only between two lines. Each later part starts by restoring the print state.
+function _prnSplit(u8){
+  const MAX=200000-20,mk=u8.marks||[];
+  if(!u8||!u8.length)return [];
+  if(u8.length<=MAX)return [u8];
+  const cat=(a,b)=>{const o=new Uint8Array(a.length+b.length);o.set(a,0);o.set(b,a.length);return o;};
+  const pre=s=>Uint8Array.of(27,64,27,77,0,27,97,s[0],27,69,s[1],29,33,s[2]);
+  const parts=[];let start=0,st=null,i=0;
+  while(u8.length-start>MAX){
+    while(i<mk.length&&mk[i][0]-start<=MAX)i++;
+    if(i===0||mk[i-1][0]<=start)return [];
+    const end=mk[i-1][0],part=u8.subarray(start,end);
+    parts.push(st?cat(pre(st),part):part);
+    st=[mk[i-1][1],mk[i-1][2],mk[i-1][3]];start=end;
+  }
+  const tail=u8.subarray(start);parts.push(st?cat(pre(st),tail):tail);
+  return parts.length>20?[]:parts;
+}
+// Text style -> list of hand-off URLs, one per part. [] when there is nothing to print or it is far too long. Also called by the document window.
+function _prnTextParts(html){try{return _prnSplit(_prnBuildHtml(html)).map(p=>_prnK().url(p));}catch(e){return [];}}
+const _PRN_AUTO_MAX=3;   // Auto style: a document that would need more than this many picture parts is printed as compact text instead, to save paper
+// The one entry point. isReceipt: a receipt, slip or Z report (Auto prints those as text). fullDoc: the complete page, with its own styles, for the picture style.
+function _prnPrintHtml(html,isReceipt,fullDoc){
+  const t0=Date.now(),pf=_prnPrefs(),K=_prnK();
+  const asText=()=>{const p=_prnTextParts(html);if(!p.length){showToast('⚠️ Could not send to the printer');return false;}return K.send(p,t0);};
+  if(pf.look==='text'||(pf.look!=='picture'&&isReceipt))return asText();
+  showToast('🖨️ Preparing the print…');
+  K.picture(fullDoc||html,pf).then(urls=>{
+    if(pf.look!=='picture'&&urls.length>_PRN_AUTO_MAX){showToast('Long document: printing compact text to save paper');asText();}
+    else K.send(urls,t0);
+  }).catch(()=>{showToast('⚠️ Picture print is not available here, printing text');asText();});
+  return true;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1538,7 +1704,6 @@ function _pdfPrint(htmlBody, title, filename, receipt) {
   // Built-in printer (Settings > Printer): `receipt` callers (receipts, slips, Z reports) print straight to the terminal's printer with
   // no screen. Other documents still open their screen, but its Print button prints straight to the printer instead of the browser dialog.
   const _bi = _prnOn();
-  if (_bi && receipt) { _prnPrintHtml(htmlBody); return; }
   // Inject brand colour as a CSS variable so every accent in the document
   // automatically reflects the depot's chosen colour.  Falls back to MDM
   // default green when no brand colour has been set.
@@ -1629,7 +1794,7 @@ function _pdfPrint(htmlBody, title, filename, receipt) {
 </head>
 <body>
 <div class="pdf-toolbar">
-  <button class="primary" onclick="__prnPrint()">🖨 Print / Save PDF</button>
+  <button class="primary" id="__prn_btn" onclick="__prnPrint()">🖨 Print / Save PDF</button>
   <button id="__share_btn" onclick="_shareGeneratedPdf()">📤 Share to WhatsApp / Social</button>
 </div>
 <div class="pdf-toolbar-spacer"></div>
@@ -1638,18 +1803,32 @@ ${htmlBody}
 </div>
 <script>
 window.__prnBuiltIn = ${_bi ? 'true' : 'false'};
-// Print button: with the Built-in printer on, the app window turns this page into printer text (_prnUrlFromHtml) and the hand-off
-// to RawBT happens here, straight from the tap. Anything else (switch off, no opener, page too long) is the normal browser print.
+// Print button. With the Built-in printer on, this page is drawn as a picture (or turned into compact text: Settings > Printer > Print style)
+// and handed to the RawBT app from here, straight from the tap. A long page goes in parts: a bar asks for a tap before each next part.
+// Anything that cannot be sent (switch off, app window closed, page too long) is the normal browser print.
 // Kept in its own script block so it works whatever the share script below does.
-function __prnPrint(){
-  try{
-    if (window.__prnBuiltIn && window.opener && window.opener._prnUrlFromHtml){
-      var u = window.opener._prnUrlFromHtml(document.getElementById('pdf-content').innerHTML);
-      if (u){ location.href = u; return; }
-    }
-  } catch(e){}
-  window.print();
+var __prnKit = (${_prnKit.toString()})(window), __prnPic = null;
+function __prnText(){
+  try{ var op = window.opener; if (op && op._prnTextParts) return op._prnTextParts(document.getElementById('pdf-content').innerHTML); }catch(e){}
+  return [];
 }
+function __prnWarm(){
+  try{ if (__prnKit.prefs().look === 'text') return;
+    __prnPic = __prnKit.picture(document.documentElement.outerHTML); __prnPic.catch(function(){}); }catch(e){}
+}
+function __prnPrint(){
+  if (!window.__prnBuiltIn){ window.print(); return; }
+  var t0 = Date.now(), pf = __prnKit.prefs(), btn = document.getElementById('__prn_btn');
+  function asText(){ var p = __prnText(); if (p.length) __prnKit.send(p, t0); else window.print(); }
+  if (pf.look === 'text'){ asText(); return; }
+  var label = btn.textContent; btn.disabled = true; btn.textContent = '⏳ Preparing…';
+  var job = __prnPic || __prnKit.picture(document.documentElement.outerHTML);
+  job.then(function(urls){
+    btn.disabled = false; btn.textContent = label;
+    if (pf.look === 'auto' && urls.length > 3) asText(); else __prnKit.send(urls, t0);
+  }, function(){ btn.disabled = false; btn.textContent = label; asText(); });
+}
+if (window.__prnBuiltIn) window.addEventListener('load', __prnWarm);
 <\/script>
 <script>
 window.__pdfShareTitle = ${JSON.stringify(title || 'MDM Document')};
@@ -1801,6 +1980,8 @@ async function _shareGeneratedPdf(){
 <\/script>
 </body>
 </html>`;
+
+  if (_bi && receipt) { _prnPrintHtml(htmlBody, true, fullHtml); return; }   // Built-in printer: no screen
 
   // Fix 10: replaced document.write() with a blob URL — avoids the risks of
   // document.write() while keeping full print fidelity. All callers of
@@ -4282,7 +4463,7 @@ function printSubscriptionReceipt(payload, ts){
   <div class="pay">⏳ PENDING CONFIRMATION<br><span style="font-weight:500;font-size:11px">Activation within 48 hours of confirmed payment</span></div>
   <div class="footer">Questions? WhatsApp +260 96 027 1128<br>support@nexlitedigitalsolutionslimited.digital</div>
   </body></html>`;
-  if (_prnOn()) { _prnPrintHtml(html); return; }   // Built-in printer (Settings > Printer): straight to the printer, no screen
+  if (_prnOn()) { _prnPrintHtml(html, true, html); return; }   // Built-in printer (Settings > Printer): straight to the printer, no screen
   const blob = new Blob([html], { type: 'text/html' });
   const blobUrl = URL.createObjectURL(blob);
   const w = window.open(blobUrl, '_blank', 'width=420,height=700');
@@ -4532,7 +4713,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.56';
+const SW_VERSION  = 'v0.3.58';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -9199,6 +9380,7 @@ function printDailyZ(id){
   if(z.notes)h+=`<div style="margin:10px 0;font-size:10pt"><b>Notes:</b> ${esc(z.notes)}</div>`;
   h+=`<div class="sig-row"><div class="sig-box">Closed by</div><div class="sig-box">Checked by</div></div>`+_pdfFooter(esc(ref));
   _pdfPrint(h,'Z Report '+ref,'Z_Report_'+ref,true);
+  logAuditEvent('REPORT','Day Z Report',`${ref} · ${z.date} · Printed`);   // step 20 (the close-out itself is logged as 'Daily Close Out' when it is saved)
 }
 
 function renderGenSummary(){
@@ -16042,11 +16224,22 @@ function _printStaffIdCard(id) {
 
 <div class="no-print" style="text-align:center;margin-top:20px;color:#555;font-size:10pt">
   Print on card stock (85.6 × 54 mm / credit card size) and laminate for best results.<br>
-  <button onclick="window.print()" style="margin-top:10px;padding:9px 24px;background:${accentColor};border:none;border-radius:8px;font-weight:700;font-size:11pt;cursor:pointer;color:${accentTextColor}">🖨 Print Now</button>
+  <button onclick="__idPrint()" style="margin-top:10px;padding:9px 24px;background:${accentColor};border:none;border-radius:8px;font-weight:700;font-size:11pt;cursor:pointer;color:${accentTextColor}">🖨 Print Now</button>
 </div>`;
 
   // Fix 10: use blob URL instead of document.write()
-  const _idHtml = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>ID Card — ${esc(s.name)}</title></head><body>${html}</body></html>`;
+  // Built-in printer (Settings > Printer): the card is drawn as a picture and sent to the terminal's printer. The dark card face would be a
+  // solid black block on thermal paper, so it is printed as a white card with black text and a border instead.
+  const _idInk = '.card,.card-front,.card-back{background:#fff!important;border:2px solid #000!important;border-radius:10px!important}.card *{color:#000!important;background:transparent!important}.card-header,.card-back-header{border-bottom:2px solid #000!important}.card-footer,.card-back-footer{border-top:2px solid #000!important}.card-avatar{border:2px solid #000!important}.card-contract{border:1.5px solid #000!important}';
+  const _idHtml = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>ID Card — ${esc(s.name)}</title></head><body>${html}
+<script>
+var __idKit = (${_prnKit.toString()})(window), __idBuiltIn = ${_prnOn() ? 'true' : 'false'}, __idInk = ${JSON.stringify(_idInk)};
+function __idPrint(){
+  if (!__idBuiltIn){ window.print(); return; }
+  var t0 = Date.now();
+  __idKit.picture(document.documentElement.outerHTML, __idKit.prefs(), __idInk).then(function(u){ __idKit.send(u, t0); }, function(){ window.print(); });
+}
+<\/script></body></html>`;
   const _idBlob = new Blob([_idHtml], { type: 'text/html' });
   const _idUrl  = URL.createObjectURL(_idBlob);
   const w = window.open(_idUrl, '_blank', 'width=820,height=640');
@@ -20574,13 +20767,16 @@ function _renderPrinterCard(){
     <div class="card">
       <label style="display:flex;gap:12px;align-items:flex-start;font-size:17px;line-height:1.5;cursor:pointer">
         <input type="checkbox" id="prn-on" ${on?'checked':''} onchange="prnSetBuiltIn(this.checked)" style="width:24px;height:24px;flex-shrink:0;margin-top:2px"/>
-        <span><strong>Built-in printer</strong><br>Receipts, slips and Z reports print straight to the printer, with no print screen. Payslips, reports and other documents keep their screen, but their Print button prints straight to the printer. For POS terminals with a built-in printer; this device only.</span>
+        <span><strong>Built-in printer</strong><br>Receipts, slips and Z reports print straight to the printer, with no print screen. Payslips, reports, books and ID cards keep their screen, but their Print button prints straight to the printer. For POS terminals with a built-in printer; this device only.</span>
       </label>
-      <div style="font-size:16px;color:var(--muted);margin:10px 0 14px;line-height:1.6">Needs the free RawBT app, with its printer set to this terminal's built-in printer.</div>
+      <div style="font-size:16px;color:var(--muted);margin:10px 0 14px;line-height:1.6">Needs the free RawBT app, with its printer set to this terminal's built-in printer. If RawBT is not installed yet, the first print opens its Play Store page: install it, open it once and pick the built-in printer, then come back and press Test print. <a href="https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter" target="_blank" rel="noopener">Get RawBT</a></div>
       ${sel('Thermal paper','prnSetCols',[[0,'Auto (58 mm on a handheld terminal)'],[32,'58 mm paper (32 characters)'],[48,'80 mm paper (48 characters)']],pf.cols||0)}
+      ${sel('Print style','prnSetLook',[['auto','Auto: receipts as text, documents as pictures'],['text','Plain text for everything (fastest, no logo)'],['picture','Pictures for everything (logo on receipts too)']],pf.look||'auto')}
       ${sel('Print size','prnSetSize',[[0,'Normal'],[1,'Large (taller letters, easy to read)'],[2,'Extra large (wider and taller)']],pf.size==null?1:pf.size)}
+      <div style="font-size:16px;color:var(--muted);margin:2px 0 12px;line-height:1.6">A picture keeps the logo, tables and layout, in black and white. A long document is sent in parts: after each part a bar asks you to tap for the next one. Wide tables fit best on 80 mm paper or at Normal size.</div>
       <div id="prn-msg"></div>
-      <button class="btn bo" style="margin-top:8px;width:100%" onclick="prnTest()">🖨️ Test print</button>
+      <button class="btn bo" style="margin-top:8px;width:100%" onclick="prnTest()">🖨️ Test print (receipt)</button>
+      <button class="btn bo" style="margin-top:8px;width:100%" onclick="prnTestDoc()">🖨️ Test document print (logo and table)</button>
     </div>`;
 }
 function prnSetBuiltIn(on){
@@ -20588,11 +20784,18 @@ function prnSetBuiltIn(on){
   _prnMsg(ok?`<div class="ok-msg" style="margin-bottom:8px">✅ ${on?'Built-in printer is ON for this device. Use Test print to check it.':'Built-in printer is OFF. Printing uses the browser print dialog.'}</div>`:'<div class="err-box" style="margin-bottom:8px">Could not save this on the device.</div>');
 }
 function prnSetCols(v){ _prnSave({cols:+v||0}); _prnMsg('<div class="ok-msg" style="margin-bottom:8px">✅ Paper saved. Use Test print: the numbers line should wrap where the paper ends.</div>'); }
+function prnSetLook(v){ _prnSave({look:['auto','text','picture'].includes(v)?v:'auto'}); _prnMsg('<div class="ok-msg" style="margin-bottom:8px">✅ Print style saved. Use the test buttons to see it.</div>'); }
 function prnSetSize(v){ _prnSave({size:+v}); _prnMsg('<div class="ok-msg" style="margin-bottom:8px">✅ Print size saved.</div>'); }
 function prnTest(){
   if(!_prnOn()){ _prnMsg('<div class="err-box" style="margin-bottom:8px">Tick Built-in printer first.</div>'); return; }
   const di=DATA.depotInfo||{};
-  _prnPrintHtml(`<div class="center bold">${esc(di.name||'Shop Inventory & Sales Manager')}</div><div class="center">TEST PRINT</div><hr><div>123456789012345678901234567890123456789012345678</div><div>Using ${_prnWidth()} characters per line</div><hr><table><tr><td>Sample item</td><td class="right">K1.00</td></tr></table>`);
+  _prnPrintHtml(`<div class="center bold">${esc(di.name||'Shop Inventory & Sales Manager')}</div><div class="center">TEST PRINT</div><hr><div>123456789012345678901234567890123456789012345678</div><div>Using ${_prnWidth()} characters per line</div><hr><table><tr><td>Sample item</td><td class="right">K1.00</td></tr></table>`,true);
+}
+function prnTestDoc(){
+  if(!_prnOn()){ _prnMsg('<div class="err-box" style="margin-bottom:8px">Tick Built-in printer first.</div>'); return; }
+  const di=DATA.depotInfo||{}, th='style="text-align:left;background:#000;color:#fff;padding:5px"', td='style="padding:5px;border-bottom:1px solid #999"';
+  const logo=di.logoDataUrl?`<img src="${di.logoDataUrl}" style="height:56px;max-width:160px;object-fit:contain;display:block;margin:0 auto 6px" alt="">`:'';
+  _prnPrintHtml(`${logo}<div style="text-align:center;font-weight:700;font-size:18px">${esc(di.name||'Shop Inventory & Sales Manager')}</div><div style="text-align:center;color:#555">DOCUMENT TEST</div><hr><table style="width:100%;border-collapse:collapse"><thead><tr><th ${th}>Item</th><th ${th}>Qty</th><th ${th}>Amount</th></tr></thead><tbody><tr><td ${td}>Sample item</td><td ${td}>2</td><td ${td}>K20.00</td></tr><tr><td ${td}>Another item</td><td ${td}>1</td><td ${td}>K5.50</td></tr></tbody></table>`,false);
 }
 
 // ── TILL DISCOUNTS (till roadmap step 18) ──────────────────────────────────
@@ -22212,6 +22415,7 @@ async function _finishAddUser(username, role, pass, linkedStaffId, err){
   }
 
   updateData(d=>({...d,users:[...(d.users||[]),{username,password:hashed,role,recoveryEmail:(window._auEmail||''),emailVerified:false,...(linkedStaffId?{linkedStaffId}:{}),..._newUserAuth}]}));
+  logAuditEvent('CREATE','User',`${username} · Role: ${roleLabel(role)}${linkedStaffId?' · Linked to staff ID '+linkedStaffId:''}`);   // step 20: who may sell at the till (never the password)
   closeModal();
   showToast('✅ User "'+username+'" added.');
 }
@@ -22223,6 +22427,7 @@ function removeUser(username){
     _savedUsersRemove(username);
     const _gone = (DATA.users||[]).find(u=>u.username===username);
     updateData(d=>({...d,users:d.users.filter(u=>u.username!==username)}));
+    logAuditEvent('DELETE','User',`${username}${_gone?' · Role: '+roleLabel(_gone.role):''} · Login removed, cloud access revoked`);   // step 20
     if(isFbConfigured()){
       fbDelete('usernames/' + username.toLowerCase())
         .catch(e=>console.warn('Firebase username delete failed:', e.message));
@@ -22266,11 +22471,23 @@ function exportJSON(){
   document.body.appendChild(a);a.click();document.body.removeChild(a);
 }
 
+// ── The log as shown and exported = DATA.auditLog (what logAuditEvent wrote) + the till's own lines (till roadmap step 20) ──────────
+// The till (pos.html) cannot write into DATA: it is one blob, last write wins, so two phones writing audit lines into it would lose some.
+// Its events are append-only records outside the blob, like its sales (shifts.js), and Shifts.auditEntries turns them into the same shape
+// logAuditEvent writes: shift opened / closed (variance, forced), discounts and who allowed them, voids and refunds with reason and approver,
+// X and Z reports, PINs that let a cashier leave, wrong PINs. The ledgers are read fresh each time, and nothing is copied into
+// DATA.auditLog, so a line cannot be doubled by two phones or trimmed away by the 2000-line cap.
+async function _auditAll(){
+  try{await salesReload();await shiftsReload();}catch(e){}
+  let till=[];
+  try{till=Shifts.auditEntries(_shiftEv||[],_SALE_LIST||[],_RET_LIST||[],{money:zm});}catch(e){console.warn('[MDM] till audit lines unavailable',e);}
+  return (DATA.auditLog||[]).concat(till);
+}
 // ── Fix 26: Audit Log Export ──────────────────────────────────────────────────
-function exportAuditLog(){
+async function exportAuditLog(){
   if(!requireAdmin('export audit log'))return;
   if(!hasFeature('audit_log')){ showUpgradePrompt('audit_log'); return; }
-  const log=DATA.auditLog||[];
+  const log=await _auditAll();
   if(log.length===0){alert('No audit events recorded yet. Events are captured from this point forward whenever records are created, edited, or deleted.');return;}
   openDateRangeModal({
     title:'📋 Export Audit Log',
@@ -22290,11 +22507,12 @@ function exportAuditLog(){
 }
 
 // ── Fix 26: Audit Log Viewer ──────────────────────────────────────────────────
-function viewAuditLog(){
+async function viewAuditLog(){
   if(!requireAdmin('view audit log'))return;
   if(!hasFeature('audit_log')){ showUpgradePrompt('audit_log'); return; }
-  const log=(DATA.auditLog||[]).slice().sort((a,b)=>b.ts.localeCompare(a.ts)).slice(0,100);
-  const actionColor={CREATE:'var(--green)',EDIT:'var(--amber)',DELETE:'var(--red)'};
+  const log=(await _auditAll()).slice().sort((a,b)=>String(b.ts).localeCompare(String(a.ts))).slice(0,100);
+  const actionColor={CREATE:'var(--green)',EDIT:'var(--amber)',DELETE:'var(--red)',
+    OPEN:'var(--green)',CLOSE:'var(--amber)',DISCOUNT:'var(--amber)',REFUND:'var(--amber)',VOID:'var(--red)',DENY:'var(--red)',APPROVE:'var(--green)',REPORT:'var(--blue)'};   // step 20: the till's actions
   const rows=log.length===0
     ?`<tr><td colspan="5" class="empty">No audit events yet. Events are recorded from this point forward.</td></tr>`
     :log.map(e=>`<tr>
@@ -22306,7 +22524,7 @@ function viewAuditLog(){
     </tr>`).join('');
   openModal(`
     <div class="mtitle">📋 Audit Log — Last ${log.length} Events</div>
-    <div style="font-size:16px;color:var(--muted);margin-bottom:10px">Shows the 100 most recent events. Export as CSV for the full log.</div>
+    <div style="font-size:16px;color:var(--muted);margin-bottom:10px">Shows the 100 most recent events, including the till's shifts, discounts, voids, refunds, reports and PIN events. Export for the full log.</div>
     <div class="card" style="padding:0;margin-bottom:12px"><div class="tw"><table>
       <thead><tr><th>Date</th><th>User</th><th>Action</th><th>Area</th><th>Detail</th></tr></thead>
       <tbody>${rows}</tbody>

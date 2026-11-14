@@ -882,7 +882,7 @@ function escposReceipt(b,tag,pf){
 }
 function sendRaw(u8){
   let s='';for(let i=0;i<u8.length;i+=0x8000)s+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));
-  location.href='intent:base64,'+btoa(s)+'#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+  location.href='intent:base64,'+btoa(s)+'#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.browser_fallback_url='+encodeURIComponent('https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter')+';end;';   // no RawBT installed: Chrome opens its Play Store page
 }
 let PRNOVL=null;
 function openPrinter(){
@@ -901,7 +901,7 @@ function openPrinter(){
   af.append(au,el('span','',' Print each receipt automatically after the sale (RawBT only)'));body.append(af);
   body.append(el('div','mu','RawBT: install the free app, set its printer to this terminal\u2019s built-in printer, then use Test print. Paper is not read from the printer: Auto assumes 58 mm on a handheld, so set RawBT\u2019s paper width to match.'));
   const foot=el('div','pay-f'),test=el('button','sec','Test print',{type:'button'}),ok=el('button','pri','Save',{type:'button'});
-  const read=()=>{const o={mode:mode.value,cols:+cols.value,size:+siz.value,auto:au.checked};try{localStorage.setItem(PRK,JSON.stringify(o));}catch{}return o;};
+  const read=()=>{const o=Object.assign(prefs(),{mode:mode.value,cols:+cols.value,size:+siz.value,auto:au.checked});try{localStorage.setItem(PRK,JSON.stringify(o));}catch{}return o;};
   test.onclick=()=>{const o=read();if(o.mode!=='rawbt'){say('Choose RawBT first.','bad');return;}
     sendRaw(escposReceipt({at:Date.now(),receiptNo:'TEST',cashier:USER?String(USER.username):'',lines:[{name:'Test item',qty:1,unit:'',price:1}],lineCount:1,qtyTotal:1,total:1},'TEST PRINT',o));};
   ok.onclick=()=>{read();shut();say('Printer settings saved','ok',2500);};
@@ -1266,7 +1266,7 @@ function openDisc(){
       const nm=approverName(who);
       DISC={kind,value:v,reason,by:nm,apBP:j.bp};
       closeDisc();renderCart();say('Discount allowed by '+nm+'.','ok');
-    },'That is '+Sales.pctText(j.bp)+'% off. A manager must type their PIN to allow it.','Allow discount');
+    },'That is '+Sales.pctText(j.bp)+'% off. A manager must type their PIN to allow it.','Allow discount','allow a discount');
   }
   bP.onclick=()=>{if(kind!=='pct'){inp.value='';setKind('pct');}};bA.onclick=()=>{if(kind!=='amt'){inp.value='';setKind('amt');}};
   inp.oninput=upd;ok.onclick=apply;
@@ -1421,14 +1421,18 @@ function shiftOpen(){return !!shiftMine()&&!isHolder(USER);}
 let PINOVL=null;
 function exitGuard(go){
   if(!Gate.pinRequired(DATA,shiftOpen()))return go();
-  askManagerPin(go);
+  askManagerPin(who=>{
+    // step 20: who let this cashier out. Wait (at most 0.8 s) for the entry to be saved on the phone: toApp() leaves the page at once.
+    const saved=tillAudit('exit_ok',{what:go===logout?'log out':'go to the main app',approver:approverName(who)});
+    Promise.race([saved,new Promise(r=>setTimeout(r,800))]).then(()=>go(who));
+  },null,null,'leave the till');
 }
 function closePin(skipFocus){
   if(!PINOVL)return;
   PINOVL.remove();PINOVL=null;
   if(!skipFocus&&!COARSE)focusSearch();
 }
-function askManagerPin(go,msg,label){            // go(who) runs after a PIN holder's PIN was typed; step 18 reuses the pad for discounts
+function askManagerPin(go,msg,label,why){        // go(who) runs after a PIN holder's PIN was typed; step 18 reuses the pad for discounts; why (step 20) = what the PIN is for, for the Audit log
   if(PINOVL)return;
   const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Manager PIN'});
   const box=el('div','pay'),head=el('div','pay-h');
@@ -1458,6 +1462,7 @@ function askManagerPin(go,msg,label){            // go(who) runs after a PIN hol
     if(bad){err.textContent='This phone could not check the PIN. Try again, or ask the Admin.';return;}
     if(who){Gate.pinClear(localStorage);closePin(true);go(who);return;}
     const r=Gate.pinFailed(localStorage,Date.now());
+    tillAudit(r.locked?'pin_lock':'pin_fail',{what:why||'unlock the pad',note:r.locked?'Locked for '+Math.round(r.left/1000)+' seconds':'Tries left: '+r.triesLeft});   // step 20: the PIN typed is never kept
     inp.value='';inp.focus();
     err.textContent=r.locked?'Too many wrong PINs. Locked for '+Math.ceil(r.left/1000)+' seconds.':'Wrong PIN. '+r.triesLeft+(r.triesLeft===1?' try':' tries')+' left.';
   }
@@ -1545,6 +1550,23 @@ const SHIFTLG=Shifts.create({
   opts:{dateOf:t=>new Date(t).toISOString().slice(0,10)},   // the same date rule as the sales ledger
   adapter:Shifts.idbAdapter()
 });
+// ── AUDIT TRAIL (till roadmap step 20) ────────────────────────────────────────────────────────────────────────
+// The Audit log lives in the main app (DATA.auditLog). The till cannot write there: DATA is one blob, last write wins, so two phones
+// writing audit lines into it would lose some. So the till's events are append-only records like its sales (shifts.js: tillAudit/<id>,
+// create-only, uploaded with the shifts), and the main app joins them to the log when it shows or exports it.
+//   Written here, because they leave no record of their own:  an X report taken, a Z report shown or reprinted, a manager PIN that lets
+//   a cashier leave the till (who allowed it), a wrong manager PIN (what it was for), a pad that locked.
+//   NOT written here: shift open / close (variance, forced), a discount given, a void, a refund. Their own records already say who, when,
+//   why and who allowed it, and the main app reads the Audit lines straight from them, so the log cannot disagree with the ledger.
+// A PIN itself is never stored. Best effort by design: a failed log is only a console warning; it never stops a sale, a PIN or a report.
+function tillAudit(event,o){
+  try{
+    const t=NUM.peek();
+    if(!USER||!t||!t.registered)return Promise.resolve(null);          // a till that has not claimed its code has nothing to attach it to
+    const x=Object.assign({shiftId:SHIFT?SHIFT.open.shiftId:undefined},o||{});
+    return SHIFTLG.log(t,{username:String(USER.username),role:String(USER.role||'')},event,x).catch(e=>{console.warn('Audit entry not saved',e);return null;});
+  }catch(e){console.warn('Audit entry not saved',e);return Promise.resolve(null);}
+}
 let SHIFT=null,SHIFT_ALL=[],SHIFTS_PENDING=0,SHIFT_ERR='',shiftsBusy=false,shiftPrompted=false;   // SHIFT: {open,close:null} for THIS till, or null
 let SHOVL=null,SHBODY=null,SHTTL=null,SHDONE=null,SHVIEW='',SHBUSY=false,SHOPENING=false,SHBC=null;
 const SHIFT_MSG={
@@ -1912,11 +1934,14 @@ async function showShiftReport(shiftId,kind,copy){
   if(!cur){say('That shift is not on this phone.','warn',4000);return;}
   if(cur.close){
     if(kind==='X')say('That shift was closed meanwhile. This is its Z report.','warn',4500);
-    showReport(Shifts.report('Z',cur.open,SALES_ALL,{close:cur.close,returns:RETS_ALL}),kind==='X'?true:!!copy);
+    const isCopy=kind==='X'?true:!!copy;
+    showReport(Shifts.report('Z',cur.open,SALES_ALL,{close:cur.close,returns:RETS_ALL}),isCopy);
+    tillAudit('z_report',{shiftId:cur.open.shiftId,what:isCopy?'copy':''});   // step 20: shown (and so printable); a reprint says copy
     return;
   }
   if(kind==='Z'){say('That shift is not closed yet.','warn',4000);return;}
   showReport(Shifts.report('X',cur.open,SALES_ALL,{now:Date.now(),out:cashOutNow(cur.open.shiftId),returns:RETS_ALL}),false);
+  tillAudit('x_report',{shiftId:cur.open.shiftId,note:sameUser(cur.open.cashier,USER&&USER.username)?'':'For '+cur.open.cashier+'\u2019s shift'});   // step 20: a manager's look at someone else's shift says so
 }
 
 // ── VOIDS AND REFUNDS (till roadmap step 19) ──────────────────────────────────────────────────────────────────
@@ -2181,7 +2206,7 @@ function renderRetConfirm(){
     const run=who=>doReturn(who,refunds,Q);
     if(isHolder(USER)){run(String(USER.username));return;}
     if(!Gate.pinHolders(DATA).length){err.textContent='Nobody has set a manager PIN yet. An Admin or Manager must log in to do this, or set a PIN in the main app under Settings \u2192 Manager PIN.';return;}
-    askManagerPin(who=>run(approverName(who)),'A manager must type their PIN to allow this '+(isVoid?'void':'refund')+'.','Allow');
+    askManagerPin(who=>run(approverName(who)),'A manager must type their PIN to allow this '+(isVoid?'void':'refund')+'.','Allow','allow a '+(isVoid?'void':'refund'));
   };
   btns.append(go,bk);fr.append(btns);
   RTBODY.replaceChildren(fr);

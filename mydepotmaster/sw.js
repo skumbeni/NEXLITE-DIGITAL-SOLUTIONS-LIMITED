@@ -25,7 +25,42 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.56 (2026-11-14) — Built-in printer switch in Settings; Print buttons print straight to the terminal's printer (index.html, sw.js).
+// Current version: v0.3.58 (2026-11-14) — Till roadmap step 20: audit-log entries for the till (shifts.js + pos.html + index.html + database_rules.json + sw.js).
+//   - Settings > Audit Log (Admin) now shows what happens at the till, with who, when and who allowed it. It covers steps 14-19:
+//       Shift opened; shift closed (expected, counted, SHORT / OVER, FORCED when someone else closed it, the note)
+//       Discount given (amount, %, who allowed it, manager PIN or own limit, reason)
+//       Void and refund (the sale, reason, who allowed it, money paid back)
+//       X report taken (a manager's look at someone else's shift says so), Z report shown or reprinted (COPY), saved day Z printed (main app)
+//       Manager PIN let a cashier leave the till (who allowed it); wrong manager PIN (what it was for, tries left); PIN pad locked
+//       A login added or removed in Settings > Users (a Cashier included; the password is never logged)
+//     Already logged and unchanged: Manager PIN set / removed, Till exit PIN switch, Till discount settings, Daily Close Out.
+//   - HOW. The till cannot call logAuditEvent(): that writes into DATA, one blob where the last write wins, which is exactly why sales, shifts and returns live
+//     outside it. So the till's lines reach the Audit log the same way its sales do:
+//       1. Events that ALREADY have a record are not written twice. Shifts.auditEntries() reads them from the record itself (shifts/, shiftCloses/, the discount
+//          fields on sales/, returns/), so the log cannot disagree with the ledger and a line cannot go missing.
+//       2. Events with NO record of their own (X report, Z shown / reprinted, PIN let someone leave, wrong PIN, pad locked) are written by the till as new
+//          append-only records, tillAudit/{id} (id K7F2-A<time><3 random>, create-only), through shifts.js log(). Same IndexedDB store, outbox and download as
+//          the shifts (no schema change). The PIN typed is never stored.
+//       3. index.html _auditAll() = DATA.auditLog + Shifts.auditEntries(...), read fresh each time. The viewer (newest 100) and the PDF export both use it. Nothing
+//          is copied into DATA.auditLog, so two phones cannot double a line and the 2000-line cap cannot trim till lines. Main-app events still use logAuditEvent.
+//     Best effort: a failed till log is a console warning only; it never stops a sale, a PIN or a report. A till that has not claimed its code logs nothing.
+//   - database_rules.json MUST BE PUBLISHED: new depots/<depot>/tillAudit node (create-only, only for a registered till, event limited to the five above, every field
+//     checked). Until it is published the till still sells, opens and closes shifts and uploads them as before; only the audit records wait in the outbox on the
+//     phone (nothing is lost) and the till's shift-upload warning shows. Publish it BEFORE the phones update.
+//   - Not logged: a discount put on a cart that was never sold; each press of Print (the report is logged when it is shown); idle auto-logout (nobody is there);
+//     password resets. Till lines are readable by every signed-in phone of the depot, like shifts and sales; closing that is step 21.
+//   - shifts.js: new 'audit' record kind (auditRecord / validateAudit), create(env).log(), auditEntries(); push sends audit records last, pull fetches them last.
+//     shiftsOf() and openShiftOf() ignore them, so shifts behave exactly as before. sales.js, returns.js and gate.js are unchanged; shifts.js was already precached.
+//   Files: shifts.js + pos.html + index.html (Audit Log viewer and export, user add / remove, day Z print, SW_VERSION) + database_rules.json + sw.js.
+// Previous: v0.3.57 (2026-11-14) — Built-in printer, no more limits: pictures (logo, tables, ID cards, books), long jobs in parts, RawBT install link (index.html, pos.html, sw.js).
+//   - Print style (Settings > Printer): Auto = receipts as text, documents as pictures; Plain text; Pictures for everything. A picture is the page drawn in black and white and sent as
+//     ESC/POS raster, so the logo, tables and layout print. Wide tables fit best on 80 mm paper or at Normal size. If drawing fails the job prints as text instead.
+//   - Staff ID cards and book/spreadsheet prints now go to the built-in printer too (ID cards as a white card with a black border to save ink).
+//   - Long jobs are no longer sent to the browser print dialog: they are cut into parts of at most 200 KB; part 1 goes at once, a bar asks for a tap before each next part
+//     (Chrome only allows the hand-off right after a tap). Auto prints a document that needs more than 3 picture parts as compact text to save paper.
+//   - If RawBT is not installed, the hand-off now opens its Play Store page instead of doing nothing (index.html and the Till in pos.html). Settings > Printer has a Get RawBT link.
+//   - pos.html: the Till's Printer dialog no longer wipes the Print style setting when it saves. No database or rules change.
+// Previous: v0.3.56 (2026-11-14) — Built-in printer switch in Settings; Print buttons print straight to the terminal's printer (index.html, sw.js).
 //   - Settings > Printer (Admin and Staff): Built-in printer tick, Thermal paper (Auto / 58 mm / 80 mm), Print size, Test print. Per device; same localStorage key as the
 //     Till's Printer button (mdm_till_printer), so one switch covers both the Till and the main app.
 //   - ON: receipts, void/refund slips, Z reports and the subscription receipt print by RawBT with no print screen. Payslips, reports and other documents keep their
@@ -2109,7 +2144,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.56';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.58';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
