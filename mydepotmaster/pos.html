@@ -494,6 +494,7 @@ async function setupTill(){
   tillBusy=true;TILL_ERR='';paintTill();
   try{await NUM.ensureRegistered();}catch(e){TILL_ERR=tillErrText(e);console.warn('Till code claim failed',e);}
   tillBusy=false;paintTill();
+  probeClock(true);
   loadShift().then(()=>{paintShift();if(SHOVL&&!SHBUSY)renderShift();});         // a registered till can now open (or already has) a shift
   if(PAYOVL&&PAYFOOT&&PAY)renderPayFoot(settle(toC(cartTotal()),PAY.tenders));   // a payment screen left open: unlock Complete
 }
@@ -1108,6 +1109,7 @@ function completePay(){
 // Step 16: the whole decision runs inside the shift lock (a second tab cannot close the shift between the check and the save). The
 // sale is stamped with the shift it belongs to. No shift, or someone else's shift, and nothing is taken or recorded.
 async function recordSale(b){
+  const ck=clockStop('The sale was not completed.');if(ck)return {err:ck};
   const id=tillIdNow(),cur=id?await SHIFTLG.current(id):null;
   if(!cur)return {err:'No shift is open on this till. Open a shift, then try again. The sale was not completed.'};
   if(!sameUser(cur.open.cashier,USER&&USER.username))return {err:'The shift open on this till is '+cur.open.cashier+'\u2019s. It must be closed before you can sell. The sale was not completed.'};
@@ -1627,7 +1629,32 @@ async function syncShifts(){
   }catch(e){console.warn('Shift sync failed',e);}
   finally{shiftsBusy=false;paintShift();}
 }
-const syncAll=()=>{syncSales();syncShifts();};
+// ── CLOCK GUARD (gate.js, CLOCK GUARD) ──────────────────────────────────────────────────────────────────────
+// The database rules refuse a record stamped more than 2 days ahead of the server, and a sale stamped hours off lands on the wrong
+// day's close-out. So the till asks the server for the time (every 5 minutes while online, and when it comes back online) and does
+// not take a sale, a void or refund, or a shift open/close while the phone is 6 hours or more out. Unknown (no signal, rules not
+// published yet) never blocks; a phone that says it is before November 2026 always does.
+let clockBusy=false,clockSaid=false;
+async function probeClock(force){
+  const t=NUM.peek();
+  if(clockBusy||!navigator.onLine||!(DATA&&DATA.installId)||!(t&&t.registered))return;
+  if(!force&&!Gate.clockDue(localStorage,Date.now()))return;
+  clockBusy=true;
+  try{
+    const sent=Date.now();
+    const r=await CLOUD.put('depots/'+DATA.installId+'/clock/'+t.code,{t:{'.sv':'timestamp'}});
+    const got=Date.now(),s=Gate.clockNote(localStorage,r&&r.t,sent,got),bad=Gate.clockProblem(localStorage,got);
+    if(s&&bad){if(!clockSaid){clockSaid=true;say(bad+' Selling is paused. Set the date and time in the phone\u2019s Settings.','bad',9000);}}
+    else clockSaid=false;
+  }catch(e){}                                           // unknown is never "wrong"
+  finally{clockBusy=false;}
+}
+// '' to go on, or what to show the cashier. suffix: what did not happen ("The sale was not completed." / "Nothing was recorded.").
+function clockStop(suffix){
+  const p=Gate.clockProblem(localStorage,Date.now());
+  return p?p+' Set the date and time in the phone\u2019s Settings, then try again. '+suffix:'';
+}
+const syncAll=()=>{probeClock();syncSales();syncShifts();};
 
 function openShiftSheet(){
   if(SHOVL||SHOPENING||PAYOVL||HOVL||PINOVL||MOVL||CAMOVL)return;
@@ -1689,6 +1716,8 @@ function renderOpen(){
     err.textContent='';
     const f=amt(inp.value);
     if(isNaN(f)){err.textContent=SHIFT_MSG.BAD_FLOAT;inp.focus();return;}
+    await Promise.race([probeClock(true),new Promise(r=>setTimeout(r,4000))]);   // a fresh look at the clock before a shift is opened
+    const ck=clockStop('Nothing was recorded.');if(ck){err.textContent=ck;return;}
     SHBUSY=true;go.disabled=true;go.textContent='Opening\u2026';
     let failed='';
     try{
@@ -1763,6 +1792,7 @@ function renderClose(sh,forced){
     const c=amt(cnt.value);
     if(isNaN(c)){err.textContent=SHIFT_MSG.BAD_COUNT;cnt.focus();return;}
     if(CART.length||PAYOVL){err.textContent='Finish or hold the sale in the cart first, then close the shift.';return;}
+    {const ck=clockStop('Nothing was recorded.');if(ck){err.textContent=ck;return;}}
     const v=Shifts.varianceOf(sm,c);
     if(!confirm(v===0?'Close this shift? This cannot be undone.':'Close this shift with the cash '+(v<0?'short by ':'over by ')+money(Math.abs(v))+'? This cannot be undone.'))return;
     SHBUSY=true;go.disabled=true;go.textContent='Closing\u2026';
@@ -2241,6 +2271,7 @@ async function doReturn(approvedBy,refunds,P){
 }
 // Shift check, number and ledger append, one at a time (the same lock as a sale, so the shift cannot be closed in between).
 async function recordReturn(b,sale){
+  const ck=clockStop('Nothing was recorded.');if(ck)return {err:ck};
   const id=tillIdNow(),cur=id?await SHIFTLG.current(id):null;
   if(!cur)return {err:'No shift is open on this till. Open a shift, then try again. Nothing was recorded.'};
   if(!sameUser(cur.open.cashier,USER&&USER.username))return {err:'The shift open on this till is '+cur.open.cashier+'\u2019s. It must be closed before anything can be taken back. Nothing was recorded.'};
@@ -2743,7 +2774,7 @@ async function boot(){
   $('depot').textContent=di.name||'';
   setPill('p-user',USER.username+(USER.role?' · '+USER.role:''));
   $('hdr').hidden=false;netPill();cloudPill();
-  addEventListener('online',()=>{netPill();cloudPill();setupTill();syncAll();paintSales();});addEventListener('offline',()=>{netPill();paintSales();});
+  addEventListener('online',()=>{netPill();cloudPill();setupTill();probeClock(true);syncAll();paintSales();});addEventListener('offline',()=>{netPill();paintSales();});
   setInterval(syncAll,60000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncAll();});
   ['pointerdown','keydown','touchstart','scroll'].forEach(e=>document.addEventListener(e,idleReset,{passive:true,capture:true}));
   idleReset();

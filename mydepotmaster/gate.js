@@ -410,6 +410,12 @@ const Gate = (function () {
         if (!res.ok) throw _err('HTTP_' + res.status, 'HTTP ' + res.status);
         return res.json();
       },
+      // A plain overwrite. The reply is what the server stored, with server values ({'.sv':'timestamp'}) filled in.
+      async put(path, data) {
+        const res = await call(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+        if (!res.ok) throw _err('HTTP_' + res.status, 'HTTP ' + res.status);
+        return res.json();
+      },
       async putIfAbsent(path, data) {
         const res = await call(path, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'If-None-Match': '*' }, body: JSON.stringify(data) });
         if (res.status === 412) throw _err('EXISTS', 'Already exists');
@@ -516,7 +522,58 @@ const Gate = (function () {
   function pinClear(storage) { try { storage.removeItem(PIN_LOCK_KEY); } catch (e) {} }
 
 
+  // ═════════════════════════════════════════════════════════════════
+  // CLOCK GUARD — a till whose phone clock is badly wrong must not sell. The database rules refuse a sale stamped more than
+  // 2 days in the future, so such a sale would sit in the outbox; and a sale stamped hours off lands on the wrong day's close-out.
+  // The till asks the server what time it is (a write of {'.sv':'timestamp'} to depots/<depot>/clock/<till>, whose reply carries the
+  // server's clock), keeps the difference, and refuses to take a sale, a void, a refund or a shift open/close while that difference
+  // is 6 hours or more. Rules of thumb that keep it from ever locking a till for no reason:
+  //   - a measurement counts for 10 minutes, by the phone's own clock. Fix the clock and the measurement is already stale
+  //     (the phone's time has jumped), so the till is free at once; offline for longer than that, the till trusts the phone.
+  //   - a clock that says it is before the app was built is wrong whatever the network says, so that one is refused offline too.
+  //   - any failed measurement (no signal, rules not published yet) means "unknown", never "wrong".
+  // ═════════════════════════════════════════════════════════════════
+  const CLOCK_KEY      = 'mdm_clock';
+  const CLOCK_BLOCK_MS = 6 * 3600 * 1000;            // off by this much or more: refuse
+  const CLOCK_FRESH_MS = 10 * 60 * 1000;             // how long a measurement is believed
+  const CLOCK_EVERY_MS = 5 * 60 * 1000;              // how often the till measures again while online
+  const CLOCK_MAX_RTT  = 30 * 1000;                  // a slower round trip is not a reliable sample
+  const CLOCK_FLOOR    = Date.UTC(2026, 10, 1);      // 1 Nov 2026: this app did not exist before it
+
+  function _clockRead(storage) {
+    try { const o = JSON.parse(storage.getItem(CLOCK_KEY) || 'null'); if (o && Number.isFinite(o.skew) && Number.isFinite(o.at)) return { skew: o.skew, at: o.at }; } catch (e) {}
+    return null;
+  }
+  // serverMs: the server's clock from the reply. sentAt / gotAt: the phone's clock just before the request and just after the reply.
+  // Keeps skew = server minus phone (positive: the phone is behind). Returns the sample, or null when it was not usable.
+  function clockNote(storage, serverMs, sentAt, gotAt) {
+    if (!Number.isFinite(serverMs) || serverMs <= 0 || !Number.isFinite(sentAt) || !Number.isFinite(gotAt)) return null;
+    if (gotAt < sentAt || gotAt - sentAt > CLOCK_MAX_RTT) return null;
+    const s = { skew: Math.round(serverMs - (sentAt + gotAt) / 2), at: gotAt };
+    try { storage.setItem(CLOCK_KEY, JSON.stringify(s)); } catch (e) {}
+    return s;
+  }
+  function clockDue(storage, now) {                 // time to measure again?
+    const s = _clockRead(storage);
+    return !s || now < s.at || now - s.at >= CLOCK_EVERY_MS;
+  }
+  function _span(ms) {
+    const m = Math.round(Math.abs(ms) / 60000);
+    if (m >= 2880) return Math.round(m / 1440) + ' days';
+    if (m >= 120) return Math.round(m / 60) + ' hours';
+    return m + ' minutes';
+  }
+  // '' when the till may go on, otherwise what to tell the cashier (the caller adds "nothing was recorded").
+  function clockProblem(storage, now) {
+    if (!(now >= CLOCK_FLOOR)) return 'This phone\u2019s date and time are wrong (it says ' + new Date(now).toISOString().slice(0, 10) + ').';
+    const s = _clockRead(storage);
+    if (s && now - s.at >= 0 && now - s.at <= CLOCK_FRESH_MS && Math.abs(s.skew) >= CLOCK_BLOCK_MS)
+      return 'This phone\u2019s clock is about ' + _span(s.skew) + (s.skew < 0 ? ' ahead of' : ' behind') + ' the real time.';
+    return '';
+  }
+
   return {
+    clockNote, clockDue, clockProblem, CLOCK_KEY, CLOCK_BLOCK_MS, CLOCK_FRESH_MS, CLOCK_EVERY_MS, CLOCK_FLOOR,
     TRIAL_MS, SUB_GRACE_MS, TIER_ORDER, TIER_FEATURES, TRIAL_TIER, READ_ONLY_STATUSES, KEYS, POS_SESSION_MS,
     computeEffectiveStatus, tierFeatureSet: _tierFeatureSet,
     statusOf, isSelfSuspended, tierOf, hasFeature, isReadOnly, reconcile,

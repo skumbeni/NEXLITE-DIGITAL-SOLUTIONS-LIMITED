@@ -25,7 +25,21 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.58 (2026-11-14) — Till roadmap step 20: audit-log entries for the till (shifts.js + pos.html + index.html + database_rules.json + sw.js).
+// Current version: v0.3.59 (2026-11-14) — Till roadmap step 21, follow-up: depot delete, wrong phone clocks, and a nightly check of till records (gate.js + pos.html + index.html + database_rules.json + sw.js).
+//   - Delete account (Settings): refused while the company has any till record (sales, voids/refunds, shifts, shift closes, audit entries). Those are append-only, and
+//     the database rules now also stop a depot admin from deleting a depot that holds any. The app asks the cloud BEFORE it frees any username or wipes anything, so a
+//     refusal changes nothing and says why; no signal also stops it cleanly. Support (the super-admin uid, mdm-admin) can still close such an account.
+//   - Wrong phone clock: the rules refuse a sale, void/refund, shift open or shift close stamped more than 2 days ahead of the server (the audit log is exempt: it must
+//     always be able to record). So the till measures its clock against the server (a tiny write to depots/<depot>/clock/<till>, every 5 minutes online, on coming back
+//     online and before a shift is opened) and, while the phone is 6 hours or more out (the AM/PM mistake, a wrong day), pauses sales, voids/refunds and shift open/close
+//     with a message to fix the date and time. A measurement counts for 10 minutes by the phone's own clock, so fixing the clock frees the till at once; no signal, or rules
+//     not published yet, means "unknown", never "wrong". A phone that says it is before November 2026 is always refused. gate.js: restCloud.put + clockNote / clockDue / clockProblem.
+//   - database_rules.json MUST BE PUBLISHED (and BEFORE the phones update): new depots/<depot>/clock/<till code>; `at` capped at server time + 2 days on sales, returns,
+//     shifts and shiftCloses; the depot-delete rule. Until it is published nothing breaks: the clock check just cannot measure (so never blocks).
+//   - Not fixable in the rules, so checked afterwards: line totals, lineCount, qtyTotal and payment sums (rules cannot add up a list). till_verify.js (Node, not shipped to
+//     phones) re-checks every till record and the sums against sales / returns / shifts, for the nightly backup job.
+//   Files: gate.js + pos.html + index.html (account delete check, SW_VERSION) + database_rules.json + sw.js. sales.js, returns.js and shifts.js are unchanged.
+// Previous: v0.3.58 (2026-11-14) — Till roadmap step 20: audit-log entries for the till (shifts.js + pos.html + index.html + database_rules.json + sw.js).
 //   - Settings > Audit Log (Admin) now shows what happens at the till, with who, when and who allowed it. It covers steps 14-19:
 //       Shift opened; shift closed (expected, counted, SHORT / OVER, FORCED when someone else closed it, the note)
 //       Discount given (amount, %, who allowed it, manager PIN or own limit, reason)
@@ -2144,7 +2158,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.58';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.59';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

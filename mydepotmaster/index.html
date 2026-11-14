@@ -2815,10 +2815,10 @@ function _withAuthParam(url, idToken) {
 }
 
 // Firebase Realtime Database REST API helpers (no SDK needed)
-async function fbGet(path) {
+async function fbGet(path, qs) {          // qs (optional): a query string without the '?', e.g. 'orderBy=%22%24key%22&limitToFirst=1'
   for (let attempt = 0; attempt < 2; attempt++) {
     const idToken = await _getIdToken(attempt > 0);
-    const url = _withAuthParam(FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json', idToken);
+    const url = _withAuthParam(FB_CONFIG.databaseURL.replace(/\/+$/, '') + '/' + path + '.json' + (qs ? '?' + qs : ''), idToken);
     const acToken = await _getAppCheckToken();
     const headers = acToken ? { 'X-Firebase-AppCheck': acToken } : {};
     const res = await _fetchWithTimeout(url, { headers }, _FB_TIMEOUT_MS);
@@ -4713,7 +4713,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.58';
+const SW_VERSION  = 'v0.3.59';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -21694,6 +21694,16 @@ function deleteAccountStep4(){
   });
 }
 
+// The till's records (sales, voids/refunds, shifts, shift closes, audit entries) are append-only in the database rules, and the rules
+// also refuse to let an admin delete a depot that holds any of them. True when this depot has at least one. Throws when the cloud
+// cannot be asked (no signal), so the caller can stop BEFORE anything is removed.
+async function _tillRecordsExist(installId){
+  const kinds = ['sales','returns','shifts','shiftCloses','tillAudit'];
+  const found = await Promise.all(kinds.map(k =>
+    fbGet('depots/'+installId+'/'+k, 'orderBy=%22%24key%22&limitToFirst=1').then(v => !!(v && typeof v === 'object' && Object.keys(v).length))));
+  return found.some(Boolean);
+}
+
 // Executes the full wipe — local storage, IndexedDB, Firebase
 async function _executeAccountDeletion(){
   const installId = DATA.installId || _loadPersistedInstallId();
@@ -21711,6 +21721,21 @@ async function _executeAccountDeletion(){
   try {
     // 1. Firebase: delete usernames and the depot (lockouts/ no longer exists)
     if(isFbConfigured() && installId){
+      // Till records cannot be deleted from the app (database rules). Find out BEFORE freeing the usernames, so a refusal leaves
+      // the account exactly as it was.
+      prog('☁️ Checking the cloud…');
+      let kept;
+      try { kept = await _tillRecordsExist(installId); }
+      catch(e) {
+        prog('⚠️ Could not reach the cloud, so nothing was deleted.<br><span style="font-size:16px">Check your signal and try again.</span>');
+        setTimeout(closeModal, 6000);
+        return;
+      }
+      if(kept) {
+        prog('🔒 This company has till records (sales, refunds, shifts or audit entries).<br><span style="font-size:16px">They are kept permanently and cannot be deleted from the app. Nothing was deleted. Contact support to close the account.</span>');
+        setTimeout(closeModal, 10000);
+        return;
+      }
       prog('☁️ Removing cloud data…');
       // ORDER MATTERS (Firebase rules): the usernames/ delete rule checks that
       // this account is still listed in depots/<id>/authorizedUids, and that
