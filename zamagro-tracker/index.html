@@ -1064,11 +1064,13 @@
                 <div class="view-toolbar">
                     <button class="btn btn-primary" onclick="prepareSaleModal()">+ New Sale</button>
                     <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="openInvoiceBuilder()">🧾 Invoice / Quote / Proforma</button>
+                    <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="openSavedDocs()">📂 Saved</button>
                     <input type="text" id="search-sales" placeholder="Search sales..." onkeyup="renderTable('sales')">
                     <input type="date" id="date-from-sales" onchange="renderTable('sales')" title="From">
                     <span class="arrow">→</span>
                     <input type="date" id="date-to-sales" onchange="renderTable('sales')" title="To">
                     <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="clearDateFilter('sales')">Clear</button>
+                    <button class="btn btn-sm btn-primary" onclick="openReportBuilder('sales')">🖨 Report</button>
                 </div>
                 <div class="table-container">
                     <table id="table-sales"><thead><tr><th>ID</th><th>Date</th><th>Customer</th><th>Items</th><th>Total (ZMW)</th><th>Method</th><th>Actions</th></tr></thead><tbody></tbody></table>
@@ -1084,6 +1086,7 @@
                     <span class="arrow">→</span>
                     <input type="date" id="date-to-purchases" onchange="renderTable('purchases')" title="To">
                     <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="clearDateFilter('purchases')">Clear</button>
+                    <button class="btn btn-sm btn-primary" onclick="openReportBuilder('purchases')">🖨 Report</button>
                     <button class="btn btn-sm btn-primary" onclick="exportPDF('purchases')">⬇ PDF</button>
                     <button class="btn btn-sm btn-primary" onclick="exportWord('purchases')">⬇ Word</button>
                     <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="exportCSV('purchases')">⬇ CSV</button>
@@ -1225,6 +1228,7 @@
                     <span class="arrow">→</span>
                     <input type="date" id="date-to-expenses" onchange="renderTable('expenses')" title="To">
                     <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="clearDateFilter('expenses')">Clear</button>
+                    <button class="btn btn-sm btn-primary" onclick="openReportBuilder('expenses')">🖨 Report</button>
                     <button class="btn btn-sm btn-primary" onclick="exportPDF('expenses')">⬇ PDF</button>
                     <button class="btn btn-sm btn-primary" onclick="exportWord('expenses')">⬇ Word</button>
                     <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="exportCSV('expenses')">⬇ CSV</button>
@@ -1247,6 +1251,7 @@
             <div id="view-fisp" class="hidden">
                 <div class="view-toolbar">
                     <button class="btn btn-primary" onclick="prepareFISPModal()">+ Add FISP Claim</button>
+                    <button class="btn btn-sm btn-primary" onclick="openReportBuilder('fisp')">🖨 Report</button>
                     <input type="text" id="search-fisp" placeholder="Search FISP claims..." onkeyup="renderTable('fisp')">
                     <select id="fisp-season-filter" onchange="renderTable('fisp')" style="padding:0.45rem 0.65rem;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-size:.875rem;background:var(--surface);color:var(--text);min-width:130px;">
                         <option value="">All Seasons</option>
@@ -1307,6 +1312,7 @@
                         <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="document.getElementById('pl-month').value=''; renderPL();">All Time</button>
                         <select id="pl-scope" style="display:none;padding:6px 10px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:.82rem;" onchange="setGroupScope(this.value==='all')"></select>
                         <select id="rep-shop" title="Which shop the downloads below are built for" style="display:none;padding:6px 10px;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-family:inherit;font-size:.82rem;"></select>
+                        <button class="btn btn-sm btn-primary" onclick="openReportBuilder()">🖨 Print Report</button>
                         <button class="btn btn-sm btn-primary" onclick="repRun(exportPLpdf)">⬇ P&amp;L PDF</button>
                         <button class="btn btn-sm btn-primary" onclick="repRun(exportPLword)">⬇ P&amp;L Word</button>
                         <button class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);" onclick="repRun(exportPLcsv)">⬇ P&amp;L CSV</button>
@@ -1670,10 +1676,24 @@
             <div id="sale-items-rows" style="margin-top:.5rem;"></div>
             <button type="button" class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);margin-bottom:1rem;" onclick="addSaleItemRow()">+ Add Item</button>
 
-            <!-- Running total -->
-            <div style="display:flex;justify-content:flex-end;align-items:baseline;gap:.6rem;margin-bottom:1rem;padding:.6rem .75rem;background:var(--surface-2);border-radius:var(--radius-sm);border:1.5px solid var(--border);">
-                <span style="color:var(--text-muted);font-size:.85rem;font-weight:600;">SALE TOTAL:</span>
-                <span id="sale-items-total" style="font-size:1.15rem;font-weight:800;color:var(--primary-dark);">K0.00</span>
+            <!-- Running total, with discount -->
+            <div style="margin-bottom:1rem;padding:.6rem .75rem;background:var(--surface-2);border-radius:var(--radius-sm);border:1.5px solid var(--border);">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:.85rem;font-weight:600;color:var(--text-muted);">
+                    <span>SUBTOTAL:</span><span id="sale-subtotal">K0.00</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:.5rem;margin:.5rem 0;flex-wrap:wrap;">
+                    <span style="font-size:.85rem;font-weight:600;color:var(--text-muted);">DISCOUNT:</span>
+                    <select id="sale-disc-type" onchange="updateSaleGrandTotal()" style="width:auto;padding:6px 8px;">
+                        <option value="pct">%</option>
+                        <option value="amt">K (ZMW)</option>
+                    </select>
+                    <input type="number" id="sale-disc-val" min="0" step="0.01" placeholder="0" oninput="updateSaleGrandTotal()" style="flex:1;min-width:80px;">
+                    <span id="sale-disc-amt" style="font-weight:700;color:var(--text-muted);min-width:80px;text-align:right;">−K0.00</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:baseline;border-top:1.5px solid var(--border);padding-top:.5rem;">
+                    <span style="color:var(--text-muted);font-size:.85rem;font-weight:600;">SALE TOTAL:</span>
+                    <span id="sale-items-total" style="font-size:1.15rem;font-weight:800;color:var(--primary-dark);">K0.00</span>
+                </div>
             </div>
 
             <div class="form-group"><label style="font-weight:600;">Payment Method</label>
@@ -1865,8 +1885,10 @@
     <div id="modal-dn-print" class="modal-overlay hidden">
         <div class="modal-content" style="max-width:560px;max-height:92vh;overflow-y:auto;">
             <div id="dn-print-body"></div>
-            <div style="display:flex;gap:.5rem;margin-top:1.25rem;flex-wrap:wrap;">
+            <div style="display:flex;gap:.5rem;margin-top:1.25rem;flex-wrap:wrap;" id="dn-print-actions">
                 <button class="btn btn-primary" style="flex:1;" onclick="window.print()">🖨 Print</button>
+                <button class="btn btn-sm" style="flex:1;background:var(--surface-2);border:1.5px solid var(--border);font-weight:600;" onclick="dnSignFromPrint('driver')">✍ Driver</button>
+                <button class="btn btn-sm" style="flex:1;background:var(--surface-2);border:1.5px solid var(--border);font-weight:600;" onclick="dnSignFromPrint('cust')">✍ Customer</button>
                 <button class="btn btn-sm" style="flex:1;background:#eee;" onclick="closeModal('modal-dn-print')">Close</button>
             </div>
         </div>
@@ -2463,15 +2485,106 @@
             <div id="invoice-items-rows" style="margin-top:.5rem;"></div>
             <button type="button" class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);margin-bottom:1rem;" onclick="addInvoiceItemRow()">+ Add Item</button>
 
-            <div style="display:flex;justify-content:flex-end;gap:.6rem;align-items:baseline;margin-bottom:1rem;">
-                <span style="color:var(--text-muted);font-size:.85rem;font-weight:600;">TOTAL:</span>
-                <span id="invoice-items-total" style="font-size:1.1rem;font-weight:800;color:var(--primary-dark);">K0.00</span>
+            <div style="margin-bottom:1rem;padding:.6rem .75rem;background:var(--surface-2);border-radius:var(--radius-sm);border:1.5px solid var(--border);">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:.85rem;font-weight:600;color:var(--text-muted);">
+                    <span>SUBTOTAL:</span><span id="invoice-subtotal">K0.00</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:.5rem;margin:.5rem 0;flex-wrap:wrap;">
+                    <span style="font-size:.85rem;font-weight:600;color:var(--text-muted);">DISCOUNT:</span>
+                    <select id="inv-disc-type" onchange="updateInvoiceGrandTotal()" style="width:auto;padding:6px 8px;">
+                        <option value="pct">%</option>
+                        <option value="amt">K (ZMW)</option>
+                    </select>
+                    <input type="number" id="inv-disc-val" min="0" step="0.01" placeholder="0" oninput="updateInvoiceGrandTotal()" style="flex:1;min-width:80px;">
+                    <span id="invoice-disc-amt" style="font-weight:700;color:var(--text-muted);min-width:80px;text-align:right;">−K0.00</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:baseline;border-top:1.5px solid var(--border);padding-top:.5rem;">
+                    <span style="color:var(--text-muted);font-size:.85rem;font-weight:600;">TOTAL:</span>
+                    <span id="invoice-items-total" style="font-size:1.1rem;font-weight:800;color:var(--primary-dark);">K0.00</span>
+                </div>
             </div>
 
             <div class="form-group"><label>Notes / Terms (optional)</label><textarea id="inv-doc-notes" rows="2" placeholder="e.g. 50% deposit required, prices valid for 14 days"></textarea></div>
 
             <button type="button" class="btn btn-primary" style="width: 100%" onclick="generateInvoiceDoc()">Generate Document</button>
             <button onclick="closeModal('modal-invoice-builder')" class="btn btn-sm" style="margin-top: 10px; width: 100%">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Signature pad -->
+    <div id="modal-sign" class="modal-overlay hidden" style="z-index:3000;">
+        <div class="modal-content" style="max-width:520px;">
+            <h3 id="sign-title">Signature</h3>
+            <p style="color:var(--text-muted);font-size:.82rem;margin:.35rem 0 .75rem;">Sign inside the box with your finger.</p>
+            <div class="form-group"><label style="font-weight:600;">Name of signer</label><input type="text" id="sign-name" maxlength="100" placeholder="Full name"></div>
+            <canvas id="sign-canvas" width="600" height="200"></canvas>
+            <div style="display:flex;gap:.5rem;margin-top:.9rem;flex-wrap:wrap;">
+                <button type="button" class="btn btn-primary" style="flex:2;" onclick="signApply()">✔ Apply signature</button>
+                <button type="button" class="btn btn-sm" style="flex:1;background:var(--surface-2);border:1.5px solid var(--border);" onclick="signClear()">Clear</button>
+                <button type="button" class="btn btn-sm" id="sign-skip" style="flex:1;background:#eee;" onclick="signCancel()">Cancel</button>
+            </div>
+            <div style="font-size:.72rem;color:var(--text-muted);margin-top:.6rem;">An on-screen signature is a visual record that the person agreed or received the goods. It is not a certified digital signature.</div>
+        </div>
+    </div>
+
+    <!-- Saved quotations / proformas / invoices -->
+    <div id="modal-saved-docs" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width:720px;max-height:92vh;overflow-y:auto;">
+            <h3>📂 Saved Quotes &amp; Invoices</h3>
+            <input type="text" id="saved-docs-search" placeholder="Search by number, customer or type..." oninput="renderSavedDocs()" style="margin:.75rem 0;">
+            <div class="table-container"><table id="table-saved-docs"><thead><tr><th>No.</th><th>Type</th><th>Date</th><th>Customer</th><th>Total</th><th>Signed</th><th></th></tr></thead><tbody></tbody></table></div>
+            <button onclick="closeModal('modal-saved-docs')" class="btn btn-sm" style="margin-top:10px;width:100%">Close</button>
+        </div>
+    </div>
+
+    <!-- Combined Report: builder -->
+    <div id="modal-report-builder" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width:520px;max-height:92vh;overflow-y:auto;">
+            <h3>🖨 Print Report</h3>
+            <p style="color:var(--text-muted);font-size:.82rem;margin:.35rem 0 1rem;">Pick the period and what to include. You get one combined report to print or save as a PDF.</p>
+            <div class="form-group">
+                <label style="font-weight:600;">Period</label>
+                <select id="rpt-preset" onchange="rptPreset(this.value)">
+                    <option value="custom">Custom dates</option>
+                    <option value="month">This month</option>
+                    <option value="lastmonth">Last month</option>
+                    <option value="7d">Last 7 days</option>
+                    <option value="30d">Last 30 days</option>
+                    <option value="year">This year</option>
+                    <option value="all">All time</option>
+                </select>
+            </div>
+            <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 10px;">
+                <div class="form-group"><label style="font-weight:600;">From</label><input type="date" id="rpt-from" onchange="rptDatesTouched()"></div>
+                <div class="form-group"><label style="font-weight:600;">To</label><input type="date" id="rpt-to" onchange="rptDatesTouched()"></div>
+            </div>
+            <label style="font-weight:600;display:block;margin-bottom:.4rem;">Include in the report</label>
+            <div id="rpt-sections" style="display:grid;gap:.45rem;margin-bottom:1rem;"></div>
+            <div id="rpt-fisp-opts" class="grid hidden" style="grid-template-columns: 1fr 1fr; gap: 10px;">
+                <div class="form-group"><label style="font-weight:600;">FISP season</label><select id="rpt-season"></select></div>
+                <div class="form-group"><label style="font-weight:600;">FISP status</label>
+                    <select id="rpt-status"><option value="">All</option><option value="Pending">Pending</option><option value="Paid">Paid</option></select>
+                </div>
+            </div>
+            <div class="form-group hidden" id="rpt-shop-row">
+                <label style="font-weight:600;">Shop</label>
+                <select id="rpt-shop"></select>
+            </div>
+            <button type="button" class="btn btn-primary" style="width:100%" onclick="buildReport()">Preview &amp; Print</button>
+            <button onclick="closeModal('modal-report-builder')" class="btn btn-sm" style="margin-top:8px;width:100%">Cancel</button>
+        </div>
+    </div>
+
+    <!-- Combined Report: preview / print -->
+    <div id="modal-report-print" class="modal-overlay hidden">
+        <div class="modal-content" style="max-width:900px;max-height:92vh;overflow-y:auto;">
+            <div id="report-print-body"></div>
+            <div style="display:flex;gap:.5rem;margin-top:1.25rem;flex-wrap:wrap;" id="report-print-actions">
+                <button class="btn btn-primary" style="flex:1;" onclick="window.print()">🖨 Print</button>
+                <button class="btn btn-sm" style="flex:1;background:var(--danger);color:#fff;font-weight:600;" onclick="exportReportPDF()">⬇ PDF</button>
+                <button class="btn btn-sm" style="flex:1;background:var(--surface-2);border:1.5px solid var(--border);" onclick="closeModal('modal-report-print');openModal('modal-report-builder')">✏️ Change</button>
+                <button class="btn btn-sm" style="flex:1;background:#eee;" onclick="closeModal('modal-report-print')">Close</button>
+            </div>
         </div>
     </div>
 
@@ -2485,6 +2598,8 @@
                 <button class="btn btn-primary" style="flex:1;" onclick="window.print()">🖨 Print</button>
                 <button class="btn btn-sm" style="flex:1;background:var(--danger);color:#fff;font-weight:600;" onclick="exportInvoicePDF()">⬇ PDF</button>
                 <button class="btn btn-sm" style="flex:1;background:var(--accent);color:#fff;font-weight:600;" onclick="exportInvoiceWord()">⬇ Word</button>
+                <button id="btn-sign-doc" class="btn btn-sm" style="flex:1;background:var(--surface-2);border:1.5px solid var(--border);font-weight:600;" onclick="signQuotation()">✍ Sign</button>
+                <button id="btn-save-doc" class="btn btn-sm" style="flex:1;background:var(--success);color:#fff;font-weight:700;" onclick="saveQuoteDoc()">💾 Save</button>
                 <button id="btn-convert-to-sale" class="btn btn-sm hidden" style="flex:1;background:var(--success);color:white;font-weight:700;" onclick="convertQuotationToSale()">✅ Convert to Sale</button>
                 <button class="btn btn-sm" style="flex:1; background:#eee;" onclick="closeModal('modal-invoice-print')">Close</button>
             </div>
@@ -2493,12 +2608,12 @@
 
     <style>
         @media print {
-            body > *:not(#modal-receipt):not(#modal-invoice-print):not(#modal-statement):not(#modal-grn-print):not(#modal-dn-print):not(#modal-cd-print):not(#modal-ret-print):not(#modal-trf-print) { display: none !important; }
-            #modal-receipt:not(.hidden), #modal-invoice-print:not(.hidden), #modal-statement:not(.hidden), #modal-grn-print:not(.hidden), #modal-dn-print:not(.hidden), #modal-cd-print:not(.hidden), #modal-ret-print:not(.hidden), #modal-trf-print:not(.hidden) { position: static !important; background: none !important; display: block !important; }
+            body > *:not(#modal-receipt):not(#modal-invoice-print):not(#modal-statement):not(#modal-grn-print):not(#modal-dn-print):not(#modal-cd-print):not(#modal-ret-print):not(#modal-trf-print):not(#modal-report-print) { display: none !important; }
+            #modal-receipt:not(.hidden), #modal-invoice-print:not(.hidden), #modal-statement:not(.hidden), #modal-grn-print:not(.hidden), #modal-dn-print:not(.hidden), #modal-cd-print:not(.hidden), #modal-ret-print:not(.hidden), #modal-trf-print:not(.hidden), #modal-report-print:not(.hidden) { position: static !important; background: none !important; display: block !important; }
             #statement-actions, #statement-opts, #statement-pay { display: none !important; }
             #modal-statement .modal-content { max-height: none !important; overflow: visible !important; }
             .modal-content { box-shadow: none !important; max-width: 100% !important; }
-            #receipt-actions, #invoice-print-actions, #grn-print-actions { display: none !important; }
+            #receipt-actions, #invoice-print-actions, #grn-print-actions, #dn-print-actions { display: none !important; }
             .receipt-divider { border-top: 1px dashed #000; margin: 8px 0; }
         }
         .receipt-divider { border-top: 1px dashed #ccc; margin: 8px 0; }
@@ -2580,6 +2695,41 @@
         #invoice-print-body .invoice-grand-total { display: flex; justify-content: space-between; font-weight: 800; font-size: 1rem; border-top: 1.5px solid #333; padding-top: 6px; margin-top: 4px; }
         #invoice-print-body .invoice-notes { margin-top: 10px; font-size: 0.78rem; color: #444; background: #f7f7f7; padding: 6px 8px; border-radius: 4px; }
         #invoice-print-body .invoice-footer { text-align: center; font-size: 0.78rem; margin-top: 12px; color: #555; }
+
+        /* --- SIGNATURES --- */
+        #sign-canvas { display: block; width: 100%; height: auto; background: #fff; border: 2px dashed #8a9; border-radius: 8px; touch-action: none; cursor: crosshair; }
+        .sig-cell { position: relative; }
+        .sig-cell img.sig-img { position: absolute; left: 0; bottom: 100%; max-height: 56px; max-width: 100%; }
+
+        /* --- COMBINED REPORT (preview + print) --- */
+        #report-print-body { font-size: 0.82rem; line-height: 1.45; color: #111; background: #fff; padding: 12px; border-radius: 6px; }
+        #report-print-body .rpt-head { text-align: center; margin-bottom: 6px; }
+        #report-print-body .rpt-logo { display: block; margin: 0 auto 6px; max-width: 64px; max-height: 64px; object-fit: contain; }
+        #report-print-body .rpt-co { font-weight: 800; font-size: 1.1rem; }
+        #report-print-body .rpt-sub { color: #555; font-size: 0.78rem; }
+        #report-print-body .rpt-title { text-align: center; font-weight: 800; font-size: 1.1rem; letter-spacing: 1px; margin: 10px 0 4px; padding: 5px 0; border-top: 1.5px solid #ccc; border-bottom: 1.5px solid #ccc; }
+        #report-print-body .rpt-period { text-align: center; font-size: 0.88rem; font-weight: 600; }
+        #report-print-body .rpt-filters { text-align: center; font-size: 0.78rem; color: #555; margin-bottom: 8px; }
+        #report-print-body h4 { margin: 16px 0 6px; font-size: 0.95rem; color: #1E6B35; border-bottom: 2px solid #1E6B35; padding-bottom: 3px; page-break-after: avoid; }
+        #report-print-body .rpt-wrap { overflow-x: auto; }
+        #report-print-body table { width: 100%; border-collapse: collapse; font-size: 0.76rem; }
+        #report-print-body th { background: #1E6B35; color: #fff; text-align: left; padding: 4px 5px; font-weight: 700; }
+        #report-print-body td { padding: 3px 5px; border-bottom: 1px solid #e3e3e3; vertical-align: top; }
+        #report-print-body tbody tr:nth-child(even) td { background: #f6f8f3; }
+        #report-print-body .r { text-align: right; white-space: nowrap; }
+        #report-print-body tr { page-break-inside: avoid; }
+        #report-print-body thead { display: table-header-group; }
+        #report-print-body .rpt-totals { margin-top: 5px; font-size: 0.8rem; font-weight: 700; text-align: right; }
+        #report-print-body .rpt-totals span { margin-left: 14px; white-space: nowrap; }
+        #report-print-body .rpt-empty { color: #777; font-style: italic; padding: 4px 0; }
+        #report-print-body .rpt-foot { text-align: center; font-size: 0.72rem; color: #888; margin-top: 14px; }
+        @media print {
+            #modal-report-print .modal-content { max-height: none !important; overflow: visible !important; width: 100% !important; max-width: 100% !important; padding: 0 !important; }
+            #report-print-actions { display: none !important; }
+            #report-print-body { padding: 0; }
+            #report-print-body .rpt-wrap { overflow: visible; }
+            #report-print-body th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+        }
     </style>
 
     <!-- WhatsApp assistant: generic preview-and-send box (kept last so it sits above other modals) -->
@@ -2654,6 +2804,7 @@
             returns:     'za_returns',
             suppayments: 'za_suppayments',
             transfers:   'za_transfers',
+            quotes:      'za_quotes',
             settings:    'za_settings'
         };
 
@@ -2674,6 +2825,7 @@
             returns:      [],
             suppayments:  [],
             transfers:    [],
+            quotes:       [],
             settings:  { lowStockThreshold: 20, creditTermDays: 30, taxRegime: 'none', stockCategories: [], expenseCategories: [] }
         };
 
@@ -2858,6 +3010,8 @@
             set suppayments(v) { shopSet('suppayments', v); },
             get transfers() { return shopGet('transfers'); },
             set transfers(v) { shopSet('transfers', v); },
+            get quotes() { return shopGet('quotes'); },
+            set quotes(v) { shopSet('quotes', v); },
             get settings()     { return dbLoad('settings'); },
             set settings(v) { writeSettings(v); }
         };
@@ -2955,7 +3109,7 @@
         const LOCAL_SESSION_KEY = 'za_local_session'; // { role, displayName } — marks an active logged-in session across refreshes
         const SYNC_QUEUE_KEY  = 'za_pending_sync'; // persistent offline-safe outbox
         const LAST_SYNCED_KEY = 'za_last_synced';  // persisted so "Last synced" survives a page reload
-        const SYNC_COLLECTIONS = ['inventory', 'sales', 'purchases', 'expenses', 'fisp', 'credit', 'customers', 'suppliers', 'adjustments', 'grns', 'pos', 'deliveries', 'cdnotes', 'returns', 'suppayments', 'transfers'];
+        const SYNC_COLLECTIONS = ['inventory', 'sales', 'purchases', 'expenses', 'fisp', 'credit', 'customers', 'suppliers', 'adjustments', 'grns', 'pos', 'deliveries', 'cdnotes', 'returns', 'suppayments', 'transfers', 'quotes'];
 
         let cloudAuth = null;
         // The uid whose businesses/{uid} node this session actually reads/writes. For the
@@ -4475,7 +4629,7 @@
             'handleEditSave','handleEditSale','handleEditPurchase','handleEditFISP','handleEditExpense','handleEditCustomer','handleEditSupplier','handleEditCredit',
             'submitMultiSale','convertQuotationToSale','handleCreditPayment','applyLumpSumPayment','payFISP','payCredit',
             'savePO','saveGRN','saveDN','saveCD','saveRET','saveTRF','saveSupPay','receiveAgainstPO','togglePOCancel','dnSetStatus','grnSaveNewProduct',
-            'saveCreditPromise','saveCreditTerm',
+            'saveCreditPromise','saveCreditTerm','saveQuoteDoc','dnSignFromPrint','deleteSavedDoc',
             // forms that open an "add/edit" screen
             'openAddStockModal','openAddCustomerModal','openAddSupplierModal','openAdjustmentModal',
             'openEditModal','openEditSaleModal','openEditPurchaseModal','openEditFISPModal','openEditExpenseModal','openEditCustomerModal','openEditSupplierModal','openEditCreditModal',
@@ -5180,7 +5334,7 @@
         }
 
         function clearAllData() {
-            const collections = ['inventory','sales','purchases','expenses','fisp','credit','customers','suppliers','adjustments','grns','pos','deliveries','cdnotes','returns','suppayments','transfers'];
+            const collections = ['inventory','sales','purchases','expenses','fisp','credit','customers','suppliers','adjustments','grns','pos','deliveries','cdnotes','returns','suppayments','transfers','quotes'];
             writeCollection('credit', []); // also removes the credit audit entries stored alongside
             collections.forEach(key => { dbSetAll(key, []); }); // routes through writeCollection -> local + cloud sync
             refreshAll();
@@ -7841,7 +7995,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                     const saleActions = currentUser === 'admin'
                         ? `<button class="btn btn-sm btn-primary" onclick="openEditSaleModal('${esc(item.id)}')">✏️</button><button class="btn btn-sm btn-danger" onclick="deleteRecord('sales','${esc(item.id)}')">🗑</button>`
                         : '';
-                    row = `<tr><td>${esc(item.id)}</td><td>${esc(item.date)}</td><td>${esc(item.cust)}</td><td>${itemsCell}</td><td>${formatZMW(item.total)}</td><td>${methodCell}</td><td style="white-space:nowrap;display:flex;gap:4px;"><button class="btn btn-sm" style="background:#eee;" onclick="printReceipt('${esc(item.id)}')">🖨</button>${saleActions}</td></tr>`;
+                    row = `<tr><td>${esc(item.id)}</td><td>${esc(item.date)}</td><td>${esc(item.cust)}</td><td>${itemsCell}</td><td>${formatZMW(item.total)}${item.discount > 0 ? `<div style="font-size:.72rem;color:var(--text-muted);">after −${formatZMW(item.discount)} discount</div>` : ''}</td><td>${methodCell}</td><td style="white-space:nowrap;display:flex;gap:4px;"><button class="btn btn-sm" style="background:#eee;" onclick="printReceipt('${esc(item.id)}')">🖨</button>${saleActions}</td></tr>`;
                 } else if (type === 'purchases') {
                     const currentProdName = db.inventory.find(i => i.id === item.prodId)?.name || item.prodName;
                     const purBy = item.recordedBy ? `<span style='font-size:.72rem;color:var(--text-muted);'>${esc(item.recordedBy)}</span>` : '';
@@ -8591,11 +8745,12 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             }
         }
         function _groupSums(pred) {
-            const g = { grossSales: 0, returnsTotal: 0, purchasesRaw: 0, extIn: 0, extOut: 0, expenses: 0, writeoffs: 0, closingShops: 0, rows: [] };
+            const g = { grossSales: 0, discounts: 0, returnsTotal: 0, purchasesRaw: 0, extIn: 0, extOut: 0, expenses: 0, writeoffs: 0, closingShops: 0, rows: [] };
             const add = (list, f) => list.reduce((t, x) => t + (f(x) || 0), 0);
             getShops(true).forEach(sh => {
                 const r = _asShop(sh.id, () => ({
                     sales: add(db.sales.filter(x => pred(x.date)), x => x.total),
+                    disc: add(db.sales.filter(x => pred(x.date)), x => x.discount),
                     rets: add(db.returns.filter(x => pred(x.date)), x => x.total),
                     pur: add(db.purchases.filter(x => pred(x.date)), x => x.total),
                     tin: add(db.transfers.filter(x => x.direction === 'in' && !x.internal && pred(x.date)), x => x.total),
@@ -8605,7 +8760,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                     stock: add(db.inventory, i => i.qty * i.cost)
                 }));
                 g.rows.push(Object.assign({ id: sh.id, name: sh.name, active: sh.active !== false }, r));
-                g.grossSales += r.sales; g.returnsTotal += r.rets; g.purchasesRaw += r.pur; g.extIn += r.tin; g.extOut += r.tout;
+                g.grossSales += r.sales; g.discounts += r.disc || 0; g.returnsTotal += r.rets; g.purchasesRaw += r.pur; g.extIn += r.tin; g.extOut += r.tout;
                 g.expenses += r.exp; g.writeoffs += r.wo; g.closingShops += r.stock;
             });
             const out = dbLoad('transfers').filter(t => t && t.internal && t.direction === 'out');
@@ -8626,7 +8781,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const gross = g.revenue - g.cogs;
             const net = gross - g.expenses - g.writeoffs - tax.taxDeduction;
             const period = monthVal ? new Date(monthVal + '-01').toLocaleString('default', { month: 'long', year: 'numeric' }) : 'All Time';
-            return { monthVal, period, grossSales: g.grossSales, returnsTotal: g.returnsTotal, revenue: g.revenue, purchases: g.purchases, purchasesRaw: g.purchasesRaw,
+            return { monthVal, period, grossSales: g.grossSales, discounts: _r2(g.discounts), returnsTotal: g.returnsTotal, revenue: g.revenue, purchases: g.purchases, purchasesRaw: g.purchasesRaw,
                 transfersIn: g.extIn, transfersOut: g.extOut, expenses: g.expenses, writeoffs: g.writeoffs, closingStock: g.closing, cogs: g.cogs, gross, tax, net,
                 group: true, inTransit: g.inTransit, lostInTransit: g.lostInTransit, shops: g.rows };
         }
@@ -8683,6 +8838,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             }
 
             const grossSales = db.sales.filter(s => matchesMonth(s.date)).reduce((sum, s) => sum + s.total, 0);
+            const discounts = _r2(db.sales.filter(s => matchesMonth(s.date)).reduce((sum, s) => sum + (s.discount || 0), 0));
             const returnsTotal = db.returns.filter(r => matchesMonth(r.date)).reduce((sum, r) => sum + (r.total || 0), 0);
             const revenue   = grossSales - returnsTotal;
             const purchasesRaw = db.purchases.filter(p => matchesMonth(p.date)).reduce((sum, p) => sum + p.total, 0);
@@ -8706,7 +8862,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 ? new Date(monthVal + '-01').toLocaleString('default', { month: 'long', year: 'numeric' })
                 : 'All Time';
 
-            return { monthVal, period, grossSales, returnsTotal, revenue, purchases, purchasesRaw, transfersIn, transfersOut, expenses, writeoffs, closingStock, cogs, gross, tax, net };
+            return { monthVal, period, grossSales, discounts, returnsTotal, revenue, purchases, purchasesRaw, transfersIn, transfersOut, expenses, writeoffs, closingStock, cogs, gross, tax, net };
         }
 
         function renderPL() {
@@ -8728,6 +8884,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             }
 
             divRow('Revenue');
+            if (pl.discounts > 0) { row('Sales at list prices', _r2(pl.grossSales + pl.discounts), 'text-success', true); row('Less: Discounts given', pl.discounts, 'text-danger', true); }
             if (pl.returnsTotal > 0) { row('Gross Sales', pl.grossSales, 'text-success', true); row('Less: Sales Returns', pl.returnsTotal, 'text-danger', true); }
             row(pl.returnsTotal > 0 ? 'Net Sales Revenue' : 'Total Sales Revenue', pl.revenue, 'text-success');
 
@@ -8846,17 +9003,17 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                     if (s.items && s.items.length > 0) {
                         s.items.forEach((li, idx) => {
                             const prod = db.inventory.find(i => i.id === li.prodId)?.name || li.prodName;
-                            rows.push([idx===0?s.id:'', idx===0?s.date:'', idx===0?s.cust:'', prod, li.qty, li.unitPrice.toFixed(2), li.lineTotal.toFixed(2), idx===0?s.method:'']);
+                            rows.push([idx===0?s.id:'', idx===0?s.date:'', idx===0?s.cust:'', prod, li.qty, li.unitPrice.toFixed(2), li.discount > 0 ? li.discount.toFixed(2) : '', li.lineTotal.toFixed(2), idx===0?s.method:'']);
                         });
                     } else {
                         const prod = db.inventory.find(i => i.id === s.prodId)?.name || s.prodName;
                         const up = s.qty > 0 ? (s.total/s.qty) : 0;
-                        rows.push([s.id, s.date, s.cust, prod, s.qty, up.toFixed(2), s.total.toFixed(2), s.method]);
+                        rows.push([s.id, s.date, s.cust, prod, s.qty, up.toFixed(2), '', s.total.toFixed(2), s.method]);
                     }
                 });
                 return {
                     title: `${co} — Sales Report (${date})`,
-                    headers: ['ID','Date','Customer','Product','Qty','Unit Price','Total (ZMW)','Method'],
+                    headers: ['ID','Date','Customer','Product','Qty','Unit Price','Discount (ZMW)','Total (ZMW)','Method'],
                     rows, filename: `ZamAgro_Sales_${date.replace(/\//g,'-')}`
                 };
             } else if (type === 'purchases') {
@@ -8925,6 +9082,318 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             if (d) _makePDF(d.title, d.headers, d.rows, d.filename);
         }
 
+        // ── COMBINED PRINT REPORT ─────────────────────────────────────────
+        // One report for a chosen date range: any mix of FISP claims, sales, purchases, expenses, returns
+        // and credit sales. It opens as a preview (Print or PDF). Records keep their dates as DD/MM/YYYY
+        // text, so every date filter converts through _dmyToISO first.
+        const RPT_ORDER = ['fisp', 'sales', 'purchases', 'expenses', 'returns', 'credit'];
+        const RPT_SECTIONS = {
+            fisp:      { icon: '🌾', label: 'FISP claims',   feature: 'fisp' },
+            sales:     { icon: '🛒', label: 'Sales' },
+            purchases: { icon: '📦', label: 'Purchases',     feature: 'purchases' },
+            expenses:  { icon: '💸', label: 'Expenses' },
+            returns:   { icon: '↩️', label: 'Sales returns' },
+            credit:    { icon: '🧾', label: 'Credit sales',  feature: 'credit' }
+        };
+        const RPT_SEASONS = ['2022/23', '2023/24', '2024/25', '2025/26', '2026/27'];
+        let _lastReport = null;
+        let _rptDraft = null;   // the last choices, so Change / reopening keeps them
+
+        function _isoLocalOf(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
+        function _isoToDMY(iso) { return iso ? iso.split('-').reverse().join('/') : ''; }
+        function _rptMoney(v) { return (Number(v) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+        function _rptAvailable(k) { const f = RPT_SECTIONS[k].feature; return !f || hasFeature(f); }
+
+        function rptPreset(v) {
+            const now = new Date();
+            let from = '', to = '';
+            if (v === 'month')          { from = _isoLocalOf(new Date(now.getFullYear(), now.getMonth(), 1)); to = _isoLocalOf(new Date(now.getFullYear(), now.getMonth() + 1, 0)); }
+            else if (v === 'lastmonth') { from = _isoLocalOf(new Date(now.getFullYear(), now.getMonth() - 1, 1)); to = _isoLocalOf(new Date(now.getFullYear(), now.getMonth(), 0)); }
+            else if (v === '7d')        { from = _isoLocalOf(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6)); to = _isoLocalOf(now); }
+            else if (v === '30d')       { from = _isoLocalOf(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29)); to = _isoLocalOf(now); }
+            else if (v === 'year')      { from = `${now.getFullYear()}-01-01`; to = `${now.getFullYear()}-12-31`; }
+            else if (v === 'custom')    { return; }
+            document.getElementById('rpt-from').value = from;
+            document.getElementById('rpt-to').value = to;
+        }
+        function rptDatesTouched() { document.getElementById('rpt-preset').value = 'custom'; }
+        function rptToggleFisp() {
+            const on = document.getElementById('rpt-sec-fisp') && document.getElementById('rpt-sec-fisp').checked;
+            document.getElementById('rpt-fisp-opts').classList.toggle('hidden', !on);
+        }
+
+        // listType: 'sales' | 'purchases' | 'expenses' | 'fisp' when opened from that list (its section is
+        // pre-ticked and its date filter is carried over); nothing when opened from Reports.
+        function openReportBuilder(listType) {
+            const wrap = document.getElementById('rpt-sections');
+            wrap.innerHTML = RPT_ORDER.filter(_rptAvailable).map(k =>
+                `<label style="display:flex;gap:.5rem;align-items:center;font-size:.92rem;"><input type="checkbox" id="rpt-sec-${k}" onchange="rptToggleFisp()"> ${RPT_SECTIONS[k].icon} ${RPT_SECTIONS[k].label}</label>`
+            ).join('');
+
+            let picks;
+            if (listType && RPT_SECTIONS[listType]) picks = [listType];
+            else if (_rptDraft) picks = _rptDraft.sections;
+            else picks = ['fisp', 'sales', 'purchases', 'expenses'];
+            RPT_ORDER.forEach(k => { const el = document.getElementById('rpt-sec-' + k); if (el) el.checked = picks.includes(k); });
+
+            // Season list: the usual seasons plus any season already used on a claim
+            const seasons = Array.from(new Set(RPT_SEASONS.concat(db.fisp.map(f => f.season).filter(Boolean)))).sort();
+            document.getElementById('rpt-season').innerHTML = '<option value="">All seasons</option>' + seasons.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
+            document.getElementById('rpt-status').value = '';
+
+            // Dates: the list's own filter when opened from a list, else the last choice, else this month
+            let from = '', to = '', preset = 'month';
+            if (listType) {
+                from = (document.getElementById('date-from-' + listType) || {}).value || '';
+                to   = (document.getElementById('date-to-' + listType) || {}).value || '';
+                preset = (from || to) ? 'custom' : 'month';
+                if (listType === 'fisp') document.getElementById('rpt-season').value = (document.getElementById('fisp-season-filter') || {}).value || '';
+            } else if (_rptDraft) { from = _rptDraft.from; to = _rptDraft.to; preset = _rptDraft.preset; }
+            if (preset === 'month' && !from && !to) rptPreset('month');
+            else { document.getElementById('rpt-from').value = from; document.getElementById('rpt-to').value = to; }
+            document.getElementById('rpt-preset').value = preset;
+            if (!listType && _rptDraft) {
+                document.getElementById('rpt-season').value = _rptDraft.season || '';
+                document.getElementById('rpt-status').value = _rptDraft.status || '';
+            }
+
+            // Shop picker: only for an owner with more than one shop
+            const shopRow = document.getElementById('rpt-shop-row');
+            if (canGroupView()) {
+                const act = getActiveShopId();
+                document.getElementById('rpt-shop').innerHTML =
+                    `<option value="">This shop (${esc(getShopName(act))})</option>` +
+                    getShops(true).filter(x => x.id !== act).map(x => `<option value="${esc(x.id)}">${esc(x.name)}${x.active === false ? ' (inactive)' : ''}</option>`).join('') +
+                    `<option value="${WA_ALL}">All shops together</option>`;
+                if (_rptDraft && !listType) document.getElementById('rpt-shop').value = _rptDraft.shop || '';
+                shopRow.classList.remove('hidden');
+            } else { shopRow.classList.add('hidden'); }
+
+            rptToggleFisp();
+            openModal('modal-report-builder');
+        }
+
+        function buildReport() {
+            const sections = RPT_ORDER.filter(k => { const el = document.getElementById('rpt-sec-' + k); return el && el.checked; });
+            if (!sections.length) { showToast('Tick at least one thing to include', 'danger'); return; }
+            const from = document.getElementById('rpt-from').value || '';
+            const to   = document.getElementById('rpt-to').value || '';
+            if (from && to && from > to) { showToast('The From date must be on or before the To date', 'danger'); return; }
+            const o = {
+                sections, from, to,
+                season: sections.includes('fisp') ? document.getElementById('rpt-season').value : '',
+                status: sections.includes('fisp') ? document.getElementById('rpt-status').value : '',
+                shop: canGroupView() ? (document.getElementById('rpt-shop').value || '') : ''
+            };
+            _rptDraft = { sections, from, to, preset: document.getElementById('rpt-preset').value, season: o.season, status: o.status, shop: o.shop };
+            let d;
+            try { d = _rptCompute(o); } catch (e) { console.error(e); showToast('Could not build the report', 'danger'); return; }
+            _lastReport = d;
+            document.getElementById('report-print-body').innerHTML = _rptHTML(d);
+            closeModal('modal-report-builder');
+            openModal('modal-report-print');
+        }
+
+        // One shop's records, read in whichever shop is active at the time.
+        function _rptCollect(o, S, shopName) {
+            const inR = (dmy) => {
+                if (!o.from && !o.to) return true;
+                const iso = _dmyToISO(dmy);
+                if (!iso) return false;
+                return !((o.from && iso < o.from) || (o.to && iso > o.to));
+            };
+            const sh = shopName ? [shopName] : [];
+            const invName = (id, fallback) => { const p = db.inventory.find(x => x.id === id); return (p && p.name) || fallback || '—'; };
+            const push = (k, rec, cells) => S[k].rows.push({ iso: _dmyToISO(rec.date), id: String(rec.id || ''), cells: sh.concat(cells) });
+
+            if (S.fisp && hasFeature('fisp')) db.fisp.forEach(f => {
+                if (!inR(f.date)) return;
+                if (o.season && f.season !== o.season) return;
+                const status = f.status === 'Paid' ? 'Paid' : 'Pending';
+                if (o.status && status !== o.status) return;
+                const val = Number(f.val) || 0, a = S.fisp.a;
+                a.total += val;
+                if (status === 'Paid') { a.paid += val; a.paidN++; } else { a.pend += val; a.pendN++; }
+                push('fisp', f, [f.date, f.farmerName || '', f.nrc || '', f.camp || '', f.voucher || '', f.prodName ? f.prodName + (f.qty ? ' × ' + f.qty : '') : '—', _rptMoney(val), status]);
+            });
+            if (S.sales) db.sales.forEach(x => {
+                if (!inR(x.date)) return;
+                const items = (x.items && x.items.length)
+                    ? x.items.map(li => `${invName(li.prodId, li.prodName)} × ${li.qty}`).join('; ')
+                    : `${invName(x.prodId, x.prodName)} × ${x.qty}`;
+                S.sales.a.total += Number(x.total) || 0;
+                S.sales.a.disc  += Number(x.discount) || 0;
+                push('sales', x, [x.date, x.id, x.cust || '', items, x.method || '', x.discount > 0 ? _rptMoney(x.discount) : '', _rptMoney(x.total)]);
+            });
+            if (S.purchases && hasFeature('purchases')) db.purchases.forEach(p => {
+                if (!inR(p.date)) return;
+                S.purchases.a.total += Number(p.total) || 0;
+                push('purchases', p, [p.date, p.supplier || '', invName(p.prodId, p.prodName), p.qty != null ? String(p.qty) : '', _rptMoney(p.total)]);
+            });
+            if (S.expenses) db.expenses.forEach(e => {
+                if (!inR(e.date)) return;
+                S.expenses.a.total += Number(e.amt) || 0;
+                push('expenses', e, [e.date, e.cat || '', e.desc || '', _rptMoney(e.amt)]);
+            });
+            if (S.returns) db.returns.forEach(r => {
+                if (!inR(r.date)) return;
+                S.returns.a.total += Number(r.total) || 0;
+                push('returns', r, [r.date, r.id, r.saleId || '', r.cust || '', r.reason || '', _rptMoney(r.total)]);
+            });
+            if (S.credit && hasFeature('credit')) db.credit.forEach(c => {
+                if (!inR(c.date)) return;
+                const paid = creditPaidShown(c), bal = creditBalance(c), a = S.credit.a;
+                a.amt += Number(c.amt) || 0; a.paid += paid; a.bal += bal;
+                push('credit', c, [c.date, c.cust || '', c.prod || '', _rptMoney(c.amt), _rptMoney(paid), _rptMoney(bal), creditState(c)]);
+            });
+        }
+
+        function _rptCols(k, allShops) {
+            const base = {
+                fisp:      [['Date'], ['Farmer'], ['NRC / ID'], ['Camp / Area'], ['Voucher No.'], ['Product (Qty)'], ['Value (ZMW)', 'r'], ['Status']],
+                sales:     [['Date'], ['Receipt No.'], ['Customer'], ['Items'], ['Method'], ['Discount (ZMW)', 'r'], ['Total (ZMW)', 'r']],
+                purchases: [['Date'], ['Supplier'], ['Product'], ['Qty', 'r'], ['Total Cost (ZMW)', 'r']],
+                expenses:  [['Date'], ['Category'], ['Description'], ['Amount (ZMW)', 'r']],
+                returns:   [['Date'], ['Return No.'], ['Sale Ref'], ['Customer'], ['Reason'], ['Refund (ZMW)', 'r']],
+                credit:    [['Date'], ['Customer'], ['Items'], ['Amount (ZMW)', 'r'], ['Paid (ZMW)', 'r'], ['Balance (ZMW)', 'r'], ['Status']]
+            }[k];
+            return allShops ? [['Shop']].concat(base) : base;
+        }
+
+        function _rptTotalLines(k, a) {
+            if (k === 'fisp')      return [['Total claims', formatZMW(a.total)], ['Paid', `${formatZMW(a.paid)} (${a.paidN})`], ['Pending', `${formatZMW(a.pend)} (${a.pendN})`]];
+            if (k === 'sales')     return [['Total sales', formatZMW(a.total)]].concat(a.disc > 0 ? [['Discounts given (already deducted)', formatZMW(a.disc)]] : []);
+            if (k === 'purchases') return [['Total purchases', formatZMW(a.total)]];
+            if (k === 'expenses')  return [['Total expenses', formatZMW(a.total)]];
+            if (k === 'returns')   return [['Total refunded', formatZMW(a.total)]];
+            return [['Credit given', formatZMW(a.amt)], ['Paid so far', formatZMW(a.paid)], ['Balance owing', formatZMW(a.bal)]];
+        }
+
+        function _rptCompute(o) {
+            const S = {};
+            o.sections.forEach(k => {
+                S[k] = { key: k, rows: [], a: {
+                    fisp: { total: 0, paid: 0, pend: 0, paidN: 0, pendN: 0 }, sales: { total: 0, disc: 0 }, purchases: { total: 0 },
+                    expenses: { total: 0 }, returns: { total: 0 }, credit: { amt: 0, paid: 0, bal: 0 }
+                }[k] };
+            });
+            const allShops = o.shop === WA_ALL;
+            if (allShops) getShops(true).forEach(sh => _asShop(sh.id, () => _rptCollect(o, S, getShopName(sh.id))));
+            else if (o.shop)  _asShop(o.shop, () => _rptCollect(o, S, ''));
+            else              _rptCollect(o, S, '');
+
+            const sections = RPT_ORDER.filter(k => S[k]).map(k => {
+                const sec = S[k];
+                sec.rows.sort((x, y) => (x.iso || '').localeCompare(y.iso || '') || x.id.localeCompare(y.id));
+                sec.cols = _rptCols(k, allShops);
+                sec.totals = _rptTotalLines(k, sec.a);
+                return sec;
+            });
+            const co = allShops ? getCompanyInfo(true) : (o.shop ? _asShop(o.shop, () => getCompanyInfo()) : getCompanyInfo());
+            const period = (o.from && o.to) ? `${_isoToDMY(o.from)} to ${_isoToDMY(o.to)}` : o.from ? `From ${_isoToDMY(o.from)}` : o.to ? `Up to ${_isoToDMY(o.to)}` : 'All dates';
+            const filters = [];
+            if (o.season) filters.push(`FISP season ${o.season}`);
+            if (o.status) filters.push(`FISP ${o.status.toLowerCase()} claims only`);
+            const now = new Date();
+            return { o, co, sections, allShops, period, filters, generatedBy: getGeneratedByLabel(),
+                     generatedOn: `${now.toLocaleDateString('en-GB')} ${now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}` };
+        }
+
+        // Summary rows: [section, records, amount, note]
+        function _rptSummary(d) {
+            return d.sections.map(sec => {
+                const a = sec.a, k = sec.key;
+                const amount = k === 'credit' ? a.amt : a.total;
+                const note = k === 'fisp' ? `Paid ${formatZMW(a.paid)} · Pending ${formatZMW(a.pend)}`
+                    : k === 'sales' ? (a.disc > 0 ? `After ${formatZMW(a.disc)} of discounts` : '')
+                    : k === 'credit' ? `Balance owing ${formatZMW(a.bal)}` : '';
+                return [RPT_SECTIONS[k].label, sec.rows.length, amount, note];
+            });
+        }
+
+        function _rptHTML(d) {
+            const co = d.co;
+            const sub = [co.phone, co.address, co.tpin ? 'TPIN: ' + co.tpin : ''].filter(Boolean).map(esc).join(' · ');
+            const title = d.sections.length === 1 ? RPT_SECTIONS[d.sections[0].key].label.toUpperCase() + ' REPORT' : 'COMBINED REPORT';
+            const table = (cols, rows) => {
+                const th = cols.map(c => `<th${c[1] ? ' class="r"' : ''}>${esc(c[0])}</th>`).join('');
+                const body = rows.map(r => '<tr>' + r.cells.map((v, i) => `<td${cols[i] && cols[i][1] ? ' class="r"' : ''}>${esc(v)}</td>`).join('') + '</tr>').join('');
+                return `<div class="rpt-wrap"><table><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
+            };
+            let h = `<div class="rpt-head">${co.logo ? `<img src="${co.logo}" class="rpt-logo" alt="">` : ''}<div class="rpt-co">${esc(co.name)}</div>${sub ? `<div class="rpt-sub">${sub}</div>` : ''}</div>
+                <div class="rpt-title">${esc(title)}</div>
+                <div class="rpt-period">${esc(d.period)}</div>
+                ${d.filters.length ? `<div class="rpt-filters">${esc(d.filters.join(' · '))}</div>` : '<div class="rpt-filters"></div>'}`;
+            if (d.sections.length > 1) {
+                h += `<h4>Summary</h4>` + table([['Section'], ['Records', 'r'], ['Amount (ZMW)', 'r'], ['Notes']],
+                    _rptSummary(d).map(r => ({ cells: [r[0], String(r[1]), _rptMoney(r[2]), r[3]] })));
+            }
+            d.sections.forEach(sec => {
+                h += `<h4>${RPT_SECTIONS[sec.key].icon} ${esc(RPT_SECTIONS[sec.key].label)} (${sec.rows.length})</h4>`;
+                if (!sec.rows.length) { h += `<div class="rpt-empty">No records in this period.</div>`; return; }
+                h += table(sec.cols, sec.rows) + `<div class="rpt-totals">${sec.totals.map(t => `<span>${esc(t[0])}: ${esc(t[1])}</span>`).join('')}</div>`;
+            });
+            h += `<div class="rpt-foot">Generated by ${esc(d.generatedBy)} on ${esc(d.generatedOn)} · ZamAgro Track</div>`;
+            return h;
+        }
+
+        function exportReportPDF() {
+            const d = _lastReport;
+            if (!d) { showToast('Build a report first', 'danger'); return; }
+            const { jsPDF } = window.jspdf || {};
+            if (!jsPDF) { showToast('PDF library not loaded yet — try again in a moment', 'danger'); return; }
+            const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+            const W = 283, co = d.co;
+            let y = 14;
+            doc.setFontSize(14); doc.setFont('helvetica', 'bold'); doc.text(co.name || 'ZamAgro Track', 14, y); y += 6;
+            doc.setFontSize(9); doc.setFont('helvetica', 'normal');
+            [co.phone, co.address, co.tpin ? 'TPIN: ' + co.tpin : ''].filter(Boolean).forEach(t => { doc.text(t, 14, y); y += 4.5; });
+            y += 2;
+            doc.setFontSize(12); doc.setFont('helvetica', 'bold');
+            doc.text(d.sections.length === 1 ? RPT_SECTIONS[d.sections[0].key].label + ' Report' : 'Combined Report', 14, y); y += 5.5;
+            doc.setFontSize(9.5); doc.setFont('helvetica', 'normal');
+            doc.text(d.period + (d.filters.length ? '   |   ' + d.filters.join(', ') : ''), 14, y); y += 6;
+
+            const head = { fillColor: [30, 107, 53], textColor: 255, fontStyle: 'bold' };
+            if (d.sections.length > 1) {
+                doc.autoTable({
+                    startY: y, head: [['Section', 'Records', 'Amount (ZMW)', 'Notes']],
+                    body: _rptSummary(d).map(r => [r[0], String(r[1]), _rptMoney(r[2]), r[3]]),
+                    styles: { fontSize: 9, cellPadding: 2 }, headStyles: head, alternateRowStyles: { fillColor: [243, 246, 238] },
+                    columnStyles: { 1: { halign: 'right' }, 2: { halign: 'right' } }, margin: { left: 14, right: 14 }
+                });
+                y = doc.lastAutoTable.finalY + 8;
+            }
+            d.sections.forEach(sec => {
+                if (y > 170) { doc.addPage(); y = 14; }
+                doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor(30, 107, 53);
+                doc.text(`${RPT_SECTIONS[sec.key].label} (${sec.rows.length})`, 14, y); doc.setTextColor(0);
+                if (!sec.rows.length) {
+                    doc.setFontSize(9); doc.setFont('helvetica', 'italic'); doc.text('No records in this period.', 14, y + 6); y += 14; return;
+                }
+                const right = {};
+                sec.cols.forEach((c, i) => { if (c[1]) right[i] = { halign: 'right' }; });
+                doc.autoTable({
+                    startY: y + 2, head: [sec.cols.map(c => c[0])], body: sec.rows.map(r => r.cells),
+                    styles: { fontSize: 8, cellPadding: 1.8 }, headStyles: head, alternateRowStyles: { fillColor: [243, 246, 238] },
+                    columnStyles: right, margin: { left: 14, right: 14 }, rowPageBreak: 'avoid'
+                });
+                y = doc.lastAutoTable.finalY + 5;
+                if (y > 195) { doc.addPage(); y = 14; }
+                doc.setFontSize(9); doc.setFont('helvetica', 'bold');
+                doc.text(sec.totals.map(t => `${t[0]}: ${t[1]}`).join('     '), W, y, { align: 'right' });
+                y += 10;
+            });
+            const pages = doc.internal.getNumberOfPages();
+            for (let i = 1; i <= pages; i++) {
+                doc.setPage(i); doc.setFontSize(8); doc.setFont('helvetica', 'normal'); doc.setTextColor(140);
+                doc.text(`Generated by ${d.generatedBy} on ${d.generatedOn}`, 14, 204);
+                doc.text(`Page ${i} of ${pages}`, W, 204, { align: 'right' });
+            }
+            const tag = (d.o.from ? _isoToDMY(d.o.from) : 'start') + '_to_' + (d.o.to ? _isoToDMY(d.o.to) : 'today');
+            doc.save(`ZamAgro_Report_${tag.replace(/\//g, '-')}.pdf`);
+        }
+
         function exportPLpdf() {
             const monthVal = document.getElementById('pl-month')?.value;
             const pl = getPL(monthVal);
@@ -8942,6 +9411,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             doc.text(`Profit & Loss — ${pl.period}`, 14, y); y += 8;
             const summaryRows = [
                 ['Total Revenue', pl.revenue.toFixed(2)],
+                ...(pl.discounts > 0 ? [['Memo: discounts already deducted', pl.discounts.toFixed(2)]] : []),
                 ['Purchases (Stock Bought)', pl.purchasesRaw.toFixed(2)],
                 ...(pl.transfersIn > 0 ? [['Add: Stock Transferred In', pl.transfersIn.toFixed(2)]] : []),
                 ...(pl.transfersOut > 0 ? [['Less: Stock Transferred Out', pl.transfersOut.toFixed(2)]] : []),
@@ -9012,7 +9482,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 s.items.forEach(li => {
                     const name = db.inventory.find(p => p.id === li.prodId)?.name || li.prodName;
                     doc.setFont('helvetica','bold'); doc.setFontSize(8); doc.text(name, 5, y); y += 4;
-                    row2(`  ${li.qty} × ${formatZMW(li.unitPrice)}`, formatZMW(li.lineTotal));
+                    row2(`  ${li.qty} × ${formatZMW(_liListPrice(li))}`, formatZMW(_liGross(li)));
                 });
             } else {
                 const prod = db.inventory.find(i => i.id === s.prodId)?.name || s.prodName;
@@ -9021,6 +9491,10 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 row2(`  ${s.qty} × ${formatZMW(up)}`, formatZMW(s.total));
             }
             doc.line(5, y, 75, y); y += 3;
+            if (s.discount > 0) {
+                row2('Subtotal', formatZMW(_r2(s.total + s.discount)));
+                row2(`Discount${s.discPct ? ' (' + s.discPct + '%)' : ''}`, '-' + formatZMW(s.discount));
+            }
             doc.setFont('helvetica','bold'); doc.setFontSize(10);
             doc.text('TOTAL', 5, y); doc.text(formatZMW(s.total), 75, y, {align:'right'}); y += 6;
             doc.setFont('helvetica','normal'); doc.setFontSize(8);
@@ -9088,6 +9562,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const green = '1E6B35';
             const summaryRows = [
                 ['Total Sales Revenue', pl.revenue.toFixed(2)],
+                ...(pl.discounts > 0 ? [['Memo: discounts already deducted', pl.discounts.toFixed(2)]] : []),
                 ['Purchases (Stock Bought)', pl.purchasesRaw.toFixed(2)],
                 ...(pl.transfersIn > 0 ? [['Add: Stock Transferred In', pl.transfersIn.toFixed(2)]] : []),
                 ...(pl.transfersOut > 0 ? [['Less: Stock Transferred Out', pl.transfersOut.toFixed(2)]] : []),
@@ -9148,7 +9623,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 borders: { top:{style:BorderStyle.SINGLE,size:1}, bottom:{style:BorderStyle.SINGLE,size:1}, left:{style:BorderStyle.SINGLE,size:1}, right:{style:BorderStyle.SINGLE,size:1} }
             }))});
             const itemRows = q.items.map((li, i) => {
-                const prod = db.inventory.find(p => p.id === li.prodId)?.name || li.prodId;
+                const prod = li.name || db.inventory.find(p => p.id === li.prodId)?.name || li.prodId;
                 return [prod, String(li.qty), li.price.toFixed(2), (li.qty * li.price).toFixed(2)];
             });
             const doc = new Document({ sections: [{ children: [
@@ -9161,9 +9636,13 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 new Paragraph({ text: '', spacing: { after: 100 } }),
                 new Table({ rows: [mkHdr(['Product','Qty','Unit Price (ZMW)','Total (ZMW)']), ...itemRows.map((r,i)=>mkRow(r,i))], width: { size: 100, type: WidthType.PERCENTAGE } }),
                 new Paragraph({ text: '', spacing: { after: 100 } }),
-                new Paragraph({ children: [new TextRun({ text: `TOTAL: ${formatZMW(q.items.reduce((s,li)=>s+(li.qty*li.price),0))}`, bold: true, size: 22, color: green })] }),
+                ...(q.discount > 0 ? [
+                    new Paragraph({ children: [new TextRun({ text: `Subtotal: ${formatZMW(q.subtotal)}`, size: 20 })] }),
+                    new Paragraph({ children: [new TextRun({ text: `Discount${q.discType === 'pct' ? ' (' + q.discVal + '%)' : ''}: -${formatZMW(q.discount)}`, size: 20 })] })
+                ] : []),
+                new Paragraph({ children: [new TextRun({ text: `TOTAL: ${formatZMW(q.grandTotal != null ? q.grandTotal : q.items.reduce((s,li)=>s+(li.qty*li.price),0))}`, bold: true, size: 22, color: green })] }),
                 ...(q.notes ? [new Paragraph({ children: [new TextRun({ text: `Notes: ${q.notes}`, size: 16, italics: true })] })] : []),
-                ..._podWordParas(docxLib, (q.docType && q.docType !== 'Invoice') ? 'quote' : 'goods'),
+                ..._podWordParas(docxLib, (q.docType && q.docType !== 'Invoice') ? 'quote' : 'goods', _sigOK(q.custSig) ? { sig: q.custSig, name: q.custSigName, at: q.custSigAt } : null),
                 new Paragraph({ children: [new TextRun({ text: `Generated by ${q.generatedBy || getGeneratedByLabel()} — ZamAgro Track — ${q.docDate || new Date().toLocaleDateString('en-GB')}`, size: 16, color: '888888', italics: true })], spacing: { before: 300 } })
             ]}]});
             const blob = await Packer.toBlob(doc);
@@ -9189,7 +9668,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             doc.setFontSize(9); doc.setFont('helvetica','normal');
             doc.text(`Date: ${q.docDate || new Date().toLocaleDateString('en-GB')}`, 14, y); y += 5;
             const tableRows = q.items.map(li => {
-                const prod = db.inventory.find(p => p.id === li.prodId)?.name || li.prodId;
+                const prod = li.name || db.inventory.find(p => p.id === li.prodId)?.name || li.prodId;
                 return [prod, String(li.qty), `K${li.price.toFixed(2)}`, `K${(li.qty*li.price).toFixed(2)}`];
             });
             doc.autoTable({
@@ -9202,18 +9681,24 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 margin: { left: 14, right: 14 }
             });
             const finalY = doc.lastAutoTable.finalY + 6;
-            const total = q.items.reduce((s,li)=>s+(li.qty*li.price),0);
+            const total = q.grandTotal != null ? q.grandTotal : q.items.reduce((s,li)=>s+(li.qty*li.price),0);
+            let totY = finalY;
+            if (q.discount > 0) {
+                doc.setFont('helvetica','normal'); doc.setFontSize(10);
+                doc.text(`Subtotal: ${formatZMW(q.subtotal)}`, 14, totY); totY += 5;
+                doc.text(`Discount${q.discType === 'pct' ? ' (' + q.discVal + '%)' : ''}: -${formatZMW(q.discount)}`, 14, totY); totY += 6;
+            }
             doc.setFont('helvetica','bold'); doc.setFontSize(11);
-            doc.text(`TOTAL: ${formatZMW(total)}`, 14, finalY);
-            let noteY = finalY + 7;
+            doc.text(`TOTAL: ${formatZMW(total)}`, 14, totY);
+            let noteY = totY + 7;
             if (q.notes) {
                 doc.setFont('helvetica','normal'); doc.setFontSize(9);
                 doc.text(`Notes: ${q.notes}`, 14, noteY);
                 noteY += 7;
             }
-            if (podOn()) {
-                if (noteY > 240) { doc.addPage(); noteY = 20; }
-                noteY = _podPdfBlock(doc, 14, noteY + 6, 110, (q.docType && q.docType !== 'Invoice') ? 'quote' : 'goods');
+            if (podOn() || _sigOK(q.custSig)) {
+                if (noteY > (_sigOK(q.custSig) ? 215 : 240)) { doc.addPage(); noteY = 20; }
+                noteY = _podPdfBlock(doc, 14, noteY + 6, 110, (q.docType && q.docType !== 'Invoice') ? 'quote' : 'goods', _sigOK(q.custSig) ? { sig: q.custSig, name: q.custSigName, at: q.custSigAt } : null);
             }
             doc.setFont('helvetica','italic'); doc.setFontSize(8); doc.setTextColor(140);
             doc.text(`Generated by ${q.generatedBy || getGeneratedByLabel()} on ${q.docDate || new Date().toLocaleDateString('en-GB')}`, 14, noteY);
@@ -9237,6 +9722,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 [],
                 ['SUMMARY', 'Amount (ZMW)'],
                 ['Total Sales Revenue',                   pl.revenue.toFixed(2)],
+                ...(pl.discounts > 0 ? [['Memo: discounts already deducted', pl.discounts.toFixed(2)]] : []),
                 ['Total Purchases (Stock Bought)',         pl.purchasesRaw.toFixed(2)],
                 ...(pl.transfersIn > 0 ? [['Add: Stock Transferred In', pl.transfersIn.toFixed(2)]] : []),
                 ...(pl.transfersOut > 0 ? [['Less: Stock Transferred Out', pl.transfersOut.toFixed(2)]] : []),
@@ -9303,7 +9789,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 headers = ['ID', 'Product', 'Category', 'Unit', 'Qty', 'Unit Cost (ZMW)', 'Total Value (ZMW)', 'Status'];
                 rows = db.inventory.map(i => [i.id, i.name, i.cat, i.unit, i.qty, i.cost.toFixed(2), (i.qty * i.cost).toFixed(2), i.status]);
             } else if (type === 'sales') {
-                headers = ['ID', 'Date', 'Customer', 'Product', 'Qty', 'Unit Price (ZMW)', 'Line Total (ZMW)', 'Method'];
+                headers = ['ID', 'Date', 'Customer', 'Product', 'Qty', 'Unit Price (ZMW)', 'Discount (ZMW)', 'Line Total (ZMW)', 'Method'];
                 rows = [];
                 db.sales.forEach(s => {
                     if (s.items && s.items.length > 0) {
@@ -9315,16 +9801,17 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                                 idx === 0 ? s.cust : '',
                                 prod, li.qty,
                                 li.unitPrice.toFixed(2),
+                                li.discount > 0 ? li.discount.toFixed(2) : '',
                                 li.lineTotal.toFixed(2),
                                 idx === 0 ? s.method : ''
                             ]);
                         });
                         // Grand total row for multi-item
-                        if (s.items.length > 1) rows.push(['', '', '', 'SALE TOTAL', '', '', s.total.toFixed(2), '']);
+                        if (s.items.length > 1) rows.push(['', '', '', 'SALE TOTAL', '', '', '', s.total.toFixed(2), '']);
                     } else {
                         const prod = db.inventory.find(i => i.id === s.prodId)?.name || s.prodName;
                         const unitPrice = s.qty > 0 ? (s.total / s.qty) : 0;
-                        rows.push([s.id, s.date, s.cust, prod, s.qty, unitPrice.toFixed(2), s.total.toFixed(2), s.method]);
+                        rows.push([s.id, s.date, s.cust, prod, s.qty, unitPrice.toFixed(2), '', s.total.toFixed(2), s.method]);
                     }
                 });
             } else if (type === 'purchases') {
@@ -9382,7 +9869,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 itemLines = sale.items.map(li => {
                     const name = db.inventory.find(p => p.id === li.prodId)?.name || li.prodName;
                     return `<div class="receipt-row"><span>${esc(name)}</span></div>
-                            <div class="receipt-row"><span>&nbsp;&nbsp;${li.qty} × ${formatZMW(li.unitPrice)}</span><span>${formatZMW(li.lineTotal)}</span></div>`;
+                            <div class="receipt-row"><span>&nbsp;&nbsp;${li.qty} × ${formatZMW(_liListPrice(li))}</span><span>${formatZMW(_liGross(li))}</span></div>`;
                 }).join('');
             } else {
                 const prodName  = db.inventory.find(i => i.id === sale.prodId)?.name || sale.prodName;
@@ -9408,6 +9895,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 <div class="receipt-row"><span><strong>Item</strong></span><span><strong>ZMW</strong></span></div>
                 ${itemLines}
                 <hr class="receipt-divider">
+                ${sale.discount > 0 ? `<div class="receipt-row"><span>Subtotal</span><span>${formatZMW(_r2(sale.total + sale.discount))}</span></div><div class="receipt-row"><span>Discount${sale.discPct ? ' (' + sale.discPct + '%)' : ''}</span><span>−${formatZMW(sale.discount)}</span></div>` : ''}
                 <div class="receipt-row receipt-total"><span>TOTAL</span><span>${formatZMW(sale.total)}</span></div>
                 ${sale.deposit > 0 ? `<div class="receipt-row"><span>Deposit paid:</span><span>${formatZMW(sale.deposit)}</span></div><div class="receipt-row"><span><strong>Balance on credit:</strong></span><span><strong>${formatZMW(_r2(sale.total - sale.deposit))}</strong></span></div>` : ''}
                 ${podBlockHTML('goods')}
@@ -9543,10 +10031,23 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const line = (label) => `<div style="display:flex;gap:6px;align-items:flex-end;margin-bottom:14px;"><span>${label}</span><span style="flex:1;border-bottom:1px solid #333;height:1.1em;"></span></div>`;
             return `<div style="margin-top:16px;font-size:.78rem;page-break-inside:avoid;"><div style="font-weight:700;margin-bottom:12px;">${_podLabel(kind)}</div>${line('Name:')}${line('Signature:')}${line('Date:')}</div>`;
         }
-        function _podPdfBlock(doc, x, y, x2, kind) {
-            if (!podOn()) return y;
+        // sig (optional): { sig: PNG data URL, name, at } draws the captured signature instead of the blank lines.
+        function _podPdfBlock(doc, x, y, x2, kind, sig) {
+            const sg = (sig && _sigOK(sig.sig)) ? sig : null;
+            if (!podOn() && !sg) return y;
             doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(0);
             doc.text(_podLabel(kind), x, y); y += 9;
+            if (sg) {
+                const z = _sigSize(sg.sig), k = Math.min(60 / z.w, 22 / z.h);
+                const iw = z.w * k, ih = z.h * k;
+                doc.addImage(sg.sig, 'PNG', x, y - 2, iw, ih);
+                y += ih + 2;
+                doc.setDrawColor(60); doc.setLineWidth(0.25); doc.line(x, y, x + 70, y);
+                doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5);
+                y += 5; doc.text(`Name: ${sg.name || ''}`, x, y);
+                y += 5; doc.text(`Signed on screen: ${sg.at || ''}`, x, y);
+                return y + 8;
+            }
             doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5);
             ['Name:', 'Signature:', 'Date:'].forEach(l => {
                 doc.text(l, x, y);
@@ -9555,10 +10056,19 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             });
             return y;
         }
-        function _podWordParas(docxLib, kind) {
-            if (!podOn()) return [];
-            const { Paragraph, TextRun } = docxLib;
+        function _podWordParas(docxLib, kind, sig) {
+            const sg = (sig && _sigOK(sig.sig)) ? sig : null;
+            if (!podOn() && !sg) return [];
+            const { Paragraph, TextRun, ImageRun } = docxLib;
             const mk = (t, bold) => new Paragraph({ children: [new TextRun({ text: t, bold: !!bold, size: 18 })], spacing: { before: bold ? 300 : 200 } });
+            if (sg && ImageRun) {
+                const z = _sigSize(sg.sig), k = Math.min(200 / z.w, 75 / z.h);
+                const bytes = Uint8Array.from(atob(sg.sig.split(',')[1]), c => c.charCodeAt(0));
+                return [mk(_podLabel(kind), true),
+                    new Paragraph({ children: [new ImageRun({ data: bytes, type: 'png', transformation: { width: Math.round(z.w * k), height: Math.round(z.h * k) } })], spacing: { before: 120 } }),
+                    mk('Name: ' + (sg.name || '')), mk('Signed on screen: ' + (sg.at || ''))];
+            }
+            if (!podOn()) return [];
             return [mk(_podLabel(kind), true), mk('Name: ________________________________'), mk('Signature: ____________________________'), mk('Date: ________________________________')];
         }
 
@@ -9589,7 +10099,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 s.items.forEach(li => {
                     const name = db.inventory.find(p => p.id === li.prodId)?.name || li.prodName || li.prodId;
                     lines.push(`• ${name}`);
-                    lines.push(`  ${li.qty} × ${formatZMW(li.unitPrice)} = ${formatZMW(li.lineTotal)}`);
+                    lines.push(`  ${li.qty} × ${formatZMW(_liListPrice(li))} = ${formatZMW(_liGross(li))}`);
                 });
             } else {
                 const prodName  = db.inventory.find(i => i.id === s.prodId)?.name || s.prodName || s.prodId;
@@ -9599,6 +10109,10 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             }
 
             lines.push('─────────────────────');
+            if (s.discount > 0) {
+                lines.push(`Subtotal: ${formatZMW(_r2(s.total + s.discount))}`);
+                lines.push(`Discount${s.discPct ? ' (' + s.discPct + '%)' : ''}: -${formatZMW(s.discount)}`);
+            }
             lines.push(`*TOTAL: ${formatZMW(s.total)}*`);
             if (s.deposit > 0) {
                 lines.push(`Deposit paid: ${formatZMW(s.deposit)}`);
@@ -9630,6 +10144,8 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             document.getElementById('inv-doc-cust').value = '';
             document.getElementById('inv-doc-phone').value = '';
             document.getElementById('inv-doc-notes').value = '';
+            document.getElementById('inv-disc-type').value = 'pct';
+            document.getElementById('inv-disc-val').value = '';
             renderInvoiceItemRows();
             openModal('modal-invoice-builder');
         }
@@ -9679,9 +10195,16 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
         }
 
         function updateInvoiceGrandTotal() {
-            const total = invoiceItems.reduce((sum, i) => sum + (i.qty || 0) * (i.price || 0), 0);
+            const dc = _saleDiscountCalc(invoiceItems, 'inv-disc-type', 'inv-disc-val');
+            const subEl = document.getElementById('invoice-subtotal');
+            const dEl = document.getElementById('invoice-disc-amt');
             const totalEl = document.getElementById('invoice-items-total');
-            if (totalEl) totalEl.textContent = formatZMW(total);
+            if (subEl) subEl.textContent = formatZMW(dc.gross);
+            if (dEl) {
+                dEl.textContent = dc.err ? dc.err : '−' + formatZMW(dc.disc);
+                dEl.style.color = (dc.err || dc.disc > 0) ? 'var(--danger)' : 'var(--text-muted)';
+            }
+            if (totalEl) totalEl.textContent = formatZMW(dc.net);
         }
 
         function addInvoiceItemRow() {
@@ -9724,15 +10247,17 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                     total: i.qty * i.price
                 };
             });
-            const grandTotal = lines.reduce((sum, l) => sum + l.total, 0);
+            const dc = _saleDiscountCalc(validItems, 'inv-disc-type', 'inv-disc-val');
+            if (dc.err) { showToast(dc.err, 'danger'); return; }
+            const grandTotal = dc.net;
 
             const docNo = uid(type === 'Invoice' ? 'INV' : (type === 'Quotation' ? 'QUO' : 'PRO'));
             const docDate = new Date().toLocaleDateString('en-GB');
-            let validUntilRow = '';
+            let validUntil = '';
             if (type !== 'Invoice') {
                 const d = new Date();
                 d.setDate(d.getDate() + 14);
-                validUntilRow = `<div class="invoice-row"><span>Valid Until:</span><span>${esc(d.toLocaleDateString('en-GB'))}</span></div>`;
+                validUntil = d.toLocaleDateString('en-GB');
             }
 
             const co = getCompanyInfo();
@@ -9744,6 +10269,49 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const notesBlock = notes ? `<div class="invoice-notes"><strong>Notes:</strong> ${esc(notes)}</div>` : '';
             const generatedBy = getGeneratedByLabel();
 
+            const itemRows = lines.map(l => `
+                <tr>
+                    <td>${esc(l.name)}</td>
+                    <td style="text-align:center;">${esc(l.qty)}${l.unit ? ' ' + esc(l.unit) : ''}</td>
+                    <td style="text-align:right;">${formatZMW(l.price)}</td>
+                    <td style="text-align:right;">${formatZMW(l.total)}</td>
+                </tr>
+            `).join('');
+
+
+
+            // Stash snapshot for PDF/Word export and Convert to Sale
+            _lastQuotation = { cust, phone, items: validItems.map((it, n) => ({ prodId: it.prodId, qty: it.qty, price: it.price, name: lines[n].name, unit: lines[n].unit })),
+                grandTotal, subtotal: dc.gross, discount: dc.disc, discType: dc.type, discVal: dc.val, docType: type, docNo, docDate, generatedBy, notes, validUntil, saved: false };
+            _renderDocPreview();
+            const convertBtn = document.getElementById('btn-convert-to-sale');
+            if (convertBtn) convertBtn.classList.toggle('hidden', type === 'Invoice');
+
+            closeModal('modal-invoice-builder');
+            openModal('modal-invoice-print');
+        }
+
+
+        // The quotation / proforma / invoice preview is drawn from _lastQuotation, so a document can be
+        // built fresh, signed on the spot, saved, and reopened later and look the same each time.
+        function _renderDocPreview() {
+            const q = _lastQuotation;
+            if (!q) return;
+            const type = q.docType, cust = q.cust, phone = q.phone, docNo = q.docNo, docDate = q.docDate, notes = q.notes, grandTotal = q.grandTotal;
+            const generatedBy = q.generatedBy || getGeneratedByLabel();
+            const dc = { disc: q.discount || 0, gross: q.subtotal != null ? q.subtotal : q.grandTotal, type: q.discType, val: q.discVal };
+            const lines = q.items.map(i => {
+                const p = db.inventory.find(x => x.id === i.prodId);
+                return { name: i.name || (p ? p.name : '(product removed)'), unit: i.unit != null ? i.unit : (p ? (p.unit || '') : ''), qty: i.qty, price: i.price, total: i.qty * i.price };
+            });
+            const validUntilRow = (type !== 'Invoice' && q.validUntil) ? `<div class="invoice-row"><span>Valid Until:</span><span>${esc(q.validUntil)}</span></div>` : '';
+            const co = getCompanyInfo();
+            const logoRow      = co.logo    ? `<img src="${co.logo}" class="invoice-logo" alt="">` : '';
+            const phoneRowCo   = co.phone   ? `<div class="invoice-co-sub">${esc(co.phone)}</div>` : '';
+            const addressRowCo = co.address ? `<div class="invoice-co-sub">${esc(co.address)}</div>` : '';
+            const tpinRowCo    = co.tpin    ? `<div class="invoice-co-sub">TPIN: ${esc(co.tpin)}</div>` : '';
+            const customerPhoneRow = phone ? `<div class="invoice-row"><span>Phone:</span><span>${esc(phone)}</span></div>` : '';
+            const notesBlock = notes ? `<div class="invoice-notes"><strong>Notes:</strong> ${esc(notes)}</div>` : '';
             const itemRows = lines.map(l => `
                 <tr>
                     <td>${esc(l.name)}</td>
@@ -9771,22 +10339,223 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                     <thead><tr><th>Item</th><th style="text-align:center;">Qty</th><th style="text-align:right;">Unit Price</th><th style="text-align:right;">Total</th></tr></thead>
                     <tbody>${itemRows}</tbody>
                 </table>
+                ${dc.disc > 0 ? `<div class="invoice-row"><span>Subtotal</span><span>${formatZMW(dc.gross)}</span></div><div class="invoice-row"><span>Discount${dc.type === 'pct' ? ' (' + dc.val + '%)' : ''}</span><span>−${formatZMW(dc.disc)}</span></div>` : ''}
                 <div class="invoice-grand-total"><span>GRAND TOTAL</span><span>${formatZMW(grandTotal)}</span></div>
                 ${notesBlock}
-                ${podBlockHTML(type === 'Invoice' ? 'goods' : 'quote')}
+                ${_sigBlockHTML(type === 'Invoice' ? 'goods' : 'quote', q)}
                 <div class="invoice-footer">${type === 'Invoice' ? 'Thank you for your business!' : (type === 'Quotation' ? 'Thank you for considering us — we look forward to working with you.' : 'This is a proforma invoice, not a tax invoice. Goods are released once payment is confirmed.')}<br>Powered by ZamAgro Track</div>
                 <div style="text-align:center;font-size:.72rem;color:#999;margin-top:6px;">Generated by ${esc(generatedBy)} on ${esc(docDate)}</div>
             `;
 
-            // Stash snapshot for PDF/Word export and Convert to Sale
-            _lastQuotation = { cust, phone, items: validItems, grandTotal, docType: type, docNo, docDate, generatedBy, notes };
-            const convertBtn = document.getElementById('btn-convert-to-sale');
-            if (convertBtn) convertBtn.classList.toggle('hidden', type === 'Invoice');
-
-            closeModal('modal-invoice-builder');
-            openModal('modal-invoice-print');
+            const sb = document.getElementById('btn-sign-doc');
+            if (sb) sb.textContent = _sigOK(q.custSig) ? '✍ Re-sign' : '✍ Sign';
+            const vb = document.getElementById('btn-save-doc');
+            if (vb) { vb.textContent = q.saved ? '✅ Saved' : '💾 Save'; vb.disabled = !!q.saved; }
+            const cb = document.getElementById('btn-convert-to-sale');
+            if (cb) cb.classList.toggle('hidden', type === 'Invoice');
         }
 
+        // ── SIGNATURE: capture, show, save ───────────────────────────────
+        function _sigOK(s) { return typeof s === 'string' && s.length < 60000 && /^data:image\/png;base64,[A-Za-z0-9+\/=]+$/.test(s); }
+        // Width and height of a PNG data URL, read from its header, so the image keeps its shape in PDF and Word.
+        function _sigSize(dataUrl) {
+            try {
+                const b = atob(dataUrl.split(',')[1].slice(0, 48));
+                const rd = i => ((b.charCodeAt(i) << 24) | (b.charCodeAt(i + 1) << 16) | (b.charCodeAt(i + 2) << 8) | b.charCodeAt(i + 3)) >>> 0;
+                const w = rd(16), h = rd(20);
+                if (w > 0 && h > 0 && w < 5000 && h < 5000) return { w, h };
+            } catch (e) { /* fall through */ }
+            return { w: 360, h: 120 };
+        }
+        function _sigBlockHTML(kind, q) {
+            if (!q || !_sigOK(q.custSig)) return podBlockHTML(kind);      // unsigned: the usual blank lines
+            return `<div style="margin-top:16px;font-size:.78rem;page-break-inside:avoid;"><div style="font-weight:700;margin-bottom:8px;">${_podLabel(kind)}</div>`
+                + `<img src="${q.custSig}" alt="Signature" style="display:block;max-width:220px;max-height:80px;border-bottom:1px solid #333;">`
+                + `<div style="margin-top:4px;">Name: <strong>${esc(q.custSigName || '')}</strong></div>`
+                + `<div>Signed on screen: ${esc(q.custSigAt || '')}</div></div>`;
+        }
+
+        let _signCb = null, _signInk = false, _signDown = false, _signLast = null;
+        function _signWire() {
+            const c = document.getElementById('sign-canvas');
+            if (c._wired) return;
+            c._wired = true;
+            const pt = e => { const r = c.getBoundingClientRect(); return { x: (e.clientX - r.left) * c.width / r.width, y: (e.clientY - r.top) * c.height / r.height }; };
+            c.addEventListener('pointerdown', e => {
+                e.preventDefault();
+                try { c.setPointerCapture(e.pointerId); } catch (_) { /* not supported */ }
+                _signDown = true; _signLast = pt(e); _signInk = true;
+                const x = c.getContext('2d'); x.fillStyle = '#111'; x.beginPath(); x.arc(_signLast.x, _signLast.y, 1.7, 0, Math.PI * 2); x.fill();
+            });
+            c.addEventListener('pointermove', e => {
+                if (!_signDown) return;
+                e.preventDefault();
+                const p = pt(e), x = c.getContext('2d');
+                x.strokeStyle = '#111'; x.lineWidth = 3.4; x.lineCap = 'round'; x.lineJoin = 'round';
+                x.beginPath(); x.moveTo(_signLast.x, _signLast.y); x.lineTo(p.x, p.y); x.stroke();
+                _signLast = p;
+            });
+            ['pointerup', 'pointercancel', 'pointerleave'].forEach(n => c.addEventListener(n, () => { _signDown = false; }));
+        }
+        function signClear() {
+            const c = document.getElementById('sign-canvas');
+            c.getContext('2d').clearRect(0, 0, c.width, c.height);
+            _signInk = false; _signDown = false;
+        }
+        // o: { title, name, skipLabel, onDone({ sig, name, at }) }
+        function openSignPad(o) {
+            _signCb = o.onDone || null;
+            document.getElementById('sign-title').textContent = o.title || 'Signature';
+            document.getElementById('sign-name').value = o.name || '';
+            document.getElementById('sign-skip').textContent = o.skipLabel || 'Cancel';
+            openModal('modal-sign');
+            _signWire();
+            signClear();
+        }
+        function signCancel() { _signCb = null; closeModal('modal-sign'); }
+        function signApply() {
+            if (!_signInk) { showToast('Please sign in the box first', 'danger'); return; }
+            const src = document.getElementById('sign-canvas');
+            const w = src.width, h = src.height;
+            const px = src.getContext('2d').getImageData(0, 0, w, h).data;
+            let x0 = w, y0 = h, x1 = -1, y1 = -1;
+            for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                if (px[(y * w + x) * 4 + 3] > 20) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+            }
+            if (x1 < 0) { showToast('Please sign in the box first', 'danger'); return; }
+            const pad = 6;
+            x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad); x1 = Math.min(w - 1, x1 + pad); y1 = Math.min(h - 1, y1 + pad);
+            const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+            // Cropped to the ink and kept small (it is stored with the record and synced)
+            let scale = Math.min(360 / cw, 120 / ch, 1), out = '';
+            for (let tries = 0; tries < 3 && !out; tries++) {
+                const oc = document.createElement('canvas');
+                oc.width = Math.max(1, Math.round(cw * scale)); oc.height = Math.max(1, Math.round(ch * scale));
+                oc.getContext('2d').drawImage(src, x0, y0, cw, ch, 0, 0, oc.width, oc.height);
+                const url = oc.toDataURL('image/png');
+                if (url.length <= 38000) out = url; else scale *= 0.7;
+            }
+            if (!out) { showToast('That signature is too large. Please sign again, a little smaller', 'danger'); return; }
+            const n = new Date();
+            const r = {
+                sig: out,
+                name: document.getElementById('sign-name').value.trim().slice(0, 100),
+                at: n.toLocaleDateString('en-GB') + ' ' + n.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
+            };
+            const cb = _signCb; _signCb = null;
+            closeModal('modal-sign');
+            if (cb) cb(r);
+        }
+
+        // Quotation / proforma / invoice
+        function signQuotation() {
+            const q = _lastQuotation;
+            if (!q) return;
+            openSignPad({
+                title: q.docType === 'Invoice' ? 'Customer signature: goods received' : 'Customer signature: acceptance',
+                name: q.custSigName || q.cust || '',
+                onDone: r => {
+                    q.custSig = r.sig; q.custSigName = r.name; q.custSigAt = r.at;
+                    if (q.saved) _storeQuote(q);            // a saved copy stays in step with what is on screen
+                    _renderDocPreview();
+                    showToast('Signature added');
+                }
+            });
+        }
+        function _quoteRecord(q) {
+            const rec = {
+                id: q.docNo, date: q.docDate, docType: q.docType,
+                cust: String(q.cust || '').slice(0, 200), phone: String(q.phone || '').slice(0, 40),
+                items: q.items.map(i => ({ prodId: i.prodId, name: String(i.name || '').slice(0, 200), unit: String(i.unit || '').slice(0, 40), qty: i.qty, price: i.price })),
+                notes: String(q.notes || '').slice(0, 1000),
+                subtotal: q.subtotal != null ? q.subtotal : q.grandTotal, discount: q.discount || 0, discType: q.discType || 'pct', discVal: q.discVal || 0,
+                grandTotal: q.grandTotal, validUntil: q.validUntil || '', generatedBy: String(q.generatedBy || '').slice(0, 100),
+                recordedBy: currentUser || 'unknown'
+            };
+            if (_sigOK(q.custSig)) { rec.custSig = q.custSig; rec.custSigName = q.custSigName || ''; rec.custSigAt = q.custSigAt || ''; }
+            return rec;
+        }
+        function _storeQuote(q) {
+            const list = db.quotes;
+            const rec = _quoteRecord(q);
+            const ix = list.findIndex(x => x.id === rec.id);
+            if (ix >= 0) list[ix] = Object.assign({}, list[ix], rec); else list.push(rec);
+            db.quotes = list;
+        }
+        function saveQuoteDoc() {
+            const q = _lastQuotation;
+            if (!q) return;
+            _storeQuote(q);
+            q.saved = true;
+            _renderDocPreview();
+            showToast(`${q.docType} saved. Find it under 📂 Saved`);
+        }
+        function _quoteFromRecord(r) {
+            return {
+                cust: r.cust || '', phone: r.phone || '',
+                items: (r.items || []).map(i => ({ prodId: i.prodId, qty: i.qty, price: i.price, name: i.name, unit: i.unit })),
+                grandTotal: r.grandTotal, subtotal: r.subtotal, discount: r.discount || 0, discType: r.discType, discVal: r.discVal,
+                docType: r.docType, docNo: r.id, docDate: r.date, generatedBy: r.generatedBy, notes: r.notes || '', validUntil: r.validUntil || '',
+                custSig: r.custSig, custSigName: r.custSigName, custSigAt: r.custSigAt, saved: true
+            };
+        }
+        function openSavedDocs() {
+            document.getElementById('saved-docs-search').value = '';
+            renderSavedDocs();
+            openModal('modal-saved-docs');
+        }
+        function renderSavedDocs() {
+            const tb = document.querySelector('#table-saved-docs tbody');
+            if (!tb) return;
+            const term = (document.getElementById('saved-docs-search').value || '').toLowerCase();
+            const list = db.quotes
+                .filter(r => !term || [r.id, r.cust, r.docType].some(v => String(v || '').toLowerCase().includes(term)))
+                .sort((a, b) => _dmyToISO(b.date).localeCompare(_dmyToISO(a.date)) || String(b.id).localeCompare(String(a.id)));
+            tb.innerHTML = list.length ? list.map(r => `<tr><td>${esc(r.id)}</td><td>${esc(r.docType)}</td><td>${esc(r.date)}</td><td>${esc(r.cust)}</td><td>${formatZMW(r.grandTotal)}</td><td>${_sigOK(r.custSig) ? '✅' : '—'}</td><td style="white-space:nowrap;"><button class="btn btn-sm btn-primary" onclick="openSavedDoc('${esc(r.id)}')">Open</button>${currentUser === 'admin' ? ` <button class="btn btn-sm btn-danger" onclick="deleteSavedDoc('${esc(r.id)}')">🗑</button>` : ''}</td></tr>`).join('')
+                : `<tr><td colspan="7" style="text-align:center;color:var(--text-muted);padding:1rem;">Nothing saved yet. Build a quote or invoice and tap 💾 Save.</td></tr>`;
+        }
+        function openSavedDoc(id) {
+            const r = db.quotes.find(x => x.id === id);
+            if (!r) return;
+            _lastQuotation = _quoteFromRecord(r);
+            _renderDocPreview();
+            closeModal('modal-saved-docs');
+            openModal('modal-invoice-print');
+        }
+        function deleteSavedDoc(id) {
+            if (currentUser !== 'admin') return;
+            if (!confirm('Delete this saved document? This cannot be undone.')) return;
+            db.quotes = db.quotes.filter(x => x.id !== id);
+            renderSavedDocs();
+            showToast('Deleted');
+        }
+
+        // Delivery notes: driver and customer signatures live on the delivery record
+        let _dnPrintId = null;
+        function dnSignFromPrint(who) {
+            const d = db.deliveries.find(x => x.id === _dnPrintId);
+            if (!d) return;
+            openSignPad({
+                title: who === 'driver' ? 'Driver signature' : 'Customer signature: goods received',
+                name: who === 'driver' ? (d.driver || '') : (d.receivedBy || d.cust || ''),
+                onDone: r => dnApplySig(d.id, who, r)
+            });
+        }
+        function dnApplySig(id, who, r) {
+            const list = db.deliveries;
+            const d = list.find(x => x.id === id);
+            if (!d) return;
+            d[who + 'Sig'] = r.sig; d[who + 'SigName'] = r.name; d[who + 'SigAt'] = r.at;
+            db.deliveries = list;
+            renderDNs();
+            const m = document.getElementById('modal-dn-print');
+            if (_dnPrintId === id && m && !m.classList.contains('hidden')) printDN(id);
+            showToast('Signature saved');
+        }
+        function _dnSignCell(label, sig, name, at) {
+            const ok = _sigOK(sig);
+            return `<div class="sig-cell">${ok ? `<img class="sig-img" src="${sig}" alt="">` : ''}${label}${ok ? `<span style="display:block;font-size:.7rem;color:#222;margin-top:2px;">${esc(name || '')}${at ? ' · ' + esc(at) : ''}</span>` : ''}</div>`;
+        }
 
         function convertQuotationToSale() {
             if (!_lastQuotation) { showToast('No quotation or proforma to convert', 'danger'); return; }
@@ -9815,6 +10584,8 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             document.getElementById('sale-momo-ref').value  = '';
             document.getElementById('sale-deposit').value   = '';
             document.getElementById('sale-promise').value   = '';
+            document.getElementById('sale-disc-type').value = _lastQuotation.discType === 'amt' ? 'amt' : 'pct';
+            document.getElementById('sale-disc-val').value  = _lastQuotation.discount > 0 ? _lastQuotation.discVal : '';
             toggleMomoField();
             renderSaleItemRows();
 
@@ -9966,7 +10737,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
         const LAST_BACKUP_KEY = 'za_last_backup';
         const BACKUP_NAG_DAY_KEY = 'za_backup_nag_day';
         const BACKUP_STALE_DAYS = 7;
-        const BACKUP_COLLECTIONS = ['inventory','sales','purchases','expenses','fisp','credit','customers','suppliers','adjustments','grns','pos','deliveries','cdnotes','returns','suppayments','transfers'];
+        const BACKUP_COLLECTIONS = ['inventory','sales','purchases','expenses','fisp','credit','customers','suppliers','adjustments','grns','pos','deliveries','cdnotes','returns','suppayments','transfers','quotes'];
 
         // Small, fast checksum (FNV-1a) so a half-downloaded or hand-edited file is caught on restore.
         function _checksum(str) {
@@ -10185,6 +10956,8 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
         function prepareSaleModal() {
             if (db.inventory.length === 0) { showToast('Add at least one product to Inventory first', 'danger'); return; }
             saleItems = [{ prodId: '', qty: 1, price: 0 }];
+            document.getElementById('sale-disc-type').value = 'pct';
+            document.getElementById('sale-disc-val').value = '';
             document.getElementById('sale-cust').value = '';
             document.getElementById('sale-method').value = 'Cash';
             document.getElementById('sale-momo-ref').value = '';
@@ -10212,7 +10985,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const el = document.getElementById('deposit-hint');
             const inp = document.getElementById('sale-deposit');
             if (!el || !inp) return;
-            const total = saleItems.reduce((sum, i) => sum + (i.qty || 0) * (i.price || 0), 0);
+            const total = _saleDiscountCalc(saleItems).net;
             const dep = parseFloat(inp.value) || 0;
             if (total <= 0) { el.textContent = 'Add items to see the balance.'; el.style.color = 'var(--text-muted)'; return; }
             if (dep < 0 || dep >= total) {
@@ -10294,10 +11067,50 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             renderSaleItemRows();
         }
 
+        // ── DISCOUNTS ────────────────────────────────────────────────────
+        // A discount (percentage or fixed kwacha amount) is spread across the item lines in proportion to
+        // their value, so every line's lineTotal is already the discounted amount and sale.total is the net.
+        // Revenue, credit, returns and the reports therefore stay correct without any other change.
+        // listPrice / discount on a line, and subtotal / discount / discPct on the sale, are for display.
+        function _discSpread(grosses, disc) {
+            let left = disc;
+            const sub = grosses.reduce((a, g) => a + g, 0);
+            return grosses.map((g, i) => {
+                let share = (i === grosses.length - 1) ? left : (sub > 0 ? _r2(disc * g / sub) : 0);
+                share = _r2(Math.max(0, Math.min(share, g)));
+                left = _r2(left - share);
+                return share;
+            });
+        }
+        function _saleDiscountCalc(items, typeId, valId) {
+            const gross = _r2(items.reduce((sum, i) => sum + (i.qty || 0) * (i.price || 0), 0));
+            const typeEl = document.getElementById(typeId || 'sale-disc-type');
+            const valEl  = document.getElementById(valId || 'sale-disc-val');
+            const type = typeEl && typeEl.value === 'amt' ? 'amt' : 'pct';
+            const val  = valEl ? (parseFloat(valEl.value) || 0) : 0;
+            let err = '';
+            if (val < 0) err = 'Discount cannot be negative';
+            else if (type === 'pct' && val > 100) err = 'Discount cannot be more than 100%';
+            else if (type === 'amt' && val > gross) err = 'Discount cannot be more than the subtotal';
+            let disc = 0;
+            if (!err && val > 0 && gross > 0) disc = _r2(Math.min(gross, type === 'amt' ? val : gross * val / 100));
+            return { gross, disc, net: _r2(gross - disc), type, val, err };
+        }
+        // What a line sells at before discount, for receipts and quotes.
+        function _liListPrice(li) { return (li.discount > 0 && li.listPrice != null) ? li.listPrice : li.unitPrice; }
+        function _liGross(li) { return (li.discount > 0 && li.listPrice != null) ? _r2(li.qty * li.listPrice) : li.lineTotal; }
+
         function updateSaleGrandTotal() {
-            const total = saleItems.reduce((sum, i) => sum + (i.qty || 0) * (i.price || 0), 0);
+            const dc = _saleDiscountCalc(saleItems);
+            const subEl = document.getElementById('sale-subtotal');
+            const dEl = document.getElementById('sale-disc-amt');
             const el = document.getElementById('sale-items-total');
-            if (el) el.textContent = formatZMW(total);
+            if (subEl) subEl.textContent = formatZMW(dc.gross);
+            if (dEl) {
+                dEl.textContent = dc.err ? dc.err : '−' + formatZMW(dc.disc);
+                dEl.style.color = (dc.err || dc.disc > 0) ? 'var(--danger)' : 'var(--text-muted)';
+            }
+            if (el) el.textContent = formatZMW(dc.net);
             updateDepositHint();
         }
 
@@ -10311,13 +11124,15 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
 
             const validItems = saleItems.filter(i => i.prodId && i.qty > 0 && i.price >= 0);
             if (validItems.length === 0) { showToast('Add at least one product with a valid quantity', 'danger'); return; }
+            const dc = _saleDiscountCalc(validItems);
+            if (dc.err) { showToast(dc.err, 'danger'); return; }
 
             let deposit = 0, promiseDmy = '';
             if (method === 'Credit') {
                 const pIso = document.getElementById('sale-promise').value;
                 if (pIso) { if (pIso < _todayISOLocal()) { showToast('Promise date cannot be in the past', 'danger'); return; } const [py, pm, pd] = pIso.split('-'); promiseDmy = `${pd}/${pm}/${py}`; }
                 deposit = _r2(parseFloat(document.getElementById('sale-deposit').value) || 0);
-                const chkTotal = validItems.reduce((sum, i) => sum + i.qty * i.price, 0);
+                const chkTotal = dc.net;
                 if (deposit < 0) { showToast('Deposit cannot be negative', 'danger'); return; }
                 if (deposit > 0 && deposit >= chkTotal - 0.001) { showToast('Deposit must be less than the sale total. For full payment, use Cash or Mobile Money.', 'danger'); return; }
             }
@@ -10332,16 +11147,27 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             }
 
             // Deduct stock for all items
-            const resolvedItems = validItems.map(si => {
+            const _grosses = validItems.map(si => _r2(si.qty * si.price));
+            const _shares = _discSpread(_grosses, dc.disc);
+            const resolvedItems = validItems.map((si, _i) => {
                 const prod = inv.find(p => p.id === si.prodId);
                 prod.qty -= si.qty;
                 if (prod.qty <= 0) prod.status = 'Out of Stock';
-                return { prodId: si.prodId, prodName: prod.name, qty: si.qty, unitPrice: si.price, lineTotal: si.qty * si.price };
+                const li = { prodId: si.prodId, prodName: prod.name, qty: si.qty, unitPrice: si.price, lineTotal: si.qty * si.price };
+                if (_shares[_i] > 0) {
+                    const net = _r2(_grosses[_i] - _shares[_i]);
+                    li.listPrice = si.price;
+                    li.discount = _shares[_i];
+                    li.unitPrice = Math.round(net / si.qty * 10000) / 10000;
+                    li.lineTotal = net;
+                }
+                return li;
             });
             db.inventory = inv;
 
             const grandTotal = resolvedItems.reduce((sum, i) => sum + i.lineTotal, 0);
 
+            const _discTotal = _r2(resolvedItems.reduce((a, i) => a + (i.discount || 0), 0));
             const sale = {
                 id:      uid('SAL'),
                 date:    new Date().toLocaleDateString('en-GB'),
@@ -10352,6 +11178,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 prodName: resolvedItems[0].prodName,
                 qty:      resolvedItems[0].qty,
                 total:    grandTotal,
+                ...(_discTotal > 0 ? { subtotal: _r2(grandTotal + _discTotal), discount: _discTotal, ...(dc.type === 'pct' ? { discPct: dc.val } : {}) } : {}),
                 method,
                 momoRef,
                 ...(deposit > 0 ? { deposit } : {}),
@@ -11883,6 +12710,9 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             db.deliveries = list;
             renderDNs();
             showToast('Marked as ' + status);
+            if (status === 'Delivered') {
+                openSignPad({ title: 'Customer signature: goods received', name: d.receivedBy || d.cust || '', skipLabel: 'Skip', onDone: r => dnApplySig(id, 'cust', r) });
+            }
         }
 
         function renderDNs() {
@@ -11919,6 +12749,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
         function printDN(id) {
             const d = db.deliveries.find(x => x.id === id);
             if (!d) return;
+            _dnPrintId = id;
             const co = getCompanyInfo();
             const sub = [co.phone, co.address, co.tpin ? 'TPIN: ' + co.tpin : ''].filter(Boolean).map(esc).join(' · ');
             const row = (k, v) => v ? `<div class="grn-row"><span>${k}:</span><span>${esc(v)}</span></div>` : '';
@@ -11936,7 +12767,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 ${d.notes ? `<div style="margin-top:8px;font-size:.78rem;background:#f7f7f7;padding:6px 8px;border-radius:4px;"><strong>Notes:</strong> ${esc(d.notes)}</div>` : ''}
                 ${d.status === 'Delivered' ? `<div style="margin-top:8px;font-size:.8rem;">Received by <strong>${esc(d.receivedBy || '—')}</strong> on ${esc(d.deliveredAt || '')}</div>` : ''}
                 <div style="margin-top:10px;font-size:.78rem;color:#444;">Goods received in good condition and the correct quantity.</div>
-                <div class="grn-sign"><div>Driver (name &amp; signature)</div><div>Customer (name, signature &amp; date)</div></div>`;
+                <div class="grn-sign" style="margin-top:${(_sigOK(d.driverSig) || _sigOK(d.custSig)) ? 64 : 28}px;">${_dnSignCell('Driver (name &amp; signature)', d.driverSig, d.driverSigName, d.driverSigAt)}${_dnSignCell('Customer (name, signature &amp; date)', d.custSig, d.custSigName, d.custSigAt)}</div>`;
             openModal('modal-dn-print');
         }
 
@@ -12855,13 +13686,15 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
 
             // Build editSaleItems from items[] or legacy fields
             if (sale.items && sale.items.length > 0) {
-                editSaleItems = sale.items.map(li => ({ prodId: li.prodId, qty: li.qty, price: li.unitPrice }));
+                editSaleItems = sale.items.map(li => ({ prodId: li.prodId, qty: li.qty, price: li.unitPrice,
+                    _orig: { prodId: li.prodId, qty: li.qty, price: li.unitPrice, lineTotal: li.lineTotal, listPrice: li.listPrice, discount: li.discount } }));
             } else {
                 const unitPrice = sale.qty > 0 ? (sale.total / sale.qty) : 0;
                 editSaleItems = [{ prodId: sale.prodId, qty: sale.qty, price: unitPrice }];
             }
             renderEditSaleItemRows();
             openModal('modal-edit-sale');
+            if (sale.discount > 0) showToast('This sale had a discount. The prices shown here are after the discount.');
         }
 
         function toggleEditSaleMomo() {
@@ -12976,7 +13809,13 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 const prod = inv.find(p => p.id === si.prodId);
                 prod.qty -= si.qty;
                 if (prod.qty <= 0) prod.status = 'Out of Stock';
-                return { prodId: si.prodId, prodName: prod.name, qty: si.qty, unitPrice: si.price, lineTotal: si.qty * si.price };
+                const li = { prodId: si.prodId, prodName: prod.name, qty: si.qty, unitPrice: si.price, lineTotal: si.qty * si.price };
+                // A line that was discounted and has not been touched keeps its discount.
+                const o = si._orig;
+                if (o && o.discount > 0 && o.prodId === si.prodId && o.qty === si.qty && o.price === si.price) {
+                    li.listPrice = o.listPrice; li.discount = o.discount; li.lineTotal = o.lineTotal;
+                }
+                return li;
             });
             db.inventory = inv;
 
@@ -12987,6 +13826,15 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             sale.prodName = resolvedItems[0].prodName;
             sale.qty      = resolvedItems[0].qty;
             sale.total    = grandTotal;
+            {
+                const _dsum = _r2(resolvedItems.reduce((a, i) => a + (i.discount || 0), 0));
+                if (_dsum > 0 || sale.discount > 0) {
+                    const _kept = validItems.length === originalItems.length && validItems.every(si => si._orig && si._orig.prodId === si.prodId && si._orig.qty === si.qty && si._orig.price === si.price);
+                    sale.discount = _dsum;
+                    sale.subtotal = _r2(grandTotal + _dsum);
+                    if (!(_dsum > 0 && _kept)) sale.discPct = 0;
+                }
+            }
             sale.method   = newMethod;
             sale.momoRef  = newMomo;
             db.sales = sales;
