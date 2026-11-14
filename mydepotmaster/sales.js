@@ -16,8 +16,8 @@
  *
  * STOCK (roadmap step 10): stockBook() below is the ONE place stock is worked out, for the till and the main app:
  *       stock = received − issued − sold + returns        (no stored counters: every figure is summed from records)
- *   received/issued are the main app's own records, sold comes from this ledger, returns from void/refund records
- *   (roadmap step 19 feeds them; until then there are none).
+ *   received/issued are the main app's own records, sold comes from this ledger, returns from the void/refund records of returns.js
+ *   (roadmap step 19: Returns.forStock() hands over the lines that go back on the shelf; a damaged return is not restocked).
  *
  * PER-BATCH STOCK (v0.3.36): a till sale of a commodity carries no batch, so batchBook() below allocates each sale line to the
  *   batches FIFO (oldest stock first), replaying the records in date/time order. Nothing is stored; the per-batch figures
@@ -37,6 +37,10 @@
  *   main app overlays them on DATA in memory so reports, close-out and customer balances see till sales, and strips
  *   them again whenever DATA is saved or synced. Stock does NOT depend on that overlay: stockBook ignores _sale rows
  *   and reads the ledger itself. Roadmap step 23 (Sales History from the ledger) retires the overlay.
+ *   VOIDS AND REFUNDS (roadmap step 19, returns.js): a return is a record of its own, never an edit of the sale. issuedRows(sales, returns) adds each
+ *   one as NEGATIVE rows (issued < 0, flags _sale and _return) dated the day the return was made, so a day that was already closed is never changed
+ *   and every report that sums issued x price comes out net. The cash/credit split of a return row follows the main app's own pattern: money handed
+ *   back is a negative partialPaid, the part taken off the customer's balance is the rest of the negative value.
  *
  * Plain classic script, no dependencies, one global: Sales. Load it with a normal <script src="sales.js"></script>
  * after gate.js. Add sales.js to the precache list in sw.js, otherwise the pages cannot start offline.
@@ -278,7 +282,7 @@ const Sales = (function () {
 
   // Sales -> rows shaped like the main app's own records. gen: general items (generalIssued shape);
   // com: { commodityId: [commodityIssued-shaped rows] }. Every row carries _sale:true and a unique id "<saleId>#<line>".
-  function issuedRows(sales) {
+  function issuedRows(sales, returns) {
     const gen = [], com = {};
     const list = (sales || []).slice().sort((a, b) => (a.date + a.time + a.id).localeCompare(b.date + b.time + b.id));
     list.forEach(s => {
@@ -292,6 +296,32 @@ const Sales = (function () {
           customerId: s.customerId || '', customerName: s.customerName || '',
           enteredBy: s.cashier, enteredByRole: s.cashierRole || '', enteredAt: s.at, approvalStatus: 'approved',
           payMethods: methodsOf(s)
+        };
+        if (l.kind === 'commodity') {
+          const cid = l.itemId.slice(4);
+          (com[cid] || (com[cid] = [])).push(Object.assign(base, { batchName: BATCH_NAME, transporter: '', salePrice: netPrice(l) }));
+        } else {
+          gen.push(Object.assign(base, { itemName: l.name, itemId: l.itemId, sellingPrice: netPrice(l), unit: l.unit }));
+        }
+      });
+    });
+    // Voids and refunds (returns.js): negative rows on the day they were made. Row status: nothing handed back = 'credit' (the whole value comes off
+    // what the customer owes), nothing taken off a balance = 'paid', both = 'partial' with the money handed back as a NEGATIVE partialPaid.
+    const rets = (returns || []).filter(r => r && r.id && arr(r.lines).length).slice().sort((a, b) => (a.date + a.time + a.id).localeCompare(b.date + b.time + b.id));
+    rets.forEach(r => {
+      const lines = arr(r.lines), T = lines.reduce((a, l) => a + toC(l.total), 0), M = toC(r.refunded), C = toC(r.creditApplied);
+      const st = M <= 0 ? 'credit' : (C <= 0 ? 'paid' : 'partial');
+      const how = arr(r.refunds).map(p => String(p.label || p.method).toUpperCase()).filter((m, i, a) => a.indexOf(m) === i).join(' + ');
+      let given = 0;
+      lines.forEach((l, i) => {
+        let pc = 0;
+        if (st === 'partial') { pc = i === lines.length - 1 ? M - given : Math.floor(M * toC(l.total) / (T || 1)); given += pc; }
+        const base = {
+          id: r.id + '#' + i, _sale: true, _return: true, returnId: r.id, returnKind: r.kind, saleId: r.saleId, receiptNo: r.id, tillId: r.tillId,
+          date: r.date, time: r.time, issued: -Number(l.qty), notes: (r.kind === 'void' ? 'VOID of ' : 'REFUND of ') + r.saleId + ' \u00B7 ' + (r.reason || ''),
+          creditStatus: toC(l.total) > 0 ? st : 'paid', partialPaid: st === 'partial' ? -pc / 100 : 0,
+          customerId: r.customerId || '', customerName: r.customerName || '',
+          enteredBy: r.cashier, enteredByRole: r.cashierRole || '', enteredAt: r.at, approvalStatus: 'approved', payMethods: how
         };
         if (l.kind === 'commodity') {
           const cid = l.itemId.slice(4);
@@ -320,7 +350,7 @@ const Sales = (function () {
   //             Rows flagged _sale are the main app's in-memory overlay of THIS ledger and are skipped here, so a
   //             till sale is counted once, from the ledger, never twice.
   //   sales     ledger records; every line counts against its itemId ("com:<id>" for a commodity)
-  //   returns   [{itemId | itemName, qty, date?, time?}]: stock coming back (voids / refunds, roadmap step 19)
+  //   returns   [{itemId | itemName, qty, date?, time?}]: stock coming back (voids / refunds, roadmap step 19: Returns.forStock(records))
   // opts:
   //   idOfName(name)   id for a row that carries only a name (the main app passes its item-master lookup)
   //   keyOf(row)       overrides how a received/issued row is keyed (used to total ONE commodity)
@@ -359,7 +389,9 @@ const Sales = (function () {
   // ══════════════════════════════════════════════════════════════════════════════
   // PER-BATCH STOCK of ONE commodity  =  the stockBook formula, split by batch
   // ══════════════════════════════════════════════════════════════════════════════
-  //   batch stock = received(batch) − issued(batch) − sold(batch)      (+ returns once voids exist, roadmap step 19)
+  //   batch stock = received(batch) − issued(batch) − sold(batch) + returned(batch)      (roadmap step 19)
+  // A restocked return goes back to the batches its sale line came from, in the order they supplied it (so a void puts exactly what it took back where it
+  // was); anything over that goes to the last of them. src.returns are the return RECORDS (returns.js), not the stockBook shape.
   // A till sale names no batch, so every sale line is ALLOCATED: records are replayed in date/time order (at the same
   // minute: received, then issued, then sold) and a sale takes from the batch that arrived first and still holds stock,
   // then the next, and so on (FIFO). If a sale is bigger than everything in stock at that moment, the shortfall goes to
@@ -367,15 +399,15 @@ const Sales = (function () {
   // pseudo batch BATCH_NAME (no stock was recorded at all yet). The allocation is derived, never stored, so it re-works
   // itself when a backdated receive is entered. A later cut-off gives the same numbers as the full replay up to then.
   // src: { received: commodity received rows, issued: commodity issued rows (rows flagged _sale are skipped, sales are
-  //        read from the ledger), sales: ledger records }
+  //        read from the ledger), sales: ledger records, returns?: return records }
   // opts: cid (required: the commodity id; its sale lines have itemId "com:<cid>"), until / untilDate / isApproved,
   //       exactly as in stockBook. Same rules as stockBook: approved rows only, received rows with condition 'rejected' skipped.
   // Returns:
-  //   get(batch)        { rec, issued, sold, out (= issued + sold), bal, soldValue (money taken for what was sold) }
+  //   get(batch)        { rec, issued, sold, ret, out (= issued + sold), bal, soldValue (money taken for what was sold, less what was given back) }
   //   names()           every batch that has any record, oldest stock first
   //   total()           the commodity's stock = stockBook(...).bal for the same commodity
   //   timeline()        { rowId: stock after that row }: a received/issued row gets its OWN batch's stock;
-  //                     a till-sale row (id "<saleId>#<line>") gets the commodity's total stock, as it belongs to no one batch
+  //                     a till-sale or till-return row (id "<saleId or returnId>#<line>") gets the commodity's total stock, as it belongs to no one batch
   //   allocation(id)    which batches a sale line came from: [{ batch, qty }]
   function batchBook(src, o) {
     o = o || {};
@@ -394,18 +426,33 @@ const Sales = (function () {
       if (!s || !within(s.date, s.time)) return;
       arr(s.lines).forEach((l, i) => { if (l && l.itemId === key) ev.push({ k: 2, at: at(s.date, s.time), id: s.id + '#' + i, q: Number(l.qty) || 0, price: netPrice(l) }); });
     });
+    (src.returns || []).forEach(r => {
+      if (!r || !within(r.date, r.time)) return;
+      arr(r.lines).forEach((l, i) => { if (l && l.itemId === key) ev.push({ k: 3, at: at(r.date, r.time), id: r.id + '#' + i, q: l.restock === false ? 0 : Number(l.qty) || 0, sl: r.saleId + '#' + l.lineNo }); });
+    });
     ev.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : (a.k - b.k) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
 
-    const st = new Map(), order = [], lines = new Map(), tl = new Map();
+    const st = new Map(), order = [], lines = new Map(), prices = new Map(), back = new Map(), tl = new Map();
     let total = 0;
-    const slot = b => { let s = st.get(b); if (!s) { s = { rec: 0, issued: 0, sold: 0, value: 0 }; st.set(b, s); } return s; };
-    const bal = s => s.rec - s.issued - s.sold;
+    const slot = b => { let s = st.get(b); if (!s) { s = { rec: 0, issued: 0, sold: 0, ret: 0, value: 0 }; st.set(b, s); } return s; };
+    const bal = s => s.rec - s.issued - s.sold + s.ret;
     ev.forEach(e => {
       if (e.k === 0) {
         const s = slot(e.b); if (order.indexOf(e.b) < 0) order.push(e.b);
         s.rec += e.q; total += e.q; tl.set(e.id, bal(s));
       } else if (e.k === 1) {
         const s = slot(e.b); s.issued += e.q; total -= e.q; tl.set(e.id, bal(s));
+      } else if (e.k === 3) {
+        let need = e.q;
+        const parts = lines.get(e.sl) || [], price = prices.get(e.sl) || 0;
+        const give = (b, q) => { const s = slot(b); s.ret += q; s.value -= q * price; total += q; need -= q; };
+        for (const p of parts) {
+          if (need <= EPS) break;
+          const bk = e.sl + '|' + p.batch, free = p.qty - (back.get(bk) || 0);
+          if (free > EPS) { const t = Math.min(free, need); give(p.batch, t); back.set(bk, (back.get(bk) || 0) + t); }
+        }
+        if (need > EPS) give(parts.length ? parts[parts.length - 1].batch : (order.length ? order[order.length - 1] : BATCH_NAME), need);
+        tl.set(e.id, total);
       } else {
         let need = e.q, last = null;
         const parts = [];
@@ -416,12 +463,13 @@ const Sales = (function () {
         for (const b of order) { if (need <= EPS) break; const have = bal(slot(b)); if (have > EPS) take(b, Math.min(have, need)); }
         if (need > EPS) take(last != null ? last : (order.length ? order[order.length - 1] : BATCH_NAME), need);
         lines.set(e.id, parts.map(p => ({ batch: p.batch, qty: r3(p.qty) })));
+        prices.set(e.id, e.price);
         tl.set(e.id, total);
       }
     });
 
-    const fin = s => ({ rec: r3(s.rec), issued: r3(s.issued), sold: r3(s.sold), out: r3(s.issued + s.sold), bal: r3(s.rec - s.issued - s.sold), soldValue: r2(s.value) });
-    const none = { rec: 0, issued: 0, sold: 0, value: 0 };
+    const fin = s => ({ rec: r3(s.rec), issued: r3(s.issued), sold: r3(s.sold), ret: r3(s.ret), out: r3(s.issued + s.sold), bal: r3(s.rec - s.issued - s.sold + s.ret), soldValue: r2(s.value) });
+    const none = { rec: 0, issued: 0, sold: 0, ret: 0, value: 0 };
     let tlObj = null;
     return {
       get: b => fin(st.get(b == null ? '' : String(b)) || none),

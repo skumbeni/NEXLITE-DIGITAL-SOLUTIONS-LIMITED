@@ -10,7 +10,7 @@
  *   Like sales, shift records live OUTSIDE the DATA blob, so two tills can never overwrite each other.
  *
  * CASH MATHS (nothing is stored but the result at close; every figure is summed from records)
- *   expected cash = float + cash taken on this shift's sales − cash paid out (refunds, roadmap step 19, feed `out` later)
+ *   expected cash = float + cash taken on this shift's sales − cash paid out (cash handed back on voids and refunds, roadmap step 19: Returns.cashOutOf(shiftId) is the `out` figure)
  *   cash taken on a sale = the CASH payment lines' `amount` (what was applied to the bill; the change given back is already
  *   left out of `amount`, `tendered` is not used here).
  *   variance = counted − expected   (negative = cash is short, positive = cash is over)
@@ -32,6 +32,10 @@
  *     report('X', ...)  one OPEN shift, read-only, as often as wanted. Changes nothing.
  *     report('Z', ...)  one CLOSED shift: the figures frozen in its close record, plus the item list from the ledger.
  *     dayReport(...)    every sale of one date and every shift COUNTED on it, across tills: what the main app's daily close-out shows and keeps.
+ *   VOIDS AND REFUNDS (roadmap step 19, returns.js). A return is booked on the day and in the shift it is MADE, never back onto the sale's, so a
+ *   closed shift or a closed day is never changed. Its cash comes out of the drawer (`out`); the reports show it beside the sales: report() adds `rt`
+ *   (counts and money of this shift's returns, from o.returns) and `netTotal`; dayReport(date, events, sales, returns) adds `returns`, `cashOut` (cash
+ *   handed back on the date) and `netTotal`. The Z's own figures are still the close record's: `total` stays the sales taken, `cashOut` is already in it.
  *   The Z of a shift IS its shiftCloses record (append-only), so there is no Z counter to collide: its number is the shiftId.
  *   The day's Z reference is 'Z-' + the date.
  *
@@ -212,9 +216,25 @@ const Shifts = (function () {
       .sort((a, b) => (b.total - a.total) || a.name.localeCompare(b.name));
   }
 
+  // Voids and refunds (returns.js records) summed: { count, voids, refunds, total, credit, money, byMethod }. `total` is the value taken back,
+  // `credit` the part of it taken off customers' unpaid balances, `money` what was handed back (byMethod splits it).
+  function returnsSummary(list) {
+    const by = {}; METHODS.forEach(m => { by[m] = 0; });
+    let voids = 0, refunds = 0, total = 0, credit = 0, money = 0;
+    (list || []).forEach(r => {
+      if (!r) return;
+      if (r.kind === 'void') voids++; else refunds++;
+      total += toC(r.total); credit += toC(r.creditApplied); money += toC(r.refunded);
+      arr(r.refunds).forEach(p => { if (by[p.method] != null) by[p.method] += toC(p.amount); });
+    });
+    const o = {}; METHODS.forEach(m => { o[m] = by[m] / 100; });
+    return { count: voids + refunds, voids, refunds, total: total / 100, credit: credit / 100, money: money / 100, byMethod: o };
+  }
+
   // One shift's report.  kind 'X' (shift open) or 'Z' (shift closed).
   //   open   the shift's open record     sales   the ledger's records     o.close  its close record (needed for Z)
   //   o.out  cash paid out of the drawer so far (X only; step 19)           o.now    time the report is taken (X)
+  //   o.returns  the ledger's return records (any; this shift's are picked by shiftId): adds r.rt and r.netTotal (step 19)
   // 'Z' takes every figure from the close record, because that is what was counted and signed off; the item list comes from the
   // ledger. itemsComplete says whether that list adds up to the Z's total: a phone that has not downloaded every sale of the
   // shift (a Z reprinted on another device) would otherwise print a list that disagrees with the totals, so it reports false.
@@ -254,6 +274,8 @@ const Shifts = (function () {
     r.discountGiven = disc / 100;            // roadmap step 18: already taken off `total`, shown so a manager can see how much was given
     r.discountCount = discN;
     r.itemsComplete = mine.length === r.saleCount && sumC === toC(r.total);
+    r.rt = returnsSummary((o.returns || []).filter(x => x && x.shiftId === open.shiftId));   // step 19: voids and refunds paid out in this shift
+    r.netTotal = (toC(r.total) - toC(r.rt.total)) / 100;
     return r;
   }
 
@@ -269,8 +291,9 @@ const Shifts = (function () {
   //   openEarlier shifts opened on an earlier date and still open (a warning, not a block: a till whose storage was wiped can leave one)
   //   cashSales   cash taken on the day's sales (cash payment lines; the float and the change given back are not in it)
   //   shiftVariance  sum of the closed shifts' variances (negative = short);  counted  sum of their counts less floats
-  function dayReport(date, events, sales) {
+  function dayReport(date, events, sales, returns) {
     const list = shiftsOf(events);
+    const rt = returnsSummary((returns || []).filter(x => x && x.date === date));   // step 19: returns made on this date (their own day, whatever the sale's)
     const day = (sales || []).filter(s => s && s.date === date);
     const by = {}; METHODS.forEach(m => { by[m] = 0; });
     let total = 0, credit = 0, change = 0, noShift = 0, disc = 0, discN = 0;
@@ -298,6 +321,7 @@ const Shifts = (function () {
       date, saleCount: day.length, total: total / 100, credit: credit / 100, byMethod: o,
       cashSales: by.cash / 100, nonCash: (by.mtn + by.airtel + by.card) / 100, changeGiven: change / 100, noShift,
       discountGiven: disc / 100, discountCount: discN,    // already taken off `total` (step 18)
+      returns: rt, cashOut: rt.byMethod.cash, netTotal: (total - toC(rt.total)) / 100,   // step 19: voids and refunds made today; cash handed back; sales less returns
       shifts: rows, openToday: openNow.filter(x => x.open.date === date).map(row), openEarlier: openNow.filter(x => x.open.date < date).map(row),
       shiftVariance: varC / 100, counted: countedC / 100, items: itemsOf(day)
     };
@@ -530,7 +554,7 @@ const Shifts = (function () {
     return { all, pending, current, open, close, push, pull };
   }
 
-  return { V, SID_RE, METHODS, openRecord, closeRecord, validateOpen, validateClose, forCloud, fromCloud, shiftsOf, openShiftOf, summary, varianceOf, itemsOf, report, dayReport, create, memAdapter, idbAdapter };
+  return { V, SID_RE, METHODS, openRecord, closeRecord, validateOpen, validateClose, forCloud, fromCloud, shiftsOf, openShiftOf, summary, varianceOf, itemsOf, report, dayReport, returnsSummary, create, memAdapter, idbAdapter };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Shifts; // lets Node load it for tests

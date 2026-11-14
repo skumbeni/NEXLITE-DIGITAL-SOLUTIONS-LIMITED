@@ -25,7 +25,21 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.54 (2026-11-13) — Printer text size: Font A forced, new Text size setting (default Large) (pos.html, index.html SW_VERSION only, sw.js).
+// Current version: v0.3.56 (2026-11-14) — Built-in printer switch in Settings; Print buttons print straight to the terminal's printer (index.html, sw.js).
+//   - Settings > Printer (Admin and Staff): Built-in printer tick, Thermal paper (Auto / 58 mm / 80 mm), Print size, Test print. Per device; same localStorage key as the
+//     Till's Printer button (mdm_till_printer), so one switch covers both the Till and the main app.
+//   - ON: receipts, void/refund slips, Z reports and the subscription receipt print by RawBT with no print screen. Payslips, reports and other documents keep their
+//     screen, but its Print button prints straight to the printer. Needs the free RawBT app. OFF: the browser print dialog, as before. No database or rules change.
+// Previous: v0.3.55 (2026-11-14) — Till roadmap step 19: voids and refunds as new records linked to the sale (returns.js NEW + sales.js + shifts.js + pos.html + index.html + database_rules.json + sw.js).
+//   - returns.js (new, loaded by pos.html and index.html): returns/{returnId}, create-only and append-only like sales and shifts. A VOID takes back the whole sale in the shift it
+//     was taken in; a REFUND takes back some or all lines at any time. Each has a reason, the manager who allowed it, and points at the sale. The customer's unpaid balance is
+//     cleared first; only the rest is money handed back. A damaged return is not put back in stock. Numbers come from the till's receipt counter (K7F2-R000125).
+//   - Till: new Returns button (find the sale, choose lines or void, reason, how the money goes back, manager PIN for anyone but Admin/Manager, slip prints in the browser or by RawBT).
+//     Cash handed back comes off the drawer: expected cash, close shift, X and Z reports and My sales all show it.
+//   - Main app: stock, reports, customer balances and the daily close-out count the returns (a return is booked on the day it is made, so a closed day never changes).
+//   - database_rules.json: new returns node (create-only, only once its sale is in the cloud). Publish it BEFORE using Returns on more than one phone.
+//   - sw.js: returns.js is precached. The offline rule for scripts now also covers shifts.js and returns.js (it only listed gate.js and sales.js, so shifts.js was not served from the cache offline).
+// Previous: v0.3.54 (2026-11-13) — Printer text size: Font A forced, new Text size setting (default Large) (pos.html, index.html SW_VERSION only, sw.js).
 // Previous: v0.3.53 (2026-11-13) — Printer paper width: new Auto option (default; 58 mm on a handheld), Test print adds a width ruler (pos.html, index.html SW_VERSION only, sw.js).
 // Previous: v0.3.52 (2026-11-13) — Till auto-print on built-in thermal printers (pos.html, index.html SW_VERSION only, sw.js).
 //   - Till header > Printer: choose Browser print dialog (as before) or RawBT thermal (ESC/POS, 58/80 mm), switch on auto-print after each sale, Test print.
@@ -2095,7 +2109,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.54';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.56';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
@@ -2152,6 +2166,7 @@ self.addEventListener('install', e => {
         .then(() => cache.add('gate.js').catch(() => {}))       // shared gating rules: index.html AND pos.html need it to start offline
         .then(() => cache.add('sales.js').catch(() => {}))      // the sales ledger: index.html AND pos.html need it to start offline
         .then(() => cache.add('shifts.js').catch(() => {}))     // the shift ledger (step 16): pos.html needs it to start offline
+        .then(() => cache.add('returns.js').catch(() => {}))    // voids and refunds (step 19): index.html AND pos.html need it to start offline
         .then(() => cache.add('pos.html').catch(() => {}))      // the till page (best-effort; index.html also adds it)
         .then(() => cache.add(FONTS_CSS).catch(() => {}))       // fonts (best-effort, may fail offline)
       )
@@ -2233,8 +2248,8 @@ self.addEventListener('fetch', e => {
   // gate.js — shared licence/tier rules, loaded as a plain <script src> by index.html and pos.html.
   // It is not a navigation, so without this rule it would pass straight to the network and both pages
   // would fail to start offline. Network-first so a deploy is picked up; cache fallback when offline.
-  // sales.js (the append-only sales ledger, step 9) is loaded the same way and needs the same rule.
-  if (/\/(gate|sales)\.js(\?|$)/.test(url)) {
+  // sales.js (the append-only sales ledger, step 9), shifts.js (step 16) and returns.js (step 19) are loaded the same way and need the same rule.
+  if (/\/(gate|sales|shifts|returns)\.js(\?|$)/.test(url)) {
     e.respondWith(networkFirst(req));
     return;
   }

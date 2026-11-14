@@ -250,6 +250,20 @@ button[hidden]{display:none!important}
 .shv.ok{color:var(--green)}.shv.bad{color:var(--red)}.shv.warn{color:var(--amber)}
 .shbtns{display:flex;flex-direction:column;gap:8px;margin-top:8px}
 .shbtns button{width:100%;padding:12px 16px}
+/* ── RETURNS (roadmap step 19) ── */
+.rt-chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 10px}
+.rt-chips button{padding:7px 12px;font-size:13px;border-radius:999px}
+.rt-chips button.on{background:var(--green);border-color:var(--green);color:#0a1628}
+.rt-line .rt-q{display:flex;gap:8px;align-items:center;margin:2px 0 4px}
+.rt-line .rt-q input{width:96px;font:inherit;font-size:17px;padding:8px 10px;border-radius:10px;border:2px solid var(--border);background:var(--bg);color:var(--text)}
+.rt-line .rt-q button{padding:8px 12px;font-size:14px}
+.rt-line.gone{opacity:.55}
+.rt-m{display:grid;grid-template-columns:96px 1fr;gap:6px 8px;align-items:center;margin-bottom:8px;font-size:14px}
+.rt-m input{width:100%;font:inherit;font-size:16px;padding:9px 10px;border-radius:10px;border:2px solid var(--border);background:var(--bg);color:var(--text)}
+.rt-m .ref{grid-column:2}
+.rt-ck{display:flex;gap:8px;align-items:center;margin:8px 0;font-size:14px}
+button.warnb{border-color:var(--amber);color:var(--amber)}
+button.warnb:disabled{opacity:.45;cursor:not-allowed}
 .cart-f .hint.warn{color:var(--amber)}
 </style>
 </head>
@@ -258,7 +272,7 @@ button[hidden]{display:none!important}
   <div><b>🧾 Till <span id="tillcode"></span></b><small id="depot"></small></div>
   <div class="hr">
     <div class="pills"><span class="pill" id="p-shift"></span><span class="pill" id="p-net"></span><span class="pill" id="p-cloud"></span><span class="pill" id="p-till"></span><span class="pill" id="p-sales"></span><span class="pill" id="p-user"></span></div>
-    <div class="hb"><button class="sm" id="b-print" type="button">Printer</button><button class="sm" id="b-shift" type="button">Shift</button><button class="sm" id="b-mine" type="button" hidden>My sales</button><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
+    <div class="hb"><button class="sm" id="b-print" type="button">Printer</button><button class="sm" id="b-ret" type="button">Returns</button><button class="sm" id="b-shift" type="button">Shift</button><button class="sm" id="b-mine" type="button" hidden>My sales</button><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
   </div>
 </header>
 <main id="main"></main>
@@ -267,6 +281,7 @@ button[hidden]{display:none!important}
 <script src="gate.js"></script>
 <script src="sales.js"></script>
 <script src="shifts.js"></script>
+<script src="returns.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-check-compat.js" defer></script>
@@ -510,9 +525,22 @@ let SALES_ALL=[],SALES_PENDING=0,SALES_ERR='',SALES_AUTH=false,salesBusy=false; 
 async function loadSold(){
   try{SALES_ALL=await LEDGER.all();SALES_PENDING=await LEDGER.pending();}
   catch(e){console.warn('Could not read the sales ledger',e);}
+  await loadRets();                                      // step 19: voids and refunds are read with the sales: stock and the drawer need both
+}
+// Voids and refunds (roadmap step 19): their own append-only records, returns/{returnId}, kept by returns.js. Same rules as sales:
+// saved on this phone first, uploaded when there is signal, the other tills' downloaded. See VOIDS AND REFUNDS further down.
+const RETLG=Returns.create({
+  depotKey:()=>DATA&&DATA.installId,
+  opts:{dateOf:t=>new Date(t).toISOString().slice(0,10)},   // the same date rule as the sales ledger
+  adapter:Returns.idbAdapter()
+});
+let RETS_ALL=[],RETS_PENDING=0;
+async function loadRets(){
+  try{RETS_ALL=await RETLG.all();RETS_PENDING=await RETLG.pending();}
+  catch(e){console.warn('Could not read the returns ledger',e);}
 }
 function paintSales(){
-  const waiting=SALES_PENDING+SHIFTS_PENDING;            // shift records (step 16) go up the same way, so they count here too
+  const waiting=SALES_PENDING+SHIFTS_PENDING+RETS_PENDING;   // shift records (step 16) and voids/refunds (step 19) go up the same way, so they count here too
   if(SALES_ERR||SHIFT_ERR)setPill('p-sales','Sales: '+(SALES_ERR||SHIFT_ERR),'bad');
   else if(waiting)setPill('p-sales','Sales: '+waiting+(!navigator.onLine?' waiting for signal':(SALES_AUTH?' waiting (no cloud session)':' uploading')),'warn');
   else setPill('p-sales','Sales: all uploaded','ok');
@@ -527,6 +555,13 @@ async function syncSales(){
     SALES_ERR=(up.left&&up.error&&up.error!=='NETWORK'&&up.error!=='NO_AUTH')?'upload problem ('+up.error+')':'';
     let got=0;
     try{got=(await LEDGER.pull(CLOUD)).added;}catch(e){console.warn('Sales download failed',e);}
+    // Step 19: voids and refunds go up AFTER the sales they point at (the database rules want the sale to be there first), then the other tills' come down.
+    try{
+      const ru=await RETLG.push(CLOUD);
+      if(ru.left&&ru.error==='NO_AUTH')SALES_AUTH=true;
+      if(!up.left&&ru.left&&ru.error&&ru.error!=='NETWORK'&&ru.error!=='NO_AUTH')SALES_ERR='refund upload problem ('+ru.error+')';
+    }catch(e){console.warn('Returns upload failed',e);}
+    try{got+=(await RETLG.pull(CLOUD)).added;}catch(e){console.warn('Returns download failed',e);}
     await loadSold();
     if(got&&GRID){loadCatalog();renderGrid();}
   }catch(e){console.warn('Sales sync failed',e);}
@@ -574,7 +609,7 @@ function commodityItems(){
       if(!iss.length)iss=DATA.maizeIssued||[];
     }
     const key='com:'+c.id;      // received - issued - sold + returns, by the shared formula (rows flagged _sale are skipped there, sales are read from the ledger)
-    const avail=Sales.stockBook({received:rec,issued:iss,sales:SALES_ALL,returns:[]},{keyOf:()=>key,only:key}).get(key).bal;
+    const avail=Sales.stockBook({received:rec,issued:iss,sales:SALES_ALL,returns:Returns.forStock(RETS_ALL)},{keyOf:()=>key,only:key}).get(key).bal;
     const unit=String(c.unit||'');
     const o={
       id:'com:'+c.id,kind:'commodity',icon:String(c.icon||''),name:String(c.name),sku:'',barcode:'',
@@ -588,8 +623,8 @@ function commodityItems(){
 function loadCatalog(){
   const items=(DATA.inventoryItems||[]).map(x=>typeof x==='string'?{name:x}:x).filter(x=>x&&x.name);
   const idByName=new Map(items.map(x=>[x.name,x.id||legacyId(x.name)]));
-  // ONE formula for the whole app (sales.js): stock = received - issued - sold + returns. Returns come from void/refund records (step 19).
-  const book=Sales.stockBook({received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:SALES_ALL,returns:[]},{idOfName:n=>idByName.get(n)||legacyId(n)});
+  // ONE formula for the whole app (sales.js): stock = received - issued - sold + returns. Returns are the restocked lines of the void/refund records (step 19, Returns.forStock).
+  const book=Sales.stockBook({received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:SALES_ALL,returns:Returns.forStock(RETS_ALL)},{idOfName:n=>idByName.get(n)||legacyId(n)});
   const prices=DATA.inventoryPrices||{};
   const general=items.map(x=>{
     const o={
@@ -1476,8 +1511,10 @@ function renderMine(){
   row('Total sold',money(total));
   by.forEach((v,k)=>row('Collected \u2014 '+k,money(v)));
   if(credit>0)row('Still owed (credit)',money(credit));
+  const mr=Shifts.returnsSummary(RETS_ALL.filter(r=>r&&r.date===day&&sameUser(r.cashier,USER&&USER.username)));   // step 19
+  if(mr.count)row('Voids & refunds ('+mr.count+')','\u2212'+money(mr.total));
   const sh=shiftMine();
-  if(sh){const sm=Shifts.summary(sh.open,SALES_ALL);row('Shift '+sh.open.shiftId,'since '+sh.open.time);row('Float',money(sm.float));row('Cash sales this shift',money(sm.cashSales));row('Cash that should be in the drawer',money(sm.expectedCash));}
+  if(sh){const sm=Shifts.summary(sh.open,SALES_ALL,{out:cashOutNow(sh.open.shiftId)});row('Shift '+sh.open.shiftId,'since '+sh.open.time);row('Float',money(sm.float));row('Cash sales this shift',money(sm.cashSales));if(sm.cashOut>0)row('Cash paid back (voids & refunds)','\u2212'+money(sm.cashOut));row('Cash that should be in the drawer',money(sm.expectedCash));}
   fr.append(sum);
   if(!a.length)fr.append(el('div','h-empty','No sales yet today.'));
   a.forEach(s=>{
@@ -1500,8 +1537,9 @@ function renderMine(){
 // One shift per till at a time. A shift left open (idle logout, phone put away) is still there at the next login: the same cashier
 // carries on; anyone else must have an admin or manager close it first (they count the drawer; the record says it was forced).
 // Opening and closing are checked under a lock together with taking a sale, so a second tab cannot sell into a shift that has
-// just been closed. Cash in and out of the drawer during a shift (refunds, pay-outs) comes with step 19; shifts.js already
+// just been closed. Cash out of the drawer during a shift (refunds: step 19; pay-outs are not built) goes in as `out`; shifts.js already
 // takes it as `out`. X and Z reports (step 17) are further down, after renderShiftDone.
+// Step 19: cash handed back on voids and refunds (VOIDS AND REFUNDS, further down) is that `out`: Returns.cashOutOf(shiftId).
 const SHIFTLG=Shifts.create({
   depotKey:()=>DATA&&DATA.installId,
   opts:{dateOf:t=>new Date(t).toISOString().slice(0,10)},   // the same date rule as the sales ledger
@@ -1666,16 +1704,18 @@ function renderOther(){
 
 function renderClose(sh,forced){
   SHTTL.textContent='Close shift';
-  const o=sh.open,sm=Shifts.summary(o,SALES_ALL),fr=document.createDocumentFragment();
+  const o=sh.open,sm=Shifts.summary(o,SALES_ALL,{out:cashOutNow(o.shiftId)}),rt=Shifts.returnsSummary(RETS_ALL.filter(x=>x&&x.shiftId===o.shiftId)),fr=document.createDocumentFragment();
   fr.append(el('div','h-sub',(forced?'Closing '+o.cashier+'\u2019s shift. Count the cash in their drawer. ':'')+o.shiftId+' \u00B7 opened '+o.time+' by '+o.cashier));
   const sum=el('div','pay-sum');
   const row=(l,v,c)=>sum.append(el('span','',l),el('span','r'+(c?' '+c:''),v));
   row('Sales',String(sm.saleCount));
   row('Total sold',money(sm.total));
+  if(rt.count)row('Voids & refunds ('+rt.count+')','\u2212'+money(rt.total));
   Shifts.METHODS.forEach(m=>{if(m!=='cash'&&sm.byMethod[m]>0)row('Collected \u2014 '+METHODS[m].label,money(sm.byMethod[m]));});
   if(sm.credit>0)row('Left unpaid (credit)',money(sm.credit));
   row('Float',money(sm.float));
   row('Cash sales',money(sm.cashSales));
+  if(sm.cashOut>0)row('Cash paid back (voids & refunds)','\u2212'+money(sm.cashOut));
   row('Cash that should be in the drawer',money(sm.expectedCash));
   fr.append(sum);
   const cnt=el('input','',null,{type:'text',inputmode:'decimal',autocomplete:'off','aria-label':'Cash counted'});cnt.placeholder='0.00';
@@ -1708,9 +1748,10 @@ function renderClose(sh,forced){
     try{
       rec=await withShiftLock(async()=>{
         const sales=await LEDGER.all();                    // everything on this phone, read fresh: another tab may have sold meanwhile
+        const rets=await RETLG.all();                      // step 19: and may have handed cash back
         const cur=await SHIFTLG.current(o.tillId);
         if(!cur||cur.open.shiftId!==o.shiftId){const x=new Error('closed');x.code='ALREADY_CLOSED';throw x;}
-        return SHIFTLG.close(cur,sales,c,{username:String(USER.username),role:String(USER.role||'')},note.value.trim());
+        return SHIFTLG.close(cur,sales,c,{username:String(USER.username),role:String(USER.role||'')},note.value.trim(),{out:Returns.cashOutOf(cur.open.shiftId,rets)});
       });
     }catch(e){
       console.warn('Shift not closed',e);
@@ -1743,6 +1784,7 @@ function renderShiftDone(){
   const row=(l,v,c)=>sum.append(el('span','',l),el('span','r'+(c?' '+c:''),v));
   row('Sales',String(r.saleCount));
   row('Total sold',money(r.total));
+  if(r.cashOut>0)row('Cash paid back (voids & refunds)','\u2212'+money(r.cashOut));
   row('Cash expected',money(r.expectedCash));
   row('Cash counted',money(r.countedCash));
   row('Difference',r.variance===0?'Balanced':(r.variance<0?'Short '+money(-r.variance):'Over '+money(r.variance)),r.variance===0?'ok':(r.variance<0?'bad':'amb'));
@@ -1795,6 +1837,17 @@ function reportEl(r,copy){
   if(r.credit>0)row(t,'Left unpaid (credit)',money(r.credit));
   paper.append(t);
   if(r.firstReceipt)paper.append(el('div','mu','Receipts '+r.firstReceipt+(r.lastReceipt&&r.lastReceipt!==r.firstReceipt?' to '+r.lastReceipt:'')));
+  if(r.rt&&r.rt.count){                                   // step 19: voids and refunds paid out in this shift
+    paper.append(el('div','sec','Voids & refunds'));
+    t=el('table');
+    if(r.rt.voids)row(t,'Voids',String(r.rt.voids));
+    if(r.rt.refunds)row(t,'Refunds',String(r.rt.refunds));
+    row(t,'Value taken back','\u2212'+money(r.rt.total));
+    if(r.rt.credit>0)row(t,'Taken off customers\u2019 balances',money(r.rt.credit));
+    Shifts.METHODS.forEach(m=>{if(r.rt.byMethod[m]>0)row(t,'Handed back \u2014 '+METHODS[m].label,money(r.rt.byMethod[m]));});
+    row(t,'Net sales (after returns)',money(r.netTotal),'b');
+    paper.append(t);
+  }
   paper.append(el('div','sec','Money collected'));
   t=el('table');
   let coll=0;
@@ -1805,7 +1858,7 @@ function reportEl(r,copy){
   t=el('table');
   row(t,'Float (cash at the start)',money(r.float));
   row(t,'+ Cash sales',money(r.cashSales));
-  if(r.cashOut>0)row(t,'\u2212 Cash paid out',money(r.cashOut));
+  if(r.cashOut>0)row(t,'\u2212 Cash paid back (voids & refunds)',money(r.cashOut));
   row(t,'Cash expected',money(r.expectedCash),'b');
   if(Z){
     row(t,'Cash counted',money(r.countedCash),'b');
@@ -1859,11 +1912,412 @@ async function showShiftReport(shiftId,kind,copy){
   if(!cur){say('That shift is not on this phone.','warn',4000);return;}
   if(cur.close){
     if(kind==='X')say('That shift was closed meanwhile. This is its Z report.','warn',4500);
-    showReport(Shifts.report('Z',cur.open,SALES_ALL,{close:cur.close}),kind==='X'?true:!!copy);
+    showReport(Shifts.report('Z',cur.open,SALES_ALL,{close:cur.close,returns:RETS_ALL}),kind==='X'?true:!!copy);
     return;
   }
   if(kind==='Z'){say('That shift is not closed yet.','warn',4000);return;}
-  showReport(Shifts.report('X',cur.open,SALES_ALL,{now:Date.now()}),false);
+  showReport(Shifts.report('X',cur.open,SALES_ALL,{now:Date.now(),out:cashOutNow(cur.open.shiftId),returns:RETS_ALL}),false);
+}
+
+// ── VOIDS AND REFUNDS (till roadmap step 19) ──────────────────────────────────────────────────────────────────
+// A sale is never edited or deleted. Taking something back writes a NEW record that points at the sale (returns.js; uploaded to
+// depots/<depot>/returns/<id> like sales, create-only):
+//   VOID    the whole sale, only in the shift it was taken in; the money goes back the way it came (cash as cash, MTN as MTN).
+//   REFUND  some or all of the lines, any time. The customer's unpaid balance is cleared first; only the rest is money handed back, by any
+//           method, never more than was paid. Damaged goods are not put back in stock (untick "Put the goods back in stock").
+// Always a reason, and someone with authority: an Admin or Manager login allows it itself, anyone else needs a manager PIN (the pad of
+// step 15, the approver is recorded). Cash handed back comes out of THIS shift's drawer (expected cash drops by it), so it needs the
+// cashier's own open shift. It is booked on the day and in the shift it is MADE: a closed shift or day is never changed. It works offline:
+// the record is saved on the phone first, the receipt shows only after that, and it uploads when there is signal. The number comes from
+// the till's receipt counter (K7F2-R000125), so two tills can never collide. Two offline tills can still return the same item at the
+// same moment; the app cannot stop that, it can only find it afterwards (Returns.overReturned).
+const RT_MSG={
+  STORAGE:'This phone could not save it (storage full or blocked). Nothing was recorded. Free some space and try again.',
+  NO_DEPOT:'This till does not know its depot yet. Open the main app online once, then try again.',
+  EXISTS:'That return number is already recorded. Nothing new was recorded. Try again.'
+};
+let RTOVL=null,RTBODY=null,RTTTL=null,RT=null,RTBUSY=false;
+const cashOutNow=id=>Returns.cashOutOf(id,RETS_ALL);
+const retNum=s=>String((s&&(s.receiptNo||s.id))||'');
+function parseQty(v){const t=String(v==null?'':v).trim().replace(',','.');if(!/^\d*\.?\d{0,3}$/.test(t)||t===''||t==='.')return 0;return Number(t);}
+function anyOverlay(){return !!(RTOVL||PAYOVL||HOVL||PINOVL||SHOVL||MOVL||CAMOVL||DOVL||ROVL||RPOVL||PRNOVL);}
+function openReturns(){
+  if(anyOverlay()||RTBUSY)return;
+  if(isReadOnly()){say('The till is read-only right now.','bad',4000);return;}
+  if(!tillReady()){say('This till has no receipt code yet. Go online once first.','warn',5000);return;}
+  RTBUSY=true;
+  (async()=>{
+    try{await loadSold();await loadShift();paintShift();}finally{RTBUSY=false;}
+    if(anyOverlay())return;
+    if(!shiftMine()){say(shiftState()==='other'?'The shift on this till is '+SHIFT.open.cashier+'\u2019s. Nobody can take anything back until it is closed.':'Open your shift first. Cash handed back comes out of its drawer.','warn',6000);return;}
+    const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Void or refund'});
+    const box=el('div','pay'),head=el('div','pay-h'),cx=el('button','sm','Close',{type:'button'});
+    cx.onclick=closeReturns;RTTTL=el('h2','','Void or refund');
+    head.append(RTTTL,cx);
+    RTBODY=el('div','pay-body held-body');
+    box.append(head,RTBODY);ovl.append(box);
+    ovl.addEventListener('click',e=>{if(e.target===ovl)closeReturns();});
+    document.body.append(ovl);RTOVL=ovl;
+    RT={step:'find',q:'',sale:null,kind:'refund',qty:new Map(),picks:[],reason:'',note:'',restock:true,restockSet:false,alloc:null,busy:false,err:'',btn:null};
+    renderRet();
+  })();
+}
+function closeReturns(){
+  if(!RTOVL||(RT&&RT.busy))return;
+  RTOVL.remove();RTOVL=RTBODY=RTTTL=RT=null;
+  if(!COARSE)focusSearch();
+}
+function renderRet(){
+  if(!RTBODY||!RT)return;
+  if(RT.step==='find')renderRetFind();else if(RT.step==='pick')renderRetPick();else renderRetConfirm();
+  RTBODY.scrollTop=0;
+}
+// ── 1. find the sale: today's sales on this phone, or search by receipt number (or customer)
+function retFindList(q){
+  const t=String(q||'').trim().toUpperCase(),today=new Date().toISOString().slice(0,10);
+  let list=SALES_ALL.filter(x=>x&&x.id);
+  list=t?list.filter(x=>String(x.id).includes(t)||String(x.customerName||'').toUpperCase().includes(t)):list.filter(x=>x.date===today);
+  return list.sort((a,b)=>(b.at||0)-(a.at||0)).slice(0,40);
+}
+function renderRetFind(){
+  RTTTL.textContent='Void or refund';
+  const fr=document.createDocumentFragment();
+  fr.append(el('div','h-sub','Find the sale: type or scan its receipt number (the last digits are enough), or choose one of today\u2019s.'));
+  const inp=el('input','',null,{type:'text',autocomplete:'off','aria-label':'Receipt number',placeholder:'Receipt number'});
+  inp.value=RT.q;
+  const list=el('div');
+  fr.append(fld('Receipt number',inp),list);
+  RTBODY.replaceChildren(fr);
+  const draw=()=>{
+    RT.q=inp.value;
+    const rows=retFindList(RT.q),f=document.createDocumentFragment();
+    if(!rows.length)f.append(el('div','h-empty',RT.q.trim()?'No sale on this phone matches \u201c'+RT.q.trim()+'\u201d.':'No sales yet today.'));
+    rows.forEach(x=>{
+      const rem=Returns.remaining(x,RETS_ALL);
+      const when=el('div');when.append(el('b','',x.time||''),el('span','ag',retNum(x)));
+      const top=el('div','h-top');top.append(when,el('b','',money(x.total)));
+      const st=rem.done?'Fully taken back':(rem.count?'Partly taken back':(x.creditStatus==='credit'?'On credit':(x.creditStatus==='partial'?'Part paid':'Paid')));
+      const n=(x.lines||[]).length,r=el('div','held');
+      r.append(top,el('div','h-sub',(RT.q.trim()?x.date+' \u00B7 ':'')+st+' \u00B7 '+n+(n===1?' item':' items')+(x.customerName?' \u00B7 '+x.customerName:'')+' \u00B7 '+x.cashier));
+      const acts=el('div','h-acts'),go=el('button',rem.done?'':'pri',rem.done?'Nothing left':'Choose',{type:'button'});
+      go.disabled=rem.done;go.onclick=()=>retChoose(x.id);
+      acts.append(go);r.append(acts);f.append(r);
+    });
+    list.replaceChildren(f);
+  };
+  inp.addEventListener('input',draw);
+  inp.addEventListener('keydown',e=>{
+    if(e.key!=='Enter')return;
+    e.preventDefault();
+    const rows=retFindList(inp.value);
+    if(rows.length===1&&!Returns.remaining(rows[0],RETS_ALL).done)retChoose(rows[0].id);
+  });
+  draw();
+  if(!COARSE)setTimeout(()=>{try{inp.focus();}catch{}},0);
+}
+function retChoose(id){
+  const x=SALES_ALL.find(v=>v&&v.id===id);if(!x||!RT)return;
+  RT.sale=x;RT.kind='refund';RT.qty=new Map();RT.picks=[];RT.alloc=null;RT.err='';RT.reason='';RT.note='';RT.restock=true;RT.restockSet=false;RT.step='pick';
+  renderRet();
+}
+function retVoidWhy(x){                            // '' when the sale can be voided, otherwise why not
+  const sh=shiftMine();
+  if(Returns.remaining(x,RETS_ALL).count)return 'This sale already has a return, so it can only be refunded, not voided.';
+  if(!sh||!x.shiftId||x.shiftId!==sh.open.shiftId)return 'A void is only possible in the shift the sale was taken in. Use a refund for this one.';
+  return '';
+}
+// ── 2. choose what comes back
+function renderRetPick(){
+  const x=RT.sale,rem=Returns.remaining(x,RETS_ALL),fr=document.createDocumentFragment();
+  RTTTL.textContent='Sale '+retNum(x);
+  fr.append(el('div','h-sub',fdt(x.at)+' \u00B7 '+x.cashier+(x.customerName?' \u00B7 '+x.customerName:'')));
+  const prev=RETS_ALL.filter(r=>r&&r.saleId===x.id).reduce((a,r)=>a+toC(r.total),0);
+  const info=el('div','pay-sum'),irow=(l,v)=>info.append(el('span','',l),el('span','r',v));
+  irow('Sale total',money(x.total));
+  irow('Customer paid',money(x.amountPaid));
+  if(rem.balanceC>0)irow('Still owed on this sale',money(rem.balanceC/100));
+  if(prev>0)irow('Already taken back',money(prev/100));
+  fr.append(info);
+  const sumBox=el('div','pay-sum'),err=el('div','pay-err','',{role:'alert'});
+  const btns=el('div','shbtns'),go=el('button','pri','Continue',{type:'button'}),vd=el('button','warnb','Void the whole sale',{type:'button'}),bk=el('button','','Back',{type:'button'});
+  const why=retVoidWhy(x);
+  const picks=()=>[...RT.qty.entries()].map(([lineNo,qty])=>({lineNo,qty,restock:true}));
+  const upd=()=>{
+    const p=Returns.plan(x,RETS_ALL,picks());
+    sumBox.replaceChildren();
+    const row=(l,v)=>sumBox.append(el('span','',l),el('span','r',v));
+    row('Value taken back',money(p.totalC/100));
+    if(p.creditC>0)row('Off the customer\u2019s balance',money(p.creditC/100));
+    row('Money to hand back',money(p.moneyC/100));
+    err.textContent=p.problem||'';
+    go.disabled=!(p.totalC>0)||!!p.problem;
+  };
+  fr.append(el('div','h-sub','How much of each item is coming back?'));
+  rem.lines.forEach(L=>{
+    const c=el('div','held rt-line'+(L.qty>0?'':' gone')),top=el('div','h-top');
+    top.append(el('b','',L.name),el('span','ag',money(L.price)+(L.unit?' / '+L.unit.toLowerCase():'')));
+    c.append(top,el('div','h-sub',L.qty>0?'Sold '+fq(L.soldQty)+(L.usedQty>0?' \u00B7 already taken back '+fq(L.usedQty):'')+' \u00B7 can take back '+fq(L.qty):'Already taken back in full'));
+    if(L.qty>0){
+      const q=el('div','rt-q'),inp=el('input','',null,{type:'text',inputmode:'decimal',autocomplete:'off','aria-label':'Quantity of '+L.name+' to take back',placeholder:'0'}),all=el('button','','All',{type:'button'});
+      const cur=RT.qty.get(L.lineNo);if(cur)inp.value=String(cur);
+      const set=()=>{
+        let v=parseQty(inp.value);
+        if(v>L.qty){v=L.qty;inp.value=String(v);}
+        if(v>0)RT.qty.set(L.lineNo,v);else RT.qty.delete(L.lineNo);
+        upd();
+      };
+      inp.addEventListener('input',set);
+      all.onclick=()=>{inp.value=String(L.qty);set();};
+      q.append(inp,all);c.append(q);
+    }
+    fr.append(c);
+  });
+  fr.append(sumBox,err);
+  go.onclick=()=>{RT.picks=picks();RT.kind='refund';RT.alloc=null;RT.err='';RT.step='confirm';renderRet();};
+  vd.disabled=!!why;
+  vd.onclick=()=>{RT.kind='void';RT.alloc=null;RT.err='';RT.step='confirm';renderRet();};
+  bk.onclick=()=>{RT.step='find';RT.sale=null;renderRet();};
+  btns.append(go,vd,bk);fr.append(btns);
+  if(why)fr.append(el('div','h-sub',why));
+  RTBODY.replaceChildren(fr);
+  upd();
+}
+// What is being returned right now, worked out fresh from the ledger each time it is needed.
+function retPlanNow(){
+  const x=RT.sale;
+  if(RT.kind==='void'){const v=Returns.voidPlan(x,RETS_ALL);return Object.assign({},v,{problem:v.problem||retVoidWhy(x)});}
+  return Returns.plan(x,RETS_ALL,RT.picks.map(v=>({lineNo:v.lineNo,qty:v.qty,restock:RT.restock})));
+}
+// ── 3. reason, how the money goes back, who allows it
+function renderRetConfirm(){
+  const x=RT.sale,isVoid=RT.kind==='void',P=retPlanNow(),fr=document.createDocumentFragment();
+  RTTTL.textContent=isVoid?'Void sale':'Refund';
+  fr.append(el('div','h-sub',(isVoid?'The whole of sale ':'Part of sale ')+retNum(x)+' \u00B7 '+fdt(x.at)));
+  const ls=el('div','pay-sum'),lrow=(l,v,c)=>ls.append(el('span','',l),el('span','r'+(c?' '+c:''),v));
+  P.lines.forEach(l=>lrow(fq(l.qty)+(l.unit?' '+l.unit.toLowerCase():'')+' \u00D7 '+l.name,money(l.total)));
+  lrow('Value taken back',money(P.totalC/100));
+  if(P.creditC>0)lrow('Off the customer\u2019s balance',money(P.creditC/100));
+  lrow('Money to hand back',money(P.moneyC/100),'amb');
+  fr.append(ls);
+  if(P.problem)fr.append(el('div','pay-err',P.problem));
+  const ck=el('input','',null,{type:'checkbox'}),ckl=el('label','rt-ck');
+  ck.checked=RT.restock;ckl.append(ck,el('span','','Put the goods back in stock'));
+  ck.onchange=()=>{RT.restock=ck.checked;RT.restockSet=true;};
+  fr.append(el('div','h-sub','Why is it being taken back? (required)'));
+  const chips=el('div','rt-chips'),cb=[];
+  Returns.REASONS.forEach(r=>{
+    const b=el('button',RT.reason===r?'on':'',r,{type:'button'});
+    b.onclick=()=>{
+      RT.reason=r;cb.forEach(v=>v.classList.toggle('on',v===b));
+      if(!RT.restockSet){RT.restock=Returns.NO_RESTOCK.indexOf(r)<0;ck.checked=RT.restock;}   // damaged or expired goods are not sold again: untick, the cashier can override
+    };
+    cb.push(b);chips.append(b);
+  });
+  fr.append(chips,ckl);
+  let left=null;
+  const paintLeft=()=>{
+    if(!left)return;
+    let sum=0,bad=false;
+    Returns.METHODS.forEach(m=>{const raw=String(RT.alloc[m].amt||'').trim();if(raw==='')return;const v=amt(raw);if(isNaN(v))bad=true;else sum+=toC(v);});
+    const d=P.moneyC-sum;
+    left.textContent=bad?'Type amounts like 20 or 12.50':(d===0?'Adds up':(d>0?'Still to hand back: '+money(d/100):'Too much by '+money(-d/100)));
+    left.className='shv '+(d===0&&!bad?'ok':'warn');
+  };
+  if(isVoid){
+    if(P.refunds&&P.refunds.length){
+      fr.append(el('div','h-sub','The money goes back the way it was taken:'));
+      const vs=el('div','pay-sum');
+      P.refunds.forEach(v=>vs.append(el('span','',(METHODS[v.method]?METHODS[v.method].label:v.method)+(v.ref?' \u00B7 '+v.ref:'')),el('span','r',money(v.amount))));
+      fr.append(vs);
+    }
+  }else if(P.moneyC>0){
+    if(!RT.alloc){
+      RT.alloc={};Returns.METHODS.forEach(m=>{RT.alloc[m]={amt:'',ref:''};});
+      Returns.defaultRefunds(x,RETS_ALL,P.moneyC).forEach(v=>{RT.alloc[v.method].amt=String(v.amountC/100);});
+    }
+    fr.append(el('div','h-sub','Hand back '+money(P.moneyC/100)+' as:'));
+    left=el('div','shv','',{role:'status','aria-live':'polite'});
+    Returns.METHODS.forEach(m=>{
+      const g=el('div','rt-m'),a=el('input','',null,{type:'text',inputmode:'decimal',autocomplete:'off','aria-label':METHODS[m].label+' amount handed back',placeholder:'0.00'});
+      a.value=RT.alloc[m].amt;
+      g.append(el('span','',METHODS[m].label),a);
+      if(METHODS[m].ref){
+        const rf=el('input','ref',null,{type:'text',maxlength:'100',autocomplete:'off','aria-label':METHODS[m].label+' reference',placeholder:'Reference'});
+        rf.value=RT.alloc[m].ref;rf.addEventListener('input',()=>{RT.alloc[m].ref=rf.value;});g.append(rf);
+      }
+      a.addEventListener('input',()=>{RT.alloc[m].amt=a.value;paintLeft();});
+      fr.append(g);
+    });
+    fr.append(left);
+  }
+  const note=el('input','',null,{type:'text',maxlength:'200',autocomplete:'off','aria-label':'Note (optional)'});
+  note.value=RT.note;note.addEventListener('input',()=>{RT.note=note.value;});
+  fr.append(fld('Note (optional)',note));
+  const err=el('div','pay-err',RT.err||'',{role:'alert'});fr.append(err);
+  const btns=el('div','shbtns'),go=el('button','pri',isVoid?'Confirm void':'Confirm refund',{type:'button'}),bk=el('button','','Back',{type:'button'});
+  RT.btn=go;
+  bk.onclick=()=>{if(RT.busy)return;RT.step='pick';RT.err='';renderRet();};
+  go.onclick=()=>{
+    err.textContent='';
+    if(RT.busy)return;
+    const Q=retPlanNow();
+    if(Q.problem||!(Q.totalC>0)){err.textContent=Q.problem||'Nothing to take back.';return;}
+    if(!RT.reason){err.textContent='Choose why it is being taken back.';return;}
+    let refunds=[];
+    if(isVoid)refunds=Q.refunds.map(v=>({method:v.method,label:METHODS[v.method]?METHODS[v.method].label:v.method,amount:v.amount,ref:v.ref||''}));
+    else if(Q.moneyC>0){
+      let sum=0;
+      for(const m of Returns.METHODS){
+        const raw=String(RT.alloc[m].amt||'').trim();if(raw==='')continue;
+        const v=amt(raw);
+        if(isNaN(v)){err.textContent='Type '+METHODS[m].label+' as an amount, for example 20 or 12.50.';return;}
+        if(v<=0)continue;
+        const ref=String(RT.alloc[m].ref||'').trim();
+        if(METHODS[m].ref&&!ref){err.textContent='Type the '+METHODS[m].label+' reference of the money sent back.';return;}
+        refunds.push({method:m,label:METHODS[m].label,amount:v,ref});sum+=toC(v);
+      }
+      if(sum!==Q.moneyC){err.textContent='The amounts must add up to '+money(Q.moneyC/100)+'.';return;}
+    }
+    const run=who=>doReturn(who,refunds,Q);
+    if(isHolder(USER)){run(String(USER.username));return;}
+    if(!Gate.pinHolders(DATA).length){err.textContent='Nobody has set a manager PIN yet. An Admin or Manager must log in to do this, or set a PIN in the main app under Settings \u2192 Manager PIN.';return;}
+    askManagerPin(who=>run(approverName(who)),'A manager must type their PIN to allow this '+(isVoid?'void':'refund')+'.','Allow');
+  };
+  btns.append(go,bk);fr.append(btns);
+  RTBODY.replaceChildren(fr);
+  paintLeft();
+}
+async function doReturn(approvedBy,refunds,P){
+  if(!RT||RT.busy)return;
+  RT.busy=true;RT.err='';
+  if(RT.btn){RT.btn.disabled=true;RT.btn.textContent='Saving\u2026';}
+  const x=RT.sale,lines=P.lines.map(l=>Object.assign({},l,{restock:!!RT.restock}));
+  const b={
+    kind:RT.kind,saleId:x.id,cashier:String(USER.username),cashierRole:String(USER.role||''),approvedBy,
+    reason:RT.reason,note:RT.note.trim(),
+    lines,lineCount:lines.length,qtyTotal:Math.round(lines.reduce((a,l)=>a+l.qty,0)*1000)/1000,
+    total:P.totalC/100,creditApplied:P.creditC/100,refunds,refunded:P.moneyC/100,
+    customerId:x.customerId||'',customerName:x.customerName||''
+  };
+  let out;
+  if(isReadOnly())out={err:'The till is read-only right now. Nothing was recorded.'};
+  else{try{out=await withShiftLock(()=>recordReturn(b,x));}catch(e){console.warn('Return failed',e);out={err:'It could not be saved. Nothing was recorded. Try again.'};}}
+  if(!RT)return;
+  RT.busy=false;
+  if(out.err){RT.err=out.err;renderRet();return;}
+  const rec=out.rec;
+  RETS_ALL.push(rec);RETS_PENDING++;
+  closeReturns();
+  loadCatalog();renderGrid();paintSales();
+  showReturnReceipt(rec);
+  if(prefs().auto)printReturn(rec,true);
+  say((rec.kind==='void'?'Void ':'Refund ')+rec.id+' saved','ok',3500);
+  syncSales();
+}
+// Shift check, number and ledger append, one at a time (the same lock as a sale, so the shift cannot be closed in between).
+async function recordReturn(b,sale){
+  const id=tillIdNow(),cur=id?await SHIFTLG.current(id):null;
+  if(!cur)return {err:'No shift is open on this till. Open a shift, then try again. Nothing was recorded.'};
+  if(!sameUser(cur.open.cashier,USER&&USER.username))return {err:'The shift open on this till is '+cur.open.cashier+'\u2019s. It must be closed before anything can be taken back. Nothing was recorded.'};
+  let r;
+  try{r=await NUM.next();}
+  catch(e){
+    console.warn('Return number failed',e);
+    return {err:(NUM_MSG[e&&e.code]||'Could not take a number. Nothing was recorded. Try again.').replace('The sale was not completed.','Nothing was recorded.').replace('the sale was not completed','nothing was recorded')};
+  }
+  b.id=Returns.idFromNumber(r.receiptNo);b.tillId=r.tillId;b.till=r.code;b.seq=r.seq;b.shiftId=cur.open.shiftId;b.at=Date.now();
+  try{return {rec:await RETLG.append(b,sale)};}
+  catch(e){
+    console.warn('Return not saved',e);
+    return {err:(e&&e.code==='INVALID')?e.message+'. Nothing was recorded.':(RT_MSG[e&&e.code]||'It could not be saved. Nothing was recorded. Try again.')};
+  }
+}
+// ── the receipt of a void or refund: same paper, same print rules as a sale's receipt
+function returnEl(r){
+  const paper=paperTop(),isVoid=r.kind==='void';
+  paper.append(el('hr','rule'),el('div','c mu',isVoid?'VOID \u2014 SALE CANCELLED':'REFUND RECEIPT'));
+  const no=el('div','c b','#'+r.id);no.style.fontSize='16px';paper.append(no);
+  const tg=el('div','c');tg.append(el('span','tag',isVoid?'VOID':'REFUND'));paper.append(tg);
+  paper.append(el('div','c mu','For sale #'+r.saleId));
+  const d=new Date(r.at);
+  paper.append(el('div','c mu',d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+' \u00B7 '+d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})));
+  paper.append(el('div','c mu','Served by: '+r.cashier+' \u00B7 Allowed by: '+r.approvedBy));
+  paper.append(el('hr','dash'));
+  const t=el('table');
+  r.lines.forEach(l=>{
+    const r1=el('tr','ln');r1.append(el('td','b',l.name,{colspan:'2'}));
+    const r2=el('tr');r2.append(el('td','mu',fq(l.qty)+(l.unit?' '+l.unit.toLowerCase():'')+' \u00D7 '+money(l.price)),el('td','r b',money(l.total)));
+    const tb=el('tbody');tb.append(r1,r2);t.append(tb);
+  });
+  paper.append(t,el('hr','dash'));
+  const tail=el('div','tail'),tt=el('table'),tr=el('tr','gt');
+  tr.append(el('td','','TAKEN BACK'),el('td','r',money(r.total)));tt.append(tr);
+  tail.append(tt,el('div','mu','Reason: '+r.reason+(r.note?' \u2014 '+r.note:'')));
+  const pt=el('table'),prow=(a,v,cls)=>{const x=el('tr',cls||'');x.append(el('td','',a),el('td','r',v));pt.append(x);};
+  if((r.refunds||[]).length||r.creditApplied>0){
+    tail.append(el('hr','dash'));
+    (r.refunds||[]).forEach(x=>prow('Handed back \u2014 '+(x.label||x.method)+(x.ref?' \u00B7 '+x.ref:''),money(x.amount)));
+    if(r.creditApplied>0)prow('Taken off the balance owed',money(r.creditApplied),'b');
+    tail.append(pt);
+  }
+  if(r.customerName)tail.append(el('div','mu','Customer: '+r.customerName));
+  const sg=el('div','sig');sg.append(el('span','','Customer'),el('span','','Cashier'));tail.append(sg);
+  tail.append(el('hr','rule'),el('div','ft','Keep this slip. It is the proof of the '+(isVoid?'void':'refund')+'.'));
+  paper.append(tail);
+  return paper;
+}
+function showReturnReceipt(r){
+  if(ROVL)return;
+  ROPENER=document.activeElement;
+  const ovl=el('div','rovl','',{role:'dialog','aria-modal':'true','aria-label':r.kind==='void'?'Void receipt':'Refund receipt'});
+  const sc=el('div','rscroll');sc.append(returnEl(r));
+  const bar=el('div','rbar'),pr=el('button','pri','Print',{type:'button'}),cl=el('button','','Close',{type:'button'});
+  pr.onclick=()=>printReturn(r);cl.onclick=hideReceipt;
+  bar.append(cl,pr);ovl.append(sc,bar);document.body.append(ovl);ROVL=ovl;ROVL_SALE=true;pr.focus();   // ROVL_SALE: a saved record's receipt stays up
+}
+function printReturn(r,auto){
+  const pf=prefs();
+  if(pf.mode==='rawbt'){try{sendRaw(escposReturn(r,pf));}catch{say('Could not send to RawBT.','bad');}return;}
+  if(auto)return;                                  // the browser's print dialog is never opened by itself
+  const t=document.title;
+  document.title=(r.kind==='void'?'Void ':'Refund ')+r.id;
+  const back=()=>{document.title=t;removeEventListener('afterprint',back);};
+  addEventListener('afterprint',back);
+  try{window.print();}catch{back();}
+}
+// The same thermal layout as escposReceipt (above), for a void or refund slip.
+function escposReturn(r,pf){
+  const sz=pf.size==null?1:pf.size|0,SC=[0,1,17][sz]||0,base=pf.cols||(Math.min(screen.width,screen.height)<=600?32:48),W=sz===2?base>>1:base,B=[27,64,27,77,0];
+  const txt=s=>{s=asc(s);for(let i=0;i<s.length;i++)B.push(s.charCodeAt(i));};
+  const ln=s=>{txt(s);B.push(10);},al=n=>B.push(27,97,n),bd=n=>B.push(27,69,n),hi=n=>B.push(29,33,n);
+  hi(SC);
+  const wrap=s=>{s=asc(s);const o=[];while(s.length>W){let k=s.lastIndexOf(' ',W);if(k<1)k=W;o.push(s.slice(0,k));s=s.slice(k).trim();}o.push(s);return o;};
+  const lr=(l,v)=>{l=asc(l);v=asc(v);if(l.length+v.length+1>W){wrap(l).forEach(ln);al(2);ln(v);al(0);}else ln(l+' '.repeat(W-l.length-v.length)+v);};
+  const ctr=s=>{al(1);wrap(s).forEach(ln);al(0);},rule=c=>ln(c.repeat(W));
+  const di=DATA.depotInfo||{};
+  bd(1);hi(sz?SC:1);ctr(di.name||'Shop Inventory & Sales Manager');hi(SC);bd(0);
+  if(di.district)ctr(di.district);
+  if(di.contactPhone)ctr('Tel: '+di.contactPhone);
+  rule('-');ctr(r.kind==='void'?'VOID - SALE CANCELLED':'REFUND RECEIPT');
+  bd(1);ctr('#'+r.id);bd(0);
+  ctr('For sale #'+r.saleId);
+  const d=new Date(r.at);
+  ctr(d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+' '+d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}));
+  ln('Served by: '+r.cashier);ln('Allowed by: '+r.approvedBy);
+  rule('-');
+  r.lines.forEach(l=>{bd(1);wrap(l.name).forEach(ln);bd(0);lr(fq(l.qty)+(l.unit?' '+l.unit.toLowerCase():'')+' x '+money(l.price),money(l.total));});
+  rule('-');
+  bd(1);hi(sz?SC:1);lr('TAKEN BACK',money(r.total));hi(SC);bd(0);
+  wrap('Reason: '+r.reason+(r.note?' - '+r.note:'')).forEach(ln);
+  if((r.refunds||[]).length||r.creditApplied>0){
+    rule('-');
+    (r.refunds||[]).forEach(x=>lr('Back: '+(x.label||x.method)+(x.ref?' - '+x.ref:''),money(x.amount)));
+    if(r.creditApplied>0)lr('Off balance owed',money(r.creditApplied));
+  }
+  if(r.customerName)ln('Customer: '+r.customerName);
+  rule('-');ctr('Keep this slip as proof.');
+  B.push(27,100,4);
+  return Uint8Array.from(B);
 }
 
 // ── LIVE-CART AUTOSAVE ───────────────────────────────────────────────────────
@@ -2224,6 +2678,7 @@ function buildSell(){
     if(PAYOVL){if(e.key==='Escape')cancelPay();return;}
     if(HOVL){if(e.key==='Escape')closeHeld();return;}
     if(PINOVL){if(e.key==='Escape')closePin();return;}
+    if(RTOVL){if(e.key==='Escape')closeReturns();return;}
     if(DOVL){if(e.key==='Escape')closeDisc();return;}
     if(SHOVL){if(e.key==='Escape')closeShiftSheet();return;}
     if(MOVL){if(e.key==='Escape')closeMine();return;}
@@ -2276,6 +2731,7 @@ async function boot(){
   try{SHBC=new BroadcastChannel('mdm_shift');SHBC.onmessage=async()=>{await loadShift();paintShift();if(SHOVL&&!SHBUSY)renderShift();if(PAYOVL&&PAYFOOT&&PAY)renderPayFoot(settle(toC(cartTotal()),PAY.tenders));};}catch{}
   $('b-shift').onclick=openShiftSheet;
   $('b-print').onclick=openPrinter;
+  $('b-ret').onclick=openReturns;
   loadCatalog();
   paintTill();setupTill();paintSales();syncAll();                              // claim this till's code (needs the network once)
   TAB=await claimTab();

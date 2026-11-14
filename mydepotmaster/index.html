@@ -1397,6 +1397,7 @@ body.cashier-mode #gsearch-fab,body.cashier-mode #copilot-fab{display:none!impor
 <script src="sales.js"></script>
 <!-- The shift ledger (till roadmap steps 16-17): open/close records and the X / Z / day report maths. Same file pos.html loads. Keep shifts.js in the sw.js precache list. -->
 <script src="shifts.js"></script>
+<script src="returns.js"></script>
 <script>
 
 // TEMP DEBUG: add ?acdebug=1 to the URL to see App Check token diagnostics as toasts.
@@ -1446,6 +1447,85 @@ window._acShow = function (msg) {
   } catch (e) {}
 };
 
+// ── BUILT-IN PRINTER (Android POS terminals with a thermal printer) ──────────────────────────────────────────────
+// One per-device switch (Settings > Printer), kept in the same localStorage key the Till uses (mdm_till_printer), so the Till and
+// the main app always agree. mode 'rawbt' = "Built-in printer" is ON: the page is turned into plain ESC/POS text and handed to the
+// free RawBT app, which prints on the terminal's own printer with no print dialog. Chrome only allows that hand-off right after a
+// tap, so every call below runs straight from the Print button. Off = the browser print dialog, exactly as before.
+const _PRK='mdm_till_printer';
+function _prnPrefs(){let o=null;try{o=JSON.parse(localStorage.getItem(_PRK)||'null');}catch(e){}return Object.assign({mode:'browser',cols:0,size:1,auto:false},o||{});}
+function _prnSave(patch){try{localStorage.setItem(_PRK,JSON.stringify(Object.assign(_prnPrefs(),patch)));return true;}catch(e){return false;}}
+function _prnOn(){return _prnPrefs().mode==='rawbt';}
+// characters per line: 58 mm = 32, 80 mm = 48; Auto = 58 mm on a handheld (small screen). Extra large text is twice as wide.
+function _prnWidth(pf){pf=pf||_prnPrefs();const sz=pf.size==null?1:pf.size|0,base=pf.cols||(Math.min(screen.width,screen.height)<=600?32:48);return sz===2?base>>1:base;}
+function _prnAsc(s){return String(s==null?'':s).replace(/[\u00a0\u202f\u2009]/g,' ').replace(/\u00d7/g,'x').replace(/[\u00b7\u2022]/g,'-').replace(/[\u2212\u2013\u2014]/g,'-').replace(/[\u2018\u2019]/g,"'").replace(/[\u201c\u201d]/g,'"').replace(/\u2026/g,'...').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^\x20-\x7e]/g,'');}
+// Turns a print page (receipt, slip, report, payslip) into ESC/POS bytes: headings centred, tables as "label ..... amount" rows,
+// rules as dashes, logos and buttons left out. Only the text of the page is printed.
+function _prnBuildHtml(html,pf){
+  pf=pf||_prnPrefs();
+  const sz=pf.size==null?1:pf.size|0,SC=[0,1,17][sz]||0,W=_prnWidth(pf),B=[27,64,27,77,0];          // ESC @ reset, ESC M 0 = Font A (the larger one)
+  const ln=s=>{s=_prnAsc(s);for(let i=0;i<s.length;i++)B.push(s.charCodeAt(i));B.push(10);},al=n=>B.push(27,97,n),bd=n=>B.push(27,69,n),hi=n=>B.push(29,33,n);
+  hi(SC);
+  const wrap=s=>{s=_prnAsc(s).replace(/\s+/g,' ').trim();const o=[];while(s.length>W){let k=s.lastIndexOf(' ',W);if(k<1)k=W;o.push(s.slice(0,k));s=s.slice(k).trim();}o.push(s);return o;};
+  const lr=(l,r,ind)=>{l=' '.repeat(ind||0)+_prnAsc(l).replace(/\s+/g,' ').trim();r=_prnAsc(r).replace(/\s+/g,' ').trim();if(l.length+r.length+1>W){wrap(l).forEach(ln);al(2);ln(r);al(0);}else ln(l+' '.repeat(W-l.length-r.length)+r);};
+  const rule=c=>ln(c.repeat(W));
+  const doc=new DOMParser().parseFromString(String(html||''),'text/html');
+  const SKIP={STYLE:1,SCRIPT:1,IMG:1,SVG:1,CANVAS:1,BUTTON:1,INPUT:1,SELECT:1,TEXTAREA:1,HEAD:1,TITLE:1,NOSCRIPT:1,TEMPLATE:1,IFRAME:1};
+  const sty=e=>(e.getAttribute('style')||'').toLowerCase().replace(/\s+/g,''),cls=e=>' '+(e.getAttribute('class')||'')+' ';
+  const hidden=e=>{if(SKIP[e.tagName]||e.hasAttribute('hidden'))return true;const s=sty(e);return /display:none/.test(s)||/(^|;)width:(48|56)px/.test(s)||/ (no-print|pdf-toolbar) /.test(cls(e));};   // width 48/56px = the logo / initials box
+  const isBold=e=>/^(H[1-6]|TH)$/.test(e.tagName)||/font-weight:(bold|[6-9]00)/.test(sty(e))||/ (bold|total|total-row|net-row|pdf-title|pay-section-title|payslip-company) /.test(cls(e));
+  const alignOf=(e,a)=>{const s=sty(e),c=cls(e);if(/text-align:center/.test(s)||/ center /.test(c)||/ pay /.test(c)||/ footer /.test(c))return 1;if(/text-align:right/.test(s)||/ (right|num) /.test(c))return 2;if(/text-align:left/.test(s))return 0;return a;};
+  let buf='';
+  const flush=(a,b)=>{const t=buf.replace(/\s+/g,' ').trim();buf='';if(!t)return;if(b)bd(1);al(a);wrap(t).forEach(ln);al(0);bd(0);};
+  const cellText=td=>{const c=td.cloneNode(true);c.querySelectorAll('br').forEach(x=>x.replaceWith(' '));c.querySelectorAll('style,script,img,svg,button').forEach(x=>x.remove());return(c.textContent||'').replace(/\s+/g,' ').trim();};
+  const table=(t,a)=>{
+    Array.from(t.rows).forEach(r=>{
+      const cells=Array.from(r.cells).filter(td=>!hidden(td)),parts=cells.map(cellText).filter(x=>x!=='');
+      if(!parts.length)return;
+      const head=r.parentNode.tagName==='THEAD'||(cells.length&&cells.every(td=>td.tagName==='TH')),b=head||isBold(r)||cells.some(isBold);
+      if(b)bd(1);
+      if(parts.length===1){al(cells.length===1?alignOf(cells[0],a):a);wrap(parts[0]).forEach(ln);al(0);}
+      else if(head)wrap(parts.join(' | ')).forEach(ln);
+      else{const mid=parts.slice(0,-1),last=parts[parts.length-1];                 // label (and any middle cells) left, last cell right
+        if(mid.length>1&&mid.join(' ').length+last.length+1>W){wrap(mid[0]).forEach(ln);lr(mid.slice(1).join(' '),last,2);}   // too wide for one line: name first, figures under it
+        else lr(mid.join(' '),last);}
+      bd(0);
+      if(head)rule('-');
+    });
+  };
+  const walk=(n,a,b)=>{
+    if(n.nodeType===3){buf+=n.nodeValue;return;}
+    if(n.nodeType!==1||hidden(n))return;
+    const tg=n.tagName;
+    if(tg==='BR'){flush(a,b);return;}
+    if(tg==='HR'||/ brand-hr /.test(cls(n))){flush(a,b);rule('-');return;}
+    if(tg==='TABLE'){flush(a,b);table(n,a);return;}
+    if(/^(SPAN|B|STRONG|I|EM|A|SMALL|U|FONT|SUB|SUP|LABEL|CODE)$/.test(tg)){Array.from(n.childNodes).forEach(c=>walk(c,a,b));return;}   // inline: part of the same line
+    flush(a,b);
+    const na=alignOf(n,a),nb=b||isBold(n);
+    if(tg==='LI')buf='- ';
+    Array.from(n.childNodes).forEach(c=>walk(c,na,nb));
+    flush(na,nb);
+  };
+  walk(doc.body||doc.documentElement,0,false);
+  flush(0,false);
+  rule('-');
+  B.push(27,100,4);                                                      // ESC d 4: feed 4 lines so the text clears the tear bar
+  return Uint8Array.from(B);
+}
+// RawBT hand-off: bytes -> intent URL (same hand-off the Till uses). '' when the page is too long for one hand-off.
+function _prnUrl(u8){
+  if(!u8||!u8.length||u8.length>200000)return '';
+  let s='';for(let i=0;i<u8.length;i+=0x8000)s+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));
+  return 'intent:base64,'+btoa(s)+'#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;';
+}
+function _prnUrlFromHtml(html){try{return _prnUrl(_prnBuildHtml(html));}catch(e){return '';}}   // also called by the document window (see _pdfPrint)
+function _prnPrintHtml(html){
+  const u=_prnUrlFromHtml(html);
+  if(!u){showToast('⚠️ Could not send to the printer');return false;}
+  location.href=u;return true;
+}
+
 // ══════════════════════════════════════════════════════════
 // ██  PDF PRINT ENGINE  ████████████████████████████████████
 // Universal PDF download: opens a styled print window.
@@ -1454,7 +1534,11 @@ window._acShow = function (msg) {
 // path lazy-loads html2canvas + jsPDF from cdnjs on demand (first use only,
 // needs internet) to build a real .pdf File and hand it to navigator.share().
 // ══════════════════════════════════════════════════════════
-function _pdfPrint(htmlBody, title, filename) {
+function _pdfPrint(htmlBody, title, filename, receipt) {
+  // Built-in printer (Settings > Printer): `receipt` callers (receipts, slips, Z reports) print straight to the terminal's printer with
+  // no screen. Other documents still open their screen, but its Print button prints straight to the printer instead of the browser dialog.
+  const _bi = _prnOn();
+  if (_bi && receipt) { _prnPrintHtml(htmlBody); return; }
   // Inject brand colour as a CSS variable so every accent in the document
   // automatically reflects the depot's chosen colour.  Falls back to MDM
   // default green when no brand colour has been set.
@@ -1545,13 +1629,28 @@ function _pdfPrint(htmlBody, title, filename) {
 </head>
 <body>
 <div class="pdf-toolbar">
-  <button class="primary" onclick="window.print()">🖨 Print / Save PDF</button>
+  <button class="primary" onclick="__prnPrint()">🖨 Print / Save PDF</button>
   <button id="__share_btn" onclick="_shareGeneratedPdf()">📤 Share to WhatsApp / Social</button>
 </div>
 <div class="pdf-toolbar-spacer"></div>
 <div id="pdf-content">
 ${htmlBody}
 </div>
+<script>
+window.__prnBuiltIn = ${_bi ? 'true' : 'false'};
+// Print button: with the Built-in printer on, the app window turns this page into printer text (_prnUrlFromHtml) and the hand-off
+// to RawBT happens here, straight from the tap. Anything else (switch off, no opener, page too long) is the normal browser print.
+// Kept in its own script block so it works whatever the share script below does.
+function __prnPrint(){
+  try{
+    if (window.__prnBuiltIn && window.opener && window.opener._prnUrlFromHtml){
+      var u = window.opener._prnUrlFromHtml(document.getElementById('pdf-content').innerHTML);
+      if (u){ location.href = u; return; }
+    }
+  } catch(e){}
+  window.print();
+}
+<\/script>
 <script>
 window.__pdfShareTitle = ${JSON.stringify(title || 'MDM Document')};
 window.__pdfShareFilename = ${JSON.stringify((filename || title || 'MDM_Document').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') + '.pdf')};
@@ -1582,36 +1681,36 @@ function _buildPdfFromJpeg(jpegBytes, imgWpx, imgHpx){
     length += bytes.length;
   }
   var offsets = [];
-  push('%PDF-1.4\n');
+  push('%PDF-1.4\\n');
   offsets.push(length);
-  push('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+  push('1 0 obj\\n<< /Type /Catalog /Pages 2 0 R >>\\nendobj\\n');
   var kids = [];
   for (var k = 0; k < pages; k++) kids.push((4 + 2*k) + ' 0 R');
   offsets.push(length);
-  push('2 0 obj\n<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages + ' >>\nendobj\n');
+  push('2 0 obj\\n<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages + ' >>\\nendobj\\n');
   offsets.push(length);
-  push('3 0 obj\n<< /Type /XObject /Subtype /Image /Width ' + imgWpx + ' /Height ' + imgHpx + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + jpegBytes.length + ' >>\nstream\n');
+  push('3 0 obj\\n<< /Type /XObject /Subtype /Image /Width ' + imgWpx + ' /Height ' + imgHpx + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + jpegBytes.length + ' >>\\nstream\\n');
   push(jpegBytes);
-  push('\nendstream\nendobj\n');
+  push('\\nendstream\\nendobj\\n');
   for (var k2 = 0; k2 < pages; k2++){
     var yOffset = (k2 + 1) * pageH - imgH;
-    var content = 'q\n' + imgW.toFixed(2) + ' 0 0 ' + imgH.toFixed(2) + ' 0 ' + yOffset.toFixed(2) + ' cm\n/Im0 Do\nQ\n';
+    var content = 'q\\n' + imgW.toFixed(2) + ' 0 0 ' + imgH.toFixed(2) + ' 0 ' + yOffset.toFixed(2) + ' cm\\n/Im0 Do\\nQ\\n';
     var contentBytes = enc.encode(content);
     var pageObjNum = 4 + 2*k2, contentObjNum = 5 + 2*k2;
     offsets.push(length);
-    push(pageObjNum + ' 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pageW.toFixed(2) + ' ' + pageH.toFixed(2) + '] /Resources << /XObject << /Im0 3 0 R >> >> /Contents ' + contentObjNum + ' 0 R >>\nendobj\n');
+    push(pageObjNum + ' 0 obj\\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + pageW.toFixed(2) + ' ' + pageH.toFixed(2) + '] /Resources << /XObject << /Im0 3 0 R >> >> /Contents ' + contentObjNum + ' 0 R >>\\nendobj\\n');
     offsets.push(length);
-    push(contentObjNum + ' 0 obj\n<< /Length ' + contentBytes.length + ' >>\nstream\n');
+    push(contentObjNum + ' 0 obj\\n<< /Length ' + contentBytes.length + ' >>\\nstream\\n');
     push(contentBytes);
-    push('\nendstream\nendobj\n');
+    push('\\nendstream\\nendobj\\n');
   }
   var xrefOffset = length;
   var totalObjs = offsets.length;
-  var xref = 'xref\n0 ' + (totalObjs + 1) + '\n0000000000 65535 f \n';
+  var xref = 'xref\\n0 ' + (totalObjs + 1) + '\\n0000000000 65535 f \\n';
   for (var i2 = 0; i2 < offsets.length; i2++){
-    xref += String(offsets[i2]).padStart(10, '0') + ' 00000 n \n';
+    xref += String(offsets[i2]).padStart(10, '0') + ' 00000 n \\n';
   }
-  xref += 'trailer\n<< /Size ' + (totalObjs + 1) + ' /Root 1 0 R >>\nstartxref\n' + xrefOffset + '\n%%EOF';
+  xref += 'trailer\\n<< /Size ' + (totalObjs + 1) + ' /Root 1 0 R >>\\nstartxref\\n' + xrefOffset + '\\n%%EOF';
   push(xref);
   var out = new Uint8Array(length);
   var pos = 0;
@@ -1630,9 +1729,9 @@ async function _captureContentToCanvas(el){
   var styleText = '';
   try{
     styleText = Array.prototype.map.call(document.styleSheets, function(ss){
-      try{ return Array.prototype.map.call(ss.cssRules, function(r){ return r.cssText; }).join('\n'); }
+      try{ return Array.prototype.map.call(ss.cssRules, function(r){ return r.cssText; }).join('\\n'); }
       catch(e){ return ''; }
-    }).join('\n');
+    }).join('\\n');
   } catch(e){}
   var htmlStr = new XMLSerializer().serializeToString(el);
   var svgMarkup = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '">' +
@@ -1712,10 +1811,12 @@ async function _shareGeneratedPdf(){
   if(!w){ URL.revokeObjectURL(blobUrl); showToast('⚠️ Allow pop-ups to download PDF'); return; }
   // Revoke after a generous delay to ensure the window has fully loaded
   setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
-  // Give images/fonts a moment to load, then trigger print
-  w.onload = ()=>{ w.focus(); w.print(); };
-  // Fallback if onload already fired
-  setTimeout(()=>{ try{ w.focus(); w.print(); }catch(e){} }, 600);
+  // Give images/fonts a moment to load, then trigger print (not with the Built-in printer on: the screen stays and its Print button prints)
+  if (!_bi) {
+    w.onload = ()=>{ w.focus(); w.print(); };
+    // Fallback if onload already fired
+    setTimeout(()=>{ try{ w.focus(); w.print(); }catch(e){} }, 600);
+  }
 }
 
 // Build the standard MDM header block for PDF exports
@@ -4181,6 +4282,7 @@ function printSubscriptionReceipt(payload, ts){
   <div class="pay">⏳ PENDING CONFIRMATION<br><span style="font-weight:500;font-size:11px">Activation within 48 hours of confirmed payment</span></div>
   <div class="footer">Questions? WhatsApp +260 96 027 1128<br>support@nexlitedigitalsolutionslimited.digital</div>
   </body></html>`;
+  if (_prnOn()) { _prnPrintHtml(html); return; }   // Built-in printer (Settings > Printer): straight to the printer, no screen
   const blob = new Blob([html], { type: 'text/html' });
   const blobUrl = URL.createObjectURL(blob);
   const w = window.open(blobUrl, '_blank', 'width=420,height=700');
@@ -4430,7 +4532,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.54';
+const SW_VERSION  = 'v0.3.56';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -4875,7 +4977,7 @@ async function initData(){
 // and _stripSales() drops them for IndexedDB, so they never reach localStorage, the cloud blob or a JSON backup.
 // These two MUST be var: migrateItemIds() just below runs before the rest of this script has executed.
 var _SALE_VIEW={ver:0,depot:'',gen:[],com:{}};   // rows derived from the ledger, for ONE depot
-var _SALE_LIST=[];                               // the sale records themselves (receipts, backup)
+var _SALE_LIST=[],_RET_LIST=[];   // _RET_LIST: the void/refund records (step 19)                               // the sale records themselves (receipts, backup)
 var _SALE_NONE={ver:-1,gen:[],com:{}};
 let DATA=ld(); // immediate sync load from localStorage
 migrateShiftLogStatus();  // Two-Stage Shift Log: tag legacy logs as completed
@@ -8610,7 +8712,7 @@ function renderGenIssued(){
     const sp=Number(item.sellingPrice||0);
     const saleVal=sp>0?sp*Number(item.issued||0):null;
     const cs=item.creditStatus||'paid';
-    const creditChip=cs==='paid'
+    const creditChip=item._return?`<span class="bdg ba2" style="font-size:14px">\u21A9 ${item.returnKind==='void'?'VOID':'REFUND'}</span>`:cs==='paid'
       ?`<span class="bdg bg2" style="font-size:14px">PAID</span>`
       :cs==='partial'
         ?`<span class="bdg ba2" style="font-size:14px">PARTIAL</span>`
@@ -8622,7 +8724,7 @@ function renderGenIssued(){
       <div style="font-weight:700;font-size:17px">${fmtDate(item.date)}${approvalBadge(item)}</div>
       <div style="font-size:15px;color:var(--muted)">${item.time||'—'}</div>
     </td>
-    <td style="font-weight:600">${esc(item.itemName)}${_stockCoverBadge('issued',item.id)}</td>
+    <td style="font-weight:600">${esc(item.itemName)}${_stockCoverBadge('issued',item.id)}${item._return?` <span style="font-size:11px;font-weight:700;color:var(--amber);border:1px solid var(--amber);border-radius:6px;padding:1px 5px;white-space:nowrap">\u21A9 ${esc(item.receiptNo)}</span>`:''}</td>
     <td style="color:var(--amber);text-align:right;font-weight:700">${Number(item.issued||0).toLocaleString()}</td>
     <td style="color:var(--muted);text-align:right;font-size:17px">${sp>0?zm(sp):'—'}</td>
     <td style="color:var(--green);text-align:right;font-size:17px">${saleVal!==null?zm(saleVal):'—'}</td>
@@ -8730,17 +8832,17 @@ function renderGenSales(){
     const sp=Number(item.sellingPrice||0);
     const val=sp*Number(item.issued||0);
     const cs=item.creditStatus||'paid';
-    const chip=cs==='paid'?`<span class="bdg bg2" style="font-size:14px">PAID</span>`
+    const chip=item._return?`<span class="bdg ba2" style="font-size:14px">\u21A9 ${item.returnKind==='void'?'VOID':'REFUND'}</span>`:cs==='paid'?`<span class="bdg bg2" style="font-size:14px">PAID</span>`
       :cs==='partial'?`<span class="bdg ba2" style="font-size:14px">PARTIAL</span>`
       :`<span class="bdg br2" style="font-size:14px">CREDIT</span>`;
     const editable=isWithin24h(item);
     const custName=item.customerName||'';
     return`<tr>
       <td style="color:var(--muted);font-size:16px;white-space:nowrap">${item.time||'—'}</td>
-      <td style="font-weight:600">${esc(item.itemName)}${item._sale?` <span style="font-size:11px;font-weight:700;color:var(--blue);border:1px solid var(--blue);border-radius:6px;padding:1px 5px;white-space:nowrap">\u{1F9FE} ${esc(item.receiptNo)}</span>`:''}</td>
+      <td style="font-weight:600">${esc(item.itemName)}${item._sale?` <span style="font-size:11px;font-weight:700;color:var(--blue);border:1px solid var(--blue);border-radius:6px;padding:1px 5px;white-space:nowrap">${item._return?'\u21A9':'\u{1F9FE}'} ${esc(item.receiptNo)}</span>`:''}</td>
       <td style="text-align:right;color:var(--amber);font-weight:700">${Number(item.issued||0).toLocaleString()}</td>
       <td style="text-align:right">${sp>0?zm(sp):'—'}</td>
-      <td style="text-align:right;color:var(--green);font-weight:700">${val>0?zm(val):'—'}</td>
+      <td style="text-align:right;color:${val<0?'var(--amber)':'var(--green)'};font-weight:700">${val!==0?zm(val):'—'}</td>
       <td>${chip}${cs==='partial'&&item.partialPaid>0?`<span style="font-size:14px;color:var(--muted);margin-left:4px">${zm(item.partialPaid)} pd</span>`:''}</td>
       <td style="font-size:15px;color:var(--blue)">${custName?esc(custName):'<span style="color:var(--muted)">—</span>'}</td>
       <td style="white-space:nowrap">
@@ -8845,6 +8947,7 @@ function renderGenSales(){
 function printSaleReceipt(id){
   const item=DATA.generalIssued.find(x=>x.id===id);
   if(!item){showToast('⚠️ Record not found');return;}
+  if(item._return){_printReturn(item.returnId);return;}   // step 19: a void/refund row prints the slip of the whole void/refund
   if(item._sale){_printSaleBasket(item.saleId);return;}   // a till sale prints as the whole basket
   const rno=String(item.receiptNo||item.id.slice(-6).toUpperCase());   // K7F2-000123; older records keep their old #XXXXXX
   const depot=(DATA.depotInfo||{});
@@ -8898,7 +9001,7 @@ function printSaleReceipt(id){
   <div class="brand-hr"></div>
   <div class="footer">Thank you for your business!<br>${esc(depot.name||'Shop Inventory & Sales Manager')} · Powered by Shop Inventory & Sales Manager</div>
   </body></html>`;
-  _pdfPrint(html, `Receipt #${rno}`);
+  _pdfPrint(html, `Receipt #${rno}`, '', true);
 }
 
 // ── DAILY CLOSE-OUT = THE DAY'S Z REPORT (till roadmap step 17) ───────────────────────────────────────────────────
@@ -8915,12 +9018,12 @@ function printSaleReceipt(id){
 // older records and the AI context keep working. Nothing here edits a shift or a sale.
 const _r2=n=>Math.round((Number(n)||0)*100)/100;
 function _closeFigures(dateStr){
-  const day=Shifts.dayReport(dateStr,_shiftEv,_SALE_LIST||[]);
+  const day=Shifts.dayReport(dateStr,_shiftEv,_SALE_LIST||[],_RET_LIST||[]);   // step 19: and the voids/refunds made on this date
   const app=(DATA.generalIssued||[]).filter(x=>x.date===dateStr&&!x._sale);
   const paid=app.filter(x=>(x.creditStatus||'paid')==='paid').reduce((a,b)=>a+Number(b.issued||0)*Number(b.sellingPrice||0),0);
   const part=app.filter(x=>x.creditStatus==='partial').reduce((a,b)=>a+Number(b.partialPaid||0),0);
   const appCash=_r2(paid+part);
-  return {day,appCash,appCount:app.length,expectedCash:_r2(day.cashSales+appCash)};
+  return {day,appCash,appCount:app.length,expectedCash:_r2(day.cashSales-day.cashOut+appCash)};   // cash handed back on voids/refunds (step 19) is no longer in the drawer
 }
 // One muted line for the closed card: what the saved close-out says about the tills (nothing for a record from before step 17).
 function _closeZLine(z){
@@ -8961,6 +9064,13 @@ async function openDailyCloseOut(force){
     [['mtn','MTN Money'],['airtel','Airtel Money'],['card','Card']].forEach(([k,l])=>{if(D.byMethod[k]>0)L.push(rowH('&nbsp;· '+l+' <span style="color:var(--muted)">(not in the drawer)</span>',zm(D.byMethod[k])));});
     if(D.credit>0)L.push(rowH('&nbsp;· On credit',zm(D.credit),'color:var(--amber)'));
     if(D.discountGiven>0)L.push(rowH('&nbsp;· Discounts given ('+D.discountCount+') <span style="color:var(--muted)">(already taken off)</span>',zm(D.discountGiven)));
+  }
+  if(D.returns&&D.returns.count){                                    // step 19: booked on the day they were made, whatever day the sale was
+    L.push(rowH('Voids &amp; refunds ('+D.returns.count+')','\u2212'+zm(D.returns.total),'color:var(--amber)'));
+    if(D.cashOut>0)L.push(rowH('&nbsp;· Cash handed back <span style="color:var(--muted)">(out of the drawer)</span>','\u2212'+zm(D.cashOut)));
+    [['mtn','MTN Money'],['airtel','Airtel Money'],['card','Card']].forEach(([k,l])=>{if(D.returns.byMethod[k]>0)L.push(rowH('&nbsp;· '+l+' sent back <span style="color:var(--muted)">(not in the drawer)</span>','\u2212'+zm(D.returns.byMethod[k])));});
+    if(D.returns.credit>0)L.push(rowH('&nbsp;· Taken off customers\u2019 balances','\u2212'+zm(D.returns.credit)));
+    L.push(rowH('Net till sales',zm(D.netTotal)));
   }
   if(F.appCount)L.push(rowH('Main-app issues, cash ('+F.appCount+')',zm(F.appCash)));
   L.push(rowH('Expected cash',zm(F.expectedCash),'color:var(--green)'));
@@ -9018,6 +9128,7 @@ function saveDailyCloseOut(ignoreOpen){
     closedBy:USER.username||'admin',
     zRef:'Z-'+todayStr,
     tillSales:D.saleCount, tillTotal:D.total, tillCash:D.cashSales, appCash:F.appCash, tillDiscount:D.discountGiven,
+    tillRefundCount:D.returns.count, tillRefunds:D.returns.total, tillCashOut:D.cashOut,   // step 19: voids/refunds made today; cash handed back (already out of expectedCash)
     byMethod:D.byMethod, credit:D.credit,
     shifts:D.shifts.map(x=>({shiftId:x.shiftId,cashier:x.cashier,openedDate:x.openedDate,closed:x.closed,float:x.float,expectedCash:x.expectedCash,countedCash:x.countedCash,variance:x.variance,forced:x.forced})),
     shiftVariance:D.shiftVariance
@@ -9028,6 +9139,7 @@ function saveDailyCloseOut(ignoreOpen){
   const bm=D.byMethod;
   logAuditEvent('CREATE','Daily Close Out',`${payload.zRef} · Expected: ${zm(expectedCash)} · Actual: ${zm(actual)} · Variance: ${zm(variance)} · Till shifts: ${D.shifts.filter(x=>x.closed).length} (variance ${zm(D.shiftVariance)})`
     +(bm.mtn>0||bm.airtel>0||bm.card>0?` · MTN ${zm(bm.mtn)} · Airtel ${zm(bm.airtel)} · Card ${zm(bm.card)}`:'')
+    +(D.returns.count?` · Voids/refunds made today: ${D.returns.count} (${zm(D.returns.total)}), cash handed back ${zm(D.cashOut)}`:'')
     +(left.length?` · Closed out with shifts still open: ${left.join(', ')}`:''));
   closeModal();
   showToast('✅ Daily close out saved');
@@ -9055,6 +9167,11 @@ function printDailyZ(id){
     [['mtn','MTN Money'],['airtel','Airtel Money'],['card','Card']].forEach(([k,l])=>{if(Number(bm[k])>0)rows.push({c:['· '+l+' (not in the drawer)',zm(bm[k])]});});
     if(Number(z.credit)>0)rows.push({c:['· Left on credit',zm(z.credit)]});
     if(Number(z.tillDiscount)>0)rows.push({c:['· Discounts given (already taken off)',zm(z.tillDiscount)]});
+    if(Number(z.tillRefundCount)>0){                                  // step 19
+      rows.push({c:['Voids & refunds made today ('+Number(z.tillRefundCount)+')','\u2212'+zm(z.tillRefunds||0)]});
+      if(Number(z.tillCashOut)>0)rows.push({c:['· Cash handed back (out of the drawer)','\u2212'+zm(z.tillCashOut)]});
+      rows.push({c:['Net till sales',zm(Math.round((Number(z.tillTotal||0)-Number(z.tillRefunds||0))*100)/100)],_cls:'total-row'});
+    }
     if(Number(z.appCash)>0)rows.push({c:['Main-app issues, cash',zm(z.appCash)]});
     h+=sec('Sales')+tbl(['Source','Amount'],rows,1);
   }
@@ -9081,7 +9198,7 @@ function printDailyZ(id){
   }
   if(z.notes)h+=`<div style="margin:10px 0;font-size:10pt"><b>Notes:</b> ${esc(z.notes)}</div>`;
   h+=`<div class="sig-row"><div class="sig-box">Closed by</div><div class="sig-box">Checked by</div></div>`+_pdfFooter(esc(ref));
-  _pdfPrint(h,'Z Report '+ref,'Z_Report_'+ref);
+  _pdfPrint(h,'Z Report '+ref,'Z_Report_'+ref,true);
 }
 
 function renderGenSummary(){
@@ -9452,18 +9569,23 @@ function _receiptRegister(){try{if(DATA&&DATA.installId)_receipts().ensureRegist
 // var, not let: fbRestoreData() can reach salesRefresh() very early.
 var _salesLedger=null,_salesCloudApi=null,_salesSig='',_salesBusy=false;
 function _sales(){return _salesLedger||(_salesLedger=Sales.create({depotKey:()=>DATA&&DATA.installId,adapter:Sales.idbAdapter()}));}
+// Voids and refunds (roadmap step 19, returns.js): their own append-only records, returns/{returnId}, made at the till. Like the sales they never touch
+// the DATA blob. The main app READS them (stock, reports, close-out) and syncs them with the sales; it does not make them.
+var _returnsLedger=null;
+function _returns(){return _returnsLedger||(_returnsLedger=Returns.create({depotKey:()=>DATA&&DATA.installId,opts:{dateOf:t=>new Date(t).toISOString().slice(0,10)},adapter:Returns.idbAdapter()}));}
 function _salesCloud(){return _salesCloudApi||(_salesCloudApi=Gate.restCloud({dbUrl:FB_CONFIG.databaseURL,idToken:_getIdToken,appCheck:_getAppCheckToken}));}
 // Read the ledger from this device; true when it changed (new sale, other depot) and DATA now carries the new rows.
 async function salesReload(){
   try{
     if(!DATA||!DATA.installId)return false;
     const depot=DATA.installId,list=await _sales().all();
+    let rl=[];try{rl=await _returns().all();}catch(e){console.warn('[MDM] returns ledger unavailable',e);}
     if(depot!==DATA.installId)return false;                       // a different depot loaded while we were reading
-    const sig=depot+'|'+list.length;
+    const sig=depot+'|'+list.length+'|'+rl.length;                // both ledgers are append-only: a new record always changes a length
     if(sig===_salesSig)return false;
     _salesSig=sig;
-    const rows=Sales.issuedRows(list);
-    _SALE_LIST=list;
+    const rows=Sales.issuedRows(list,rl);                         // step 19: a void/refund is a negative row on the day it was made
+    _SALE_LIST=list;_RET_LIST=rl;
     _SALE_VIEW={ver:_SALE_VIEW.ver+1,depot,gen:rows.gen,com:rows.com};
     DATA=_applySales(DATA);
     return true;
@@ -9482,6 +9604,7 @@ async function salesSync(){
     const L=_sales(),C=_salesCloud();
     try{await L.push(C);}catch(e){console.warn('[MDM] sales upload failed',e);}
     try{await L.pull(C);}catch(e){console.warn('[MDM] sales download failed',e);}
+    try{const R=_returns();await R.push(C);await R.pull(C);}catch(e){console.warn('[MDM] returns sync failed',e);}   // step 19: after the sales they point at
   }finally{_salesBusy=false;}
   await salesRefresh();
 }
@@ -9512,8 +9635,8 @@ async function shiftsSync(){
 //     stock = received - issued - sold + returns        no stored counters: every figure is summed from records
 // Sales.stockBook (sales.js) is the only place this is worked out; the till (pos.html) calls the same function, so both
 // always show the same number. received/issued are DATA.generalInventory / generalIssued (approved rows only; the overlay
-// rows flagged _sale are skipped), sold comes straight from the ledger, returns will come from void/refund records
-// (roadmap step 19; none exist yet). genStock(name) -> {rec, issued, sold, ret, out (= issued + sold), bal}.
+// rows flagged _sale are skipped), sold comes straight from the ledger, returns come from the void/refund records
+// (roadmap step 19: only lines put back in stock count). genStock(name) -> {rec, issued, sold, ret, out (= issued + sold), bal}.
 //   genStock(name,{until:'YYYY-MM-DD HH:MM'}) or genStock(name,{untilDate:'YYYY-MM-DD'}) gives the stock as it was then.
 var _gbook=null,_gbookKey=null;
 function _stockOpts(extra){
@@ -9521,9 +9644,9 @@ function _stockOpts(extra){
   (DATA.inventoryItems||[]).forEach(x=>{const n=_invItemName(x);if(n)ids.set(n,_invItemId(x));});
   return Object.assign({idOfName:n=>ids.get(n)||_itemLegacyId(n)},extra);
 }
-function _stockSrc(){return {received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:_SALE_LIST||[],returns:[]};}
+function _stockSrc(){return {received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:_SALE_LIST||[],returns:Returns.forStock(_RET_LIST||[])};}   // step 19: the restocked lines of the void/refund records
 function genStockBook(){
-  const k=[DATA.generalInventory,DATA.generalIssued,DATA.inventoryItems,_SALE_LIST];      // rebuilt only when one of these changed
+  const k=[DATA.generalInventory,DATA.generalIssued,DATA.inventoryItems,_SALE_LIST,_RET_LIST];      // rebuilt only when one of these changed
   if(_gbook&&_gbookKey&&k.every((x,j)=>x===_gbookKey[j]))return _gbook;
   _gbook=Sales.stockBook(_stockSrc(),_stockOpts());_gbookKey=k;return _gbook;
 }
@@ -9532,7 +9655,7 @@ function genStock(name,at){
   const o=_stockOpts(at);o.only=o.idOfName(name);
   return Sales.stockBook(_stockSrc(),o).byName(name);
 }
-function _saleLockToast(){showToast('\u{1F9FE} A till sale is a permanent record and cannot be edited or deleted here. Voids and refunds come with the till\u2019s next steps.');}
+function _saleLockToast(){showToast('\u{1F9FE} A till sale is a permanent record and cannot be edited or deleted here. To take something back, make a void or refund at the till (Returns).');}
 // The receipt of a whole till basket (every line, every payment) for a Sales History row that came from the till.
 function _printSaleBasket(sid){
   const s=_SALE_LIST.find(x=>x.id===sid);
@@ -9565,7 +9688,42 @@ function _printSaleBasket(sid){
   <table>${s.discount>0?`<tr><td class="muted">Subtotal</td><td class="right muted">${zm(gross)}</td></tr><tr><td>Discount</td><td class="right">\u2212${zm(s.discount)}</td></tr>`:''}<tr><td class="bold total">TOTAL</td><td class="right bold total" style="color:${esc(accent)}">${zm(s.total)}</td></tr>${pays}</table>
   <div class="pay">${payLabel}</div><div class="brand-hr"></div>
   <div class="footer">Thank you for your business!<br>${esc(depot.name||'Shop Inventory & Sales Manager')} - Powered by Shop Inventory & Sales Manager</div></body></html>`;
-  _pdfPrint(html,`Receipt #${s.receiptNo}`);
+  _pdfPrint(html,`Receipt #${s.receiptNo}`,'',true);
+}
+// The slip of a void or refund (roadmap step 19), same look as the sale receipt above.
+function _printReturn(rid){
+  const r=(_RET_LIST||[]).find(x=>x.id===rid);
+  if(!r){showToast('Slip not found on this device yet. Try again in a minute.');return;}
+  const depot=(DATA.depotInfo||{}),accent=depot.brandColor||'#1E8449',isVoid=r.kind==='void';
+  const initials=(depot.name||'MDM').split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,3)||'MDM';
+  const logoHtml=depot.logoDataUrl
+    ?`<img src="${depot.logoDataUrl}" style="height:56px;max-width:140px;object-fit:contain;display:block;margin:0 auto 6px" alt="${esc(depot.name||'')} logo">`
+    :`<div style="width:56px;height:56px;border-radius:10px;background:${esc(accent)};color:#fff;font-size:17px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto 6px">${esc(initials)}</div>`;
+  const lines=r.lines.map(l=>`<tr><td colspan="3" class="bold">${esc(l.name)}</td></tr><tr><td class="muted">${Number(l.qty).toLocaleString()} ${esc(l.unit||'')}</td><td class="right muted">x ${zm(l.price)}</td><td class="right bold">${zm(l.total)}</td></tr>`).join('');
+  const back=(r.refunds||[]).map(p=>`<tr><td class="muted">Handed back - ${esc(p.label||p.method)}${p.ref?' ('+esc(p.ref)+')':''}</td><td class="right muted">${zm(p.amount)}</td></tr>`).join('')
+    +(r.creditApplied>0?`<tr><td class="muted">Taken off the balance owed</td><td class="right muted">${zm(r.creditApplied)}</td></tr>`:'');
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${isVoid?'Void':'Refund'} #${esc(r.id)}</title><style>
+    body{font-family:Arial,sans-serif;max-width:320px;margin:20px auto;padding:0 16px;color:#111;font-size:14px}
+    .center{text-align:center}.muted{color:#888;font-size:12px}hr{border:none;border-top:1px dashed #ccc;margin:10px 0}
+    .brand-hr{border:none;border-top:2.5px solid ${esc(accent)};margin:10px 0}table{width:100%;border-collapse:collapse}td{padding:4px 0}
+    .right{text-align:right}.bold{font-weight:700}.total{font-size:18px;font-weight:800}
+    .pay{text-align:center;margin:10px 0;padding:8px;border:1.5px solid #c0392b;border-radius:8px;font-weight:700;font-size:13px;color:#c0392b}
+    .sig{display:flex;gap:16px;margin-top:26px;font-size:11px;color:#777}.sig span{flex:1;border-top:1px solid #999;padding-top:3px}
+    .footer{text-align:center;font-size:11px;color:#aaa;margin-top:14px}
+    @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+  </style></head><body>${logoHtml}
+  <div class="center bold" style="font-size:18px;margin-bottom:2px">${esc(depot.name||'SHOP INVENTORY & SALES MANAGER')}</div>
+  ${depot.district?`<div class="center muted">${esc(depot.district)}</div>`:''}${depot.contactPhone?`<div class="center muted">Tel: ${esc(depot.contactPhone)}</div>`:''}
+  <div class="brand-hr"></div><div class="center muted">${isVoid?'VOID \u2014 SALE CANCELLED':'REFUND RECEIPT'}</div><div class="center bold" style="font-size:16px">#${esc(r.id)}</div>
+  <div class="center muted">For sale #${esc(r.saleId)}</div>
+  <div class="center muted">${fmtDate(r.date)} ${esc(r.time||'')} - ${esc(r.cashier||'')} - allowed by ${esc(r.approvedBy||'')}</div>
+  ${r.customerName?`<div class="center muted" style="margin-top:4px">Customer: <strong>${esc(r.customerName)}</strong></div>`:''}
+  <hr><table>${lines}</table><hr>
+  <table><tr><td class="bold total">TAKEN BACK</td><td class="right bold total" style="color:${esc(accent)}">${zm(r.total)}</td></tr>${back}</table>
+  <div class="muted" style="margin-top:6px">Reason: ${esc(r.reason||'')}${r.note?' \u2014 '+esc(r.note):''}</div>
+  <div class="pay">${isVoid?'VOID':'REFUND'}</div><div class="sig"><span>Customer</span><span>Cashier</span></div><div class="brand-hr"></div>
+  <div class="footer">Keep this slip as proof.<br>${esc(depot.name||'Shop Inventory & Sales Manager')} - Powered by Shop Inventory & Sales Manager</div></body></html>`;
+  _pdfPrint(html,`${isVoid?'Void':'Refund'} #${r.id}`,'',true);
 }
 async function _takeReceiptNo(){
   try{
@@ -10768,14 +10926,14 @@ function getCom(cid){ return (DATA.commodities||[]).find(c=>c.id===cid)||{id:cid
 // comBatchBook(cid) -> { get(batch) {rec,issued,sold,out,bal,soldValue}, names(), total(), timeline(), allocation(id) }
 // comBatchBook(cid,{untilDate:'YYYY-MM-DD'}) gives the books as they stood at the end of that day (not cached).
 var _cbooks={};
-function _comBatchSrc(cid){return {received:cRec(cid),issued:cIss(cid),sales:_SALE_LIST||[]};}
+function _comBatchSrc(cid){return {received:cRec(cid),issued:cIss(cid),sales:_SALE_LIST||[],returns:_RET_LIST||[]};}
 function comBatchBook(cid,at){
   cid=cid||CCOM;
   if(at)return Sales.batchBook(_comBatchSrc(cid),Object.assign({cid:cid},at));
-  const k=[cRec(cid),cIss(cid),_SALE_LIST];       // rebuilt only when one of these changed
+  const k=[cRec(cid),cIss(cid),_SALE_LIST,_RET_LIST];       // rebuilt only when one of these changed
   const c=_cbooks[cid];
   if(c&&c.k.every((x,j)=>x===k[j]))return c.book;
-  const book=Sales.batchBook({received:k[0],issued:k[1],sales:_SALE_LIST||[]},{cid:cid});
+  const book=Sales.batchBook({received:k[0],issued:k[1],sales:_SALE_LIST||[],returns:_RET_LIST||[]},{cid:cid});
   _cbooks[cid]={k:k,book:book};return book;
 }
 // Batch names of a commodity: every batch with a received or issued record, plus the 'TILL SALES' pseudo batch ONLY if
@@ -20404,6 +20562,39 @@ function setTillExitPin(on){
   _mpinMsg(`<div class="ok-msg">✅ ${on?'The till will ask for a manager PIN before a cashier can leave it.':'The till will no longer ask for a PIN.'}</div>`);
 }
 
+// ── PRINTER SETTINGS (built-in thermal printer on POS terminals) ────────────────────────────────────────
+// Per device, not per depot: nothing here goes to the cloud. Same localStorage key as the Till's Printer button (mdm_till_printer),
+// so the tick here also switches the Till to the built-in printer (and its auto-print after each sale). See BUILT-IN PRINTER above.
+function _prnMsg(html){ const m=document.getElementById('prn-msg'); if(m) m.innerHTML=html; }
+function _renderPrinterCard(){
+  const pf=_prnPrefs(), on=pf.mode==='rawbt';
+  const sel=(label,fn,opts,val)=>`<div class="fw"><div class="fl">${label}</div><select class="fi" onchange="${fn}(this.value)">${opts.map(o=>`<option value="${o[0]}"${String(o[0])===String(val)?' selected':''}>${o[1]}</option>`).join('')}</select></div>`;
+  return `
+    <div class="sh">Printer</div>
+    <div class="card">
+      <label style="display:flex;gap:12px;align-items:flex-start;font-size:17px;line-height:1.5;cursor:pointer">
+        <input type="checkbox" id="prn-on" ${on?'checked':''} onchange="prnSetBuiltIn(this.checked)" style="width:24px;height:24px;flex-shrink:0;margin-top:2px"/>
+        <span><strong>Built-in printer</strong><br>Receipts, slips and Z reports print straight to the printer, with no print screen. Payslips, reports and other documents keep their screen, but their Print button prints straight to the printer. For POS terminals with a built-in printer; this device only.</span>
+      </label>
+      <div style="font-size:16px;color:var(--muted);margin:10px 0 14px;line-height:1.6">Needs the free RawBT app, with its printer set to this terminal's built-in printer.</div>
+      ${sel('Thermal paper','prnSetCols',[[0,'Auto (58 mm on a handheld terminal)'],[32,'58 mm paper (32 characters)'],[48,'80 mm paper (48 characters)']],pf.cols||0)}
+      ${sel('Print size','prnSetSize',[[0,'Normal'],[1,'Large (taller letters, easy to read)'],[2,'Extra large (wider and taller)']],pf.size==null?1:pf.size)}
+      <div id="prn-msg"></div>
+      <button class="btn bo" style="margin-top:8px;width:100%" onclick="prnTest()">🖨️ Test print</button>
+    </div>`;
+}
+function prnSetBuiltIn(on){
+  const ok=_prnSave(on?{mode:'rawbt',auto:true}:{mode:'browser',auto:false});
+  _prnMsg(ok?`<div class="ok-msg" style="margin-bottom:8px">✅ ${on?'Built-in printer is ON for this device. Use Test print to check it.':'Built-in printer is OFF. Printing uses the browser print dialog.'}</div>`:'<div class="err-box" style="margin-bottom:8px">Could not save this on the device.</div>');
+}
+function prnSetCols(v){ _prnSave({cols:+v||0}); _prnMsg('<div class="ok-msg" style="margin-bottom:8px">✅ Paper saved. Use Test print: the numbers line should wrap where the paper ends.</div>'); }
+function prnSetSize(v){ _prnSave({size:+v}); _prnMsg('<div class="ok-msg" style="margin-bottom:8px">✅ Print size saved.</div>'); }
+function prnTest(){
+  if(!_prnOn()){ _prnMsg('<div class="err-box" style="margin-bottom:8px">Tick Built-in printer first.</div>'); return; }
+  const di=DATA.depotInfo||{};
+  _prnPrintHtml(`<div class="center bold">${esc(di.name||'Shop Inventory & Sales Manager')}</div><div class="center">TEST PRINT</div><hr><div>123456789012345678901234567890123456789012345678</div><div>Using ${_prnWidth()} characters per line</div><hr><table><tr><td>Sample item</td><td class="right">K1.00</td></tr></table>`);
+}
+
 // ── TILL DISCOUNTS (till roadmap step 18) ──────────────────────────────────
 // Admin only, OFF until switched on. The till (pos.html) offers a discount on a whole basket only when depotInfo.discountOn is true.
 // A Cashier or Staff login may give up to discountCapPct of the basket on their own; more, up to discountMaxPct, needs a manager PIN
@@ -20621,6 +20812,8 @@ const SETTINGS_CATS = {
       match:['My Plan','License & Connection','Company Information','Branding','Staff & Records Policy']},
     {id:'appearance', icon:'🎨', label:'Appearance', desc:'Theme, text size, currency & dashboard widgets',
       match:['Display Preferences','Dashboard Widgets']},
+    {id:'printer', icon:'🖨️', label:'Printer', desc:'Built-in printer, paper and print size (this device)',
+      match:['Printer']},
     {id:'data-backup', icon:'💾', label:'Data & Backup', desc:'Backup, audit log, cloud sync & account deletion',
       match:['Data Management','Cloud Data Protection','My Account']},
     {id:'help-about', icon:'❓', label:'Help & About', desc:'Install app, docs, support & legal',
@@ -20629,6 +20822,8 @@ const SETTINGS_CATS = {
   staff: [
     {id:'preferences', icon:'🎨', label:'Preferences', desc:'Text size, theme, currency & dashboard',
       match:['Company Information','Display Preferences','Dashboard Widgets']},
+    {id:'printer', icon:'🖨️', label:'Printer', desc:'Built-in printer, paper and print size (this device)',
+      match:['Printer']},
     {id:'account-help', icon:'🔐', label:'Account & Help', desc:'Password, fingerprint, install, support & legal',
       match:['Recovery Email','Fingerprint Login','Stay Signed In','Change Password','Manager PIN','Login History','Install on This Phone','Help & Documentation','Contact & Support','Legal']},
   ],
@@ -20755,7 +20950,7 @@ function _renderStaffSettings(){
     ${_renderBioSection()}
     ${_renderStaySignedInSection()}
     ${_renderChangePasswordCard()}
-    ${_renderManagerPinCard()}${_renderTillDiscountCard()}
+    ${_renderManagerPinCard()}${_renderTillDiscountCard()}${_renderPrinterCard()}
     ${_renderLoginHistoryCard()}
     ${_renderInstallAppCard()}
     ${_renderHelpDocsCard()}
@@ -20984,7 +21179,7 @@ function _renderAdminSettings(){
 
     ${_renderChangePasswordCard()}
 
-    ${_renderManagerPinCard()}${_renderTillDiscountCard()}
+    ${_renderManagerPinCard()}${_renderTillDiscountCard()}${_renderPrinterCard()}
 
     ${_renderLoginHistoryCard()}
 
@@ -22061,6 +22256,7 @@ function exportJSON(){
   // not needed to restore the backup (they will be re-migrated on next login).
   const exportData = JSON.parse(JSON.stringify(DATA));
   exportData.salesLedger = JSON.parse(JSON.stringify(_SALE_LIST||[]));   // till sales live outside DATA; keep them in the backup too
+  exportData.returnsLedger = JSON.parse(JSON.stringify(_RET_LIST||[]));   // and the voids/refunds (step 19)
   if (Array.isArray(exportData.users)) {
     exportData.users = exportData.users.map(u => { const c={...u}; delete c.password; return c; });
   }
@@ -22152,6 +22348,8 @@ function handleImportFile(input){
         // Strip any plain-text passwords before saving (they will be migrated on next login)
         const _slBackup = Array.isArray(imported.salesLedger) ? imported.salesLedger : [];
         delete imported.salesLedger;   // not part of DATA
+        const _rlBackup = Array.isArray(imported.returnsLedger) ? imported.returnsLedger : [];
+        delete imported.returnsLedger;   // not part of DATA either (step 19)
         DATA = Object.assign(JSON.parse(JSON.stringify(DEFAULT)), imported);
         DATA._v = (DATA._v || 0) + 1;
         sv(DATA);
@@ -22159,7 +22357,9 @@ function handleImportFile(input){
         localStorage.removeItem(LICENSE_CACHE_KEY);
         const _fin = () => { alert('✅ Backup restored successfully! Please log in again.'); _doLogoutNow(); };
         // The till sales in the backup go back into the ledger: add-only (sales already there are left alone), and any the cloud lacks are queued for upload.
-        (_slBackup.length ? _sales().importMany(_slBackup) : Promise.resolve()).catch(()=>{}).then(_fin);
+        // Returns go in after the sales they point at (the cloud only accepts a return once its sale is there).
+        (_slBackup.length ? _sales().importMany(_slBackup) : Promise.resolve()).catch(()=>{})
+          .then(() => (_rlBackup.length ? _returns().importMany(_rlBackup) : Promise.resolve())).catch(()=>{}).then(_fin);
 
       } catch(err) {
         alert('❌ Failed to read backup file: ' + err.message);
