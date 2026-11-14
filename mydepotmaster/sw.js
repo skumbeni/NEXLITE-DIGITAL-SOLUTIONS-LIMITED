@@ -25,7 +25,25 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.59 (2026-11-14) — Till roadmap step 21, follow-up: depot delete, wrong phone clocks, and a nightly check of till records (gate.js + pos.html + index.html + database_rules.json + sw.js).
+// Current version: v0.3.62 (2026-11-14) — Till roadmap step 23, part 2: Sales History is built from the ledgers (index.html + sw.js; no database, rules, pos.html or gate.js change).
+//   - The list is one row per till receipt and one per void/refund (read from the sales and returns ledgers), over the period chosen above the tab (Today / week / month / year / all /
+//     date range; newest 150 shown), instead of today's item rows only. The main app's own Issue Item rows that carry a selling price are listed with them, as before; issues with no price are not.
+//     Printing a row prints the whole basket or the void/refund slip. Commodity sales made at the till now show too (they did not before).
+//   - Today's card and the period summary are worked out from the same records: revenue = sales less voids and refunds, "Paid" = money taken less money handed back (all methods), credit = still owed.
+//   - The overlay is NOT retired: stock, reports, P&L, cash flow, customers, search and the AI context still read the till rows it puts in generalIssued / commodityIssued.
+// Previous: v0.3.61 (2026-11-14) — Till roadmap step 23: the Sales tab becomes "Sales History" (index.html + sw.js; no database, rules, pos.html or gate.js change).
+//   - The tab under Stock > Sales is now "📜 Sales History", the back-office view of sales: today's figures, the daily close-out, receipts and the period summary. A line at the top
+//     says so and points to the Till for selling and for voids and refunds. Nothing in the view's figures, close-out or receipts changed.
+//   - The Pro lock screen says "Sales History". The upgrade prompt now has its own label for it (it used to show the raw key daily_sales and name the Growth plan; it is a Pro feature).
+//   - The feature key is still daily_sales, so no plan, licence or saved setting is affected.
+// Previous: v0.3.60 (2026-11-14) — Till roadmap step 22: the management dashboard (index.html + sw.js; no database, rules, pos.html or gate.js change).
+//   - Dashboard, Admin and Manager only, Pro plan like the till: a "Till Today" card with the day's net sales (sales less voids and refunds, summed from the same ledgers as
+//     the daily close-out), what was taken by cash / MTN / Airtel / card / on credit, the shifts open right now with what each drawer should hold (a shift still open from an
+//     earlier day is flagged), the shifts closed today with their cash variance, the low-stock list, and the Open Till button.
+//   - While the card shows it replaces the Quick Actions "Open Till" button and the LOW STOCK lines of the alert block, so nothing is listed twice. Settings > Dashboard
+//     Widgets > "Till Today" switches it off, and both come back.
+//   - Shift records are re-read when they change (other tills' shifts arrive every minute) and also while offline, from this device, and the dashboard redraws when they do.
+// Previous: v0.3.59 (2026-11-14) — Till roadmap step 21, follow-up: depot delete, wrong phone clocks, and a nightly check of till records (gate.js + pos.html + index.html + database_rules.json + sw.js).
 //   - Delete account (Settings): refused while the company has any till record (sales, voids/refunds, shifts, shift closes, audit entries). Those are append-only, and
 //     the database rules now also stop a depot admin from deleting a depot that holds any. The app asks the cloud BEFORE it frees any username or wipes anything, so a
 //     refusal changes nothing and says why; no signal also stops it cleanly. Support (the super-admin uid, mdm-admin) can still close such an account.
@@ -2158,7 +2176,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.59';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.62';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

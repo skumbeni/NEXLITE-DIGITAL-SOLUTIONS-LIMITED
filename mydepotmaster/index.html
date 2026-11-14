@@ -4049,6 +4049,7 @@ const _FEATURE_LABEL = {
   payroll_run:        { name: 'Payroll Run',               tier: 'pro'    },
   stock_check:        { name: 'Payroll Stock Check',       tier: 'pro'    },
   pos_till:           { name: 'Sell Tab (Till)',           tier: 'free'   },
+  daily_sales:        { name: 'Sales History',             tier: 'pro'    },
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -4713,7 +4714,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.59';
+const SW_VERSION  = 'v0.3.62';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -5268,7 +5269,7 @@ function _recentLoginSessions(username){
 // and does not sync to cloud — a personal display preference per user.
 const _DW_KEY = 'mdm_dash_widgets';
 const _DW_DEFAULTS = {
-  alerts:true, quickactions:true, today:true, commodities:true,
+  alerts:true, quickactions:true, today:true, till:true, commodities:true,
   inventory:true, staff:true, activity:true, books:true
 };
 
@@ -5943,7 +5944,7 @@ function openPendingApprovalsModal(){
 // are all identical to the previous render — cuts redundant work on rapid saves.
 let _renderCache = { key: null };
 function _renderCacheKey() {
-  return TAB+'|'+(DATA._v||0)+'|'+JSON.stringify(PERIOD)+'|'+JSON.stringify(DATE_RANGE)+'|'+STAB+'|'+MTAB+'|'+GTAB+'|'+CTAB+'|'+BTAB+'|'+CCOM+'|'+SETTINGS_VIEW+'|'+STAFF_LOG_TASK_FILTER+'|'+STAFF_LIST_ROLE_FILTER;
+  return TAB+'|'+(DATA._v||0)+'|'+JSON.stringify(PERIOD)+'|'+JSON.stringify(DATE_RANGE)+'|'+STAB+'|'+MTAB+'|'+GTAB+'|'+CTAB+'|'+BTAB+'|'+CCOM+'|'+SETTINGS_VIEW+'|'+STAFF_LOG_TASK_FILTER+'|'+STAFF_LIST_ROLE_FILTER+'|'+(_shiftSig||'');
 }
 
 // ── ONLINE ──────────────────────────────────────────────────────────────────
@@ -8218,6 +8219,60 @@ function renderStaffDash(){
     </div>`;
 }
 
+// ── TILL DASHBOARD (till roadmap step 22) ───────────────────────────────────────────────────────────────────────────
+// A management-only card on the Dashboard (Admin and Manager; Staff and Cashier never get this page): today's till sales net of voids and
+// refunds, the shifts open right now and what each drawer should hold, today's closed shifts with their cash variance, the low-stock list and
+// the Open Till button. Nothing is stored: every figure is summed from the same ledgers as the daily close-out (sales, returns, shifts), so
+// the two cannot disagree. While it shows it replaces the Quick Actions "Open Till" button and the LOW STOCK lines of the alert block, so
+// nothing is listed twice. Pro-gated like the till itself (pos_till). Settings > Dashboard Widgets > "Till Today" switches it off.
+function _tillDashOn(){return !!USER&&(isAdmin()||isManagerRole())&&!window.PLAY_MODE&&hasFeature('pos_till')&&isDashWidgetOn('till');}
+function _lowStockList(){
+  const out=[];
+  (DATA.inventoryItems||[]).forEach(it=>{
+    const name=_invItemName(it),min=_invItemMin(it);
+    if(!name||min<=0)return;
+    const bal=genStock(name).bal;
+    if(bal<=min)out.push({name,bal,min});
+  });
+  return out.sort((a,b)=>(a.bal/a.min)-(b.bal/b.min)||a.name.localeCompare(b.name));   // emptiest first
+}
+function _renderTillDash(){
+  const dateStr=today(),lab='font-size:15px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin:12px 0 2px';
+  const head=`<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px">
+      <div style="font-family:var(--fh);font-size:22px;font-weight:800;color:var(--white)">🧾 Till Today</div>
+      <button onclick="openTill()" style="background:var(--surface);border:1.5px solid var(--green);border-radius:12px;padding:10px 16px;color:var(--green);font-family:var(--fh);font-size:19px;font-weight:700;cursor:pointer;touch-action:manipulation">Open Till</button>
+    </div>`;
+  const wrap=b=>`<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--green);border-radius:16px;padding:14px 16px;margin-bottom:14px">${head}${b}</div>`;
+  let D=null;
+  try{D=Shifts.dayReport(dateStr,_shiftEv||[],_SALE_LIST||[],_RET_LIST||[]);}catch(e){console.warn('[MDM] till dashboard figures unavailable',e);}
+  if(!D)return wrap('<div style="font-size:17px;color:var(--muted)">Till figures are not available on this device yet.</div>');
+  const rt=D.returns||{count:0,total:0},bm=D.byMethod||{};
+  const taken=[['Cash',bm.cash],['MTN',bm.mtn],['Airtel',bm.airtel],['Card',bm.card],['On credit',D.credit]].filter(x=>Number(x[1])>0).map(x=>x[0]+' '+zm(x[1])).join(' · ');
+  const box=(c,l,v,s)=>`<div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--${c});border-radius:12px;padding:12px"><div style="font-size:15px;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:4px">${l}</div><div style="font-family:var(--fh);font-size:27px;font-weight:800;color:var(--${c})">${v}</div><div style="font-size:15px;color:var(--muted)">${s}</div></div>`;
+  const sales=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${box('green','Net sales today',zm(D.netTotal),D.saleCount+' sale'+(D.saleCount!==1?'s':''))}
+      ${box('amber','Voids &amp; refunds',zm(rt.total),rt.count+' today')}
+    </div>${taken?`<div style="font-size:16px;color:var(--muted);margin-top:8px;line-height:1.6">Taken: ${taken}</div>`:''}`;
+  // shifts open right now (any day), with what each drawer should hold
+  const openNow=Shifts.shiftsOf(_shiftEv||[]).filter(x=>!x.close);
+  const openH=openNow.length?openNow.map(x=>{
+    const o=x.open,s=Shifts.summary(o,_SALE_LIST||[],{out:Returns.cashOutOf(o.shiftId,_RET_LIST||[])}),old=o.date<dateStr;
+    return `<div style="padding:9px 0;border-top:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;gap:8px"><span style="font-family:var(--fh);font-size:19px;font-weight:700">${esc(o.till)} · ${esc(o.cashier)}</span><span style="font-size:16px;color:${old?'var(--amber)':'var(--muted)'}">${old?'⚠ ':''}since ${old?esc(fmtDate(o.date))+' ':''}${esc(o.time||'')}</span></div>
+        <div style="font-size:16px;color:var(--muted)">${s.saleCount} sale${s.saleCount!==1?'s':''} · ${zm(s.total)} · drawer should hold <strong style="color:var(--white)">${zm(s.expectedCash)}</strong></div>
+      </div>`;}).join(''):`<div style="font-size:17px;color:var(--muted);padding:6px 0">No shift is open.</div>`;
+  const closed=(D.shifts||[]).filter(r=>r.closed),v=Number(D.shiftVariance)||0;
+  const closedH=closed.length?`<div style="font-size:16px;color:var(--muted);padding-top:6px;border-top:1px solid var(--border)">${closed.length} shift${closed.length!==1?'s':''} closed today · cash <strong style="color:${v<0?'var(--red)':v>0?'var(--amber)':'var(--green)'}">${v===0?'balanced':zm(Math.abs(v))+(v<0?' short':' over')}</strong></div>`:'';
+  // low stock (the one place it is listed while this card shows)
+  const low=_lowStockList(),shown=low.slice(0,8),hasMin=(DATA.inventoryItems||[]).some(it=>_invItemMin(it)>0);
+  const lowH=low.length?shown.map(x=>`<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid var(--border)"><span style="font-size:17px">${esc(x.name)}</span><span style="font-size:17px;white-space:nowrap"><strong style="color:${x.bal<=0?'var(--red)':'var(--amber)'}">${x.bal.toLocaleString()}</strong> <span style="color:var(--muted)">/ min ${x.min.toLocaleString()}</span></span></div>`).join('')
+      +(low.length>shown.length?`<div style="font-size:16px;color:var(--blue);padding-top:6px;cursor:pointer" onclick="showTab('general')">+ ${low.length-shown.length} more · open Stock</div>`:'')
+    :`<div style="font-size:17px;color:var(--muted);padding:6px 0">${hasMin?'All items are above their minimum.':'Set a minimum stock on your items to get low-stock alerts here.'}</div>`;
+  return wrap(sales
+    +`<div style="${lab}">Shifts</div>${openH}${closedH}`
+    +`<div style="${lab}">${low.length?'🔔 ':''}Low stock${low.length?' ('+low.length+')':''}</div>${lowH}`);
+}
+
 function renderDash(){
   // Dashboard uses all commodities aggregated
   const _allCRec=(DATA.commodityReceived||{});
@@ -8251,6 +8306,7 @@ function renderDash(){
   const todayGenIn=approvedArr(DATA.generalInventory).filter(x=>x.date===todayStr).length;
   const todayStaffLogs=approvedArr(DATA.staffLogs).filter(x=>x.date===todayStr).length;
   const _pendingCount=pendingApprovalCount();
+  const _tillCard=_tillDashOn();   // step 22: the Till Today card (it carries the low-stock list and the Open Till button)
 
   // ── Warnings ──────────────────────────────────────────────────────────────
   const warnings=[];
@@ -8304,7 +8360,7 @@ function renderDash(){
     const minStock=_invItemMin(invItem);
     if(!itemName||minStock<=0)return;
     const bal=genStock(itemName).bal;
-    if(bal<=minStock){
+    if(bal<=minStock&&!_tillCard){
       warnings.push({icon:'🔔',title:`LOW STOCK — ${itemName}`,msg:`Current balance: <strong style="color:var(--amber)">${bal.toLocaleString()} units</strong> · Minimum threshold: <strong>${minStock.toLocaleString()} units</strong>. Reorder required.`});
     }
   });
@@ -8415,8 +8471,10 @@ function renderDash(){
       <button onclick="showTab('general');setTimeout(()=>openGenRecForm(),80)" class="qa-btn-amber" style="background:var(--surface);border:1.5px solid var(--amber);border-radius:12px;padding:12px 6px;color:var(--amber);font-family:var(--fh);font-size:18px;font-weight:700;cursor:pointer;touch-action:manipulation;display:flex;flex-direction:column;align-items:center;gap:4px"><span style="font-size:27px">📦</span>Receive</button>
       <button onclick="showTab('staff');setTimeout(()=>openClockInForm(),80)" class="qa-btn-blue" style="background:var(--surface);border:1.5px solid var(--blue);border-radius:12px;padding:12px 6px;color:var(--blue);font-family:var(--fh);font-size:18px;font-weight:700;cursor:pointer;touch-action:manipulation;display:flex;flex-direction:column;align-items:center;gap:4px"><span style="font-size:27px">👷</span>Clock In</button>
       <button onclick="openPrintSummary()" class="qa-btn-purple" style="background:var(--surface);border:1.5px solid var(--purple);border-radius:12px;padding:12px 6px;color:var(--purple);font-family:var(--fh);font-size:18px;font-weight:700;cursor:pointer;touch-action:manipulation;display:flex;flex-direction:column;align-items:center;gap:4px"><span style="font-size:27px">🖨️</span>Print Summary</button>
-      ${isStaffRole()?'':`<button onclick="openTill()" class="qa-btn-green play-hide" style="grid-column:1/-1;background:var(--surface);border:1.5px solid var(--green);border-radius:12px;padding:14px 6px;color:var(--green);font-family:var(--fh);font-size:20px;font-weight:700;cursor:pointer;touch-action:manipulation;display:flex;align-items:center;justify-content:center;gap:10px"><span style="font-size:27px">🧾</span>Open Till${hasFeature('pos_till')?'':' 🔒'}</button>`}
+      ${isStaffRole()||_tillCard?'':`<button onclick="openTill()" class="qa-btn-green play-hide" style="grid-column:1/-1;background:var(--surface);border:1.5px solid var(--green);border-radius:12px;padding:14px 6px;color:var(--green);font-family:var(--fh);font-size:20px;font-weight:700;cursor:pointer;touch-action:manipulation;display:flex;align-items:center;justify-content:center;gap:10px"><span style="font-size:27px">🧾</span>Open Till${hasFeature('pos_till')?'':' 🔒'}</button>`}
     </div>` : ''}
+
+    ${_tillCard?_renderTillDash():''}
 
     <!-- Today Snapshot -->
     ${isDashWidgetOn('today') ? `
@@ -8628,7 +8686,7 @@ function renderGeneral(){
         <button class="stab${GTAB==='itemnames'?' act':''}" id="gtab-itemnames">📋 Item Names</button>
       `)}
       ${_stg('Sales',`
-        <button class="stab${GTAB==='sales'?' act':''}" id="gtab-sales">🛒 Sales${hasFeature('daily_sales')?'':' 🔒'}</button>
+        <button class="stab${GTAB==='sales'?' act':''}" id="gtab-sales">📜 Sales History${hasFeature('daily_sales')?'':' 🔒'}</button>
         <button class="stab play-hide" id="gtab-till" onclick="openTill()">🧾 Till${hasFeature('pos_till')?'':' 🔒'}</button>
       `)}
       ${_stg('Finance',`
@@ -8977,61 +9035,83 @@ function renderGenIssued(){
     </table></div></div>`;
 }
 
-// ── DAILY SALES TAB ──────────────────────────────────────────────────────────
+// ── SALES HISTORY TAB (till roadmap step 23; was "Sales", feature key still daily_sales) ─────────────────────────
+// The back-office view of sales: today's figures, the daily close-out (Z report), receipts and the period summary. Selling happens at the Till
+// (pos.html). Since the follow-up to step 23 it reads the ledgers (_SALE_LIST, _RET_LIST) directly, one row per receipt and per void/refund, over the period
+// chosen above the tab, plus the main app's own priced Issue Item rows. It no longer touches the overlay rows.
 function renderGenSales(){
-  if(!hasFeature('daily_sales')){ return showUpgradePrompt('daily_sales'),`<div style="text-align:center;padding:48px 16px"><div style="font-size:40px;margin-bottom:12px">🔒</div><div style="font-size:19px;font-weight:700;color:var(--white);margin-bottom:8px">Sales — Pro Feature</div><div style="font-size:16px;color:var(--muted);margin-bottom:20px">Upgrade to Pro to access the Daily Sales tab, close-out, receipt printing and sales history.</div><button class="btn bg" onclick="showUpgradePrompt('daily_sales')">🔓 Upgrade to Pro</button></div>`; }
+  if(!hasFeature('daily_sales')){ return showUpgradePrompt('daily_sales'),`<div style="text-align:center;padding:48px 16px"><div style="font-size:40px;margin-bottom:12px">🔒</div><div style="font-size:19px;font-weight:700;color:var(--white);margin-bottom:8px">Sales History — Pro Feature</div><div style="font-size:16px;color:var(--muted);margin-bottom:20px">Upgrade to Pro to access Sales History: daily close-out, receipt printing and sales reports.</div><button class="btn bg" onclick="showUpgradePrompt('daily_sales')">🔓 Upgrade to Pro</button></div>`; }
   const todayStr=today();
-  const allSales=DATA.generalIssued;
-  const todaySales=allSales.filter(x=>x.date===todayStr);
-  const periodSales=filterPeriod(allSales, PERIOD.general, 'date', 'general');
-
-  // Today's figures
-  const todayCash   = todaySales.filter(x=>(x.creditStatus||'paid')==='paid').reduce((a,b)=>a+Number(b.issued||0)*Number(b.sellingPrice||0),0);
-  const todayCredit = todaySales.filter(x=>x.creditStatus==='credit').reduce((a,b)=>a+Number(b.issued||0)*Number(b.sellingPrice||0),0);
-  const todayPartial= todaySales.filter(x=>x.creditStatus==='partial').reduce((a,b)=>a+(Number(b.issued||0)*Number(b.sellingPrice||0)-Number(b.partialPaid||0)),0);
-  const todayRevenue= todaySales.reduce((a,b)=>a+Number(b.issued||0)*Number(b.sellingPrice||0),0);
-  const todayTxCount= todaySales.length;
-  const todayOutstanding= todayCredit+todayPartial;
-
-  // Top selling item today
-  const todayByItem={};
-  todaySales.forEach(x=>{ todayByItem[x.itemName]=(todayByItem[x.itemName]||0)+Number(x.issued||0)*Number(x.sellingPrice||0); });
-  const topItem=Object.entries(todayByItem).sort((a,b)=>b[1]-a[1])[0];
+  // Sales History reads the LEDGERS directly (till roadmap step 23): one document per till receipt (sales.js) and per void/refund (returns.js),
+  // plus the main app's own Issue Item rows that carry a selling price (they are not in the ledger). The overlay rows (_sale) are not used here.
+  const docs=[];
+  (_SALE_LIST||[]).forEach(s=>{if(s)docs.push({k:'sale',id:s.id,date:s.date,time:s.time||'',at:s.at||0,r:s});});
+  (_RET_LIST||[]).forEach(r=>{if(r)docs.push({k:'ret',id:r.id,date:r.date,time:r.time||'',at:r.at||0,r});});
+  (DATA.generalIssued||[]).forEach(x=>{if(x&&!x._sale&&Number(x.sellingPrice||0)>0&&Number(x.issued||0)>0)docs.push({k:'app',id:x.id,date:x.date,time:x.time||'',at:0,r:x});});
+  const _n=v=>Number(v)||0;
+  // revenue = sales less voids/refunds; paid = money taken less money handed back; credit = still owed (a return first clears the customer's balance)
+  const sumDocs=list=>{
+    let rev=0,paid=0,credit=0,n=0;const byItem={};
+    list.forEach(d=>{const r=d.r;
+      if(d.k==='sale'){n++;rev+=_n(r.total);paid+=_n(r.amountPaid);credit+=_n(r.balance);(r.lines||[]).forEach(l=>{byItem[l.name]=(byItem[l.name]||0)+_n(l.total);});}
+      else if(d.k==='ret'){rev-=_n(r.total);paid-=_n(r.refunded);credit-=_n(r.creditApplied);(r.lines||[]).forEach(l=>{byItem[l.name]=(byItem[l.name]||0)-_n(l.total);});}
+      else{n++;const v=_n(r.issued)*_n(r.sellingPrice),cs=r.creditStatus||'paid',p=cs==='paid'?v:cs==='partial'?_n(r.partialPaid):0;
+        rev+=v;paid+=p;credit+=v-p;byItem[r.itemName]=(byItem[r.itemName]||0)+v;}
+    });
+    return{rev,paid,credit,n,top:Object.entries(byItem).sort((a,b)=>b[1]-a[1])[0]};
+  };
+  const todaySales=docs.filter(d=>d.date===todayStr);
+  const T=sumDocs(todaySales);
+  const todayCash=T.paid,todayRevenue=T.rev,todayTxCount=T.n,todayOutstanding=Math.max(0,T.credit),topItem=T.top;
 
   // Close-out records
   const closeOuts=DATA.dailyCloseOuts||[];
   const todayClose=closeOuts.find(x=>x.date===todayStr);
 
-  // Period figures
-  const periodRevenue = periodSales.reduce((a,b)=>a+Number(b.issued||0)*Number(b.sellingPrice||0),0);
-  const periodCash    = periodSales.filter(x=>(x.creditStatus||'paid')==='paid').reduce((a,b)=>a+Number(b.issued||0)*Number(b.sellingPrice||0),0);
-  const periodCredit  = periodSales.filter(x=>x.creditStatus==='credit'||x.creditStatus==='partial').reduce((a,b)=>a+Number(b.issued||0)*Number(b.sellingPrice||0),0);
-
-  // Today's sales rows
-  const sorted=todaySales.slice().sort((a,b)=>(b.time||'').localeCompare(a.time||''));
-  const rows=sorted.map(item=>{
-    const sp=Number(item.sellingPrice||0);
-    const val=sp*Number(item.issued||0);
-    const cs=item.creditStatus||'paid';
-    const chip=item._return?`<span class="bdg ba2" style="font-size:14px">\u21A9 ${item.returnKind==='void'?'VOID':'REFUND'}</span>`:cs==='paid'?`<span class="bdg bg2" style="font-size:14px">PAID</span>`
-      :cs==='partial'?`<span class="bdg ba2" style="font-size:14px">PARTIAL</span>`
-      :`<span class="bdg br2" style="font-size:14px">CREDIT</span>`;
-    const editable=isWithin24h(item);
-    const custName=item.customerName||'';
-    return`<tr>
-      <td style="color:var(--muted);font-size:16px;white-space:nowrap">${item.time||'—'}</td>
-      <td style="font-weight:600">${esc(item.itemName)}${item._sale?` <span style="font-size:11px;font-weight:700;color:var(--blue);border:1px solid var(--blue);border-radius:6px;padding:1px 5px;white-space:nowrap">${item._return?'\u21A9':'\u{1F9FE}'} ${esc(item.receiptNo)}</span>`:''}</td>
-      <td style="text-align:right;color:var(--amber);font-weight:700">${Number(item.issued||0).toLocaleString()}</td>
-      <td style="text-align:right">${sp>0?zm(sp):'—'}</td>
-      <td style="text-align:right;color:${val<0?'var(--amber)':'var(--green)'};font-weight:700">${val!==0?zm(val):'—'}</td>
-      <td>${chip}${cs==='partial'&&item.partialPaid>0?`<span style="font-size:14px;color:var(--muted);margin-left:4px">${zm(item.partialPaid)} pd</span>`:''}</td>
-      <td style="font-size:15px;color:var(--blue)">${custName?esc(custName):'<span style="color:var(--muted)">—</span>'}</td>
+  // The chosen period (the buttons above the tab): figures and the list of transactions
+  const periodDocs=filterPeriod(docs,PERIOD.general,'date','general');
+  const P=sumDocs(periodDocs);
+  const periodRevenue=P.rev,periodCash=P.paid,periodCredit=Math.max(0,P.credit);
+  const periodLabel={daily:'Today',weekly:'This week',monthly:'This month',yearly:'This year',all:'All time',range:'Date range'}[PERIOD.general]||'';
+  const sorted=periodDocs.slice().sort((a,b)=>(b.date+' '+b.time).localeCompare(a.date+' '+a.time)||(b.at-a.at));
+  const shown=sorted.slice(0,150);
+  const chipOf=cs=>cs==='paid'?`<span class="bdg bg2" style="font-size:14px">PAID</span>`:cs==='partial'?`<span class="bdg ba2" style="font-size:14px">PARTIAL</span>`:`<span class="bdg br2" style="font-size:14px">CREDIT</span>`;
+  const rcpt=(t,no)=>` <span style="font-size:11px;font-weight:700;color:var(--${t==='ret'?'amber':'blue'});border:1px solid var(--${t==='ret'?'amber':'blue'});border-radius:6px;padding:1px 5px;white-space:nowrap">${t==='ret'?'\u21A9':'\u{1F9FE}'} ${esc(no)}</span>`;
+  const whenOf=d=>(d.date===todayStr?'':esc(fmtDate(d.date))+' ')+esc(d.time||'—');
+  const rows=shown.map(d=>{
+    const r=d.r,td='<td style="color:var(--muted);font-size:16px;white-space:nowrap">'+whenOf(d)+'</td>';
+    if(d.k==='sale'){
+      const ls=r.lines||[],first=ls[0]||{name:'(no items)'},how=(r.payments||[]).filter(p=>_n(p.amount)>0).map(p=>esc(p.label||p.method)).join(', ');
+      return`<tr>${td}
+        <td style="font-weight:600">${esc(first.name)}${ls.length>1?` <span style="color:var(--muted);font-weight:400">+${ls.length-1} more</span>`:''}${rcpt('sale',r.receiptNo)}</td>
+        <td style="text-align:right;color:var(--amber);font-weight:700">${_n(r.qtyTotal).toLocaleString()}</td><td style="text-align:right">—</td>
+        <td style="text-align:right;color:var(--green);font-weight:700">${zm(r.total)}</td>
+        <td>${chipOf(r.creditStatus||'paid')}${how?`<span style="font-size:14px;color:var(--muted);margin-left:4px">${how}</span>`:''}${r.creditStatus==='partial'&&_n(r.balance)>0?`<span style="font-size:14px;color:var(--muted);margin-left:4px">${zm(r.balance)} due</span>`:''}</td>
+        <td style="font-size:15px;color:var(--blue)">${r.customerName?esc(r.customerName):'<span style="color:var(--muted)">—</span>'}</td>
+        <td style="white-space:nowrap"><button class="editbtn" onclick="_printSaleBasket('${esc(r.id)}')" title="Print receipt">🧾</button></td></tr>`;
+    }
+    if(d.k==='ret'){
+      const q=(r.lines||[]).reduce((a,l)=>a+_n(l.qty),0);
+      return`<tr>${td}
+        <td style="font-weight:600">${r.kind==='void'?'Void':'Refund'} of ${esc(r.saleId)}${rcpt('ret',r.id)}<div style="font-size:14px;color:var(--muted);font-weight:400">${esc(r.reason||'')}</div></td>
+        <td style="text-align:right;color:var(--amber);font-weight:700">-${q.toLocaleString()}</td><td style="text-align:right">—</td>
+        <td style="text-align:right;color:var(--amber);font-weight:700">-${zm(r.total)}</td>
+        <td><span class="bdg ba2" style="font-size:14px">\u21A9 ${r.kind==='void'?'VOID':'REFUND'}</span></td>
+        <td style="font-size:15px;color:var(--blue)">${r.customerName?esc(r.customerName):'<span style="color:var(--muted)">—</span>'}</td>
+        <td style="white-space:nowrap"><button class="editbtn" onclick="_printReturn('${esc(r.id)}')" title="Print slip">🧾</button></td></tr>`;
+    }
+    const sp=_n(r.sellingPrice),val=sp*_n(r.issued),cs=r.creditStatus||'paid',editable=isWithin24h(r);   // the main app's own sale: as before
+    return`<tr>${td}
+      <td style="font-weight:600">${esc(r.itemName)}</td>
+      <td style="text-align:right;color:var(--amber);font-weight:700">${_n(r.issued).toLocaleString()}</td><td style="text-align:right">${zm(sp)}</td>
+      <td style="text-align:right;color:var(--green);font-weight:700">${zm(val)}</td>
+      <td>${chipOf(cs)}${cs==='partial'&&r.partialPaid>0?`<span style="font-size:14px;color:var(--muted);margin-left:4px">${zm(r.partialPaid)} pd</span>`:''}</td>
+      <td style="font-size:15px;color:var(--blue)">${r.customerName?esc(r.customerName):'<span style="color:var(--muted)">—</span>'}</td>
       <td style="white-space:nowrap">
-        <button class="editbtn" onclick="printSaleReceipt('${item.id}')" title="Print receipt">🧾</button>
-        ${USER.role==='admin'&&!item._sale?`<button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`openEditGenIss('${item.id}')`:''}" title="${editable?'Edit':'Edit window closed'}">✏️</button>
-        <button class="delbtn" onclick="delGenIss('${item.id}')">🗑</button>`:''}
-      </td>
-    </tr>`;
+        <button class="editbtn" onclick="printSaleReceipt('${r.id}')" title="Print receipt">🧾</button>
+        ${USER.role==='admin'?`<button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`openEditGenIss('${r.id}')`:''}" title="${editable?'Edit':'Edit window closed'}">✏️</button>
+        <button class="delbtn" onclick="delGenIss('${r.id}')">🗑</button>`:''}
+      </td></tr>`;
   }).join('');
 
   // Close-out card
@@ -9066,6 +9146,9 @@ function renderGenSales(){
     </button>`:''}`;
 
   return`
+    <!-- Back-office note (till roadmap step 23) -->
+    <div style="font-size:16px;color:var(--muted);line-height:1.6;margin-bottom:12px">📜 <strong style="color:var(--white)">Sales History</strong> is the back office: receipts, the daily close-out and reports.<span class="play-hide"> Sales are rung up at the Till; take one back there with a void or refund.</span></div>
+
     <!-- Today Summary Card -->
     <div style="background:linear-gradient(135deg,var(--surface),var(--surface2));border:1.5px solid var(--border);border-radius:14px;padding:14px 16px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
@@ -9075,7 +9158,7 @@ function renderGenSales(){
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
         <div class="sbox" style="border-radius:10px">
           <div class="sv" style="font-size:22px;color:var(--green)">${zm(todayCash)}</div>
-          <div class="sl">Cash Sales</div>
+          <div class="sl">Paid Sales</div>
         </div>
         <div class="sbox" style="border-radius:10px">
           <div class="sv" style="font-size:22px;color:${todayOutstanding>0?'var(--red)':'var(--muted)'}">${zm(todayOutstanding)}</div>
@@ -9105,21 +9188,21 @@ function renderGenSales(){
       + New Sale
     </button>
 
-    <!-- Today's Transactions -->
-    <div style="font-family:var(--fh);font-size:17px;font-weight:700;margin-bottom:8px;color:var(--muted)">TODAY'S TRANSACTIONS</div>
-    ${todaySales.length===0
-      ?`<div style="text-align:center;padding:28px 0;color:var(--muted);font-size:17px">No sales recorded today yet.<br><span style="font-size:28px">🛒</span></div>`
+    <!-- Transactions in the chosen period -->
+    <div style="font-family:var(--fh);font-size:17px;font-weight:700;margin-bottom:8px;color:var(--muted)">TRANSACTIONS · ${periodLabel.toUpperCase()}</div>
+    ${sorted.length===0
+      ?`<div style="text-align:center;padding:28px 0;color:var(--muted);font-size:17px">No sales recorded in this period.<br><span style="font-size:28px">🛒</span></div>`
       :`<div class="card" style="padding:0"><div class="tw"><table>
-        <thead><tr><th>Time</th><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Value</th><th>Payment</th><th>Customer</th><th></th></tr></thead>
+        <thead><tr><th>When</th><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Price</th><th style="text-align:right">Value</th><th>Payment</th><th>Customer</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
-      </table></div></div>`}
+      </table></div></div>${sorted.length>shown.length?`<div style="font-size:16px;color:var(--muted);text-align:center;padding:8px">Showing the newest ${shown.length} of ${sorted.length}. Pick a shorter period to see the rest.</div>`:''}`}
 
     <!-- Period Summary -->
     ${periodRevenue>0?`
     <div style="margin-top:16px;font-family:var(--fh);font-size:17px;font-weight:700;margin-bottom:8px;color:var(--muted)">PERIOD SUMMARY</div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
       <div class="sbox" style="border-radius:10px"><div class="sv" style="font-size:18px;color:var(--green)">${zm(periodRevenue)}</div><div class="sl">Revenue</div></div>
-      <div class="sbox" style="border-radius:10px"><div class="sv" style="font-size:18px">${zm(periodCash)}</div><div class="sl">Cash</div></div>
+      <div class="sbox" style="border-radius:10px"><div class="sv" style="font-size:18px">${zm(periodCash)}</div><div class="sl">Paid</div></div>
       <div class="sbox" style="border-radius:10px"><div class="sv" style="font-size:18px;color:${periodCredit>0?'var(--amber)':'var(--muted)'}">${zm(periodCredit)}</div><div class="sl">Credit</div></div>
     </div>`:''}
   `;
@@ -9794,24 +9877,36 @@ async function salesSync(){
 // The till (pos.html) opens and closes shifts (shifts.js: IndexedDB "mdm_shifts" + depots/<depot>/shifts and shiftCloses). The main
 // app only READS them, for the day's Z report in the daily close-out. Like the sales ledger they never touch the DATA blob.
 // var, not let, for the same early-call reason as _salesLedger above.
-var _shiftLedger=null,_shiftEv=[],_shiftBusy=false;
+var _shiftLedger=null,_shiftEv=[],_shiftBusy=false,_shiftSig=null;
 function _shifts(){return _shiftLedger||(_shiftLedger=Shifts.create({depotKey:()=>DATA&&DATA.installId,opts:{dateOf:t=>new Date(t).toISOString().slice(0,10)},adapter:Shifts.idbAdapter()}));}
+// true when the records changed (shift records are append-only: an open or a close always changes the count)
 async function shiftsReload(){
   try{
-    if(!DATA||!DATA.installId)return;
+    if(!DATA||!DATA.installId)return false;
     const depot=DATA.installId,list=await _shifts().all();
-    if(depot===DATA.installId)_shiftEv=list;
-  }catch(e){console.warn('[MDM] shift records unavailable',e);}
+    if(depot!==DATA.installId)return false;
+    _shiftEv=list;
+    const sig=depot+'|'+list.length;
+    if(sig===_shiftSig)return false;
+    _shiftSig=sig;return true;
+  }catch(e){console.warn('[MDM] shift records unavailable',e);return false;}
+}
+async function shiftsRefresh(){                                     // step 22: the dashboard shows the open shifts, so it redraws when they change
+  if(await shiftsReload()){
+    const ovl=document.getElementById('modal-ovl');
+    if(TAB==='dashboard'&&!(ovl&&ovl.style.display==='flex'))render();
+  }
 }
 async function shiftsSync(){
-  if(_shiftBusy||!navigator.onLine||!USER||!DATA||!DATA.installId)return;
+  if(_shiftBusy||!USER||!DATA||!DATA.installId)return;
+  if(!navigator.onLine){await shiftsRefresh();return;}               // offline: still read this device's own shift records
   _shiftBusy=true;
   try{
     const L=_shifts(),C=_salesCloud();
     try{await L.push(C);}catch(e){console.warn('[MDM] shift upload failed',e);}
     try{await L.pull(C);}catch(e){console.warn('[MDM] shift download failed',e);}
   }finally{_shiftBusy=false;}
-  await shiftsReload();
+  await shiftsRefresh();
 }
 // ── ONE stock formula (roadmap step 10) ──────────────────────────────────────────────────────────────────────────
 //     stock = received - issued - sold + returns        no stored counters: every figure is summed from records
@@ -20639,6 +20734,7 @@ function _renderDashboardWidgetsCard(){
         {id:'alerts',        icon:'⚠️', label:'Alerts & Warnings'},
         {id:'quickactions',  icon:'⚡', label:'Quick Actions'},
         {id:'today',         icon:'📅', label:'Today Snapshot'},
+        {id:'till',          icon:'🧾', label:'Till Today (sales, shifts, low stock)'},
         {id:'commodities',   icon:'📦', label:'Commodities'},
         {id:'inventory',     icon:'🗄️', label:'Inventory Balances'},
         {id:'staff',         icon:'👷', label:'Staff Summary'},
@@ -21270,6 +21366,7 @@ function _renderAdminSettings(){
         {id:'alerts',        icon:'⚠️', label:'Alerts & Warnings'},
         {id:'quickactions',  icon:'⚡', label:'Quick Actions'},
         {id:'today',         icon:'📅', label:'Today Snapshot'},
+        {id:'till',          icon:'🧾', label:'Till Today (sales, shifts, low stock)'},
         {id:'commodities',   icon:'📦', label:'Commodities'},
         {id:'inventory',     icon:'🗄️', label:'Inventory Balances'},
         {id:'staff',         icon:'👷', label:'Staff Summary'},
