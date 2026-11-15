@@ -25,7 +25,23 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.64 (2026-11-15) — Till roadmap step 25: promotions (sales.js + shifts.js + pos.html + index.html + database_rules.json + sw.js).
+// Current version: v0.3.65 (2026-11-15) — Till roadmap step 26: multiple units, each / pack / carton (sales.js + returns.js + shifts.js + pos.html + index.html + database_rules.json + sw.js).
+//   - Item details (Manage Inventory Items): OTHER UNITS, up to 3 per item: name, contains (how many of the item's base UNIT), barcode (optional), price (optional; blank = selling price x contains).
+//     Saved as item.units. Stock, receiving, issuing, stock counts and the Price List stay in the BASE unit. A barcode, SKU or unit barcode must belong to ONE item and ONE unit: the editor,
+//     the CSV import and the till all check it (the till refuses an ambiguous scan, as before).
+//   - Till: scanning a pack or carton barcode adds that unit; a line that has other units shows a unit picker (changing it re-prices the line and merges it into a line already in that unit);
+//     the same item in two units is two lines; the tile lists the other units; "only N in stock" counts base units across all of an item's lines; offers are worked on the base-unit
+//     equivalent of a line; held baskets and restored carts re-price each line from its own unit (a unit the item no longer has keeps its stored price and is named in the notes).
+//   - Record: a line sold in another unit carries factor + base (additive; absent for the base unit and for every sale before this version). qty, price, total, discount and offers stay in the
+//     SOLD unit. Stock (stockBook, soldById), issuedRows (rows for the main app's reports: in BASE units, with soldQty / soldUnit / soldFactor for display) and returns (Returns.forStock)
+//     use qty x factor. A refund or void line copies factor/base from its sale line and must be in the same unit. X and Z item lists keep one row per unit. Commodities are not sold in units.
+//   - database_rules.json MUST BE PUBLISHED BEFORE the phones update: sale and return lines accept factor (up to 100000) and base. Until then a sale in a pack or carton is refused by the cloud and
+//     waits in the outbox; sales in the base unit upload as before. ALL TILLS MUST BE UPDATED before units are used: a phone still on the old sales.js would count a carton as one unit of stock.
+//   - scripts/till/ (nightly check) needs the new sales.js, returns.js and shifts.js beside till_verify.js, which itself is unchanged. New Node tests: test_units.js (record, stock, returns, reports,
+//     nightly check), test_pos_units.js (the till's unit code cut out of pos.html), test_item_units.js (the editor's save cut out of index.html).
+//   - Not covered yet: the CSV import / export has no unit columns; Price List edits the base price only (a unit's own price is set in item details); price tiers are step 27.
+//   Files: sales.js + returns.js + shifts.js + pos.html + index.html (item details, SW_VERSION) + database_rules.json + sw.js. gate.js and till_verify.js are unchanged.
+// Previous: v0.3.64 (2026-11-15) — Till roadmap step 25: promotions (sales.js + shifts.js + pos.html + index.html + database_rules.json + sw.js).
 //   - Settings > Promotions (Admin): offers the till gives BY ITSELF, so the cashier does nothing. Four kinds: a percentage off; a special price per unit; N for a price
 //     (3 for K20); buy N get M free. Each covers chosen items (stock items and commodities, by id) and/or whole categories, between two dates (both days included, the shop's
 //     own calendar), on chosen weekdays; percentage and special price can need a minimum quantity. An offer can be switched off (kept) or deleted. They are DATA.promotions
@@ -2213,7 +2229,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.64';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.65';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

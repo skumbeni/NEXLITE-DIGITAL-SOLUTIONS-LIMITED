@@ -260,8 +260,8 @@ const Shifts = (function () {
   function itemsOf(sales) {
     const m = new Map();
     (sales || []).forEach(s => { if (s) arr(s.lines).forEach(l => {
-      const k = String(l.itemId);
-      const x = m.get(k) || { itemId: k, name: String(l.name || ''), unit: String(l.unit || ''), qty: 0, c: 0 };
+      const k = String(l.itemId) + (Number(l.factor) > 0 && Number(l.factor) !== 1 ? '|' + String(l.unit || '') : '');   // step 26: cartons and singles are different rows (their quantities cannot be added)
+      const x = m.get(k) || { itemId: String(l.itemId), name: String(l.name || ''), unit: String(l.unit || ''), qty: 0, c: 0 };
       x.qty = Math.round((x.qty + (Number(l.qty) || 0)) * 1000) / 1000;
       x.c += toC(l.total);
       m.set(k, x);

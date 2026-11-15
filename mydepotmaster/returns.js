@@ -60,6 +60,7 @@ const Returns = (function () {
   const MAX_LINES = 200, MAX_REFUNDS = 20;
   const PAGE = 300, MAX_PAGES = 40, OVERLAP_MS = 60000;
   const QTY_EPS = 0.0005;
+  const FACTOR_MAX = 100000;                                // step 26: same limit as sales.js
 
   const isNum = x => typeof x === 'number' && isFinite(x);
   const r2 = n => Math.round(n * 100) / 100;
@@ -68,6 +69,10 @@ const Returns = (function () {
   const str = (x, n) => (x == null ? '' : String(x)).slice(0, n);
   function err(code, msg) { const e = new Error(msg || code); e.code = code; return e; }
   const arr = x => Array.isArray(x) ? x : (x && typeof x === 'object' ? Object.keys(x).sort((a, b) => a - b).map(k => x[k]) : []);
+  // Step 26 (multiple units): a line sold in a pack or carton carries `factor` (base units in one) and `base` (the base unit's name), copied from the sale line.
+  // qty stays in the sold unit; what goes back on the shelf is baseQty(line) = qty x factor. Same two helpers as sales.js.
+  const fOf = l => (l && isNum(l.factor) && l.factor > 0) ? l.factor : 1;
+  const baseQty = l => { const f = fOf(l), q = Number(l && l.qty) || 0; return f === 1 ? q : r3(q * f); };
   const zero = () => { const o = {}; METHODS.forEach(m => { o[m] = 0; }); return o; };
 
   // 'K7F2-000125' (the number the till's counter hands out) -> 'K7F2-R000125'
@@ -93,6 +98,8 @@ const Returns = (function () {
         };
         const d = Number(l.discount);
         if (isNum(d) && d > 0) o.discount = d;
+        const fc = Number(l.factor);
+        if (o.kind === 'item' && isNum(fc) && fc > 0 && fc !== 1) { o.factor = fc; o.base = str(l.base, 40); }
         return o;
       }),
       lineCount: Number(b.lineCount), qtyTotal: Number(b.qtyTotal), total: Number(b.total),
@@ -135,6 +142,11 @@ const Returns = (function () {
       if ((l.kind === 'commodity') !== /^com:./.test(l.itemId)) return 'item kind does not match its id';
       if (typeof l.name !== 'string' || !l.name || l.name.length > 200) return 'bad item name';
       if (typeof l.restock !== 'boolean') return 'bad restock flag';
+      if (l.factor !== undefined || l.base !== undefined) {
+        if (l.kind !== 'item') return 'only stock items are sold in several units';
+        if (!isNum(l.factor) || !(l.factor > 0) || l.factor > FACTOR_MAX || Math.abs(l.factor * 1000 - Math.round(l.factor * 1000)) > 1e-6) return 'bad unit size';
+        if (typeof l.base !== 'string' || !l.base || l.base.length > 40) return 'bad base unit';
+      }
       if (!isNum(l.qty) || !(l.qty > 0) || !isNum(l.price) || l.price < 0 || !isNum(l.total) || l.total < 0) return 'bad line amounts';
       const dsc = l.discount === undefined ? 0 : l.discount;
       if (!isNum(dsc) || dsc < 0 || Math.abs(dsc * 100 - Math.round(dsc * 100)) > 1e-6) return 'bad line discount';
@@ -223,6 +235,7 @@ const Returns = (function () {
     else c = Math.min(grossC, row.valueC);
     const o = { lineNo: row.lineNo, itemId: L.itemId, kind: L.kind, name: L.name, unit: L.unit || '', qty: q, price: L.price, total: c / 100, restock: restock !== false };
     if (grossC - c > 0) o.discount = (grossC - c) / 100;
+    if (fOf(L) !== 1) { o.factor = L.factor; o.base = L.base; }                       // step 26: a pack goes back as a pack
     return o;
   }
 
@@ -278,6 +291,7 @@ const Returns = (function () {
       const row = rem.lines[l.lineNo], L = sale.lines[l.lineNo];
       if (!row || !L || row.itemId !== l.itemId || row.kind !== l.kind) return 'a returned line does not match the sale';
       if (l.price !== L.price) return 'a returned line has a different price from the sale';
+      if (fOf(l) !== fOf(L)) return 'a returned line is in a different unit from the sale';
       if (l.qty > row.qty + QTY_EPS) return 'more of ' + l.name + ' than was sold';
       if (toC(l.total) > row.valueC) return 'more money for ' + l.name + ' than it was worth';
     }
@@ -321,7 +335,7 @@ const Returns = (function () {
   // Restocked lines, shaped for Sales.stockBook's `returns` ({itemId, qty, date, time}).
   function forStock(returns) {
     const out = [];
-    arr(returns).forEach(r => { if (r) arr(r.lines).forEach(l => { if (l && l.restock !== false) out.push({ itemId: l.itemId, qty: Number(l.qty) || 0, date: r.date, time: r.time }); }); });
+    arr(returns).forEach(r => { if (r) arr(r.lines).forEach(l => { if (l && l.restock !== false) out.push({ itemId: l.itemId, qty: baseQty(l), date: r.date, time: r.time }); }); });
     return out;
   }
   // Cash handed back out of a shift's drawer (money).

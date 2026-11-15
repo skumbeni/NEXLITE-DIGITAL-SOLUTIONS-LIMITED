@@ -42,6 +42,11 @@
  *   promotions still accepts it. A manual (basket) discount is worked on the value AFTER the offers, so the cashier's limit is a share of what the customer would
  *   otherwise pay. discountParts(sale) splits a sale's discount into { promoC, manualC } for reports and the audit log.
  *
+ * MULTIPLE UNITS (roadmap step 26): an item has one base unit and may be sold in others (PACK = 6, CARTON = 24). A line in another unit carries `factor` (base units in
+ *   one of it) and `base` (the base unit's name); qty, price, total and discounts stay in the sold unit, and baseQty(line) = qty x factor is what stock, issuedRows and soldById
+ *   count. Lines without `factor` (the base unit, and every sale before step 26) read exactly as before. unitList(item, basePrice) is the one place that works out which units an
+ *   item is sold in and at what price.
+ *
  * WHAT THE MAIN APP DOES WITH THE LEDGER BESIDES STOCK
  *   issuedRows() turns the sales into rows shaped like generalIssued / commodityIssued rows (flag _sale:true). The
  *   main app overlays them on DATA in memory so reports, close-out and customer balances see till sales, and strips
@@ -71,6 +76,7 @@ const Sales = (function () {
   const OVERLAP_MS = 60000;                              // pull re-reads the last minute, so nothing near the cursor is missed
   const PROMO_BY = 'Promotion';                           // discountBy of a sale whose whole discount came from offers
   const PROMO_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
+  const FACTOR_MAX = 100000;                             // step 26: the most base units one sold unit may hold (a carton of 24, a bag of 50 kg ...)
   const BATCH_NAME = 'TILL SALES';                       // pseudo batch the main app shows for commodity sold at the till
 
   const isNum = x => typeof x === 'number' && isFinite(x);
@@ -81,6 +87,38 @@ const Sales = (function () {
   function err(code, msg) { const e = new Error(msg || code); e.code = code; return e; }
   // Realtime Database hands back an array as {"0":..,"1":..}, and drops an empty one altogether.
   const arr = x => Array.isArray(x) ? x : (x && typeof x === 'object' ? Object.keys(x).sort((a, b) => a - b).map(k => x[k]) : []);
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // MULTIPLE UNITS (roadmap step 26)
+  // ══════════════════════════════════════════════════════════════════════════════
+  // A stock item has ONE base unit (item.unit: PCS, KG ...). Stock is always counted in it. The item may ALSO be sold in bigger (or smaller) units,
+  // e.g. PACK = 6 PCS, CARTON = 24 PCS: item.units = [{ name, factor, barcode, price }], factor = base units in one of that unit, price optional
+  // (blank = base price x factor), barcode optional (a carton has its own). A sale line in such a unit is written in THAT unit and says how big it is:
+  //   { unit:'CARTON', qty:2, price:<per carton>, total, factor:24, base:'PCS' }       2 cartons = 48 PCS off the shelf
+  // `factor` and `base` are absent for a line in the base unit, and for every line written before step 26, so those read exactly as they did.
+  // qty, price, total, discount and the offers stay in the SOLD unit (the receipt, the returns and the money all follow what the customer saw);
+  // only what is counted against STOCK is converted, by baseQty(). Commodities are not sold in several units.
+  const fOf = l => (l && isNum(l.factor) && l.factor > 0) ? l.factor : 1;
+  const baseQty = l => { const f = fOf(l), q = Number(l && l.qty) || 0; return f === 1 ? q : r3(q * f); };
+  // The units an item is sold in: item = { unit, barcode, units:[{name,factor,barcode,price}] }, basePrice = list price per base unit.
+  // -> [{ name, factor, barcode, price, isBase, own }], base unit first. A unit with no name, a repeated name, a factor of 1 or a bad factor is left out.
+  // `own` is true when the unit carries its own price; otherwise the price is basePrice x factor, rounded to the ngwee.
+  function unitList(item, basePrice) {
+    item = item || {};
+    const bp = Number(basePrice) || 0, alts = [], seen = new Set();
+    let baseName = str(item.unit, 40).trim();
+    seen.add(baseName.toUpperCase());
+    arr(item.units).forEach(u => {
+      if (!u) return;
+      const name = str(u.name, 40).trim(), f = Number(u.factor);
+      if (!name || seen.has(name.toUpperCase()) || !isNum(f) || !(f > 0) || f === 1 || f > FACTOR_MAX || Math.abs(f * 1000 - Math.round(f * 1000)) > 1e-6) return;
+      seen.add(name.toUpperCase());
+      const own = isNum(Number(u.price)) && Number(u.price) > 0;
+      alts.push({ name, factor: f, barcode: str(u.barcode, 48), price: own ? r2(Number(u.price)) : r2(bp * f), isBase: false, own });
+    });
+    if (!baseName && alts.length) baseName = 'EACH';
+    return [{ name: baseName, factor: 1, barcode: str(item.barcode, 48), price: r2(bp), isBase: true, own: true }].concat(alts);
+  }
 
   // ══════════════════════════════════════════════════════════════════════════════
   // THE RECORD
@@ -114,6 +152,8 @@ const Sales = (function () {
         };
         const d = Number(l.discount);
         if (isNum(d) && d > 0) o.discount = d;           // absent unless a discount was given on this line
+        const fc = Number(l.factor);
+        if (o.kind === 'item' && isNum(fc) && fc > 0 && fc !== 1) { o.factor = fc; o.base = str(l.base, 40); }   // step 26: absent unless sold in a unit other than the base
         const pd = Number(l.promoDiscount);
         if (isNum(pd) && pd > 0 && l.promoId) { o.promoDiscount = pd; o.promoId = str(l.promoId, 40); o.promoName = str(l.promoName, 60); }   // step 25: the part of o.discount that an offer gave
         return o;
@@ -159,6 +199,11 @@ const Sales = (function () {
       if (l.kind !== 'item' && l.kind !== 'commodity') return 'bad item kind';
       if ((l.kind === 'commodity') !== /^com:./.test(l.itemId)) return 'item kind does not match its id';
       if (typeof l.name !== 'string' || !l.name || l.name.length > 200) return 'bad item name';
+      if (l.factor !== undefined || l.base !== undefined) {   // step 26: a line sold in a pack or carton says how many base units it holds
+        if (l.kind !== 'item') return 'only stock items are sold in several units';
+        if (!isNum(l.factor) || !(l.factor > 0) || l.factor > FACTOR_MAX || Math.abs(l.factor * 1000 - Math.round(l.factor * 1000)) > 1e-6) return 'bad unit size';
+        if (typeof l.base !== 'string' || !l.base || l.base.length > 40) return 'bad base unit';
+      }
       if (!isNum(l.qty) || !(l.qty > 0) || !isNum(l.price) || l.price < 0 || !isNum(l.total) || l.total < 0) return 'bad line amounts';
       const dsc = l.discount === undefined ? 0 : l.discount;
       if (!isNum(dsc) || dsc < 0 || Math.abs(dsc * 100 - Math.round(dsc * 100)) > 1e-6) return 'bad line discount';
@@ -456,6 +501,14 @@ const Sales = (function () {
 
   // Sales -> rows shaped like the main app's own records. gen: general items (generalIssued shape);
   // com: { commodityId: [commodityIssued-shaped rows] }. Every row carries _sale:true and a unique id "<saleId>#<line>".
+  // The general-issue row for one sale or return line. In the base unit it is what it always was. In another unit (step 26) the row is in BASE units
+  // (issued = qty x factor, price per base unit, the base unit's name), so every report that adds up `issued` or issued x price stays right; soldQty /
+  // soldUnit / soldFactor keep what the customer saw, for Sales History to show.
+  function unitRow(l) {
+    const f = fOf(l);
+    if (f === 1) return { itemName: l.name, itemId: l.itemId, sellingPrice: netPrice(l), unit: l.unit };
+    return { itemName: l.name, itemId: l.itemId, sellingPrice: netPrice(l) / f, unit: l.base, soldQty: Number(l.qty), soldUnit: l.unit, soldFactor: f };
+  }
   function issuedRows(sales, returns) {
     const gen = [], com = {};
     const list = (sales || []).slice().sort((a, b) => (a.date + a.time + a.id).localeCompare(b.date + b.time + b.id));
@@ -464,7 +517,7 @@ const Sales = (function () {
       s.lines.forEach((l, i) => {
         const base = {
           id: s.id + '#' + i, _sale: true, saleId: s.id, receiptNo: s.receiptNo, tillId: s.tillId,
-          date: s.date, time: s.time, issued: l.qty, notes: '',
+          date: s.date, time: s.time, issued: baseQty(l), notes: '',
           creditStatus: l.total > 0 ? s.creditStatus : 'paid',
           partialPaid: s.creditStatus === 'partial' ? paid[i] : 0,
           customerId: s.customerId || '', customerName: s.customerName || '',
@@ -475,7 +528,7 @@ const Sales = (function () {
           const cid = l.itemId.slice(4);
           (com[cid] || (com[cid] = [])).push(Object.assign(base, { batchName: BATCH_NAME, transporter: '', salePrice: netPrice(l) }));
         } else {
-          gen.push(Object.assign(base, { itemName: l.name, itemId: l.itemId, sellingPrice: netPrice(l), unit: l.unit }));
+          gen.push(Object.assign(base, unitRow(l)));
         }
       });
     });
@@ -492,7 +545,7 @@ const Sales = (function () {
         if (st === 'partial') { pc = i === lines.length - 1 ? M - given : Math.floor(M * toC(l.total) / (T || 1)); given += pc; }
         const base = {
           id: r.id + '#' + i, _sale: true, _return: true, returnId: r.id, returnKind: r.kind, saleId: r.saleId, receiptNo: r.id, tillId: r.tillId,
-          date: r.date, time: r.time, issued: -Number(l.qty), notes: (r.kind === 'void' ? 'VOID of ' : 'REFUND of ') + r.saleId + ' \u00B7 ' + (r.reason || ''),
+          date: r.date, time: r.time, issued: -baseQty(l), notes: (r.kind === 'void' ? 'VOID of ' : 'REFUND of ') + r.saleId + ' \u00B7 ' + (r.reason || ''),
           creditStatus: toC(l.total) > 0 ? st : 'paid', partialPaid: st === 'partial' ? -pc / 100 : 0,
           customerId: r.customerId || '', customerName: r.customerName || '',
           enteredBy: r.cashier, enteredByRole: r.cashierRole || '', enteredAt: r.at, approvalStatus: 'approved', payMethods: how
@@ -501,7 +554,7 @@ const Sales = (function () {
           const cid = l.itemId.slice(4);
           (com[cid] || (com[cid] = [])).push(Object.assign(base, { batchName: BATCH_NAME, transporter: '', salePrice: netPrice(l) }));
         } else {
-          gen.push(Object.assign(base, { itemName: l.name, itemId: l.itemId, sellingPrice: netPrice(l), unit: l.unit }));
+          gen.push(Object.assign(base, unitRow(l)));
         }
       });
     });
@@ -511,7 +564,7 @@ const Sales = (function () {
   // itemId -> quantity sold (items AND commodities; commodity ids start with "com:"). The till subtracts this from stock.
   function soldById(sales) {
     const m = new Map();
-    (sales || []).forEach(s => s.lines.forEach(l => m.set(l.itemId, r3((m.get(l.itemId) || 0) + l.qty))));
+    (sales || []).forEach(s => s.lines.forEach(l => m.set(l.itemId, r3((m.get(l.itemId) || 0) + baseQty(l)))));
     return m;
   }
 
@@ -549,7 +602,7 @@ const Sales = (function () {
     };
     (src.received || []).forEach(r => { if (r && ok(r) && r.condition !== 'rejected' && within(r.date, r.time)) add(keyOf(r), 'rec', Number(r.received) || 0); });
     (src.issued || []).forEach(r => { if (r && !r._sale && ok(r) && within(r.date, r.time)) add(keyOf(r), 'issued', Number(r.issued) || 0); });
-    (src.sales || []).forEach(s => { if (s && within(s.date, s.time)) arr(s.lines).forEach(l => add(l.itemId, 'sold', Number(l.qty) || 0)); });
+    (src.sales || []).forEach(s => { if (s && within(s.date, s.time)) arr(s.lines).forEach(l => add(l.itemId, 'sold', baseQty(l))); });
     (src.returns || []).forEach(x => { if (x && within(x.date, x.time)) add(x.itemId || idOf(x.itemName), 'ret', Number(x.qty) || 0); });
     const fin = s => ({ rec: r3(s.rec), issued: r3(s.issued), sold: r3(s.sold), ret: r3(s.ret), out: r3(s.issued + s.sold), bal: r3(s.rec - s.issued - s.sold + s.ret) });
     const none = { rec: 0, issued: 0, sold: 0, ret: 0 };
@@ -845,7 +898,7 @@ const Sales = (function () {
     return { append, all, pending, push, pull, importMany };
   }
 
-  return { V, ID_RE, BATCH_NAME, DISC_MAX_PCT, PROMO_BY, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, linePaid, methodsOf, netPrice, discountPolicy, discountSplit, discountJudge, pctText, promoCheck, promoList, promoDay, promoActive, promoMatches, promoText, promoLine, promoApply, discountParts, create, memAdapter, idbAdapter };
+  return { V, ID_RE, BATCH_NAME, DISC_MAX_PCT, PROMO_BY, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, fOf, baseQty, unitList, FACTOR_MAX, linePaid, methodsOf, netPrice, discountPolicy, discountSplit, discountJudge, pctText, promoCheck, promoList, promoDay, promoActive, promoMatches, promoText, promoLine, promoApply, discountParts, create, memAdapter, idbAdapter };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Sales; // lets Node load it for tests

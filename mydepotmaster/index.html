@@ -4714,7 +4714,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.64';
+const SW_VERSION  = 'v0.3.65';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -13163,6 +13163,7 @@ function _itemChipsHtml(item){
   if(it.barcode)c.push(chip('Barcode '+esc(it.barcode)));
   if(it.sku)c.push(chip('SKU '+esc(it.sku)));
   if(it.unit)c.push(chip(esc(it.unit)));
+  (Array.isArray(it.units)?it.units:[]).forEach(u=>{if(u&&u.name)c.push(chip(esc(u.name)+' ×'+Number(u.factor)+(Number(u.price)>0?' · '+zm(u.price):'')));});   // step 26
   if(it.category)c.push(chip(esc(it.category)));
   if(Number(pr.purchasePrice)>0)c.push(chip('Cost '+zm(pr.purchasePrice)));
   if(Number(pr.sellingPrice)>0)c.push(chip('Price '+zm(pr.sellingPrice)));
@@ -13170,19 +13171,28 @@ function _itemChipsHtml(item){
   return c.length?`<div style="margin:2px 0 6px">${c.join('')}</div>`:'';
 }
 
+// Step 26 (multiple units): item.units = [{name, factor, barcode?, price?}] = the other units this item is SOLD in (PACK = 6, CARTON = 24 ...).
+// The item's own `unit` stays the BASE unit: stock, receiving, issuing, stock counts and the Price List are all in it. A unit's price is optional
+// (blank = selling price x factor); its barcode is optional (a carton usually has its own). The till (pos.html) and sales.js unitList() read this.
+function _itemCodes(x){
+  const o=_invItemObj(x),c=[o.barcode,o.sku];
+  (Array.isArray(o.units)?o.units:[]).forEach(u=>{if(u&&u.barcode)c.push(u.barcode);});
+  return c.map(v=>String(v||'').toLowerCase()).filter(Boolean);
+}
+
 // EAN-13 check digit for the first 12 digits.
 function _ean13Check(d12){let t=0;for(let i=0;i<12;i++)t+=Number(d12[i])*(i%2?3:1);return (10-t%10)%10;}
 // Internal barcode for goods that have none. GS1 reserves prefixes 20–29 for in-store use,
 // so a leading 2 can never clash with a manufacturer's code.
-function genItemBarcode(){
-  const used=new Set((DATA.inventoryItems||[]).map(x=>String(_invItemObj(x).barcode).toLowerCase()).filter(Boolean));
+function genItemBarcode(target){
+  const used=new Set();(DATA.inventoryItems||[]).forEach(x=>_itemCodes(x).forEach(c=>used.add(c)));
   let code='';
   for(let n=0;n<50;n++){
     let b='2';for(let i=0;i<11;i++)b+=Math.floor(Math.random()*10);
     code=b+_ean13Check(b);
     if(!used.has(code))break;
   }
-  const el=document.getElementById('idt-barcode');
+  const el=document.getElementById(target||'idt-barcode');
   if(el)el.value=code;
 }
 
@@ -13208,6 +13218,14 @@ function openItemDetails(id,from){
       ${fld('COST PRICE'+(cur()?' ('+esc(cur())+')':''),`<input class="fi" id="idt-cost" type="number" inputmode="decimal" min="0" step="any" value="${Number(pr.purchasePrice)>0?Number(pr.purchasePrice):''}" placeholder="0.00"/>`)}
       ${fld('SELLING PRICE'+(cur()?' ('+esc(cur())+')':''),`<input class="fi" id="idt-price" type="number" inputmode="decimal" min="0" step="any" value="${Number(pr.sellingPrice)>0?Number(pr.sellingPrice):''}" placeholder="0.00"/>`)}
     </div>
+    <div style="font-size:15px;color:var(--muted);margin:4px 0 6px">OTHER UNITS (OPTIONAL)</div>
+    <div style="font-size:14px;color:var(--muted);margin-bottom:8px;line-height:1.6">Sell this item by the pack or carton too. Stock is always counted in <b>${esc(it.unit||'the unit above')}</b>. A blank price means selling price × contains.</div>
+    ${[0,1,2].map(n=>{const u=(Array.isArray(it.units)?it.units:[])[n]||{};return `<div style="border:1px solid var(--border);border-radius:10px;padding:8px 8px 0;margin-bottom:8px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${fld('NAME',`<input class="fi" id="idt-u${n}-name" list="idt-units" value="${esc(u.name||'')}" placeholder="E.G. CARTON" autocomplete="off" oninput="this.value=this.value.toUpperCase()"/>`)}
+      ${fld('CONTAINS ('+esc(it.unit||'UNITS')+')',`<input class="fi" id="idt-u${n}-f" type="number" inputmode="decimal" min="0" step="any" value="${Number(u.factor)>0?Number(u.factor):''}" placeholder="E.G. 24"/>`)}
+      ${fld('BARCODE (OPTIONAL)',`<div style="display:flex;gap:6px"><input class="fi" id="idt-u${n}-bc" value="${esc(u.barcode||'')}" placeholder="Scan or type" autocomplete="off" style="flex:1;min-width:0"/><button class="btn bo" style="width:auto;padding:10px 10px" onclick="genItemBarcode('idt-u${n}-bc')">Gen</button></div>`)}
+      ${fld('PRICE'+(cur()?' ('+esc(cur())+')':'')+' (OPTIONAL)',`<input class="fi" id="idt-u${n}-pr" type="number" inputmode="decimal" min="0" step="any" value="${Number(u.price)>0?Number(u.price):''}" placeholder="Selling price × contains"/>`)}
+    </div></div>`;}).join('')}
     ${fld('VAT',`<select class="fi" id="idt-vat">${Object.keys(vc).map(k=>`<option value="${k}"${it.vat===k?' selected':''}>${esc(vc[k])}</option>`).join('')}</select>`)}
     <div style="font-size:14px;color:var(--muted);margin-bottom:8px;line-height:1.6">Cost and selling price are the same prices the Receive and Issue forms already use, so they stay in step. The item name can't be changed here yet.</div>
     <div class="mact">
@@ -13238,8 +13256,31 @@ function saveItemDetails(id,from){
   for(const v of [barcode,sku]){
     if(!v)continue;
     const lv=v.toLowerCase();
-    const clash=items.find(x=>x.id!==id&&(String(x.barcode).toLowerCase()===lv||String(x.sku).toLowerCase()===lv));
-    if(clash){alert('"'+v+'" is already used as a barcode or SKU by '+clash.name+'.');return;}
+    const clash=items.find(x=>x.id!==id&&_itemCodes(x).includes(lv));
+    if(clash){alert('"'+v+'" is already used as a barcode, SKU or unit barcode by '+clash.name+'.');return;}
+  }
+  // Step 26: the other units (up to 3). Every code must still identify exactly one item AND one unit, or a scan would be ambiguous.
+  const units=[],seenCodes=new Set([barcode.toLowerCase(),sku.toLowerCase()].filter(Boolean));
+  for(let n=0;n<3;n++){
+    const nm=uc(g('u'+n+'-name')).trim(),fs=g('u'+n+'-f').trim(),bc=g('u'+n+'-bc').trim(),ps=g('u'+n+'-pr').trim();
+    if(!nm&&!fs&&!bc&&!ps)continue;
+    const f=Number(fs),pu=ps===''?0:Number(ps);
+    if(!nm){alert('Give the other unit a name, e.g. CARTON.');return;}
+    if(nm.length>40){alert(nm.slice(0,20)+'… is too long a unit name (40 characters max).');return;}
+    if(!unit){alert('Set the UNIT first (e.g. PCS). Packs and cartons are counted in it.');return;}
+    if(nm===unit||units.some(u=>u.name===nm)){alert('"'+nm+'" is used twice. Each unit needs its own name.');return;}
+    if(!(f>0)||f===1||f>100000||Math.abs(f*1000-Math.round(f*1000))>1e-6){alert(nm+': type how many '+unit+' it contains (not 1, at most 3 decimals).');return;}
+    if(!Number.isFinite(pu)||pu<0){alert(nm+': the price must be zero or more.');return;}
+    if(bc){
+      if(!/^[\x21-\x7E]{1,48}$/.test(bc)){alert(nm+': the barcode must be 1–48 characters with no spaces.');return;}
+      const lv=bc.toLowerCase();
+      if(seenCodes.has(lv)){alert('"'+bc+'" is used twice on this item. Each barcode must be different.');return;}
+      const clash=items.find(x=>x.id!==id&&_itemCodes(x).includes(lv));
+      if(clash){alert('"'+bc+'" is already used as a barcode, SKU or unit barcode by '+clash.name+'.');return;}
+      seenCodes.add(lv);
+    }
+    if(pu>0&&cost>0&&pu<cost*f&&!confirm(nm+' price ('+pu+') is below its cost ('+(Math.round(cost*f*100)/100)+'). Save anyway?'))return;
+    units.push({name:nm,factor:f,...(bc?{barcode:bc}:{}),...(pu>0?{price:pu}:{})});
   }
   if(price>0&&cost>0&&price<cost&&!confirm('Selling price ('+price+') is below cost ('+cost+'). Save anyway?'))return;
   const pr0=(DATA.inventoryPrices||{})[before.name]||{};
@@ -13248,6 +13289,7 @@ function saveItemDetails(id,from){
     const i=arr.findIndex(x=>_invItemId(x)===id);
     if(i<0)return d;
     arr[i]={...arr[i],id,sku,barcode,unit,category,vat};
+    if(units.length)arr[i].units=units;else delete arr[i].units;      // step 26
     const prices={...(d.inventoryPrices||{})};
     const nm=arr[i].name, p={...(prices[nm]||{})};
     if(cost>0)p.purchasePrice=cost;else delete p.purchasePrice;
@@ -13255,7 +13297,7 @@ function saveItemDetails(id,from){
     if(Object.keys(p).length)prices[nm]=p;else delete prices[nm];
     return {...d,inventoryItems:arr,inventoryPrices:prices};
   });
-  logAuditEvent('EDIT','Inventory Item',`Item: ${before.name} · Barcode: ${barcode||'—'} · SKU: ${sku||'—'} · Unit: ${unit||'—'} · Category: ${category||'—'} · Cost: ${cost||'—'} · Price: ${price||'—'} · VAT: ${vat||'—'}`,{...before,purchasePrice:pr0.purchasePrice||0,sellingPrice:pr0.sellingPrice||0});
+  logAuditEvent('EDIT','Inventory Item',`Item: ${before.name} · Barcode: ${barcode||'—'} · SKU: ${sku||'—'} · Unit: ${unit||'—'} · Category: ${category||'—'} · Cost: ${cost||'—'} · Price: ${price||'—'} · VAT: ${vat||'—'} · Units: ${units.map(u=>u.name+'×'+u.factor+(u.price?' @'+u.price:'')).join(', ')||'—'}`,{...before,purchasePrice:pr0.purchasePrice||0,sellingPrice:pr0.sellingPrice||0});
   closeModal();
   showToast('✅ Item details saved');
   if(from==='manage')renderManageInventoryModal();
@@ -13364,7 +13406,7 @@ function _planItemImport(text,opts){
   const byName=new Map();items.forEach((x,i)=>{const k=_normItemName(x.name);if(k&&!byName.has(k))byName.set(k,i);});
   const nameOf=new Map(items.map(x=>[x.id,x.name]));
   const owner=new Map();
-  items.forEach(x=>{[x.barcode,x.sku].forEach(c=>{const k=String(c||'').toLowerCase();if(k)owner.set(k,x.id);});});
+  items.forEach(x=>{_itemCodes(x).forEach(k=>owner.set(k,x.id));});     // step 26: an item's other units' barcodes count too
   // Take ownership of a row's codes, or report who already holds one.
   const claim=(id,oldB,oldS,newB,newS)=>{
     for(const c of [newB,newS]){

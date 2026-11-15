@@ -94,6 +94,9 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 .line .lo{grid-column:1/-1;display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:600;color:var(--green)}
 .line .lh{grid-column:1/-1;font-size:12px;color:var(--muted)}
 .tile .offer{display:block;font-size:12px;font-weight:700;color:var(--green)}
+.tile .alt{display:block;font-size:11px;color:var(--muted);line-height:1.3}
+.line .lu{grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.line .lu select{font:inherit;font-weight:600;font-size:14px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);max-width:100%}
 .qty{display:flex;align-items:center;gap:4px;justify-self:end}
 .qty button{width:40px;height:40px;padding:0;font-size:20px;line-height:1;border-radius:10px}
 .qty input{width:58px;height:40px;text-align:center;font:inherit;font-weight:600;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);padding:0 2px}
@@ -635,9 +638,12 @@ function loadCatalog(){
       id:x.id||legacyId(x.name),kind:'item',name:String(x.name),sku:String(x.sku||''),barcode:String(x.barcode||''),
       unit:String(x.unit||''),per:String(x.unit||''),category:String(x.category||''),min:Number(x.minStock)||0,
       price:Number((prices[x.name]||{}).sellingPrice)||0,
-      avail:book.get(x.id||legacyId(x.name)).bal
+      avail:book.get(x.id||legacyId(x.name)).bal      // always in the BASE unit (step 26)
     };
-    o.hay=(o.name+' '+o.sku+' '+o.barcode+' '+o.category).toLowerCase();
+    // Step 26: the units this item is sold in (base first). null for an item with just its one unit. A unit that comes to no price is not offered.
+    const ul=Sales.unitList({unit:x.unit,barcode:x.barcode,units:x.units},o.price).filter(u=>u.isBase||u.price>0);
+    o.units=ul.length>1&&o.price>0?ul:null;
+    o.hay=(o.name+' '+o.sku+' '+o.barcode+' '+o.category+(o.units?' '+o.units.filter(u=>!u.isBase).map(u=>u.barcode+' '+u.name).join(' '):'')).toLowerCase();
     return o;
   });
   ITEMS=general.concat(commodityItems()).sort((a,b)=>a.name.localeCompare(b.name));
@@ -649,10 +655,17 @@ function matches(q){
 }
 // A scan is EXACT: every item whose barcode or SKU equals the code (case-insensitive). No partial matching, so an unknown
 // code can never turn into some other item. More than one hit means two items share a code: nothing is added.
-function scanMatches(q){
+// Step 26: a pack or carton has a barcode of its own. {i,u}: the item, and the unit whose code it was (u null = the item's own barcode or SKU, i.e. the base unit).
+function scanHits(q){
   const c=String(q||'').trim().toLowerCase();if(!c)return [];
-  return ITEMS.filter(i=>(i.barcode&&i.barcode.toLowerCase()===c)||(i.sku&&i.sku.toLowerCase()===c));
+  const out=[];
+  ITEMS.forEach(i=>{
+    if((i.barcode&&i.barcode.toLowerCase()===c)||(i.sku&&i.sku.toLowerCase()===c)){out.push({i,u:null});return;}
+    if(i.units)i.units.forEach(u=>{if(!u.isBase&&u.barcode&&u.barcode.toLowerCase()===c)out.push({i,u});});
+  });
+  return out;
 }
+function scanMatches(q){return scanHits(q).map(h=>h.i);}
 // A value with no space in it and a digit somewhere (4006381333931, SB-001) is a code, a scan or a typed SKU, never a name:
 // it must match a barcode or SKU exactly. Only words (sugar, coke 500) may fall back to the one-item-left search.
 function looksLikeCode(v){return !/\s/.test(v)&&/\d/.test(v);}
@@ -667,15 +680,15 @@ function focusSearch(){try{Q.focus({preventScroll:true});}catch{Q.focus();}}
 // off, and a 13-digit read starting with 0 also matches the same product stored as a 12-digit UPC-A (and the other way round).
 function resolveCode(v,o){
   const cam=!!(o&&o.camera);
-  let hits=scanMatches(v);
-  if(!hits.length&&cam){const alt=/^0\d{12}$/.test(v)?v.slice(1):(/^\d{12}$/.test(v)?'0'+v:'');if(alt)hits=scanMatches(alt);}
-  if(hits.length>1)return {err:'Two items have the code \u201c'+v+'\u201d: '+hits.slice(0,3).map(h=>h.name).join(', ')+(hits.length>3?', \u2026':'')+'. Nothing was added. Ask a manager to fix the barcode in the main app.',ms:7000};
-  let hit=hits[0]||null;
+  let hits=scanHits(v);
+  if(!hits.length&&cam){const alt=/^0\d{12}$/.test(v)?v.slice(1):(/^\d{12}$/.test(v)?'0'+v:'');if(alt)hits=scanHits(alt);}
+  if(hits.length>1)return {err:'Two items have the code \u201c'+v+'\u201d: '+hits.slice(0,3).map(h=>h.i.name).join(', ')+(hits.length>3?', \u2026':'')+'. Nothing was added. Ask a manager to fix the barcode in the main app.',ms:7000};
+  let hit=hits[0]?hits[0].i:null;const unit=hits[0]?hits[0].u:null;
   if(!hit&&!cam&&!looksLikeCode(v)){const r=matches(v);if(r.length===1)hit=r[0];}   // typing a name: one item left in the list
   const shown=cam&&v.length>40?v.slice(0,40)+'\u2026':v;
   if(!hit)return {err:(cam||looksLikeCode(v))?'No item has the code \u201c'+shown+'\u201d.':'No item matches \u201c'+v+'\u201d.'};
   if(!hit.price)return {err:hit.name+(isCashier()?' has no price yet. Ask your admin to set it.':' has no price yet. Set it in the main app under \uD83D\uDCB2 Prices.')};
-  return {hit};
+  return {hit,unit};
 }
 
 // ── items pane
@@ -691,6 +704,7 @@ function tile(i){
   else if(i.min&&i.avail<=i.min){st=fq(i.avail)+' left';cls+=' low';}
   else st=fq(i.avail)+' in stock';
   b.append(el('span',cls,st));
+  if(i.units&&i.price)b.append(el('span','alt',i.units.filter(u=>!u.isBase).map(u=>u.name+' \u00D7'+fq(u.factor)).join(' \u00B7 ')));   // step 26: it is also sold by the pack or carton
   const of=offerFor(i);if(of&&i.price)b.append(el('span','offer',of));      // step 25: a live offer covers this item
   if(!i.price)b.disabled=true;
   return b;
@@ -705,7 +719,7 @@ function renderGrid(){
 }
 // Updates the "in cart" count on each tile in place, so the list does not jump while selling.
 function refreshBadges(){
-  const q=new Map(CART.map(l=>[l.id,l.qty]));
+  const q=new Map();CART.forEach(l=>q.set(l.id,Math.round(((q.get(l.id)||0)+baseOf(l))*1000)/1000));   // step 26: in base units, so a carton counts as what it holds
   GRID.querySelectorAll('.tile').forEach(t=>{
     const n=q.get(t.dataset.id);let b=t.querySelector('.inc');
     if(n){if(!b){b=el('span','inc');t.append(b);}b.textContent=fq(n);}else if(b)b.remove();
@@ -718,6 +732,25 @@ function refreshBadges(){
 // Step 18: lineTotal is a line's value BEFORE any discount; the basket's discount (DISC, below) is shared out over the lines in
 // whole ngwee, and cartTotal() is what the customer pays after it. With no discount nothing differs from before.
 const lineTotal=l=>Math.round(l.price*l.qty*100)/100;
+// ── MULTIPLE UNITS (roadmap step 26) ──────────────────────────────────────────
+// A cart line is in ONE unit: l.unit / l.price / l.qty are what the customer sees. A line in a pack or carton also has l.f (base units in one of
+// it) and l.bu (the base unit's name); a base-unit line has neither. The same item in two units is two lines (lineKey tells them apart). Stock is
+// always in the base unit: baseOf(l) = qty x f. Offers are worked on the base-unit equivalent of the line (see promoRes), so "3 for K20" means three
+// singles whether they are scanned one by one or sold as a carton.
+const lineF=l=>{const f=Number(l&&l.f);return f>0?f:1;};
+const lineKey=l=>l.id+(lineF(l)!==1?'|'+String(l.unit||'').toUpperCase():'');
+const baseOf=l=>Sales.baseQty({qty:l.qty,factor:lineF(l)});
+const inCartBase=id=>Math.round(CART.reduce((a,l)=>l.id===id?a+baseOf(l):a,0)*1000)/1000;
+const cartShape=l=>{const o={id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:Number(l.price),qty:Number(l.qty)};if(lineF(l)!==1){o.f=lineF(l);o.bu=String(l.bu||'');}return o;};   // what a held basket / draft keeps
+function unitFor(it,l){                          // the item's current unit that this line is in (null: the item has no such unit any more)
+  if(!it)return null;
+  if(lineF(l)===1)return it.units?it.units[0]:null;
+  return it.units?it.units.find(u=>!u.isBase&&u.name.toUpperCase()===String(l.unit||'').toUpperCase())||null:null;
+}
+function putUnit(l,it,u){                        // make line l a line in unit u (price, label and size follow)
+  if(u.isBase){l.unit=it.unit;l.per=it.per;l.price=it.price;delete l.f;delete l.bu;}
+  else{l.unit=u.name;l.per=u.name;l.price=u.price;l.f=u.factor;l.bu=it.units[0].name;}
+}
 const cartGross=()=>Math.round(CART.reduce((a,l)=>a+lineTotal(l),0)*100)/100;
 // ── PROMOTIONS (roadmap step 25) ───────────────────────────────────────────────
 // Offers the Admin keeps in Settings -> Promotions (DATA.promotions: a percentage off, a special price, N for a price, buy N get M free; on items
@@ -734,7 +767,7 @@ const promoClock=()=>{PNOW=Date.now();};
 function promoList(){const raw=DATA&&DATA.promotions;if(raw!==PL_RAW){PL_RAW=raw;PL=Sales.promoList(raw);}return PL;}
 function promoRes(){
   if(!CART.length)return {lines:[],totalC:0};
-  return Sales.promoApply(CART.map(l=>{const it=BYID.get(l.id);return {itemId:l.id,category:it?it.category:'',qty:l.qty,price:l.price};}),promoList(),{now:PNOW,money});
+  return Sales.promoApply(CART.map(l=>{const it=BYID.get(l.id),f=lineF(l);return {itemId:l.id,category:it?it.category:'',qty:f===1?l.qty:baseOf(l),price:f===1?l.price:l.price/f};}),promoList(),{now:PNOW,money});   // step 26: in base units
 }
 // The tag on an item tile: the first live offer that covers the item, in words. Uses the real clock (the tile is not a sale).
 function offerFor(i){
@@ -752,6 +785,7 @@ function makeBasket(pay){
   const lines=CART.map((l,i)=>{
     const pc=pr.lines[i]?pr.lines[i].discC:0,dc=pc+sp.lines[i];      // step 25: what the offer took off + the manual share
     const o={itemId:l.id,kind:l.kind||'item',name:l.name,unit:l.unit,qty:l.qty,price:l.price,total:(toC(lineTotal(l))-dc)/100};
+    if(lineF(l)!==1){o.factor=lineF(l);o.base=String(l.bu||'');}               // step 26: sold in a pack or carton
     if(dc>0)o.discount=dc/100;                         // step 18: line.total is AFTER the discount, line.discount is ALL that came off (offer and manual)
     if(pc>0){o.promoDiscount=pc/100;o.promoId=pr.lines[i].promo.id;o.promoName=pr.lines[i].promo.name;}   // step 25: the part that an offer gave
     return o;
@@ -1206,14 +1240,26 @@ async function finalizeSale(b){
   }
 }
 
-function addItem(i,n){
-  const l=CART.find(x=>x.id===i.id);
-  if(l)l.qty=Math.round((l.qty+(n||1))*1000)/1000;else CART.push({id:i.id,kind:i.kind,name:i.name,unit:i.unit,per:i.per,price:i.price,qty:n||1});
-  renderCart();say('Added '+i.name,'ok');
+function addItem(i,n,u){                         // u: the unit (from i.units) when a pack or carton barcode was scanned; omitted = the base unit
+  u=u&&!u.isBase?u:null;
+  const key=i.id+(u?'|'+u.name.toUpperCase():'');
+  const l=CART.find(x=>lineKey(x)===key);
+  if(l)l.qty=Math.round((l.qty+(n||1))*1000)/1000;
+  else{const o={id:i.id,kind:i.kind,name:i.name,unit:i.unit,per:i.per,price:i.price,qty:n||1};if(u)putUnit(o,i,u);CART.push(o);}
+  renderCart();say('Added '+i.name+(u?' ('+u.name+')':''),'ok');
 }
-function setQty(id,q){
+function setQty(key,q){                          // key: lineKey(line)
   q=Math.round(Number(q)*1000)/1000;
-  if(!(q>0))CART=CART.filter(l=>l.id!==id);else{const l=CART.find(x=>x.id===id);if(l)l.qty=q;}
+  if(!(q>0))CART=CART.filter(l=>lineKey(l)!==key);else{const l=CART.find(x=>lineKey(x)===key);if(l)l.qty=q;}
+  renderCart();
+}
+// Change a line to another unit of the same item (the quantity stays; price and size follow). A line already in that unit takes it over.
+function setUnit(key,name){
+  const l=CART.find(x=>lineKey(x)===key),it=l&&BYID.get(l.id);if(!it||!it.units)return;
+  const u=it.units.find(x=>x.name===name);if(!u)return;
+  putUnit(l,it,u);
+  const twin=CART.find(x=>x!==l&&lineKey(x)===lineKey(l));
+  if(twin){twin.qty=Math.round((twin.qty+l.qty)*1000)/1000;CART=CART.filter(x=>x!==l);}
   renderCart();
 }
 function clearCart(){CART=[];renderCart();}
@@ -1348,7 +1394,7 @@ function writeHeld(a){
 const heldTotal=h=>Math.round(h.lines.reduce((a,l)=>a+lineTotal({price:Number(l.price),qty:Number(l.qty)}),0)*100)/100;
 const cartAsHeld=()=>({
   id:'h_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),at:Date.now(),by:USER?String(USER.username):'',
-  lines:CART.map(l=>({id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:l.price,qty:l.qty}))
+  lines:CART.map(cartShape)
 });
 function ago(t){
   const m=Math.max(0,Math.round((Date.now()-t)/6e4));
@@ -1391,10 +1437,11 @@ function repriceLines(lines){
   let repriced=0;const unlisted=[];
   const out=lines.map(l=>{
     const it=BYID.get(l.id);
-    const line={id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:Number(l.price),qty:Number(l.qty)};
-    if(it&&it.price>0){
-      if(Math.abs(it.price-line.price)>0.004)repriced++;
-      line.price=it.price;line.name=it.name;line.unit=it.unit;line.per=it.per;line.kind=it.kind;
+    const line=cartShape(l),u=unitFor(it,line);
+    if(it&&it.price>0&&(lineF(line)===1||u)){        // step 26: a pack or carton line is re-priced from its unit; if the item has no such unit any more it keeps its stored price and is named in the notes
+      const np=u&&!u.isBase?u.price:it.price;
+      if(Math.abs(np-line.price)>0.004)repriced++;
+      putUnit(line,it,u&&!u.isBase?u:{isBase:true});line.name=it.name;line.kind=it.kind;
     }else unlisted.push(String(l.name));
     return line;
   });
@@ -2440,7 +2487,7 @@ function saveDraft(){
   try{
     if(!CART.length){localStorage.removeItem(draftKey(TAB));return;}
     localStorage.setItem(draftKey(TAB),JSON.stringify({v:1,tab:TAB,at:Date.now(),by:USER?String(USER.username):'',disc:DISC?1:0,
-      lines:CART.map(l=>({id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:l.price,qty:l.qty}))}));
+      lines:CART.map(cartShape)}));
   }catch{}                                          // storage full or blocked: the cart still works, it just is not saved
 }
 // Pick this tab's id and take its lock. A duplicated browser tab copies sessionStorage, so if another tab already holds
@@ -2499,7 +2546,7 @@ async function recoverDrafts(boot){
     }
     if(d.disc&&!out.notes.includes(DISC_LOST))out.notes.push(DISC_LOST);
     adopt.push({id:'r_'+String(d.tab)+'_'+String(d.at),at:Number(d.at)||Date.now(),by:String(d.by||''),rec:true,
-      lines:lines.map(l=>({id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:Number(l.price),qty:Number(l.qty)})),key:k});
+      lines:lines.map(cartShape),key:k});
   }
   // Move them into Held. A fixed id (tab + last change) means a pass that is interrupted before the draft is deleted
   // cannot create the basket twice. If Held is full the draft simply stays where it is and is tried again next time.
@@ -2524,7 +2571,8 @@ function draftNotice(r){
 
 function lineEl(l,pr){                           // pr: this line's offer from promoRes() (step 25)
   const it=BYID.get(l.id),row=el('div','line');
-  const rm=el('button','rm','\u2715',{type:'button','aria-label':'Remove '+l.name});rm.onclick=()=>setQty(l.id,0);
+  const lk=lineKey(l);
+  const rm=el('button','rm','\u2715',{type:'button','aria-label':'Remove '+l.name});rm.onclick=()=>setQty(lk,0);
   const tcell=el('div','lt');tcell.append(el('span','',money((toC(lineTotal(l))-(pr?pr.discC:0))/100)),rm);
   row.append(el('div','ln',l.name),tcell);
   row.append(el('div','lp',money(l.price)+(l.per?' / '+l.per.toLowerCase():'')));
@@ -2532,12 +2580,21 @@ function lineEl(l,pr){                           // pr: this line's offer from p
   const plus=el('button','','+',{type:'button','aria-label':'Increase '+l.name});
   const inp=el('input','','',{type:'number',inputmode:'decimal',min:'0',step:'any','aria-label':'Quantity of '+l.name});
   inp.value=l.qty;
-  minus.onclick=()=>setQty(l.id,l.qty-1);plus.onclick=()=>setQty(l.id,l.qty+1);
-  inp.onchange=()=>{setQty(l.id,inp.value);if(!COARSE)focusSearch();};
+  minus.onclick=()=>setQty(lk,l.qty-1);plus.onclick=()=>setQty(lk,l.qty+1);
+  inp.onchange=()=>{setQty(lk,inp.value);if(!COARSE)focusSearch();};
   inp.onfocus=()=>inp.select();
   inp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();inp.blur();}};
   const q=el('div','qty');q.append(minus,inp,plus);row.append(q);
-  if(it&&l.qty>it.avail)row.append(el('div','lw',it.avail>0?'Only '+fq(it.avail)+' in stock':'None in stock'));
+  if(it&&it.units){                              // step 26: sold in more than one unit: pick which one this line is
+    const cur=unitFor(it,l),lu=el('div','lu'),sel=el('select','','',{'aria-label':'Unit of '+l.name});
+    it.units.forEach(u=>{const o=el('option','',u.isBase?(u.name||'Each'):u.name+' \u00D7'+fq(u.factor),{value:u.name});sel.append(o);});
+    if(cur)sel.value=cur.name;
+    sel.onchange=()=>setUnit(lk,sel.value);
+    lu.append(sel);if(lineF(l)!==1)lu.append(el('span','','= '+fq(baseOf(l))+' '+String(l.bu||'').toLowerCase()));
+    row.append(lu);
+  }
+  const need=it?inCartBase(l.id):0,bu=it&&it.units?' '+String(it.units[0].name||'').toLowerCase():'';
+  if(it&&need>it.avail)row.append(el('div','lw',it.avail>0?'Only '+fq(it.avail)+bu+' in stock':'None in stock'));
   if(pr&&pr.promo){const o=el('div','lo');o.append(el('span','','Offer: '+pr.promo.name),el('span','','\u2212'+money(pr.discC/100)));row.append(o);}   // step 25
   if(pr&&pr.hint)row.append(el('div','lh',pr.hint));
   return row;
@@ -2688,9 +2745,9 @@ function camAccept(me,val){
   idleReset();                                           // scanning counts as activity: no idle logout in the middle of a basket
   const r=resolveCode(val,{camera:true});
   if(r.err){camBeep(me,false);camStatus(me,r.err,'bad');camFlash(me,'bad');return;}
-  const it=r.hit;addItem(it,1);camBeep(me,true);
-  const l=CART.find(x=>x.id===it.id),over=!!l&&l.qty>it.avail;
-  camStatus(me,'\u2713 '+it.name+(l&&l.qty>1?' \u00D7'+fq(l.qty):'')+(over?(it.avail>0?' \u00B7 only '+fq(it.avail)+' in stock':' \u00B7 none in stock'):''),over?'warn':'ok');
+  const it=r.hit,ru=r.unit&&!r.unit.isBase?r.unit:null;addItem(it,1,ru);camBeep(me,true);
+  const l=CART.find(x=>lineKey(x)===it.id+(ru?'|'+ru.name.toUpperCase():'')),over=!!l&&inCartBase(it.id)>it.avail;
+  camStatus(me,'\u2713 '+it.name+(ru?' ('+ru.name+')':'')+(l&&l.qty>1?' \u00D7'+fq(l.qty):'')+(over?(it.avail>0?' \u00B7 only '+fq(it.avail)+' in stock':' \u00B7 none in stock'):''),over?'warn':'ok');
   camFlash(me,over?'warn':'ok');camSum(me);
 }
 function stopCam(){
@@ -2765,7 +2822,7 @@ function buildSell(){
     const v=Q.value.trim();if(!v)return;
     const r=resolveCode(v);                              // scanner: exact barcode or SKU, then Enter
     if(r.err){say(r.err,'bad',r.ms);Q.select();return;}
-    addItem(r.hit,1);Q.value='';renderGrid();focusSearch();
+    addItem(r.hit,1,r.unit);Q.value='';renderGrid();focusSearch();
   });
   // Touch devices: the box keeps focus for a Bluetooth/USB scanner, but the on-screen keyboard stays down
   // until the keyboard button is tapped, so it does not cover the items.
@@ -2801,7 +2858,7 @@ function buildSell(){
     const d=await loadData();if(!d)return;DATA=d;loadCatalog();
     await loadShift();paintShift();                     // another tab may have opened or closed the shift
     if(PAYOVL&&PAYFOOT&&PAY)renderPayFoot(settle(toC(cartTotal()),PAY.tenders));
-    CART.forEach(l=>{const it=BYID.get(l.id);if(it){l.unit=it.unit;l.per=it.per;}});
+    CART.forEach(l=>{const it=BYID.get(l.id);if(it&&lineF(l)===1){l.unit=it.unit;l.per=it.per;}});
     const rc=await recoverDrafts(false);                // a tab that died while this one was in the background
     renderGrid();renderCart();renderHeldBtn();if(HOVL)renderHeldList();
     if(rc.adopted)say(draftNotice(rc).join('. ')+'.','warn',7000);
