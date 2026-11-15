@@ -32,6 +32,16 @@
  *   The policy (Settings -> Till discounts) lives in depotInfo: discountOn, discountCapPct (what a cashier may give alone),
  *   discountMaxPct (the most anyone may give, even with a PIN). discountJudge() is the one place that decides who may give what.
  *
+ * PROMOTIONS (roadmap step 25): an offer the till applies by itself, from the list the Admin keeps under Settings -> Promotions (DATA.promotions). Four kinds, each on
+ *   chosen items and/or whole categories, between two dates and on chosen weekdays: a percentage off (pct), a special price per unit (price), N for a fixed price (multi),
+ *   buy N get M free (bogo). pct and price can need a minimum quantity. An offer works on ONE sale line at a time (a line is one item); a line gets the single offer that
+ *   saves the customer most, never two. promoApply() is the one place that works it out, in whole ngwee; nothing is stored about it except what the sale records.
+ *   ON THE RECORD a promotion is a discount with a name. line.discount stays "all the money off this line" (offer + manual), so line.total, netPrice(), the returns maths,
+ *   stock value and every report that sums line totals stay right with no change. What is new and additive: line.promoDiscount / promoId / promoName (the part that came
+ *   from the offer) and the header's promoDiscount (their sum). A sale whose whole discount is offers has discountBy = PROMO_BY, so a reader that has never heard of
+ *   promotions still accepts it. A manual (basket) discount is worked on the value AFTER the offers, so the cashier's limit is a share of what the customer would
+ *   otherwise pay. discountParts(sale) splits a sale's discount into { promoC, manualC } for reports and the audit log.
+ *
  * WHAT THE MAIN APP DOES WITH THE LEDGER BESIDES STOCK
  *   issuedRows() turns the sales into rows shaped like generalIssued / commodityIssued rows (flag _sale:true). The
  *   main app overlays them on DATA in memory so reports, close-out and customer balances see till sales, and strips
@@ -59,6 +69,8 @@ const Sales = (function () {
   const MAX_LINES = 200, MAX_PAYMENTS = 20;
   const PAGE = 300, MAX_PAGES = 40;                      // pull: records per request / requests per pull
   const OVERLAP_MS = 60000;                              // pull re-reads the last minute, so nothing near the cursor is missed
+  const PROMO_BY = 'Promotion';                           // discountBy of a sale whose whole discount came from offers
+  const PROMO_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
   const BATCH_NAME = 'TILL SALES';                       // pseudo batch the main app shows for commodity sold at the till
 
   const isNum = x => typeof x === 'number' && isFinite(x);
@@ -102,6 +114,8 @@ const Sales = (function () {
         };
         const d = Number(l.discount);
         if (isNum(d) && d > 0) o.discount = d;           // absent unless a discount was given on this line
+        const pd = Number(l.promoDiscount);
+        if (isNum(pd) && pd > 0 && l.promoId) { o.promoDiscount = pd; o.promoId = str(l.promoId, 40); o.promoName = str(l.promoName, 60); }   // step 25: the part of o.discount that an offer gave
         return o;
       }),
       lineCount: Number(b.lineCount), qtyTotal: Number(b.qtyTotal), total: Number(b.total),
@@ -115,7 +129,14 @@ const Sales = (function () {
     };
     if (!rec.shiftId) delete rec.shiftId;                // no shift (a sale from before step 16): the field is simply absent
     const dsum = rec.lines.reduce((a, l) => a + toC(l.discount), 0);
-    if (dsum > 0) { rec.discount = dsum / 100; rec.discountBy = str(b.discountBy, 80); rec.discountReason = str(b.discountReason, 60); }
+    const psum = rec.lines.reduce((a, l) => a + toC(l.promoDiscount), 0);
+    if (dsum > 0) {
+      rec.discount = dsum / 100;
+      const onlyOffers = psum === dsum;                  // every cent of the discount came from offers: nobody gave it, the offer did
+      rec.discountBy = str(b.discountBy, 80) || (onlyOffers ? PROMO_BY : '');
+      rec.discountReason = str(b.discountReason, 60) || (onlyOffers ? Array.from(new Set(rec.lines.filter(l => l.promoName).map(l => l.promoName))).join(', ').slice(0, 60) : '');
+    }
+    if (psum > 0) rec.promoDiscount = psum / 100;
     return JSON.parse(JSON.stringify(rec));              // plain data only: what is stored here is what the cloud will hold
   }
 
@@ -132,7 +153,7 @@ const Sales = (function () {
     if (s.shiftId !== undefined && (!SID_RE.test(String(s.shiftId)) || String(s.shiftId).slice(0, 4) !== s.till)) return 'bad shift id';
     const lines = s.lines;
     if (!Array.isArray(lines) || !lines.length || lines.length > MAX_LINES) return 'bad lines';
-    let sum = 0, qty = 0, dsum = 0;
+    let sum = 0, qty = 0, dsum = 0, psum = 0;
     for (const l of lines) {
       if (!l || typeof l.itemId !== 'string' || !l.itemId || l.itemId.length > 80) return 'bad item id';
       if (l.kind !== 'item' && l.kind !== 'commodity') return 'bad item kind';
@@ -144,11 +165,21 @@ const Sales = (function () {
       const gross = r2(l.price * l.qty);
       if (dsc > gross + 0.005) return 'a line discount is more than the line';
       if (Math.abs(l.total - r2(gross - dsc)) > 0.005) return dsc ? 'line total does not match price × qty less the discount' : 'line total does not match price × qty';
+      if (l.promoDiscount !== undefined) {              // step 25: the part of this line's discount that an offer gave
+        const pd = l.promoDiscount;
+        if (!isNum(pd) || !(pd > 0) || Math.abs(pd * 100 - Math.round(pd * 100)) > 1e-6) return 'bad line promotion';
+        if (pd > dsc + 0.005) return 'a line promotion is more than the line discount';
+        if (typeof l.promoId !== 'string' || !PROMO_ID_RE.test(l.promoId)) return 'bad promotion id';
+        if (typeof l.promoName !== 'string' || !l.promoName || l.promoName.length > 60) return 'bad promotion name';
+        psum += toC(pd);
+      } else if (l.promoId !== undefined || l.promoName !== undefined) return 'a promotion needs its amount';
       sum += toC(l.total); qty += l.qty; dsum += toC(dsc);
     }
     if (!isNum(s.total) || toC(s.total) !== sum) return 'total does not match the lines';
     const hd = s.discount === undefined ? 0 : s.discount;
     if (!isNum(hd) || hd < 0 || toC(hd) !== dsum) return 'discount does not match the lines';
+    const hp = s.promoDiscount === undefined ? 0 : s.promoDiscount;
+    if (!isNum(hp) || hp < 0 || toC(hp) !== psum) return 'promotion total does not match the lines';
     if (hd > 0) {
       if (typeof s.discountBy !== 'string' || !s.discountBy || s.discountBy.length > 80) return 'a discount needs the person who allowed it';
       if (typeof s.discountReason !== 'string' || s.discountReason.length > 60) return 'bad discount reason';
@@ -257,6 +288,149 @@ const Sales = (function () {
     if (bp <= (p.holder ? pol.maxBP : pol.capBP)) return { ok: true, bp };
     if ((p.apBP || 0) >= bp) return { ok: true, bp, approved: true };
     return { need: 'pin', bp };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // PROMOTIONS (roadmap step 25) — pure functions, shared by the till, the main app's editor and the Node tests
+  // ══════════════════════════════════════════════════════════════════════════════
+  // A promotion, as the Admin saves it in DATA.promotions:
+  //   { id, name, type:'pct'|'price'|'multi'|'bogo', on:true|false,
+  //     items:[itemId, ...]  and/or  cats:[category name, ...]     (at least one; a line matches if its item is listed or its category is)
+  //     pct (0-100, 2 decimals)            type 'pct':   that much off the line
+  //     price (money, per unit)            type 'price': each unit costs this (only ever lowers the price)
+  //     buy (whole number >= 2), bundlePrice   type 'multi': every `buy` units cost `bundlePrice` together; the rest at the normal price
+  //     buy (>= 1), free (>= 1)            type 'bogo':  of every buy+free units, `free` are free; the rest at the normal price
+  //     minQty (optional, pct and price)   the line must have at least this many units
+  //     from, to ('YYYY-MM-DD' or '', both days included, the shop's own calendar), days ([0-6], 0 = Sunday; empty = every day) }
+  // Money is worked in whole ngwee. Every kind rounds in the shop's favour and can never take off more than the line is worth.
+  const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+  const PROMO_TYPES = ['pct', 'price', 'multi', 'bogo'];
+  const MAX_PROMOS = 200, MAX_PROMO_ITEMS = 100, MAX_PROMO_CATS = 50;
+  const twoDp = n => isNum(n) && Math.abs(n * 100 - Math.round(n * 100)) < 1e-6;
+  function realDay(t) {
+    if (typeof t !== 'string' || !DAY_RE.test(t)) return false;
+    const y = Number(t.slice(0, 4)), m = Number(t.slice(5, 7)), d = Number(t.slice(8, 10)), x = new Date(Date.UTC(y, m - 1, d));
+    return x.getUTCFullYear() === y && x.getUTCMonth() === m - 1 && x.getUTCDate() === d;
+  }
+  // '' when the promotion is sound, otherwise why not (worded for the person who is typing it in).
+  function promoCheck(p) {
+    if (!p || typeof p !== 'object') return 'not a promotion';
+    if (typeof p.id !== 'string' || !PROMO_ID_RE.test(p.id)) return 'bad promotion id';
+    if (typeof p.name !== 'string' || !p.name.trim() || p.name.length > 60) return 'Give the promotion a name (up to 60 letters).';
+    if (PROMO_TYPES.indexOf(p.type) < 0) return 'Choose what kind of offer it is.';
+    const items = p.items === undefined ? [] : p.items, cats = p.cats === undefined ? [] : p.cats;
+    if (!Array.isArray(items) || !Array.isArray(cats)) return 'bad item list';
+    if (!items.length && !cats.length) return 'Choose at least one item or category.';
+    if (items.length > MAX_PROMO_ITEMS || cats.length > MAX_PROMO_CATS) return 'Too many items or categories in one promotion.';
+    if (!items.every(x => typeof x === 'string' && x && x.length <= 80)) return 'bad item in the list';
+    if (!cats.every(x => typeof x === 'string' && x.trim() && x.length <= 60)) return 'bad category in the list';
+    if (p.type === 'pct' && !(isNum(p.pct) && p.pct > 0 && p.pct <= 100 && twoDp(p.pct))) return 'The percentage must be more than 0 and at most 100.';
+    if (p.type === 'price' && !(isNum(p.price) && p.price >= 0 && p.price <= 1e7 && twoDp(p.price))) return 'Type the special price per unit.';
+    if (p.type === 'multi') {
+      if (!(Number.isInteger(p.buy) && p.buy >= 2 && p.buy <= 1000)) return 'Type how many units make the bundle (2 or more).';
+      if (!(isNum(p.bundlePrice) && p.bundlePrice >= 0 && p.bundlePrice <= 1e7 && twoDp(p.bundlePrice))) return 'Type the price of the bundle.';
+    }
+    if (p.type === 'bogo') {
+      if (!(Number.isInteger(p.buy) && p.buy >= 1 && p.buy <= 1000)) return 'Type how many units the customer buys (1 or more).';
+      if (!(Number.isInteger(p.free) && p.free >= 1 && p.free <= 1000)) return 'Type how many units are free (1 or more).';
+    }
+    if (p.minQty !== undefined && !(isNum(p.minQty) && p.minQty >= 0 && p.minQty <= 1e6)) return 'The minimum quantity must be 0 or more.';
+    const from = p.from === undefined ? '' : p.from, to = p.to === undefined ? '' : p.to;
+    if ((from !== '' && !realDay(from)) || (to !== '' && !realDay(to))) return 'Type the dates as day, month and year.';
+    if (from && to && from > to) return 'The end date is before the start date.';
+    const days = p.days === undefined ? [] : p.days;
+    if (!Array.isArray(days) || !days.every(d => Number.isInteger(d) && d >= 0 && d <= 6)) return 'bad weekdays';
+    return '';
+  }
+  // DATA.promotions (anything: missing, a Realtime Database object, junk) -> clean promotions only. A bad one is dropped, never thrown;
+  // the first of two with the same id wins. Switched off unless `on` is exactly true.
+  function promoList(raw) {
+    const seen = new Set(), out = [];
+    arr(raw).forEach(p0 => {
+      if (!p0 || typeof p0 !== 'object') return;
+      const p = Object.assign({}, p0);                                  // a list may come back as {"0":..,"1":..}: make it a real array before it is checked
+      ['items', 'cats', 'days'].forEach(k => { if (p[k] !== undefined) p[k] = arr(p[k]); });
+      if (out.length >= MAX_PROMOS || promoCheck(p) || seen.has(p.id)) return;
+      seen.add(p.id);
+      out.push({
+        id: p.id, name: p.name.trim(), type: p.type, on: p.on === true,
+        items: arr(p.items).slice(), cats: arr(p.cats).map(c => c.trim()),
+        pct: p.type === 'pct' ? p.pct : 0, price: p.type === 'price' ? p.price : 0,
+        buy: p.type === 'multi' || p.type === 'bogo' ? p.buy : 0, bundlePrice: p.type === 'multi' ? p.bundlePrice : 0, free: p.type === 'bogo' ? p.free : 0,
+        minQty: (p.type === 'pct' || p.type === 'price') && isNum(p.minQty) ? p.minQty : 0,
+        from: p.from || '', to: p.to || '', days: arr(p.days).slice().sort((a, b) => a - b).filter((d, i, a) => a.indexOf(d) === i)
+      });
+    });
+    return out;
+  }
+  // The shop's calendar day and weekday for a moment. Local time of the phone, on purpose: "until Friday" means the shop's Friday, whereas a sale's own
+  // `date` field is the UTC day (the main app's today()).
+  function promoDay(ms) {
+    const d = new Date(ms), pad = n => String(n).padStart(2, '0');
+    return { date: d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()), dow: d.getDay() };
+  }
+  const promoActive = (p, day) => !!(p && p.on && (!p.from || day.date >= p.from) && (!p.to || day.date <= p.to) && (!p.days.length || p.days.indexOf(day.dow) >= 0));
+  const promoMatches = (p, l) => p.items.indexOf(l.itemId) >= 0 || (!!l.category && p.cats.some(c => c.toLowerCase() === String(l.category).trim().toLowerCase()));
+  const nTxt = n => String(Math.round(n * 1000) / 1000);
+  // The offer in words, for lists, the cart and the receipt. opts.money(n) formats money.
+  function promoText(p, opts) {
+    const money = (opts && opts.money) || (n => r2(n).toFixed(2));
+    const min = p.minQty > 0 ? ' when you buy ' + nTxt(p.minQty) + ' or more' : '';
+    if (p.type === 'pct') return pctText(Math.round(p.pct * 100)) + '% off' + min;
+    if (p.type === 'price') return 'Special price ' + money(p.price) + min;
+    if (p.type === 'multi') return p.buy + ' for ' + money(p.bundlePrice);
+    return 'Buy ' + p.buy + ' get ' + p.free + ' free';
+  }
+  // What ONE promotion takes off ONE line.  line = { itemId, category, qty, price } -> { discC: ngwee, hint }
+  // hint: when the line is close to earning the offer (or one more of it), what to add; shown to the cashier. '' when there is nothing useful to say.
+  function promoLine(p, line, opts) {
+    const q = Number(line.qty), price = Number(line.price), EPS = 1e-9;
+    if (!(q > 0) || !(price >= 0)) return { discC: 0, hint: '' };
+    const grossC = toC(r2(price * q));
+    let d = 0, hint = '';
+    if (p.type === 'pct' || p.type === 'price') {
+      if (q + EPS < p.minQty) hint = 'Buy ' + nTxt(p.minQty) + ' or more: ' + promoText(Object.assign({}, p, { minQty: 0 }), opts);
+      else if (p.type === 'pct') { const x = grossC * Math.round(p.pct * 100); d = (x - (x % 10000)) / 10000; }     // rounded DOWN
+      else d = grossC - Math.round(p.price * q * 100);
+    } else if (p.type === 'multi') {
+      const regularC = Math.round(price * p.buy * 100), bundleC = toC(p.bundlePrice);
+      if (bundleC < regularC) {
+        const g = Math.floor(q / p.buy + EPS), rem = q - g * p.buy;
+        if (g >= 1) d = Math.round(price * p.buy * g * 100) - g * bundleC;
+        if (rem > EPS) hint = 'Add ' + nTxt(Math.ceil(p.buy - rem - EPS)) + ' more: ' + promoText(p, opts);
+      }
+    } else {                                                                                                          // bogo
+      const grp = p.buy + p.free, g = Math.floor(q / grp + EPS), rem = q - g * grp;
+      d = Math.round(price * g * p.free * 100);
+      if (rem + EPS >= p.buy && rem < grp - EPS) hint = 'Add ' + nTxt(Math.ceil(grp - rem - EPS)) + ' more to get ' + p.free + (g >= 1 ? ' more' : '') + ' free';
+    }
+    d = Math.max(0, Math.min(d, grossC));
+    return { discC: d, hint };
+  }
+  // The offers for a whole basket.  lines: [{ itemId, category, qty, price }]; promos: promoList() output; ctx: { now } (ms) or { day } (promoDay result).
+  // -> { lines: [{ discC, promo: { id, name, type } | null, hint }], totalC }, one entry per line, in order. A line takes the offer that saves most
+  // (the first listed wins a tie); other offers are not stacked on it.
+  function promoApply(lines, promos, ctx) {
+    ctx = ctx || {};
+    const day = ctx.day || promoDay(ctx.now != null ? ctx.now : Date.now());
+    const live = arr(promos).filter(p => promoActive(p, day));
+    const out = arr(lines).map(l => {
+      l = l || {};
+      let best = null, hint = '';
+      live.forEach(p => {
+        if (!promoMatches(p, l)) return;
+        const r = promoLine(p, l, ctx);
+        if (r.discC > 0) { if (!best || r.discC > best.discC) best = { p, discC: r.discC, hint: r.hint }; }
+        else if (r.hint && !hint) hint = r.hint;
+      });
+      return best ? { discC: best.discC, promo: { id: best.p.id, name: best.p.name, type: best.p.type }, hint: best.hint } : { discC: 0, promo: null, hint };
+    });
+    return { lines: out, totalC: out.reduce((a, x) => a + x.discC, 0) };
+  }
+  // A sale's discount split into what the offers gave and what a person gave, in ngwee (a sale from before step 25 has all of it manual).
+  function discountParts(s) {
+    const all = toC(s && s.discount), promo = Math.min(all, toC(s && s.promoDiscount));
+    return { allC: all, promoC: promo, manualC: all - promo };
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
@@ -671,7 +845,7 @@ const Sales = (function () {
     return { append, all, pending, push, pull, importMany };
   }
 
-  return { V, ID_RE, BATCH_NAME, DISC_MAX_PCT, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, linePaid, methodsOf, netPrice, discountPolicy, discountSplit, discountJudge, pctText, create, memAdapter, idbAdapter };
+  return { V, ID_RE, BATCH_NAME, DISC_MAX_PCT, PROMO_BY, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, linePaid, methodsOf, netPrice, discountPolicy, discountSplit, discountJudge, pctText, promoCheck, promoList, promoDay, promoActive, promoMatches, promoText, promoLine, promoApply, discountParts, create, memAdapter, idbAdapter };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Sales; // lets Node load it for tests

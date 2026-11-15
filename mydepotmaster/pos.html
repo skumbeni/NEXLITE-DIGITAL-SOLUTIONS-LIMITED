@@ -91,6 +91,9 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 .line .lt{font-weight:700;text-align:right}
 .line .lp{color:var(--muted);font-size:13px;align-self:center}
 .line .lw{grid-column:1/-1;font-size:12px;color:var(--amber)}
+.line .lo{grid-column:1/-1;display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:600;color:var(--green)}
+.line .lh{grid-column:1/-1;font-size:12px;color:var(--muted)}
+.tile .offer{display:block;font-size:12px;font-weight:700;color:var(--green)}
 .qty{display:flex;align-items:center;gap:4px;justify-self:end}
 .qty button{width:40px;height:40px;padding:0;font-size:20px;line-height:1;border-radius:10px}
 .qty input{width:58px;height:40px;text-align:center;font:inherit;font-weight:600;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--text);padding:0 2px}
@@ -688,6 +691,7 @@ function tile(i){
   else if(i.min&&i.avail<=i.min){st=fq(i.avail)+' left';cls+=' low';}
   else st=fq(i.avail)+' in stock';
   b.append(el('span',cls,st));
+  const of=offerFor(i);if(of&&i.price)b.append(el('span','offer',of));      // step 25: a live offer covers this item
   if(!i.price)b.disabled=true;
   return b;
 }
@@ -715,17 +719,41 @@ function refreshBadges(){
 // whole ngwee, and cartTotal() is what the customer pays after it. With no discount nothing differs from before.
 const lineTotal=l=>Math.round(l.price*l.qty*100)/100;
 const cartGross=()=>Math.round(CART.reduce((a,l)=>a+lineTotal(l),0)*100)/100;
-const cartTotal=()=>(Math.round(cartGross()*100)-discSplit().total)/100;
+// ── PROMOTIONS (roadmap step 25) ───────────────────────────────────────────────
+// Offers the Admin keeps in Settings -> Promotions (DATA.promotions: a percentage off, a special price, N for a price, buy N get M free; on items
+// or categories, between dates, on chosen weekdays). They are applied by the till itself, line by line, by Sales.promoApply() (sales.js): each line
+// gets the ONE offer that saves the customer most. The cashier does nothing; the cart shows the offer under the line, and what is saved is
+// recorded on the sale (line.promoDiscount / promoId / promoName, header promoDiscount) as part of the discount. Nothing is stored in the cart:
+// the offers are worked out again from the cart every time, so a held or restored basket gets today's offers, like today's prices.
+// The clock: offers are judged at PNOW, set whenever the cart is redrawn and when Charge opens, so the total on the payment screen and the
+// sale saved from it always agree. If an offer ends between the two, Charge redraws the cart and says so before any money is taken.
+// A manual discount (step 18) is worked on the value AFTER the offers (grossLinesC), so the cashier's limit is a share of what the customer
+// would otherwise pay.
+let PNOW=Date.now(),PL_RAW=null,PL=[];
+const promoClock=()=>{PNOW=Date.now();};
+function promoList(){const raw=DATA&&DATA.promotions;if(raw!==PL_RAW){PL_RAW=raw;PL=Sales.promoList(raw);}return PL;}
+function promoRes(){
+  if(!CART.length)return {lines:[],totalC:0};
+  return Sales.promoApply(CART.map(l=>{const it=BYID.get(l.id);return {itemId:l.id,category:it?it.category:'',qty:l.qty,price:l.price};}),promoList(),{now:PNOW,money});
+}
+// The tag on an item tile: the first live offer that covers the item, in words. Uses the real clock (the tile is not a sale).
+function offerFor(i){
+  const day=Sales.promoDay(Date.now()),p=promoList().find(x=>Sales.promoActive(x,day)&&Sales.promoMatches(x,{itemId:i.id,category:i.category}));
+  return p?Sales.promoText(p,{money}):'';
+}
+const cartTotal=()=>(Math.round(cartGross()*100)-promoRes().totalC-discSplit().total)/100;
 
 // ── BASKET: the cart frozen into one record = one receipt ─────────────────────
 // This is the shape sales.js stores as sales/{saleId}: header + lines, with the selling price copied
 // onto each line at the moment of sale (so editing a price later never changes an old receipt). receiptNo, tillId,
 // till and seq are stamped when the sale is completed (step 8), and finalizeSale saves it (step 9).
 function makeBasket(pay){
-  const sp=discSplit();
+  const sp=discSplit(),pr=promoRes();
   const lines=CART.map((l,i)=>{
-    const o={itemId:l.id,kind:l.kind||'item',name:l.name,unit:l.unit,qty:l.qty,price:l.price,total:(toC(lineTotal(l))-sp.lines[i])/100};
-    if(sp.lines[i]>0)o.discount=sp.lines[i]/100;       // step 18: line.total is AFTER the discount, line.discount is what came off
+    const pc=pr.lines[i]?pr.lines[i].discC:0,dc=pc+sp.lines[i];      // step 25: what the offer took off + the manual share
+    const o={itemId:l.id,kind:l.kind||'item',name:l.name,unit:l.unit,qty:l.qty,price:l.price,total:(toC(lineTotal(l))-dc)/100};
+    if(dc>0)o.discount=dc/100;                         // step 18: line.total is AFTER the discount, line.discount is ALL that came off (offer and manual)
+    if(pc>0){o.promoDiscount=pc/100;o.promoId=pr.lines[i].promo.id;o.promoName=pr.lines[i].promo.name;}   // step 25: the part that an offer gave
     return o;
   });
   const b=Object.assign({
@@ -735,7 +763,12 @@ function makeBasket(pay){
     qtyTotal:Math.round(lines.reduce((a,l)=>a+l.qty,0)*1000)/1000,
     total:Math.round(lines.reduce((a,l)=>a+Math.round(l.total*100),0))/100
   },pay||{});
-  if(sp.total>0&&DISC){b.discount=sp.total/100;b.discountBy=DISC.by||'';b.discountReason=DISC.reason||'';}
+  if(pr.totalC+sp.total>0){                        // the same fields sales.js toRecord() writes, so the preview and the saved sale read alike
+    b.discount=(pr.totalC+sp.total)/100;
+    if(pr.totalC>0)b.promoDiscount=pr.totalC/100;
+    if(sp.total>0&&DISC){b.discountBy=DISC.by||'';b.discountReason=DISC.reason||'';}
+    else{b.discountBy=Sales.PROMO_BY;b.discountReason=Array.from(new Set(lines.filter(l=>l.promoName).map(l=>l.promoName))).join(', ').slice(0,60);}
+  }
   return b;
 }
 // White text on the brand colour (initials box), or near-black when the colour is light, so a yellow or pale brand colour is still
@@ -777,16 +810,19 @@ function receiptEl(b,tag){
   b.lines.forEach(l=>{
     const r1=el('tr','ln'),c1=el('td','b',l.name,{colspan:'2'});r1.append(c1);
     const r2=el('tr'),q=el('td','mu',fq(l.qty)+(l.unit?' '+l.unit.toLowerCase():'')+' × '+money(l.price)),a=el('td','r b',money(Math.round(l.price*l.qty*100)/100));
-    r2.append(q,a);const tb=el('tbody');tb.append(r1,r2);t.append(tb);   // one tbody per item so a page break never separates its name from its price
+    r2.append(q,a);const tb=el('tbody');tb.append(r1,r2);
+    if(l.promoDiscount>0){const r3=el('tr');r3.append(el('td','mu','Offer: '+l.promoName),el('td','r mu','\u2212'+money(l.promoDiscount)));tb.append(r3);}   // step 25
+    t.append(tb);   // one tbody per item so a page break never separates its name from its price
   });
   paper.append(t,el('hr','dash'));
   const tail=el('div','tail');                    // total, payments and footer stay together on one page when printed
   const tt=el('table');
-  if(b.discount>0){                                // step 18: what the lines add up to, what came off, then the total below
-    const gross=b.lines.reduce((a,l)=>a+Math.round(l.price*l.qty*100),0)/100,rs=el('tr'),rd=el('tr');
-    rs.append(el('td','mu','Subtotal'),el('td','r mu',money(gross)));
-    rd.append(el('td','','Discount'),el('td','r','\u2212'+money(b.discount)));
-    tt.append(rs,rd);
+  if(b.discount>0){                                // step 18: what the lines add up to, what came off, then the total below. Step 25: offers and a person's discount are shown apart
+    const gross=b.lines.reduce((a,l)=>a+Math.round(l.price*l.qty*100),0)/100,rs=el('tr');
+    const dC=toC(b.discount),pC=Math.min(dC,toC(b.promoDiscount)),mC=dC-pC;
+    rs.append(el('td','mu','Subtotal'),el('td','r mu',money(gross)));tt.append(rs);
+    if(pC>0){const ro=el('tr');ro.append(el('td','','Offers'),el('td','r','\u2212'+money(pC/100)));tt.append(ro);}
+    if(mC>0){const rd=el('tr');rd.append(el('td','','Discount'),el('td','r','\u2212'+money(mC/100)));tt.append(rd);}
   }
   const tr=el('tr','gt');tr.append(el('td','','TOTAL'),el('td','r',money(b.total)));tt.append(tr);
   tail.append(tt);
@@ -863,9 +899,15 @@ function escposReceipt(b,tag,pf){
   ctr(d.toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+' '+d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}));
   if(b.cashier)ctr('Served by: '+b.cashier);
   rule('-');
-  b.lines.forEach(l=>{bd(1);wrap(l.name).forEach(ln);bd(0);lr(fq(l.qty)+(l.unit?' '+l.unit.toLowerCase():'')+' x '+money(l.price),money(Math.round(l.price*l.qty*100)/100));});
+  b.lines.forEach(l=>{bd(1);wrap(l.name).forEach(ln);bd(0);lr(fq(l.qty)+(l.unit?' '+l.unit.toLowerCase():'')+' x '+money(l.price),money(Math.round(l.price*l.qty*100)/100));
+    if(l.promoDiscount>0)lr('  Offer: '+l.promoName,'-'+money(l.promoDiscount));});   // step 25
   rule('-');
-  if(b.discount>0){lr('Subtotal',money(b.lines.reduce((a,l)=>a+Math.round(l.price*l.qty*100),0)/100));lr('Discount','-'+money(b.discount));}
+  if(b.discount>0){                                 // step 25: offers and a person's discount apart
+    const dC=toC(b.discount),pC=Math.min(dC,toC(b.promoDiscount)),mC=dC-pC;
+    lr('Subtotal',money(b.lines.reduce((a,l)=>a+Math.round(l.price*l.qty*100),0)/100));
+    if(pC>0)lr('Offers','-'+money(pC/100));
+    if(mC>0)lr('Discount','-'+money(mC/100));
+  }
   bd(1);hi(sz?SC:1);lr('TOTAL',money(b.total));hi(SC);bd(0);
   ln(b.lineCount+(b.lineCount===1?' item':' items')+' / '+fq(b.qtyTotal)+(b.qtyTotal===1?' unit':' units'));
   if(b.payments){
@@ -940,6 +982,7 @@ function fld(label,input){const w=el('label','fld');w.append(el('span','',label)
 
 function openPay(){
   if(!CART.length||PAYOVL)return;
+  {const was=toC(cartTotal());promoClock();if(toC(cartTotal())!==was){renderCart();say('An offer has ended, so the total changed.','warn',6000);}}   // step 25: an offer that ended since the cart was drawn
   if(!reconcileDisc()){renderCart();return;}          // step 18: a discount that is no longer allowed comes off first
   if(isReadOnly()){say('The till is read-only right now.','bad');return;}
   if(toC(cartTotal())<=0){say('Nothing to charge.','bad');return;}
@@ -1187,7 +1230,7 @@ function clearCart(){CART=[];renderCart();}
 let DISC=null,DOVL=null;              // DISC: {kind:'pct'|'amt', value, reason, by (who allowed it), apBP (percentage a PIN approved, in basis points; 0 = none)}
 const DISC_LOST='the discount was not kept, apply it again';
 const discPolicy=()=>Sales.discountPolicy(DATA&&DATA.depotInfo);
-const grossLinesC=()=>CART.map(l=>toC(lineTotal(l)));
+const grossLinesC=()=>{const pr=promoRes();return CART.map((l,i)=>toC(lineTotal(l))-(pr.lines[i]?pr.lines[i].discC:0));};   // step 25: each line's value AFTER the offers, which is what a manual discount is a share of
 function discSplit(){
   if(!DISC||!CART.length)return {lines:CART.map(()=>0),total:0};
   return Sales.discountSplit(grossLinesC(),DISC.kind,DISC.value);
@@ -1218,7 +1261,7 @@ function openDisc(){
   const cx=el('button','sm','Cancel',{type:'button'});cx.onclick=closeDisc;
   head.append(el('h2','','Discount'),cx);
   const body=el('div','pay-body'),foot=el('div','pay-f');
-  const due=el('div','pay-due');due.append(el('span','','Basket'),el('b','',money(G/100)));body.append(due);
+  const due=el('div','pay-due');due.append(el('span','',promoRes().totalC>0?'Basket after offers':'Basket'),el('b','',money(G/100)));body.append(due);
   body.append(el('div','pay-note mu',holder?'You may give up to '+Sales.pctText(pol.maxBP)+'% on your own.':'You may give up to '+Sales.pctText(own)+'% on your own. More, up to '+Sales.pctText(pol.maxBP)+'%, needs a manager PIN.'));
   const mt=el('div','methods');mt.style.gridTemplateColumns='1fr 1fr';
   const bP=el('button','','% off',{type:'button'}),bA=el('button','','Amount off',{type:'button'});mt.append(bP,bA);body.append(mt);
@@ -1885,6 +1928,7 @@ function reportEl(r,copy){
   row(t,'Sales',String(r.saleCount));
   if(r.itemsComplete)row(t,'Items sold',fq(r.qtyTotal));
   row(t,'Total sold',money(r.total),'b');
+  if(r.itemsComplete&&r.promoGiven>0)row(t,'Offers applied ('+r.promoCount+'), already off the total',money(r.promoGiven));
   if(r.itemsComplete&&r.discountGiven>0)row(t,'Discounts given ('+r.discountCount+'), already off the total',money(r.discountGiven));
   if(r.credit>0)row(t,'Left unpaid (credit)',money(r.credit));
   paper.append(t);
@@ -2478,10 +2522,10 @@ function draftNotice(r){
   return m;
 }
 
-function lineEl(l){
+function lineEl(l,pr){                           // pr: this line's offer from promoRes() (step 25)
   const it=BYID.get(l.id),row=el('div','line');
   const rm=el('button','rm','\u2715',{type:'button','aria-label':'Remove '+l.name});rm.onclick=()=>setQty(l.id,0);
-  const tcell=el('div','lt');tcell.append(el('span','',money(lineTotal(l))),rm);
+  const tcell=el('div','lt');tcell.append(el('span','',money((toC(lineTotal(l))-(pr?pr.discC:0))/100)),rm);
   row.append(el('div','ln',l.name),tcell);
   row.append(el('div','lp',money(l.price)+(l.per?' / '+l.per.toLowerCase():'')));
   const minus=el('button','','\u2212',{type:'button','aria-label':'Decrease '+l.name});
@@ -2494,13 +2538,16 @@ function lineEl(l){
   inp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();inp.blur();}};
   const q=el('div','qty');q.append(minus,inp,plus);row.append(q);
   if(it&&l.qty>it.avail)row.append(el('div','lw',it.avail>0?'Only '+fq(it.avail)+' in stock':'None in stock'));
+  if(pr&&pr.promo){const o=el('div','lo');o.append(el('span','','Offer: '+pr.promo.name),el('span','','\u2212'+money(pr.discC/100)));row.append(o);}   // step 25
+  if(pr&&pr.hint)row.append(el('div','lh',pr.hint));
   return row;
 }
 function renderCart(){
+  promoClock();                                  // step 25: offers are judged now, and stay judged this way until the cart is redrawn or Charge opens
   reconcileDisc();                               // step 18: a discount the basket no longer justifies comes off before anything is drawn
-  const lines=document.createDocumentFragment();
+  const pr=promoRes(),lines=document.createDocumentFragment();
   if(!CART.length)lines.append(el('div','empty','Scan a barcode or tap an item to start a sale.'));
-  CART.forEach(l=>lines.append(lineEl(l)));
+  CART.forEach((l,i)=>lines.append(lineEl(l,pr.lines[i])));
   LINES.replaceChildren(lines);
   const tot=cartTotal(),n=CART.length;
   $('tot').textContent=money(tot);
@@ -2509,7 +2556,9 @@ function renderCart(){
   const dT=discSplit().total;
   $('dsc-row').hidden=!(n&&discPolicy().on);
   $('dsc').textContent=dT>0?'Change discount':'Discount';
-  $('dsv').textContent=dT>0?'\u2212'+money(dT/100)+' ('+Sales.pctText(Math.round(dT*10000/Math.max(1,toC(cartGross()))))+'%)':'';
+  $('dsv').textContent=dT>0?'\u2212'+money(dT/100)+' ('+Sales.pctText(Math.round(dT*10000/Math.max(1,grossLinesC().reduce((a,b)=>a+b,0))))+'%)':'';
+  $('ofr-row').hidden=!(n&&pr.totalC>0);         // step 25: what the offers saved on this basket
+  $('ofv').textContent=pr.totalC>0?'\u2212'+money(pr.totalC/100):'';
   if(!n&&!ROVL_SALE)hideReceipt();               // a recorded sale's receipt stays up after the cart is emptied
   CARTBAR.classList.toggle('has',n>0);
   $('cb-a').textContent=n?n+(n===1?' item':' items'):'Cart is empty';
@@ -2691,7 +2740,8 @@ function buildSell(){
   const secrow=el('div','sec-row');secrow.append(prv,hld);
   const drow=el('div','drow','',{id:'dsc-row'}),dbtn=el('button','sm','Discount',{id:'dsc',type:'button'});dbtn.onclick=openDisc;
   drow.hidden=true;drow.append(dbtn,el('span','dv','',{id:'dsv'}));      // shown only when the Admin has switched discounts on
-  foot.append(drow,tot,secrow,CHARGE,el('div','hint','',{id:'shint'}));
+  const orow=el('div','drow','',{id:'ofr-row'});orow.hidden=true;orow.append(el('span','','Offers applied'),el('span','dv','',{id:'ofv'}));   // step 25: shown only when an offer applies
+  foot.append(orow,drow,tot,secrow,CHARGE,el('div','hint','',{id:'shint'}));
   cart.append(grab,head,LINES,foot);
   // phone: bar that opens the sheet, and the dimmed backdrop behind it
   CARTBAR=el('button','cartbar','',{id:'cartbar',type:'button','aria-controls':'cart','aria-expanded':'false'});

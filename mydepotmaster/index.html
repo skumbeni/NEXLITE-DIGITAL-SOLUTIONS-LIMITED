@@ -4714,7 +4714,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.62';
+const SW_VERSION  = 'v0.3.64';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -5025,6 +5025,7 @@ const DEFAULT={
   fxRatesUpdatedAt:0,  // ms timestamp of last successful FX fetch
   fxRateSetAt:0,        // the USD rate for DATA.currency at the moment it was last applied to stored figures
   inventoryPrices:{}, // {itemName: {purchasePrice, sellingPrice}} — per-item price memory
+  promotions:[],      // till offers (step 25) {id,name,type:'pct'|'price'|'multi'|'bogo',on,items[],cats[],pct|price|buy+bundlePrice|buy+free,minQty?,from,to,days[]} — see Sales.promoCheck
   books:[],          // {id,name,type,size,createdAt,updatedAt,data,mimeType}
   contacts:[],       // {id,type,name,phone,email,address,balance,notes,contactPerson,taxNumber,bankDetails,paymentTerms,leadTimeDays,category,rating,lastOrderDate} type=supplier|customer
   budgets:[],        // {id,period,itemName,itemType,budgetQty,budgetValue,budgetLabour?,notes} itemType=general|commodity
@@ -5910,7 +5911,7 @@ function renderPendingApprovals(){
     // Build a short human-readable summary per category
     let detail='';
     if(cat==='genRec')      detail=`${esc(rec.itemName)} · ${Number(rec.received||0).toLocaleString()} units`;
-    else if(cat==='genIss') detail=`${esc(rec.itemName)} · ${Number(rec.issued||0).toLocaleString()} units${rec.sellingPrice?` @ ${cur()}${Number(rec.sellingPrice).toFixed(2)}`:''}`;
+    else if(cat==='genIss') detail=`${esc(rec.itemName)} · ${Number(rec.issued||0).toLocaleString()} units${rec.sellingPrice?` @ ${cur()}${Number(rec.sellingPrice).toFixed(2)}`:''}${rec.internal?' · internal: '+((_issueTypeOf(rec.issueType)||{}).label||'issue'):''}`;
     else if(cat==='genSC')  detail=`${esc(rec.itemName)} · Physical count: ${Number(rec.physicalCount||0).toLocaleString()}`;
     else if(cat==='comRec') detail=`Batch ${esc(rec.batchName)} · ${Number(rec.received||0).toLocaleString()} received`;
     else if(cat==='comIss') detail=`Batch ${esc(rec.batchName)} · ${Number(rec.issued||0).toLocaleString()} issued`;
@@ -8935,7 +8936,8 @@ function renderGenReceived(){
 }
 
 function renderGenIssued(){
-  const items=filterPeriod(DATA.generalIssued, PERIOD.general, 'date', 'general');
+  const _itemsAll=filterPeriod(DATA.generalIssued, PERIOD.general, 'date', 'general');
+  const items=_itemsAll.filter(_issFilterFn());      // step 24: All / Internal / Sales
   const sortedAll=approvedArr(DATA.generalIssued).slice().sort((a,b)=>(a.date+(a.time||'')).localeCompare(b.date+(b.time||'')));
   const runByItem={};const cumMap={};
   const cumSalesByItem={};const cumSalesMap={};
@@ -8951,12 +8953,13 @@ function renderGenIssued(){
     const sp=Number(item.sellingPrice||0);
     const saleVal=sp>0?sp*Number(item.issued||0):null;
     const cs=item.creditStatus||'paid';
-    const creditChip=item._return?`<span class="bdg ba2" style="font-size:14px">\u21A9 ${item.returnKind==='void'?'VOID':'REFUND'}</span>`:cs==='paid'
+    const _int=_isInternalIssue(item);
+    const creditChip=_int?`<span class="bdg ba2" style="font-size:14px">${esc(_issueTypeLabel(item))}</span>`:item._return?`<span class="bdg ba2" style="font-size:14px">\u21A9 ${item.returnKind==='void'?'VOID':'REFUND'}</span>`:cs==='paid'
       ?`<span class="bdg bg2" style="font-size:14px">PAID</span>`
       :cs==='partial'
         ?`<span class="bdg ba2" style="font-size:14px">PARTIAL</span>`
         :`<span class="bdg br2" style="font-size:14px">CREDIT</span>`;
-    const custChip=item.customerName?`<span style="font-size:14px;color:var(--blue);font-weight:700">👤 ${esc(item.customerName)}</span>`:item.customerId?`<span style="font-size:13px;color:var(--muted)">linked</span>`:'<span style="color:var(--muted)">—</span>';
+    const custChip=_int?(item.issueTo?`<span style="font-size:14px;color:var(--blue);font-weight:700">→ ${esc(item.issueTo)}</span>`:'<span style="color:var(--muted)">—</span>'):item.customerName?`<span style="font-size:14px;color:var(--blue);font-weight:700">👤 ${esc(item.customerName)}</span>`:item.customerId?`<span style="font-size:13px;color:var(--muted)">linked</span>`:'<span style="color:var(--muted)">—</span>';
     return`<tr>
     ${USER.role==='admin'?`<td><input type="checkbox" class="bulk-chk" data-id="${item.id}" onchange="bulkToggleRow('gen-iss-table','${item.id}',this.checked)" ${!editable?'disabled title="Outside edit window"':''}></td>`:''}
     <td style="white-space:nowrap">
@@ -8971,12 +8974,12 @@ function renderGenIssued(){
     <td style="font-size:16px">${custChip}</td>
     <td style="font-size:17px;color:var(--muted)">${esc(item.notes)||'—'}</td>
     <td style="color:var(--blue);text-align:right;font-weight:700;border-left:2px solid var(--border)">${(cumMap[item.id]||0).toLocaleString()}</td>
-    <td style="white-space:nowrap"><button class="editbtn" onclick="printSaleReceipt('${item.id}')" title="Print receipt">🧾</button>${USER.role==='admin'?` <button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`openEditGenIss('${item.id}')`:''}" title="${editable?'Edit':'Edit window closed (>'+_editWindowLabel()+')'}">✏️</button> <button class="delbtn" onclick="delGenIss('${item.id}')">🗑</button>`:''}</td>
+    <td style="white-space:nowrap">${_int?'':`<button class="editbtn" onclick="printSaleReceipt('${item.id}')" title="Print receipt">🧾</button>`}${USER.role==='admin'?` <button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`openEditGenIss('${item.id}')`:''}" title="${editable?'Edit':'Edit window closed (>'+_editWindowLabel()+')'}">✏️</button> <button class="delbtn" onclick="delGenIss('${item.id}')">🗑</button>`:''}</td>
   </tr>`;}).join('');
   bulkClear('gen-iss-table');
   const allTimeIss=approvedArr(DATA.generalIssued).reduce((a,b)=>a+Number(b.issued||0),0);
-  const periodIss=approvedArr(items).reduce((a,b)=>a+Number(b.issued||0),0);
-  const periodSales=approvedArr(items).reduce((a,b)=>a+Number(b.issued||0)*Number(b.sellingPrice||0),0);
+  const periodIss=approvedArr(_itemsAll).reduce((a,b)=>a+Number(b.issued||0),0);
+  const periodSales=approvedArr(_itemsAll).reduce((a,b)=>a+Number(b.issued||0)*Number(b.sellingPrice||0),0);
   const cumSales=approvedArr(DATA.generalIssued).reduce((a,b)=>a+Number(b.issued||0)*Number(b.sellingPrice||0),0);
   // Credit/debt summary — approved sales only (pending sales aren't official yet)
   const creditItems=approvedArr(DATA.generalIssued).filter(x=>x.creditStatus==='credit'||x.creditStatus==='partial');
@@ -9025,12 +9028,13 @@ function renderGenIssued(){
       <div class="sbox"><div class="sv" style="font-size:20px">${zm(cumSales)}</div><div class="sl">Cumulative Sales</div></div>
       <div class="sbox am"><div class="sv" style="font-size:20px">${zm(periodSales)}</div><div class="sl">Period Sales</div></div>
     </div>`:''}
+    ${_issFilterBar(_itemsAll)}
     <div style="margin-bottom:10px">
       <input class="fi" id="gen-iss-search" placeholder="🔍 Search by item name or notes…" oninput="filterTable('gen-iss-table',this.value)" style="font-size:18px"/>
     </div>
     ${USER.role==='admin'?bulkBarHtml('gen-iss-table','openBulkEditGenIss','bulkDeleteGenIss'):''}
     <div class="card" style="padding:0"><div class="tw"><table id="gen-iss-table">
-      <thead><tr>${USER.role==='admin'?`<th style="width:34px"><input type="checkbox" id="gen-iss-table-chkall" onchange="bulkToggleAll('gen-iss-table',this.checked)"></th>`:''}<th>Date & Time</th><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Selling Price</th><th style="text-align:right">Sale Value</th><th>Payment</th><th>Customer</th><th>Notes</th><th style="text-align:right;color:var(--blue);border-left:2px solid var(--border)">Item Cum.</th>${USER.role==='admin'?'<th></th>':''}</tr></thead>
+      <thead><tr>${USER.role==='admin'?`<th style="width:34px"><input type="checkbox" id="gen-iss-table-chkall" onchange="bulkToggleAll('gen-iss-table',this.checked)"></th>`:''}<th>Date & Time</th><th>Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Selling Price</th><th style="text-align:right">Sale Value</th><th>${_tillSells()?'Payment / Reason':'Payment'}</th><th>${_tillSells()?'Customer / To':'Customer'}</th><th>Notes</th><th style="text-align:right;color:var(--blue);border-left:2px solid var(--border)">Item Cum.</th>${USER.role==='admin'?'<th></th>':''}</tr></thead>
       <tbody>${items.length===0?`<tr><td colspan="${USER.role==='admin'?11:10}" class="empty">No issued items for this period</td></tr>`:rows}</tbody>
     </table></div></div>`;
 }
@@ -9184,8 +9188,8 @@ function renderGenSales(){
     ${closeCard}
 
     <!-- New Sale Button -->
-    <button onclick="GTAB='issued';openGenIssForm()" style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:var(--green);color:#111;border:none;border-radius:12px;padding:13px;font-family:var(--fh);font-size:18px;font-weight:800;cursor:pointer;margin-bottom:14px;touch-action:manipulation">
-      + New Sale
+    <button onclick="${_tillSells()?'openTill()':"GTAB='issued';openGenIssForm()"}" style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:var(--green);color:#111;border:none;border-radius:12px;padding:13px;font-family:var(--fh);font-size:18px;font-weight:800;cursor:pointer;margin-bottom:14px;touch-action:manipulation">
+      ${_tillSells()?'🧾 New Sale at the Till':'+ New Sale'}
     </button>
 
     <!-- Transactions in the chosen period -->
@@ -9327,6 +9331,7 @@ async function openDailyCloseOut(force){
     L.push(rowH('&nbsp;· Cash',zm(D.byMethod.cash)));
     [['mtn','MTN Money'],['airtel','Airtel Money'],['card','Card']].forEach(([k,l])=>{if(D.byMethod[k]>0)L.push(rowH('&nbsp;· '+l+' <span style="color:var(--muted)">(not in the drawer)</span>',zm(D.byMethod[k])));});
     if(D.credit>0)L.push(rowH('&nbsp;· On credit',zm(D.credit),'color:var(--amber)'));
+    if(D.promoGiven>0)L.push(rowH('&nbsp;· Offers applied ('+D.promoCount+') <span style="color:var(--muted)">(already taken off)</span>',zm(D.promoGiven)));
     if(D.discountGiven>0)L.push(rowH('&nbsp;· Discounts given ('+D.discountCount+') <span style="color:var(--muted)">(already taken off)</span>',zm(D.discountGiven)));
   }
   if(D.returns&&D.returns.count){                                    // step 19: booked on the day they were made, whatever day the sale was
@@ -9391,7 +9396,7 @@ function saveDailyCloseOut(ignoreOpen){
     expectedCash, actualCash:actual, variance, notes,
     closedBy:USER.username||'admin',
     zRef:'Z-'+todayStr,
-    tillSales:D.saleCount, tillTotal:D.total, tillCash:D.cashSales, appCash:F.appCash, tillDiscount:D.discountGiven,
+    tillSales:D.saleCount, tillTotal:D.total, tillCash:D.cashSales, appCash:F.appCash, tillDiscount:D.discountGiven, tillPromo:D.promoGiven,
     tillRefundCount:D.returns.count, tillRefunds:D.returns.total, tillCashOut:D.cashOut,   // step 19: voids/refunds made today; cash handed back (already out of expectedCash)
     byMethod:D.byMethod, credit:D.credit,
     shifts:D.shifts.map(x=>({shiftId:x.shiftId,cashier:x.cashier,openedDate:x.openedDate,closed:x.closed,float:x.float,expectedCash:x.expectedCash,countedCash:x.countedCash,variance:x.variance,forced:x.forced})),
@@ -9430,6 +9435,7 @@ function printDailyZ(id){
     rows.push({c:['· Cash',zm(bm.cash||0)]});
     [['mtn','MTN Money'],['airtel','Airtel Money'],['card','Card']].forEach(([k,l])=>{if(Number(bm[k])>0)rows.push({c:['· '+l+' (not in the drawer)',zm(bm[k])]});});
     if(Number(z.credit)>0)rows.push({c:['· Left on credit',zm(z.credit)]});
+    if(Number(z.tillPromo)>0)rows.push({c:['· Offers applied (already taken off)',zm(z.tillPromo)]});
     if(Number(z.tillDiscount)>0)rows.push({c:['· Discounts given (already taken off)',zm(z.tillDiscount)]});
     if(Number(z.tillRefundCount)>0){                                  // step 19
       rows.push({c:['Voids & refunds made today ('+Number(z.tillRefundCount)+')','\u2212'+zm(z.tillRefunds||0)]});
@@ -9666,7 +9672,163 @@ function saveGenRec(){if(isReadOnly()){alert("🔒 This account is in read-only 
   closeModal();
 }
 
+// ── INTERNAL ISSUES (till roadmap step 24) ───────────────────────────────────────────────────────────────────────────────
+// Once the Till is available on this account and device, SELLING happens only at the Till (pos.html): it takes the payment, numbers the receipt and keeps the
+// shift totals right. Issue Item (and the general-item lines of Multi Issue) are for stock that leaves WITHOUT a sale: a transfer to another site, staff use,
+// damage, expiry, loss, a sample. Such a row is a normal generalIssued row with internal:true, a reason (issueType) and who or where it went to (issueTo), and NO
+// price, customer, payment or receipt number. So it reduces stock like any issue, but it can never reach Sales History, the shift totals, the debts list or revenue.
+// Where the Till is not available (the Play Store build, or a plan without it) the old Issue Item form stays, so nobody loses the ability to record a sale.
+// var, not const: the render functions below can run before this line has executed.
+var ISSUE_TYPES=[
+  {id:'transfer',icon:'🚚',label:'Transfer to another site',to:'Sent to',   ph:'SITE OR PERSON', need:true},
+  {id:'staff',   icon:'👤',label:'Staff use',               to:'Taken by',   ph:'STAFF NAME',     need:true},
+  {id:'damaged', icon:'💥',label:'Damaged / spoiled',       to:'',           ph:'',               need:false},
+  {id:'expired', icon:'⌛',label:'Expired',                 to:'',           ph:'',               need:false},
+  {id:'lost',    icon:'❓',label:'Lost / stolen',           to:'',           ph:'',               need:false},
+  {id:'sample',  icon:'🎁',label:'Sample / donation',       to:'Given to',   ph:'WHO',            need:false},
+  {id:'other',   icon:'📝',label:'Other internal use',      to:'Purpose',    ph:'WHAT FOR',       need:true}
+];
+function _tillSells(){try{return !window.PLAY_MODE&&hasFeature('pos_till');}catch(e){return false;}}
+function _issueTypeOf(id){return (ISSUE_TYPES||[]).find(t=>t.id===id)||null;}
+function _isInternalIssue(r){return !!(r&&r.internal&&!r._sale&&!r._return);}
+function _issueTypeLabel(r){const t=_issueTypeOf(r&&r.issueType);return t?t.icon+' '+t.label:'📝 Internal issue';}
+function _issueAuditText(r){const t=_issueTypeOf(r.issueType);return 'Item: '+r.itemName+' · Qty: '+r.issued+' · Internal: '+(t?t.label:(r.issueType||'issue'))+(r.issueTo?' · '+r.issueTo:'')+' (not a sale)';}
+function _issueNames(extra){
+  const defined=(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean);
+  const fromData=[...new Set(DATA.generalInventory.map(x=>x.itemName))];
+  return [...new Set([...defined,...fromData,...(extra?[extra]:[])])].sort();
+}
+function _issTypeOpts(sel){return ISSUE_TYPES.map(t=>`<option value="${t.id}"${t.id===sel?' selected':''}>${t.icon} ${t.label}</option>`).join('');}
+// shows or hides the "Sent to / Taken by / …" box for the chosen reason; p = 'gi' (new) or 'egei' (edit)
+function _issTypeUi(p){
+  const t=_issueTypeOf((document.getElementById(p+'-type')||{}).value),wrap=document.getElementById(p+'-to-wrap'),lab=document.getElementById(p+'-to-label'),inp=document.getElementById(p+'-to');
+  if(!wrap||!lab||!inp)return;
+  wrap.style.display=t&&t.to?'':'none';
+  if(t&&t.to){lab.textContent=t.to+(t.need?'':' (optional)');inp.placeholder=t.ph||'';}
+}
+function _giAvail(){
+  const el=document.getElementById('gi-avail'),nm=document.getElementById('gi-name');
+  if(!el)return;
+  if(!nm||!nm.value){el.textContent='';return;}
+  try{const b=genStock(nm.value);el.textContent='Available now: '+Number(b&&b.bal||0).toLocaleString();}catch(e){el.textContent='';}
+}
+function _openInternalIssForm(){
+  const names=_issueNames();
+  const opts=names.length>0?names.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join(''):`<option value="">NO ITEMS RECEIVED YET</option>`;
+  openModal(`
+    <div class="mtitle">📤 Issue Item <span style="font-size:14px;color:var(--muted);font-weight:600">· internal</span></div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:12px;font-size:15px;line-height:1.5;color:var(--muted)">For stock that leaves <b style="color:var(--white)">without a sale</b>: transfers, staff use, damage, expiry, samples. To sell to a customer use the Till: it takes the payment, prints the receipt and keeps the shift totals right.
+      <div style="margin-top:8px"><button type="button" class="btn bo bsm" onclick="closeModal();openTill()">🧾 Open Till</button></div>
+    </div>
+    <div class="fw"><div class="fl">Item Name</div><select class="fi" id="gi-name" onchange="_giAvail()">${opts}</select></div>
+    <div class="fw"><div class="fl">Qty Issued</div><input class="fi" type="number" id="gi-qty" placeholder="0" inputmode="numeric"/><div id="gi-avail" style="font-size:14px;color:var(--muted);margin-top:4px"></div></div>
+    <div class="fw"><div class="fl">Reason</div><select class="fi" id="gi-type" onchange="_issTypeUi('gi')">${_issTypeOpts('transfer')}</select></div>
+    <div class="fw" id="gi-to-wrap"><div class="fl" id="gi-to-label"></div><input class="fi" id="gi-to" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div class="fw"><div class="fl">Date Issued</div><input class="fi" type="date" id="gi-date" value="${today()}"/></div>
+    <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="gi-notes" placeholder="E.G. WAYBILL NUMBER, DETAILS…" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn ba" onclick="saveGenIss()">✓ Issue</button></div>`);
+  setTimeout(()=>{_issTypeUi('gi');_giAvail();},50);
+}
+function _saveInternalIss(){
+  const name=document.getElementById('gi-name').value;
+  const qty=Number(document.getElementById('gi-qty').value||0);
+  if(!name||!(qty>0)){alert('Select item and enter quantity.');return;}
+  const t=_issueTypeOf(document.getElementById('gi-type').value);
+  if(!t){alert('Choose the reason for this issue.');return;}
+  const to=t.to?uc(document.getElementById('gi-to').value):'';
+  if(t.need&&!to){alert('Enter "'+t.to+'" for this reason.');return;}
+  let bal=null;try{const b=genStock(name);if(b&&isFinite(Number(b.bal)))bal=Number(b.bal);}catch(e){}
+  if(bal!==null&&qty>bal&&!confirm('Only '+bal.toLocaleString()+' of '+name+' in stock. Issue '+qty.toLocaleString()+' anyway?'))return;
+  const payload=stampEntry({id:uid(),date:document.getElementById('gi-date').value||today(),time:nowTime(),itemName:name,issued:qty,notes:uc(document.getElementById('gi-notes').value),
+    sellingPrice:0,creditStatus:'paid',partialPaid:0,customerId:'',customerName:'',internal:true,issueType:t.id,issueTo:to});
+  openModal(`
+    <div class="mtitle">Confirm Issue</div>
+    <div style="background:var(--surface2);border-radius:12px;padding:14px;margin-bottom:16px;text-align:center">
+      <div style="font-size:19px;font-weight:800;color:var(--white)">${esc(name)}</div>
+      <div style="font-size:15px;color:var(--muted);margin-top:4px">${qty.toLocaleString()} units</div>
+      <div style="font-size:16px;font-weight:700;color:var(--amber);margin-top:8px">${t.icon} ${esc(t.label)}</div>
+      ${to?`<div style="font-size:15px;color:var(--blue);margin-top:4px">${esc(t.to)}: ${esc(to)}</div>`:''}
+      <div style="font-size:13px;color:var(--muted);margin-top:8px">Not a sale: no price, payment or receipt.</div>
+    </div>
+    <div class="mact" style="flex-direction:column;gap:8px">
+      <button class="btn bg" style="width:100%" onclick="_doSaveInternalIss(this)">✓ Confirm</button>
+      <button class="btn bo" style="width:100%" onclick="closeModal()">✕ Cancel</button>
+    </div>`,'uncloseable');
+  document.getElementById('modal-ovl')._pendingIssPayload=payload;
+}
+function _doSaveInternalIss(btn){
+  const ovl=document.getElementById('modal-ovl'),payload=ovl&&ovl._pendingIssPayload;
+  if(!payload)return;
+  ovl._pendingIssPayload=null;      // a second tap can no longer save it twice
+  if(btn)btn.disabled=true;
+  updateData(d=>({...d,generalIssued:[...d.generalIssued,payload]}));
+  logAuditEvent('CREATE','Inventory Issued',_issueAuditText(payload));
+  closeModal();
+}
+// Edit of an internal row (the price, customer and payment fields of a sale are NOT offered, and are forced back to nothing on save)
+function _openEditInternalIss(iss){
+  const opts=_issueNames(iss.itemName).map(n=>`<option value="${esc(n)}"${n===iss.itemName?' selected':''}>${esc(n)}</option>`).join('');
+  openModal(`
+    <div class="mtitle">✏️ Edit Issued Item <span style="font-size:14px;color:var(--muted);font-weight:600">· internal</span></div>
+    <div class="warn">⏰ Editing is only allowed within ${_editWindowLabel()} of entry.</div>
+    <div class="fw"><div class="fl">Item Name</div><select class="fi" id="egei-name">${opts}</select></div>
+    <div class="fw"><div class="fl">Qty Issued</div><input class="fi" type="number" id="egei-qty" value="${iss.issued}" inputmode="numeric"/></div>
+    <div class="fw"><div class="fl">Reason</div><select class="fi" id="egei-type" onchange="_issTypeUi('egei')">${_issTypeOpts(iss.issueType)}</select></div>
+    <div class="fw" id="egei-to-wrap"><div class="fl" id="egei-to-label"></div><input class="fi" id="egei-to" value="${esc(iss.issueTo||'')}" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="egei-date" value="${iss.date}"/></div>
+    <div class="fw"><div class="fl">Notes</div><input class="fi" id="egei-notes" value="${esc(iss.notes||'')}" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn ba" onclick="saveEditGenIss('${iss.id}')">✓ Save Changes</button></div>`);
+  setTimeout(()=>_issTypeUi('egei'),50);
+}
+function _saveEditInternalIss(id){
+  const name=document.getElementById('egei-name').value;
+  const qty=Number(document.getElementById('egei-qty').value||0);
+  if(!name||!(qty>0)){alert('Select item and enter quantity.');return;}
+  const t=_issueTypeOf(document.getElementById('egei-type').value);
+  if(!t){alert('Choose the reason for this issue.');return;}
+  const to=t.to?uc(document.getElementById('egei-to').value):'';
+  if(t.need&&!to){alert('Enter "'+t.to+'" for this reason.');return;}
+  const before=DATA.generalIssued.find(x=>String(x.id)===String(id));
+  const date=document.getElementById('egei-date').value,notes=uc(document.getElementById('egei-notes').value);
+  updateData(d=>({...d,generalIssued:d.generalIssued.map(x=>String(x.id)===String(id)?{...x,itemName:name,itemId:'',issued:qty,date,notes,issueType:t.id,issueTo:to,
+    internal:true,sellingPrice:0,creditStatus:'paid',partialPaid:0,customerId:'',customerName:''}:x)}));
+  logAuditEvent('EDIT','Inventory Issued','ID:'+id+' · '+_issueAuditText({itemName:name,issued:qty,issueType:t.id,issueTo:to}),before);
+  closeModal();
+}
+// Issued tab filter: All / Internal / Sales
+var _issF='all';
+function _issFilterFn(){return _issF==='internal'?_isInternalIssue:_issF==='sales'?(r=>!_isInternalIssue(r)):(()=>true);}
+function _setIssF(v){_issF=v;showTab('general');}
+function _issFilterBar(period){
+  if(!(_tillSells()||(DATA.generalIssued||[]).some(_isInternalIssue)))return '';
+  const ints=period.filter(_isInternalIssue),units=approvedArr(ints).reduce((a,b)=>a+Number(b.issued||0),0);
+  const btn=(id,label)=>`<button class="stab${_issF===id?' act':''}" onclick="_setIssF('${id}')">${label}</button>`;
+  return `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">${btn('all','All')}${btn('internal','🚚 Internal')}${btn('sales','🧾 Sales')}${units>0?`<span style="font-size:14px;color:var(--muted)">${units.toLocaleString()} unit(s) issued without a sale this period</span>`:''}</div>`;
+}
+// Multi Issue: the Reason and "Sent to / Taken by" boxes of a general-item line
+function _mriReasonHtml(l){
+  return `<div class="fw"><div class="fl">Reason</div><select class="fi" onchange="_mriSetField('${l.id}','issueType',this.value)">${_issTypeOpts(l.issueType)}</select></div>`;
+}
+function _mriToHtml(l){
+  const t=_issueTypeOf(l.issueType);
+  if(!t||!t.to)return '';
+  return `<div class="fw"><div class="fl">${t.to}${t.need?'':' <span style="font-size:14px;color:var(--muted)">(optional)</span>'}</div><input class="fi" value="${esc(l.issueTo||'')}" placeholder="${t.ph||''}" oninput="_mriSetField('${l.id}','issueTo',this.value.toUpperCase())"/></div>`;
+}
+// Bulk edit: the row of an internal issue (no price, payment or customer)
+function _genIssRowHtmlInternal(r){
+  return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
+    <div style="font-weight:700;margin-bottom:8px">${esc(r.itemName)} · ${Number(r.issued||0).toLocaleString()} units · ${fmtDate(r.date)} <span style="font-size:13px;color:var(--muted);font-weight:600">· internal, no price or payment</span></div>
+    <div class="fw"><div class="fl">Item Name</div><select class="fi bel-itemName" data-id="${r.id}">${_invNameOpts(r.itemName)}</select></div>
+    <div class="fw"><div class="fl">Qty Issued</div><input class="fi bel-issued" type="number" data-id="${r.id}" value="${r.issued!=null?r.issued:0}" inputmode="numeric"/></div>
+    <div class="fw"><div class="fl">Reason</div><select class="fi bel-issueType" data-id="${r.id}">${_issTypeOpts(r.issueType)}</select></div>
+    <div class="fw"><div class="fl">Sent to / Taken by / Purpose</div><input class="fi bel-issueTo" data-id="${r.id}" value="${esc(r.issueTo||'')}" oninput="this.value=this.value.toUpperCase()"/></div>
+    <div class="fw"><div class="fl">Date</div><input class="fi bel-date" type="date" data-id="${r.id}" value="${r.date||''}"/></div>
+    <div class="fw" style="margin-bottom:0"><div class="fl">Notes</div><input class="fi bel-notes" data-id="${r.id}" value="${esc(r.notes||'')}" oninput="this.value=this.value.toUpperCase()"/></div>
+  </div>`;
+}
+
 function openGenIssForm(){
+  if(_tillSells())return _openInternalIssForm();      // step 24: with the Till available, Issue Item is for internal issues only
   const defined=(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean);
   const fromData=[...new Set(DATA.generalInventory.map(x=>x.itemName))];
   const allNames=[...new Set([...defined,...fromData])].sort();
@@ -9775,6 +9937,7 @@ function giSaveNewCustomer(){
 }
 
 function saveGenIss(){if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;} if(!requireAddPermission('issue stock'))return;
+  if(document.getElementById('gi-type'))return _saveInternalIss();      // step 24: the internal form has no price, customer or payment
   const name=document.getElementById('gi-name').value;
   const qty=Number(document.getElementById('gi-qty').value||0);
   if(!name||!qty){alert('Select item and enter quantity.');return;}
@@ -9943,8 +10106,8 @@ function _printSaleBasket(sid){
     ?`<img src="${depot.logoDataUrl}" style="height:56px;max-width:140px;object-fit:contain;display:block;margin:0 auto 6px" alt="${esc(depot.name||'')} logo">`
     :`<div style="width:56px;height:56px;border-radius:10px;background:${esc(accent)};color:#fff;font-size:17px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto 6px">${esc(initials)}</div>`;
   const payLabel=s.creditStatus==='paid'?'PAID - SETTLED IN FULL':s.creditStatus==='partial'?`PARTIAL - ${zm(s.amountPaid)} PAID, ${zm(s.balance)} DUE`:'CREDIT - ON ACCOUNT';
-  const lines=s.lines.map(l=>`<tr><td colspan="3" class="bold">${esc(l.name)}</td></tr><tr><td class="muted">${Number(l.qty).toLocaleString()} ${esc(l.unit||'')}</td><td class="right muted">x ${zm(l.price)}</td><td class="right bold">${zm(Math.round(l.price*l.qty*100)/100)}</td></tr>`).join('');
-  const gross=s.lines.reduce((a,l)=>a+Math.round(l.price*l.qty*100),0)/100;
+  const lines=s.lines.map(l=>`<tr><td colspan="3" class="bold">${esc(l.name)}</td></tr><tr><td class="muted">${Number(l.qty).toLocaleString()} ${esc(l.unit||'')}</td><td class="right muted">x ${zm(l.price)}</td><td class="right bold">${zm(Math.round(l.price*l.qty*100)/100)}</td></tr>${l.promoDiscount>0?`<tr><td colspan="2" class="muted">Offer: ${esc(l.promoName||'')}</td><td class="right muted">\u2212${zm(l.promoDiscount)}</td></tr>`:''}`).join('');
+  const gross=s.lines.reduce((a,l)=>a+Math.round(l.price*l.qty*100),0)/100, dp=Sales.discountParts(s);   // step 25: offers and a person's discount are shown apart
   const pays=(s.payments||[]).map(p=>`<tr><td class="muted">${esc(p.label||p.method)}${p.ref?' ('+esc(p.ref)+')':''}</td><td class="right muted">${zm(p.amount)}</td></tr>`).join('')
     +(s.change>0?`<tr><td class="muted">Change</td><td class="right muted">${zm(s.change)}</td></tr>`:'');
   const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Receipt #${esc(s.receiptNo)}</title><style>
@@ -9962,7 +10125,7 @@ function _printSaleBasket(sid){
   <div class="center muted">${fmtDate(s.date)} ${esc(s.time||'')}${s.cashier?' - '+esc(s.cashier):''}</div>
   ${s.customerName?`<div class="center muted" style="margin-top:4px">Customer: <strong>${esc(s.customerName)}</strong></div>`:''}
   <hr><table>${lines}</table><hr>
-  <table>${s.discount>0?`<tr><td class="muted">Subtotal</td><td class="right muted">${zm(gross)}</td></tr><tr><td>Discount</td><td class="right">\u2212${zm(s.discount)}</td></tr>`:''}<tr><td class="bold total">TOTAL</td><td class="right bold total" style="color:${esc(accent)}">${zm(s.total)}</td></tr>${pays}</table>
+  <table>${s.discount>0?`<tr><td class="muted">Subtotal</td><td class="right muted">${zm(gross)}</td></tr>${dp.promoC>0?`<tr><td>Offers</td><td class="right">\u2212${zm(dp.promoC/100)}</td></tr>`:''}${dp.manualC>0?`<tr><td>Discount</td><td class="right">\u2212${zm(dp.manualC/100)}</td></tr>`:''}`:''}<tr><td class="bold total">TOTAL</td><td class="right bold total" style="color:${esc(accent)}">${zm(s.total)}</td></tr>${pays}</table>
   <div class="pay">${payLabel}</div><div class="brand-hr"></div>
   <div class="footer">Thank you for your business!<br>${esc(depot.name||'Shop Inventory & Sales Manager')} - Powered by Shop Inventory & Sales Manager</div></body></html>`;
   _pdfPrint(html,`Receipt #${s.receiptNo}`,'',true);
@@ -10246,6 +10409,7 @@ function openBulkEditGenIss(){
   requireAdminPassword(`edit ${ids.length} issue record(s)`,()=>_doOpenBulkEditGenIss(recs));
 }
 function _genIssRowHtml(r){
+  if(_isInternalIssue(r))return _genIssRowHtmlInternal(r);      // step 24
   return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px">
     <div style="font-weight:700;margin-bottom:8px">${esc(r.itemName)} · ${Number(r.issued||0).toLocaleString()} units · ${fmtDate(r.date)}</div>
     <div class="fw"><div class="fl">Item Name</div><select class="fi bel-itemName" data-id="${r.id}">${_invNameOpts(r.itemName)}</select></div>
@@ -10263,6 +10427,7 @@ function _doOpenBulkEditGenIss(recs){
   const rowsHtml=recs.map(_genIssRowHtml).join('');
   openModal(`
     <div class="mtitle">✏️ Bulk Edit Issued (${n})</div>
+    ${recs.some(_isInternalIssue)?`<div class="warn">${recs.filter(_isInternalIssue).length} of these are internal issues: price, payment and customer do not apply to them, so the fields below leave them alone.</div>`:''}
     <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Tick any field to set the SAME value on all ${n} record(s) — leave it unticked and each record keeps its own value from the row below (every field from the issue form is editable there too).</div>
     ${_bulkOverrideFieldHtml('geniss','itemName','Item Name',`<select class="fi" id="bulkedit-geniss-itemName" disabled>${_invNameOpts()}</select>`)}
     ${_bulkOverrideFieldHtml('geniss','issued','Qty Issued',`<input class="fi" type="number" id="bulkedit-geniss-issued" inputmode="numeric" disabled/>`)}
@@ -10289,6 +10454,11 @@ function saveBulkEditGenIss(){
   const chkPartial=chk('partialPaid'),bulkPartial=val('partialPaid');
   const recs=(DATA.generalIssued||[]).filter(x=>ids.includes(String(x.id)));
   if(!recs.length)return;
+  for(const r of recs){      // step 24: an internal issue needs its "Sent to / Taken by / Purpose" for those reasons
+    if(!_isInternalIssue(r))continue;
+    const t=_issueTypeOf(_bulkRowVal('bel-issueType',String(r.id)))||_issueTypeOf(r.issueType);
+    if(t&&t.need&&!uc(_bulkRowVal('bel-issueTo',String(r.id))||'')){alert('Enter "'+t.to+'" for '+r.itemName+' ('+t.label+').');return;}
+  }
   recs.forEach(r=>logAuditEvent('EDIT','Inventory Issued',`ID:${r.id} · Item:${r.itemName} · Bulk edit`,r));
   updateData(d=>{
     const prices={...(d.inventoryPrices||{})};
@@ -10297,6 +10467,11 @@ function saveBulkEditGenIss(){
       if(!ids.includes(id))return x;
       const itemName=chkItemName?uc(bulkItemName):(uc(_bulkRowVal('bel-itemName',id))||x.itemName);
       const issued=chkIssued?Number(bulkIssued||0):Number(_bulkRowVal('bel-issued',id)||0);
+      if(_isInternalIssue(x)){      // step 24: price, payment and customer cannot be added to an internal issue
+        const t=_issueTypeOf(_bulkRowVal('bel-issueType',id))||_issueTypeOf(x.issueType)||_issueTypeOf('other');
+        return{...x,itemName,...(itemName!==x.itemName?{itemId:''}:{}),issued,date:chkDate?bulkDate:_bulkRowVal('bel-date',id),notes:uc(chkNotes?bulkNotes:(_bulkRowVal('bel-notes',id)||'')),
+          issueType:t.id,issueTo:t.to?uc(_bulkRowVal('bel-issueTo',id)||''):'',internal:true,sellingPrice:0,creditStatus:'paid',partialPaid:0,customerId:'',customerName:''};
+      }
       const sellingPrice=chkPrice?Number(bulkPrice||0):Number(_bulkRowVal('bel-sellingPrice',id)||0);
       const date=chkDate?bulkDate:_bulkRowVal('bel-date',id);
       const notes=uc(chkNotes?bulkNotes:(_bulkRowVal('bel-notes',id)||''));
@@ -11109,6 +11284,7 @@ function openEditGenIss(id){
 function _doOpenEditGenIss(id){
   const iss=DATA.generalIssued.find(x=>String(x.id)===String(id));
   if(!iss){alert('Record not found.');return;}
+  if(_isInternalIssue(iss))return _openEditInternalIss(iss);      // step 24
   const defined=(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean);
   const fromData=[...new Set(DATA.generalInventory.map(x=>x.itemName))];
   const allNames=[...new Set([...defined,...fromData])].sort();
@@ -11135,6 +11311,7 @@ function _doOpenEditGenIss(id){
 function saveEditGenIss(id){
   if(!requireAdmin('edit records'))return;
   if(isReadOnly()){alert('🔒 This account is in read-only mode.');return;}
+  if(document.getElementById('egei-type'))return _saveEditInternalIss(id);      // step 24
   const name=document.getElementById('egei-name').value;
   const qty=Number(document.getElementById('egei-qty').value||0);
   const sprice=Number(document.getElementById('egei-sprice')?.value||0);
@@ -11767,7 +11944,9 @@ function _mriBlankLine(){
     transporter:'',
     creditStatus:'paid',
     partialPaid:'',
-    notes:''
+    notes:'',
+    issueType:'transfer',   // step 24: the reason of an internal (non-sale) general-item issue
+    issueTo:''
   };
 }
 
@@ -11775,7 +11954,7 @@ function _mriRenderModal(){
   const isRec=_mriType==='receive';
   return `
     <div class="mtitle">${isRec?'📦 Multi Receive':'📤 Multi Issue'}</div>
-    <div style="font-size:15px;color:var(--muted);margin-bottom:10px;line-height:1.5">Record several items/commodities in one transaction — mix General Inventory items and named commodities, each with its own ${isRec?'supplier':'customer'}.</div>
+    <div style="font-size:15px;color:var(--muted);margin-bottom:10px;line-height:1.5">${(!isRec&&_tillSells())?'Record several issues in one go. General items leave stock <b>without a sale</b> (transfer, staff use, damage…); to sell them use the Till. Commodity lines are recorded as before.':`Record several items/commodities in one transaction — mix General Inventory items and named commodities, each with its own ${isRec?'supplier':'customer'}.`}</div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="mri-date" value="${_mriDate||today()}" oninput="_mriDate=this.value"/></div>
     <div id="mri-rows"></div>
     <div style="display:flex;gap:8px;margin:4px 0 10px">
@@ -11884,7 +12063,7 @@ function _mriSetField(id,field,val){
     const p=l.kind==='commodity'?_plPriceOf('com',l.commodityId):_plPriceOf('item',l.itemName);   // Price List
     l.price=p>0?p:'';l._pAuto=p>0;
   }
-  if(field==='kind'||field==='commodityId'||field==='itemName'){_mriRefreshRows();return;}
+  if(field==='kind'||field==='commodityId'||field==='itemName'||field==='issueType'){_mriRefreshRows();return;}
   _mriUpdateTotal();
 }
 
@@ -11916,6 +12095,7 @@ function _mriRefreshRows(){
   const fromData=[...new Set(DATA.generalInventory.map(x=>x.itemName))];
   const genNames=[...new Set([...defined,...fromData])].sort();
   wrap.innerHTML=_mriLines.map((l,idx)=>{
+    const _int=!isRec&&l.kind!=='commodity'&&_tillSells();      // step 24: an internal (non-sale) general-item line
     const batchOpts=isRec
       ? '' // free-typed batch name when receiving (new or existing lot)
       : (()=>{ const all=(l.commodityId?cRec(l.commodityId):[]).slice().sort((a,b)=>b.date.localeCompare(a.date)); const batches=[...new Set(all.map(x=>x.batchName))]; return batches; })();
@@ -11958,8 +12138,9 @@ function _mriRefreshRows(){
         </div>`}
       <div class="twobox">
         <div class="fw"><div class="fl">Qty ${isRec?'Received':'Issued'}</div><input class="fi" type="number" inputmode="numeric" placeholder="0" value="${l.qty}" oninput="_mriSetField('${l.id}','qty',this.value)"/>${_mriAvailHint(l)}</div>
-        <div class="fw"><div class="fl">${isRec?'Unit Price':'Sale Price'} (${cur()})</div><input class="fi" type="number" step="0.01" inputmode="decimal" placeholder="0.00" value="${l.price}" oninput="_mriSetField('${l.id}','price',this.value)"/></div>
+        ${_int?_mriReasonHtml(l):`<div class="fw"><div class="fl">${isRec?'Unit Price':'Sale Price'} (${cur()})</div><input class="fi" type="number" step="0.01" inputmode="decimal" placeholder="0.00" value="${l.price}" oninput="_mriSetField('${l.id}','price',this.value)"/></div>`}
       </div>
+      ${_int?_mriToHtml(l):`
       <div class="fw"><div class="fl">${isRec?'Supplier':'Customer'} <span style="font-size:14px;color:var(--muted)">(optional)</span></div>
         <select class="fi" onchange="_mriSetField('${l.id}','contactId',this.value)">
           <option value="">— None${isRec?' / Unknown':' / Walk-in'} —</option>
@@ -11975,6 +12156,7 @@ function _mriRefreshRows(){
         </select>
       </div>
       ${l.creditStatus==='partial'?`<div class="fw"><div class="fl">Amount Paid (${cur()})</div><input class="fi" type="number" step="0.01" inputmode="decimal" placeholder="0.00" value="${l.partialPaid}" oninput="_mriSetField('${l.id}','partialPaid',this.value)"/></div>`:''}`:''}
+      `}
       <div class="fw" style="margin-bottom:0"><div class="fl">Notes <span style="font-size:14px;color:var(--muted)">(optional)</span></div><input class="fi" value="${esc(l.notes)}" placeholder="Any notes for this line…" oninput="_mriSetField('${l.id}','notes',this.value)"/></div>
     </div>`;
   }).join('');
@@ -11984,7 +12166,8 @@ function _mriRefreshRows(){
 function _mriUpdateTotal(){
   const el=document.getElementById('mri-total');
   if(!el)return;
-  const total=_mriLines.reduce((a,l)=>a+(Number(l.qty)||0)*(Number(l.price)||0),0);
+  const _isRec=_mriType==='receive',_ts=_tillSells();
+  const total=_mriLines.reduce((a,l)=>a+((!_isRec&&_ts&&l.kind!=='commodity')?0:(Number(l.qty)||0)*(Number(l.price)||0)),0);
   el.textContent=total>0?`Total: ${zm(total)}`:'';
 }
 
@@ -12010,6 +12193,13 @@ async function _mriSave(){
       const name=l.itemName==='__other__'?(l.itemNameOther||'').trim().toUpperCase():(l.itemName||'').trim().toUpperCase();
       if(!name){alert('Enter or select an item name for every general-inventory line.');return;}
       if(isRec)lines.push({...l,qty,_resolvedName:name});
+      else if(_tillSells()){      // step 24: no price, customer or payment: the Till sells
+        const t=_issueTypeOf(l.issueType);
+        if(!t){alert('Choose a reason for every general-item line.');return;}
+        const to=t.to?uc(l.issueTo||''):'';
+        if(t.need&&!to){alert('Enter "'+t.to+'" for '+name+' ('+t.label+').');return;}
+        lines.push({...l,qty,_resolvedName:name,price:0,contactId:'',creditStatus:'paid',partialPaid:'',_internal:true,issueType:t.id,issueTo:to});
+      }
       else{
         const lp=_plRequire('item',name,name);if(!lp)return;
         lines.push({...l,qty,_resolvedName:name,price:String(l.price).trim()===''?lp:Number(l.price)||0});
@@ -12019,13 +12209,13 @@ async function _mriSave(){
   if(lines.length===0){alert('Add at least one line.');return;}
 
   const summary=lines.map(l=>{
-    const label=l.kind==='commodity'?`${getCom(l.commodityId).name} — ${l.batchName}`:l._resolvedName;
+    const label=l.kind==='commodity'?`${getCom(l.commodityId).name} — ${l.batchName}`:l._resolvedName+(l._internal?' ['+((_issueTypeOf(l.issueType)||{}).label||'internal')+(l.issueTo?' → '+l.issueTo:'')+']':'');
     return `• ${label} · ${Number(l.qty).toLocaleString()}${Number(l.price)>0?` × ${cur()}${Number(l.price).toFixed(2)}`:''}`;
   }).join('\n');
   if(!confirm(`Confirm Multi ${isRec?'Receive':'Issue'} — ${lines.length} line(s):\n\n${summary}\n\nProceed?`))return;
 
   // each general-item sale line is its own sale record, so each takes its own receipt number (taken before the save)
-  if(!isRec)for(const l of lines){if(l.kind!=='commodity'){const r=await _takeReceiptNo();if(r)l._rn=r;}}
+  if(!isRec)for(const l of lines){if(l.kind!=='commodity'&&!l._internal){const r=await _takeReceiptNo();if(r)l._rn=r;}}      // an internal issue takes no receipt number
 
   updateData(d=>{
     let genArr=[...(isRec?(d.generalInventory||[]):(d.generalIssued||[]))];
@@ -12061,7 +12251,7 @@ async function _mriSave(){
           if(price>0)prices[name]={...(prices[name]||{}),purchasePrice:price};
         } else {
           const partialPaid=l.creditStatus==='partial'?Number(l.partialPaid||0):0;
-          const payload=stampEntry({id:uid(),date,time:nowTime(),itemName:name,issued:qty,sellingPrice:price,creditStatus:l.creditStatus||'paid',partialPaid,customerId:l.contactId||'',customerName:contactName,notes:uc(l.notes||''),...(l._rn?{receiptNo:l._rn.receiptNo,tillId:l._rn.tillId}:{})});
+          const payload=stampEntry({id:uid(),date,time:nowTime(),itemName:name,issued:qty,sellingPrice:price,creditStatus:l.creditStatus||'paid',partialPaid,customerId:l.contactId||'',customerName:contactName,notes:uc(l.notes||''),...(l._rn?{receiptNo:l._rn.receiptNo,tillId:l._rn.tillId}:{}),...(l._internal?{internal:true,issueType:l.issueType,issueTo:l.issueTo||''}:{})});
           genArr=[...genArr,payload];
         }
       }
@@ -12075,7 +12265,7 @@ async function _mriSave(){
     };
   });
 
-  logAuditEvent('CREATE',isRec?'Multi Receive':'Multi Issue',`${lines.length} line(s) · ${date} · `+lines.map(l=>l.kind==='commodity'?`${getCom(l.commodityId).name}:${l.batchName}`:l._resolvedName).join(', '));
+  logAuditEvent('CREATE',isRec?'Multi Receive':'Multi Issue',`${lines.length} line(s) · ${date} · `+lines.map(l=>l.kind==='commodity'?`${getCom(l.commodityId).name}:${l.batchName}`:l._resolvedName+(l._internal?' ('+((_issueTypeOf(l.issueType)||{}).label||'internal')+(l.issueTo?' → '+l.issueTo:'')+', not a sale)':'')).join(', '));
   closeModal();
   showToast(`✅ ${lines.length} line(s) saved`);
 }
@@ -20933,6 +21123,161 @@ function saveTillDiscounts(){
   _tdMsg(`<div class="ok-msg">✅ ${on?`The till will offer discounts: a cashier up to ${r2(cap)}%, a manager PIN up to ${r2(max)}%.`:'The till will not offer discounts.'}</div>${on&&noPin?'<div class="warn" style="margin-top:8px">⚠️ No manager PIN is set yet, so cashiers cannot go above their own limit.</div>':''}`);
 }
 
+// ── PROMOTIONS (till roadmap step 25) ──────────────────────────────────────
+// Admin only. Offers the till applies BY ITSELF: a percentage off, a special price per unit, N for a price, or buy N get M free, on chosen items and/or
+// whole categories, between two dates and on chosen weekdays. They live in DATA.promotions and reach each till phone with the next sync, like prices.
+// What each kind takes off, "one offer per line, the best one wins" and the rounding are Sales.promoApply() in sales.js, the same code the till runs:
+// this card only edits the list. Switching an offer off keeps it; deleting removes it. A sale keeps the offer's name and the money it took off, so
+// changing or deleting an offer never changes an old receipt.
+let _promoDraft=null;                               // the offer being added or edited (null = none), so the form survives a re-render
+const _PM_DAYS=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function _promoPickItems(){                         // everything an offer can name: stock items (by id) and commodities ('com:<id>')
+  const gen=(DATA.inventoryItems||[]).filter(Boolean).map(_invItemObj).filter(x=>x.name).map(x=>({id:x.id,name:String(x.name),cat:String(x.category||'')}));
+  const com=(DATA.commodities||[]).filter(c=>c&&c.id&&c.name).map(c=>({id:'com:'+c.id,name:String(c.name),cat:'Commodity'}));
+  return gen.concat(com).sort((a,b)=>a.name.localeCompare(b.name));
+}
+function _promoStatus(p,day){                       // p: a clean promotion (Sales.promoList)
+  if(!p.on) return {t:'Switched off',c:'var(--muted)'};
+  if(p.from&&day.date<p.from) return {t:'Starts '+fmtDate(p.from),c:'var(--amber)'};
+  if(p.to&&day.date>p.to) return {t:'Ended '+fmtDate(p.to),c:'var(--muted)'};
+  if(p.days.length&&p.days.indexOf(day.dow)<0) return {t:'Not today',c:'var(--amber)'};
+  return {t:'Running now',c:'var(--green)'};
+}
+function _renderPromotionsCard(){
+  if(!USER||USER.role!=='admin') return '';
+  const raw=Array.isArray(DATA.promotions)?DATA.promotions.filter(Boolean):[], day=Sales.promoDay(Date.now());
+  const names=new Map(_promoPickItems().map(i=>[i.id,i.name]));
+  const rows=raw.map(p=>{
+    const c=Sales.promoList([p])[0];
+    if(!c) return `<div style="padding:12px 0;border-top:1px solid var(--border)"><div style="font-weight:700;font-size:18px">${esc(p&&p.name||'(no name)')}</div>
+      <div class="warn" style="margin:6px 0">⚠️ The till ignores this offer: ${esc(Sales.promoCheck(p))}</div>
+      <button class="btn br bsm" onclick="promoDelete('${esc(String(p&&p.id||''))}')">Delete</button></div>`;
+    const st=_promoStatus(c,day);
+    const what=c.items.slice(0,3).map(id=>names.get(id)||'(removed item)').concat(c.items.length>3?['+'+(c.items.length-3)+' more']:[]).concat(c.cats.map(k=>'all '+k)).join(', ');
+    const when=[c.from?'from '+fmtDate(c.from):'',c.to?'until '+fmtDate(c.to):'',c.days.length?c.days.map(d=>_PM_DAYS[d]).join(', '):''].filter(Boolean).join(' · ');
+    return `<div style="padding:12px 0;border-top:1px solid var(--border)">
+      <div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><div style="font-weight:700;font-size:18px">${esc(c.name)}</div><div style="font-size:15px;font-weight:700;white-space:nowrap;color:${st.c}">${esc(st.t)}</div></div>
+      <div style="color:var(--muted);font-size:16px;margin:4px 0 10px;line-height:1.55"><strong style="color:var(--text)">${esc(Sales.promoText(c,{money:zm}))}</strong> · ${esc(what)}${when?'<br>'+esc(when):''}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn bo bsm" onclick="promoToggle('${esc(c.id)}')">${c.on?'Switch off':'Switch on'}</button>
+        <button class="btn bo bsm" onclick="promoEdit('${esc(c.id)}')">Edit</button>
+        <button class="btn br bsm" onclick="promoDelete('${esc(c.id)}')">Delete</button>
+      </div></div>`;
+  }).join('');
+  return `
+    <div class="sh">Promotions</div>
+    <div class="card">
+      <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">
+        Offers the till gives by itself, so the cashier does nothing: a percentage off, a special price, “3 for K20”, or “buy 2 get 1 free”. Each offer covers the items or categories you choose, between the dates you choose, on the days you choose. Each item in a basket gets only ONE offer, the one that saves the customer most. A cashier's discount is worked out on what is left after the offers. Every sale records the offer and the money it took off. Offers reach each till phone after it syncs.
+      </div>
+      <div id="pm-msg"></div>
+      ${_promoDraft?_renderPromoForm():`<button class="btn bg" onclick="promoNew()">+ Add a promotion</button>`}
+      <div style="margin-top:${_promoDraft||!rows?'12':'14'}px">${rows||(_promoDraft?'':'<div style="color:var(--muted);font-size:17px">No promotions yet.</div>')}</div>
+    </div>`;
+}
+function _renderPromoForm(){
+  const d=_promoDraft, items=_promoPickItems(), known=new Set(items.map(i=>i.id));
+  const cats=Array.from(new Set(items.map(i=>i.cat).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+  d.cats.forEach(k=>{ if(cats.indexOf(k)<0) cats.push(k); });
+  const missing=d.items.filter(id=>!known.has(id)).map(id=>({id,name:'(removed item)',cat:''}));
+  const show=t=>d.type===t?'':'display:none';
+  const lbl=(t)=>`<div class="fl">${t}</div>`;
+  const inp=(id,v,ex)=>`<input class="fi" type="number" inputmode="decimal" step="any" min="0" id="${id}" value="${esc(String(v==null?'':v))}" ${ex||''}/>`;
+  const hint=t=>`<div style="font-size:15px;color:var(--muted);margin-top:6px;line-height:1.55">${t}</div>`;
+  return `
+    <div style="border:1.5px solid var(--green);border-radius:12px;padding:14px;margin-bottom:6px">
+      <div style="font-weight:800;font-size:19px;margin-bottom:12px">${d.id?'Edit promotion':'New promotion'}</div>
+      <div class="fw">${lbl('Name (shown to the cashier and on the receipt)')}<input class="fi" id="pm-name" maxlength="60" value="${esc(d.name)}" placeholder="e.g. Sugar 3 for K20" style="text-transform:none"/></div>
+      <div class="fw">${lbl('Kind of offer')}
+        <select class="fi" id="pm-type" onchange="promoTypeChange()">
+          <option value="pct" ${d.type==='pct'?'selected':''}>Percentage off</option>
+          <option value="price" ${d.type==='price'?'selected':''}>Special price per unit</option>
+          <option value="multi" ${d.type==='multi'?'selected':''}>N for a price (e.g. 3 for K20)</option>
+          <option value="bogo" ${d.type==='bogo'?'selected':''}>Buy N, get M free</option>
+        </select>
+      </div>
+      <div class="fw" id="pm-g-pct" style="${show('pct')}">${lbl('Percent off')}${inp('pm-pct',d.pct)}${hint('10 means 10% off the price. The saving is rounded down to the ngwee.')}</div>
+      <div class="fw" id="pm-g-price" style="${show('price')}">${lbl('Special price for each unit')}${inp('pm-price',d.price)}${hint('Each unit costs this instead. It can only lower a price, never raise it.')}</div>
+      <div id="pm-g-multi" style="${show('multi')}">
+        <div class="fw">${lbl('Units in the bundle')}${inp('pm-mbuy',d.type==='multi'?d.buy:'','step="1"')}</div>
+        <div class="fw">${lbl('Price of the whole bundle')}${inp('pm-bundle',d.bundlePrice)}${hint('Every full bundle costs this. Units left over (not a full bundle) are charged the normal price.')}</div>
+      </div>
+      <div id="pm-g-bogo" style="${show('bogo')}">
+        <div class="fw">${lbl('Customer buys')}${inp('pm-bbuy',d.type==='bogo'?d.buy:'','step="1"')}</div>
+        <div class="fw">${lbl('And gets free')}${inp('pm-free',d.free,'step="1"')}${hint('Buy 2 get 1 free: of every 3 units, 1 is free. Units left over are charged the normal price.')}</div>
+      </div>
+      <div class="fw" id="pm-g-min" style="${d.type==='pct'||d.type==='price'?'':'display:none'}">${lbl('Only when the customer buys at least (optional)')}${inp('pm-min',d.minQty)}</div>
+      <div class="fw">${lbl('Which items (<span id="pm-count"></span>)')}
+        <input class="fi" id="pm-q" placeholder="Search items…" oninput="promoFilter()" style="text-transform:none;margin-bottom:8px"/>
+        <div style="max-height:240px;overflow:auto;border:1.5px solid var(--border);border-radius:10px;padding:4px 10px">
+          ${missing.concat(items).map(i=>`<label class="pm-row" data-n="${esc((i.name+' '+i.cat).toLowerCase())}" style="display:flex;gap:10px;align-items:center;padding:7px 0;font-size:17px;cursor:pointer"><input type="checkbox" class="pm-item" value="${esc(i.id)}" ${d.items.indexOf(i.id)>=0?'checked':''} onchange="promoCount()" style="width:22px;height:22px;flex-shrink:0"/><span>${esc(i.name)}${i.cat?` <span style="color:var(--muted);font-size:14px">· ${esc(i.cat)}</span>`:''}</span></label>`).join('')||'<div style="color:var(--muted);padding:8px 0">No items yet.</div>'}
+        </div>
+      </div>
+      ${cats.length?`<div class="fw">${lbl('Or whole categories')}<div style="display:flex;flex-wrap:wrap;gap:8px 16px">${cats.map(k=>`<label style="display:flex;gap:8px;align-items:center;font-size:17px;cursor:pointer"><input type="checkbox" class="pm-cat" value="${esc(k)}" ${d.cats.indexOf(k)>=0?'checked':''} onchange="promoCount()" style="width:22px;height:22px"/>${esc(k)}</label>`).join('')}</div></div>`:''}
+      <div class="fw">${lbl('From (optional)')}<input class="fi" type="date" id="pm-from" value="${esc(d.from)}"/></div>
+      <div class="fw">${lbl('Until, this day included (optional)')}<input class="fi" type="date" id="pm-to" value="${esc(d.to)}"/></div>
+      <div class="fw">${lbl('Only on these days (none ticked = every day)')}<div style="display:flex;flex-wrap:wrap;gap:8px 14px">${_PM_DAYS.map((n,i)=>`<label style="display:flex;gap:6px;align-items:center;font-size:17px;cursor:pointer"><input type="checkbox" class="pm-day" value="${i}" ${d.days.indexOf(i)>=0?'checked':''} style="width:22px;height:22px"/>${n}</label>`).join('')}</div></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px"><button class="btn bg" onclick="promoSave()">Save promotion</button><button class="btn bo" onclick="promoCancel()">Cancel</button></div>
+    </div>`;
+}
+function _pmMsg(html){ const m=document.getElementById('pm-msg'); if(m) m.innerHTML=html; }
+function promoNew(){ if(!USER||USER.role!=='admin') return; _promoDraft={id:'',name:'',type:'pct',on:true,items:[],cats:[],pct:'',price:'',buy:'',bundlePrice:'',free:'',minQty:'',from:'',to:'',days:[]}; render(); setTimeout(promoCount,0); }
+function promoEdit(id){
+  if(!USER||USER.role!=='admin') return;
+  const c=Sales.promoList((DATA.promotions||[]).filter(p=>p&&p.id===id))[0]; if(!c) return;
+  _promoDraft={...c,pct:c.type==='pct'?c.pct:'',price:c.type==='price'?c.price:'',buy:c.buy||'',bundlePrice:c.type==='multi'?c.bundlePrice:'',free:c.type==='bogo'?c.free:'',minQty:c.minQty||''};
+  render(); setTimeout(promoCount,0);
+}
+function promoCancel(){ _promoDraft=null; render(); }
+function promoTypeChange(){
+  const t=document.getElementById('pm-type').value, on=(id,v)=>{ const e=document.getElementById(id); if(e) e.style.display=v?'':'none'; };
+  on('pm-g-pct',t==='pct'); on('pm-g-price',t==='price'); on('pm-g-multi',t==='multi'); on('pm-g-bogo',t==='bogo'); on('pm-g-min',t==='pct'||t==='price');
+}
+function promoFilter(){
+  const q=String(document.getElementById('pm-q').value||'').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  document.querySelectorAll('.pm-row').forEach(r=>{ const n=r.getAttribute('data-n')||''; r.style.display=q.every(w=>n.indexOf(w)>=0)?'flex':'none'; });
+}
+function promoCount(){
+  const e=document.getElementById('pm-count'); if(!e) return;
+  const n=document.querySelectorAll('.pm-item:checked').length; e.textContent=n+' chosen';
+}
+function promoSave(){
+  if(!USER||USER.role!=='admin'||!_promoDraft) return;
+  const v=id=>String((document.getElementById(id)||{}).value||'').trim();
+  const num=id=>{ const s=v(id), n=Number(s); return s!==''&&isFinite(n)?n:undefined; };
+  const r2=x=>x===undefined?undefined:Math.round(x*100)/100, type=v('pm-type');
+  const p={id:_promoDraft.id||('promo_'+uid().replace(/[^A-Za-z0-9_-]/g,'')),name:v('pm-name'),type,on:_promoDraft.on!==false,
+    items:Array.from(document.querySelectorAll('.pm-item:checked')).map(x=>x.value),
+    cats:Array.from(document.querySelectorAll('.pm-cat:checked')).map(x=>x.value),
+    from:v('pm-from'),to:v('pm-to'),days:Array.from(document.querySelectorAll('.pm-day:checked')).map(x=>Number(x.value))};
+  if(type==='pct') p.pct=r2(num('pm-pct'));
+  if(type==='price') p.price=r2(num('pm-price'));
+  if(type==='multi'){ p.buy=num('pm-mbuy'); p.bundlePrice=r2(num('pm-bundle')); }
+  if(type==='bogo'){ p.buy=num('pm-bbuy'); p.free=num('pm-free'); }
+  if(type==='pct'||type==='price'){ const m=num('pm-min'); if(m!==undefined&&m>0) p.minQty=m; }
+  const bad=Sales.promoCheck(p);
+  if(bad) return _pmMsg(`<div class="err-box" style="margin-bottom:10px">${esc(bad)}</div>`);
+  const isNew=!_promoDraft.id;
+  _promoDraft=null;
+  updateData(d=>({...d,promotions:(Array.isArray(d.promotions)?d.promotions.filter(Boolean):[]).filter(x=>x.id!==p.id).concat([p]).sort((a,b)=>String(a.name).localeCompare(String(b.name)))}));
+  logAuditEvent(isNew?'CREATE':'EDIT','Promotions',`${p.name} · ${Sales.promoText(Sales.promoList([p])[0],{money:zm})}${p.from||p.to?' · '+(p.from||'…')+' to '+(p.to||'…'):''}`);
+  showToast('✅ Promotion saved. Tills pick it up when they sync.');
+}
+function promoToggle(id){
+  if(!USER||USER.role!=='admin') return;
+  const p=(DATA.promotions||[]).find(x=>x&&x.id===id); if(!p) return;
+  const on=p.on!==true;
+  updateData(d=>({...d,promotions:(d.promotions||[]).map(x=>x&&x.id===id?{...x,on}:x)}));
+  logAuditEvent('EDIT','Promotions',`${p.name}: switched ${on?'on':'off'}`);
+}
+function promoDelete(id){
+  if(!USER||USER.role!=='admin') return;
+  const p=(DATA.promotions||[]).find(x=>x&&String(x.id)===id); if(!p) return;
+  if(!confirm(`Delete the promotion “${p.name||''}”?\n\nSales already made keep it on their receipts. This cannot be undone.`)) return;
+  updateData(d=>({...d,promotions:(d.promotions||[]).filter(x=>x&&String(x.id)!==id)}));
+  logAuditEvent('DELETE','Promotions',String(p.name||id));
+}
+
 // Settings helper — Login History. Read-only. Non-admins see their own last
 // 3 sessions. Admins see every account's last 3 sessions, grouped by user,
 // since Admin already manages passwords/roles for the whole team elsewhere
@@ -21109,6 +21454,8 @@ const SETTINGS_CATS = {
       match:['Change Password','Manager PIN','Till discounts','Login History','Recovery PIN','Recovery Email','User Accounts','Role Permissions','Fingerprint Login','Stay Signed In']},
     {id:'company-billing', icon:'🏢', label:'Company & Billing', desc:'Plan, license, company info, branding & policies',
       match:['My Plan','License & Connection','Company Information','Branding','Staff & Records Policy']},
+    {id:'promotions', icon:'🏷️', label:'Promotions', desc:'Offers the till gives by itself: % off, special price, 3 for K20, buy 2 get 1 free',
+      match:['Promotions']},
     {id:'appearance', icon:'🎨', label:'Appearance', desc:'Theme, text size, currency & dashboard widgets',
       match:['Display Preferences','Dashboard Widgets']},
     {id:'printer', icon:'🖨️', label:'Printer', desc:'Built-in printer, paper and print size (this device)',
@@ -21480,6 +21827,7 @@ function _renderAdminSettings(){
     ${_renderChangePasswordCard()}
 
     ${_renderManagerPinCard()}${_renderTillDiscountCard()}${_renderPrinterCard()}
+    ${_renderPromotionsCard()}
 
     ${_renderLoginHistoryCard()}
 
@@ -24955,12 +25303,13 @@ function exportCSV_GenReceived(){
   _csvDownload(rows,_csvFilename('Inventory_Received'));
 }
 function exportCSV_GenIssued(){
-  const rows=[_csvRow(['Date','Time','Item','Issued Qty','Selling Price','Revenue','Notes'])];
+  const rows=[_csvRow(['Date','Time','Item','Issued Qty','Selling Price','Revenue','Notes','Reason','To / For'])];
   const items=filterPeriod(DATA.generalIssued,PERIOD.general,'date','general').slice().sort((a,b)=>b.date.localeCompare(a.date));
   items.forEach(r=>rows.push(_csvRow([
     r.date,r.time||'',r.itemName,r.issued||0,
     r.sellingPrice||'',r.sellingPrice&&r.issued?Number(r.sellingPrice)*Number(r.issued):'',
-    r.notes||''
+    r.notes||'',
+    r.internal?((_issueTypeOf(r.issueType)||{}).label||r.issueType||''):'',r.internal?(r.issueTo||''):''
   ])));
   _csvDownload(rows,_csvFilename('Inventory_Issued'));
 }

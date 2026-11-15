@@ -25,7 +25,44 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.62 (2026-11-14) — Till roadmap step 23, part 2: Sales History is built from the ledgers (index.html + sw.js; no database, rules, pos.html or gate.js change).
+// Current version: v0.3.64 (2026-11-15) — Till roadmap step 25: promotions (sales.js + shifts.js + pos.html + index.html + database_rules.json + sw.js).
+//   - Settings > Promotions (Admin): offers the till gives BY ITSELF, so the cashier does nothing. Four kinds: a percentage off; a special price per unit; N for a price
+//     (3 for K20); buy N get M free. Each covers chosen items (stock items and commodities, by id) and/or whole categories, between two dates (both days included, the shop's
+//     own calendar), on chosen weekdays; percentage and special price can need a minimum quantity. An offer can be switched off (kept) or deleted. They are DATA.promotions
+//     and reach the tills with the normal sync, like prices.
+//   - The rules are Sales.promoApply() in sales.js, whole ngwee, the same code the editor's checks (promoCheck) and the till run. Each LINE gets the ONE offer that saves the
+//     customer most (the first listed wins a tie); offers do not stack on a line. A percentage is rounded down; a bundle or free units apply to whole bundles only and the rest of
+//     the line is charged normally; a special price or bundle can never raise a price; no offer can take off more than the line is worth. An offer works on one item's line at
+//     a time: there is no "any 3 drinks for K30" across different items (not built; a later step).
+//   - The till: the offer shows under the line ("Offer: Sugar 3 for K20  -K8.00"), a short hint when one more unit would earn it ("Add 1 more: 3 for K20.00"), a green tag on the
+//     item tile, an "Offers applied" row above the total, and on the receipt, the printed slip and the Z report. Offers are judged at the moment the cart is drawn and again when
+//     Charge opens (an offer that ended in between redraws the cart and says so before any money is taken), so the payment screen and the saved sale always agree. A held or
+//     restored basket gets today's offers, like today's prices.
+//   - The record: an offer is a DISCOUNT WITH A NAME. line.discount stays "all the money off this line", so line.total, netPrice(), stock value, Sales History and the returns maths
+//     need no change. New, additive: line.promoDiscount / promoId / promoName and the header's promoDiscount (their sum). A sale whose whole discount is offers has discountBy =
+//     "Promotion", so a phone still on the old sales.js accepts it instead of dropping it. A refund of part of an offer line gives back that share of what was paid (the existing
+//     rule for discounted lines); the last unit takes whatever is left, so a whole line always comes back to exactly what was paid.
+//   - A cashier's discount (step 18) is now a share of the value AFTER the offers (the cashier limit means "5% of what the customer would otherwise pay"). Z reports and the day
+//     close-out show "Offers applied" apart from "Discounts given"; the Audit log lists only a person's discount (an offer is not something anyone allowed).
+//   - database_rules.json MUST BE PUBLISHED, and BEFORE the phones update: lines accept promoDiscount / promoId / promoName and the sale accepts promoDiscount (each checked, and no
+//     bigger than the discount). Until it is published a sale with an offer is refused by the cloud and waits in the phone's outbox (nothing is lost, the till shows its usual
+//     upload warning); sales without an offer upload as before. DATA.promotions needs no rule: the data node is open to the depot like the rest of DATA.
+//   - till_verify.js is unchanged: it runs sales.js validate(), which now also checks that the promotion fields add up. New Node tests: test_promos.js (engine, record, returns,
+//     reports, nightly check), test_pos_cart.js (the till's own cart code cut out of pos.html), test_promo_admin.js (the Settings code cut out of index.html).
+//   Files: sales.js + shifts.js + pos.html + index.html (Promotions card, close-out, reprinted receipt, SW_VERSION) + database_rules.json + sw.js. gate.js and returns.js are unchanged.
+// Previous: v0.3.63 (2026-11-14) — Till roadmap step 24: Issue Item is for internal issues only (index.html + sw.js; no database, rules, pos.html or gate.js change).
+//   - Where the Till is available (not the Play Store build, and a plan with pos_till) SELLING happens only at the Till. Issue Item now records stock that leaves WITHOUT a sale:
+//     transfer to another site, staff use, damaged / spoiled, expired, lost / stolen, sample / donation, other internal use. It asks for a reason (and "Sent to", "Taken by" or
+//     "Purpose" for transfers, staff use and other), shows what is available, warns when more than that is issued, and has no price, customer, payment status or receipt. It takes
+//     no receipt number, so the till's receipt numbers are not used up. Multi Issue does the same for its general-item lines; its commodity lines are unchanged.
+//   - Such a row is a normal generalIssued row with internal:true, issueType and issueTo, sellingPrice 0 and nothing owed. It reduces stock like any issue (stock = received - issued -
+//     sold + returns is unchanged) but, having no price, it never reaches Sales History, the shift totals, the debts list or revenue. Edit (single or bulk) keeps it that way: price,
+//     customer and payment cannot be added to it. The audit log line says "Internal: <reason> ... (not a sale)".
+//   - Issued tab: an All / Internal / Sales filter, a reason badge and the destination on internal rows, no receipt button for them. CSV export gains Reason and To / For at the end.
+//   - Sales History's "+ New Sale" now opens the Till. Where the Till is not available the old Issue Item form (price, customer, payment, receipt) is unchanged, so nobody loses the
+//     ability to record a sale. Earlier priced Issue Item rows are untouched and still list in Sales History.
+//   - Commodity issues (Commodities tab) are not changed by this step.
+// Previous: v0.3.62 (2026-11-14) — Till roadmap step 23, part 2: Sales History is built from the ledgers (index.html + sw.js; no database, rules, pos.html or gate.js change).
 //   - The list is one row per till receipt and one per void/refund (read from the sales and returns ledgers), over the period chosen above the tab (Today / week / month / year / all /
 //     date range; newest 150 shown), instead of today's item rows only. The main app's own Issue Item rows that carry a selling price are listed with them, as before; issues with no price are not.
 //     Printing a row prints the whole basket or the void/refund slip. Commodity sales made at the till now show too (they did not before).
@@ -2176,7 +2213,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.62';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.64';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

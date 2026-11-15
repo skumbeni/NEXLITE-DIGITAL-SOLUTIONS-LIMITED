@@ -319,14 +319,21 @@ const Shifts = (function () {
         countedCash: null, variance: null, firstReceipt: sm.firstReceipt, lastReceipt: sm.lastReceipt, note: ''
       });
     }
-    let sumC = 0, qty = 0, change = 0, disc = 0, discN = 0;
+    let sumC = 0, qty = 0, change = 0, disc = 0, discN = 0, promo = 0, promoN = 0;
     items.forEach(i => { sumC += toC(i.total); qty += i.qty; });
-    mine.forEach(s => { change += toC(s.change); const d = toC(s.discount); if (d > 0) { disc += d; discN++; } });
+    mine.forEach(s => {
+      change += toC(s.change);
+      const all = toC(s.discount), p = Math.min(all, toC(s.promoDiscount)), m = all - p;     // step 25: what an offer gave is not what a person gave
+      if (m > 0) { disc += m; discN++; }
+      if (p > 0) { promo += p; promoN++; }
+    });
     r.items = items;
     r.qtyTotal = Math.round(qty * 1000) / 1000;
     r.changeGiven = change / 100;
-    r.discountGiven = disc / 100;            // roadmap step 18: already taken off `total`, shown so a manager can see how much was given
+    r.discountGiven = disc / 100;            // roadmap step 18: already taken off `total`, shown so a manager can see how much was given (a person's discounts; offers are below)
     r.discountCount = discN;
+    r.promoGiven = promo / 100;              // roadmap step 25: money the offers took off, also already off `total`
+    r.promoCount = promoN;                   // sales that had at least one offer
     r.itemsComplete = mine.length === r.saleCount && sumC === toC(r.total);
     r.rt = returnsSummary((o.returns || []).filter(x => x && x.shiftId === open.shiftId));   // step 19: voids and refunds paid out in this shift
     r.netTotal = (toC(r.total) - toC(r.rt.total)) / 100;
@@ -350,10 +357,12 @@ const Shifts = (function () {
     const rt = returnsSummary((returns || []).filter(x => x && x.date === date));   // step 19: returns made on this date (their own day, whatever the sale's)
     const day = (sales || []).filter(s => s && s.date === date);
     const by = {}; METHODS.forEach(m => { by[m] = 0; });
-    let total = 0, credit = 0, change = 0, noShift = 0, disc = 0, discN = 0;
+    let total = 0, credit = 0, change = 0, noShift = 0, disc = 0, discN = 0, promo = 0, promoN = 0;
     day.forEach(s => {
       total += toC(s.total); credit += toC(s.balance); change += toC(s.change);
-      const d = toC(s.discount); if (d > 0) { disc += d; discN++; }
+      const all = toC(s.discount), pr = Math.min(all, toC(s.promoDiscount)), man = all - pr;        // step 25: offers and a person's discounts are kept apart
+      if (man > 0) { disc += man; discN++; }
+      if (pr > 0) { promo += pr; promoN++; }
       if (!s.shiftId) noShift++;
       arr(s.payments).forEach(p => { if (by[p.method] != null) by[p.method] += toC(p.amount); });
     });
@@ -374,7 +383,8 @@ const Shifts = (function () {
     return {
       date, saleCount: day.length, total: total / 100, credit: credit / 100, byMethod: o,
       cashSales: by.cash / 100, nonCash: (by.mtn + by.airtel + by.card) / 100, changeGiven: change / 100, noShift,
-      discountGiven: disc / 100, discountCount: discN,    // already taken off `total` (step 18)
+      discountGiven: disc / 100, discountCount: discN,    // already taken off `total` (step 18): a person's discounts
+      promoGiven: promo / 100, promoCount: promoN,        // already taken off `total` (step 25): offers
       returns: rt, cashOut: rt.byMethod.cash, netTotal: (total - toC(rt.total)) / 100,   // step 19: voids and refunds made today; cash handed back; sales less returns
       shifts: rows, openToday: openNow.filter(x => x.open.date === date).map(row), openEarlier: openNow.filter(x => x.open.date < date).map(row),
       shiftVariance: varC / 100, counted: countedC / 100, items: itemsOf(day)
@@ -427,11 +437,13 @@ const Shifts = (function () {
       }
     });
     (sales || []).forEach(s => {
-      if (!s || !(toC(s.discount) > 0)) return;
-      const gross = (toC(s.total) + toC(s.discount)) / 100, pct = Math.round(toC(s.discount) / (toC(s.total) + toC(s.discount)) * 10000) / 100;
+      if (!s) return;
+      const all = toC(s.discount), man = all - Math.min(all, toC(s.promoDiscount));      // step 25: an offer is not something a person allowed; only the manual part is logged
+      if (!(man > 0)) return;
+      const base = toC(s.total) + man, gross = base / 100, pct = Math.round(man / base * 10000) / 100;   // base = the value after any offers
       const by = String(s.discountBy || '');
       add('T:disc:' + s.id, s.at, s.date, s.time, s.cashier, s.cashierRole, 'DISCOUNT', 'Till Sale',
-        (s.receiptNo || s.id) + ' \u00B7 ' + money(s.discount) + ' off ' + money(gross) + ' (' + pct + '%) \u00B7 Allowed by: ' + (by || '\u2014') + (by && !who(by, s.cashier) ? ' (manager PIN)' : '')
+        (s.receiptNo || s.id) + ' \u00B7 ' + money(man / 100) + ' off ' + money(gross) + ' (' + pct + '%) \u00B7 Allowed by: ' + (by || '\u2014') + (by && !who(by, s.cashier) ? ' (manager PIN)' : '')
         + (s.discountReason ? ' \u00B7 Reason: ' + s.discountReason : ''));
     });
     (returns || []).forEach(r => {
