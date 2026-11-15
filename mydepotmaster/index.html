@@ -4720,7 +4720,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.71';
+const SW_VERSION  = 'v0.3.72';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -8448,15 +8448,19 @@ function renderDash(){
     const available=_gs.bal-reserved;
     if(available<0){warnings.push({icon:'🔒',title:`RESERVED STOCK SHORTFALL — ${itemName}`,msg:`Reserved: <strong>${reserved.toLocaleString()}</strong> · Balance: <strong style="color:var(--red)">${_gs.bal.toLocaleString()}</strong> · Shortfall: <strong style="color:var(--red)">${Math.abs(available).toLocaleString()}</strong>`});}
   });
-  // Expiry alerts (batches expiring within 30 days or already expired)
-  const today30=new Date(); today30.setDate(today30.getDate()+30);
-  const expBatches=approvedArr(DATA.generalInventory).filter(r=>r.expiryDate&&r.condition!=='rejected');
-  expBatches.forEach(r=>{
-    const exp=new Date(r.expiryDate);
-    const daysLeft=Math.ceil((exp-new Date())/(1000*60*60*24));
-    if(daysLeft<=0){warnings.push({icon:'🗓',title:`EXPIRED STOCK — ${r.itemName}`,msg:`Batch received ${fmtDate(r.date)} expired on <strong style="color:var(--red)">${fmtDate(r.expiryDate)}</strong> (${Math.abs(daysLeft)} days ago). Qty: <strong>${Number(r.received||0).toLocaleString()}</strong>`});}
-    else if(daysLeft<=30){warnings.push({icon:'⏳',title:`EXPIRING SOON — ${r.itemName}`,msg:`Batch expires <strong style="color:var(--amber)">${fmtDate(r.expiryDate)}</strong> (${daysLeft} days). Qty: <strong>${Number(r.received||0).toLocaleString()}</strong>`});}
-  });
+  // Expiry alerts (step 30): a batch is flagged only while it still has stock on the shelf, and the quantity shown is what is LEFT of it (first-expired-first-out, Sales.expiryBook),
+  // not what was received. Before step 30 a batch stayed flagged for ever, even when it had all been sold.
+  try{
+    const eb=_expiryBook(),nm=_expItemNames(),t0=today();
+    eb.keys().filter(k=>eb.has(k)).forEach(k=>{
+      eb.facts(k,t0).batches.forEach(b=>{
+        if(!b.exp||b.days==null||b.days>Sales.EXPIRY_WARN)return;
+        const q=Number(b.bal).toLocaleString(),item=esc(nm.get(k)||k),lot=b.batch?' '+esc(b.batch):'';
+        if(b.expired)warnings.push({icon:'🗓',title:`EXPIRED STOCK — ${item}`,msg:`Batch${lot} expired on <strong style="color:var(--red)">${fmtDate(b.exp)}</strong> (${Math.abs(b.days)} days ago). Left on the shelf: <strong>${q}</strong>. <span style="color:var(--blue);text-decoration:underline;cursor:pointer" onclick="openExpiryScreen()">Write off →</span>`});
+        else warnings.push({icon:'⏳',title:`EXPIRING SOON — ${item}`,msg:`Batch${lot} expires <strong style="color:var(--amber)">${fmtDate(b.exp)}</strong> (${b.days} days). Left: <strong>${q}</strong>`});
+      });
+    });
+  }catch(e){console.warn('Expiry alerts failed',e);}
   // Pending-approval alert (Admin & Manager — nudges them to review staff entries)
   if(_pendingCount>0 && (isAdmin()||isManagerRole())){
     warnings.unshift({icon:'✅',title:`${_pendingCount} ENTRY${_pendingCount>1?'IES':'Y'} AWAITING APPROVAL`,msg:`Staff-entered records are excluded from balances and totals until approved. <span style="color:var(--blue);text-decoration:underline;cursor:pointer" onclick="openPendingApprovalsModal()">Review now →</span>`});
@@ -8748,6 +8752,7 @@ function renderGeneral(){
         <button class="btn bo bsm" onclick="openMultiEntryForm('receive')" title="Receive multiple items/commodities in one transaction">&#x1F500; Multi Receive</button>
         <button class="btn bo bsm" onclick="openScanReceive()" title="Receive a delivery by scanning barcodes">&#x1F4F7; Scan Receive</button>
         <button class="btn bo bsm" onclick="openMultiEntryForm('issue')" title="Issue multiple items/commodities in one transaction">&#x1F500; Multi Issue</button>
+        <button class="btn bo bsm" onclick="openExpiryScreen()" title="Batches, expiry dates and expired stock">&#x1F4C5; Expiry</button>
         ${USER.role==='admin'?`<button class="btn bo bsm" onclick="openManageInventory()">⚙️ Manage</button>`:''}
         ${USER.role==='admin'?`<button class="btn bo bsm" onclick="openPriceList()">💲 Prices</button>`:''}
         <button class="btn bo bsm" id="btn-add-transport" onclick="openTransportForm()">🚛 Transport</button>
@@ -9659,6 +9664,7 @@ function openGenRecForm(){
     <div class="fw" id="gr-reject-row" style="display:none"><div class="fl">Rejection Reason</div><input class="fi" id="gr-reject-reason" placeholder="E.G. SUBSTANDARD, WRONG ITEM, EXPIRED…" oninput="this.value=this.value.toUpperCase()"/></div>
     <div class="fw"><div class="fl">Date Received</div><input class="fi" type="date" id="gr-date" value="${today()}"/></div>
     <div class="fw"><div class="fl">Best-Before / Expiry Date <span style="font-size:15px;color:var(--muted)">(optional)</span></div><input class="fi" type="date" id="gr-expiry"/></div>
+    <div class="fw"><div class="fl">Batch / Lot No. <span style="font-size:15px;color:var(--muted)">(optional)</span></div><input class="fi" id="gr-batch" placeholder="E.G. L2411A" autocomplete="off" oninput="this.value=this.value.toUpperCase()"/></div>
     <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="gr-notes" placeholder="ANY NOTES…" oninput="this.value=this.value.toUpperCase()"/></div>
     <div class="fw"><div class="fl">Supplier <span style="font-size:15px;color:var(--muted)">(optional)</span></div>${(()=>{const sups=(DATA.contacts||[]).filter(c=>c.type==='supplier');return sups.length>0?`<select class="fi" id="gr-supplier"><option value="">— None / Unknown —</option>${sups.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select>`:`<input class="fi" id="gr-supplier-name" placeholder="SUPPLIER NAME (optional)" oninput="this.value=this.value.toUpperCase()"/>`;})()}</div>
     <div class="fw"><div class="fl">Purchase Payment Status</div><select class="fi" id="gr-credit"><option value="paid">✅ PAID — Already paid supplier</option><option value="partial">🔶 PARTIAL — Partially paid</option><option value="credit">🔴 CREDIT — Owe supplier / on account</option></select></div>
@@ -9735,7 +9741,7 @@ function saveGenRec(){if(isReadOnly()){alert("🔒 This account is in read-only 
   } else if(supNameIn){
     supplierName=supNameIn.value.trim().toUpperCase();
   }
-  const payload=stampEntry({id:uid(),date:document.getElementById('gr-date').value,time:nowTime(),itemName:name,received:effectiveRec,good:effectiveGood,damaged:effectiveDmg,condition:condVal,rejectedQty:condVal==='rejected'?rec:0,rejectionReason:rejectReason,expiryDate:document.getElementById('gr-expiry')?.value||'',notes:uc(document.getElementById('gr-notes').value),purchasePrice:condVal==='rejected'?0:pprice,creditStatus:document.getElementById('gr-credit')?.value||'paid',supplierId,supplierName});
+  const payload=stampEntry({id:uid(),date:document.getElementById('gr-date').value,time:nowTime(),itemName:name,received:effectiveRec,good:effectiveGood,damaged:effectiveDmg,condition:condVal,rejectedQty:condVal==='rejected'?rec:0,rejectionReason:rejectReason,expiryDate:document.getElementById('gr-expiry')?.value||'',...(uc(document.getElementById('gr-batch')?.value)?{batchNo:uc(document.getElementById('gr-batch').value)}:{}),notes:uc(document.getElementById('gr-notes').value),purchasePrice:condVal==='rejected'?0:pprice,creditStatus:document.getElementById('gr-credit')?.value||'paid',supplierId,supplierName});
   const totalCost=condVal==='rejected'?0:(rec*pprice);
   if(!confirm(`Confirm Item Received:\n${name} · ${rec} units${pprice>0?` × ${cur()}${pprice.toFixed(2)} = ${cur()}${totalCost.toFixed(2)}`:''}\nCondition: ${condVal.toUpperCase()}${supplierName?`\nSupplier: ${supplierName}`:''}\n\nProceed?`))return;
   updateData(d=>{
@@ -10171,6 +10177,73 @@ function genStock(name,at){
   if(!at)return genStockBook().byName(name);
   const o=_stockOpts(at);o.only=o.idOfName(name);
   return Sales.stockBook(_stockSrc(),o).byName(name);
+}
+// ── EXPIRY AND BATCHES (till roadmap step 30) ────────────────────────────────────────────────────────────────────────
+// A batch is what one delivery brought in: the Batch No. and Expiry Date on its Receive row (Receive, Scan Receive, Edit). Nothing is stored about batches: Sales.expiryBook (sales.js)
+// replays the same records the stock formula reads and gives every sale and issue to the batches first-expired-first-out, so the batches of an item always add up to genStock().
+// Expired = the expiry date has arrived (today or earlier). The Till will not sell expired stock; it stays in stock, and here, until it is written off (an ordinary internal issue,
+// reason Expired, that names its batch so it comes off THAT batch). Same date rule as everywhere (today() = the UTC date).
+var _xbook=null,_xbookKey=null,_expRows=[];
+function _expiryBook(){
+  const k=[DATA.generalInventory,DATA.generalIssued,DATA.inventoryItems,_SALE_LIST,_RET_LIST];      // rebuilt only when one of these changed
+  if(_xbook&&_xbookKey&&k.every((x,j)=>x===_xbookKey[j]))return _xbook;
+  _xbook=Sales.expiryBook({received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:_SALE_LIST||[],returns:_RET_LIST||[]},_stockOpts());_xbookKey=k;return _xbook;
+}
+function _expItemNames(){                      // item id -> name, for the ids expiryBook works in
+  const m=new Map();
+  (DATA.inventoryItems||[]).forEach(x=>{const n=_invItemName(x);if(n)m.set(_invItemId(x),n);});
+  (DATA.generalInventory||[]).forEach(r=>{if(r&&r.itemName){const id=r.itemId||_itemLegacyId(r.itemName);if(!m.has(id))m.set(id,r.itemName);}});
+  return m;
+}
+function openExpiryScreen(){
+  openModal(`<div class="mtitle">📅 Expiry &amp; Batches</div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:12px;font-size:15px;line-height:1.5;color:var(--muted)">A batch is one delivery: give it a <b style="color:var(--white)">Batch No.</b> and <b style="color:var(--white)">Expiry Date</b> when you receive it. The Till sells the batch that expires first and never sells stock past its date. Expired stock stays in stock until you write it off here.</div>
+    <div class="fw"><input class="fi" id="exp-q" placeholder="Search item or batch…" autocomplete="off" oninput="_expRender()"/></div>
+    <div class="fw"><select class="fi" id="exp-v" onchange="_expRender()"><option value="soon">Expired and expiring within ${Sales.EXPIRY_WARN} days</option><option value="all">All batches with stock</option></select></div>
+    <div id="exp-sum" style="font-weight:700;margin:4px 0 8px"></div>
+    <div id="exp-list" style="max-height:46vh;overflow:auto"></div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Close</button></div>`);
+  _expRender();
+}
+function _expRender(){
+  const list=document.getElementById('exp-list'),sum=document.getElementById('exp-sum');
+  if(!list||!sum)return;
+  const eb=_expiryBook(),nm=_expItemNames(),t0=today(),q=String((document.getElementById('exp-q')||{}).value||'').trim().toLowerCase(),all=(document.getElementById('exp-v')||{}).value==='all';
+  const rows=[];
+  eb.keys().filter(k=>eb.has(k)).forEach(k=>{
+    const item=nm.get(k)||k;
+    eb.facts(k,t0).batches.forEach(b=>{
+      if(!b.exp&&!b.batch)return;                                   // stock with neither a batch nor a date is not tracked here
+      if(!all&&!(b.exp&&b.days<=Sales.EXPIRY_WARN))return;
+      if(q&&(item+' '+b.batch).toLowerCase().indexOf(q)<0)return;
+      rows.push({item,batch:b.batch,exp:b.exp,days:b.days,expired:b.expired,bal:b.bal});
+    });
+  });
+  rows.sort((a,b)=>(a.days==null?1e9:a.days)-(b.days==null?1e9:b.days)||a.item.localeCompare(b.item));
+  _expRows=rows;
+  const ex=rows.filter(r=>r.expired),soon=rows.filter(r=>r.days!=null&&!r.expired&&r.days<=Sales.EXPIRY_WARN);
+  sum.innerHTML=(ex.length?`<span style="color:var(--red)">${ex.length} expired batch${ex.length>1?'es':''}</span>`:'<span style="color:var(--green)">No expired stock</span>')+(soon.length?` · <span style="color:var(--amber)">${soon.length} expiring within ${Sales.EXPIRY_WARN} days</span>`:'');
+  list.innerHTML=rows.length?rows.map((r,i)=>{
+    const col=r.expired?'var(--red)':(r.days!=null&&r.days<=Sales.EXPIRY_WARN?'var(--amber)':'var(--muted)');
+    const when=r.exp?(r.expired?(r.days===0?'Expires today: counts as expired':'Expired '+Math.abs(r.days)+' day'+(Math.abs(r.days)===1?'':'s')+' ago'):r.days+' day'+(r.days===1?'':'s')+' left'):'No expiry date';
+    return `<div style="border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:8px;display:flex;gap:10px;align-items:center;justify-content:space-between">
+      <div style="min-width:0"><div style="font-weight:800;color:var(--white);overflow-wrap:anywhere">${esc(r.item)}</div>
+        <div style="font-size:14px;color:var(--muted)">${r.batch?'Batch '+esc(r.batch):'No batch no.'}${r.exp?' · '+fmtDate(r.exp):''}</div>
+        <div style="font-size:14px;font-weight:700;color:${col}">${when}</div></div>
+      <div style="text-align:right;flex:none"><div style="font-size:18px;font-weight:800;color:var(--white)">${Number(r.bal).toLocaleString()}</div>
+        ${r.expired?`<button type="button" class="btn ba bsm" onclick="_expWriteOff(${i})">Write off</button>`:''}</div></div>`;
+  }).join(''):`<div style="color:var(--muted);padding:12px 0;text-align:center">${all?'No batches with a batch number or expiry date hold stock.':'Nothing is expired or expiring within '+Sales.EXPIRY_WARN+' days.'}</div>`;
+}
+function _expWriteOff(i){
+  const r=_expRows[i];if(!r||!r.expired)return;
+  if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+  if(!requireAddPermission('issue stock'))return;
+  if(!confirm('Write off '+Number(r.bal).toLocaleString()+' × '+r.item+(r.batch?' (batch '+r.batch+')':'')+', expired '+fmtDate(r.exp)+'?\n\nIt comes off stock as an expired issue. This is not a sale.'))return;
+  const payload=stampEntry({id:uid(),date:today(),time:nowTime(),itemName:r.item,issued:r.bal,notes:'EXPIRED '+r.exp+(r.batch?' · BATCH '+r.batch:''),
+    sellingPrice:0,creditStatus:'paid',partialPaid:0,customerId:'',customerName:'',internal:true,issueType:'expired',issueTo:'',expiryDate:r.exp,...(r.batch?{batchNo:r.batch}:{})});
+  updateData(d=>({...d,generalIssued:[...d.generalIssued,payload]}));
+  logAuditEvent('CREATE','Inventory Issued',_issueAuditText(payload)+' · expired batch '+(r.batch||'—')+' '+r.exp);
+  _expRender();
 }
 // ── STOCK AT THE MOMENT OF A COUNT (v0.3.71) ─────────────────────────────────────────────────────────────────────────
 // A count measures the shelf at ONE moment, so it is compared with the system stock at THAT moment (Sales.stockBook until), never with today's
@@ -11433,6 +11506,7 @@ function _doOpenEditGenRec(id){
     <div class="fw"><div class="fl">Rejection Reason</div><input class="fi" id="eger-reject-reason" value="${esc(rec.rejectionReason||'')}" placeholder="REJECTION REASON…" oninput="this.value=this.value.toUpperCase()"/></div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="eger-date" value="${rec.date}"/></div>
     <div class="fw"><div class="fl">Best-Before / Expiry Date <span style="font-size:15px;color:var(--muted)">(optional)</span></div><input class="fi" type="date" id="eger-expiry" value="${rec.expiryDate||''}"/></div>
+    <div class="fw"><div class="fl">Batch / Lot No. <span style="font-size:15px;color:var(--muted)">(optional)</span></div><input class="fi" id="eger-batch" value="${esc(rec.batchNo||'')}" autocomplete="off" oninput="this.value=this.value.toUpperCase()"/></div>
     <div class="fw"><div class="fl">Notes</div><input class="fi" id="eger-notes" value="${esc(rec.notes||'')}" oninput="this.value=this.value.toUpperCase()"/></div>
     <div class="fw"><div class="fl">Supplier <span style="font-size:15px;color:var(--muted)">(optional)</span></div>${(()=>{const sups=(DATA.contacts||[]).filter(c=>c.type==='supplier');return sups.length>0?`<select class="fi" id="eger-supplier"><option value="">— None / Unknown —</option>${sups.map(s=>`<option value="${s.id}"${s.id===rec.supplierId?' selected':''}>${esc(s.name)}</option>`).join('')}</select>`:`<input class="fi" id="eger-supplier-name" value="${esc(rec.supplierName||'')}" placeholder="SUPPLIER NAME (optional)" oninput="this.value=this.value.toUpperCase()"/>`;})()}</div>
     <div class="fw"><div class="fl">Purchase Payment Status</div><select class="fi" id="eger-credit"><option value="paid"${(rec.creditStatus||'paid')==='paid'?' selected':''}>✅ PAID — Already paid supplier</option><option value="partial"${rec.creditStatus==='partial'?' selected':''}>🔶 PARTIAL — Partially paid</option><option value="credit"${rec.creditStatus==='credit'?' selected':''}>🔴 CREDIT — Owe supplier / on account</option></select></div>
@@ -11460,7 +11534,7 @@ function saveEditGenRec(id){
     const prices={...(d.inventoryPrices||{})};
     if(pprice>0)prices[name]={...(prices[name]||{}),purchasePrice:pprice};
     return{...d,
-      generalInventory:d.generalInventory.map(x=>String(x.id)===String(id)?{...x,itemName:name,itemId:'',received:rec,good:Number(document.getElementById('eger-good').value||0),damaged:Number(document.getElementById('eger-dmg').value||0),condition:document.getElementById('eger-cond').value,rejectionReason:uc(document.getElementById('eger-reject-reason')?.value||''),creditStatus:document.getElementById('eger-credit')?.value||x.creditStatus||'paid',date:document.getElementById('eger-date').value,expiryDate:document.getElementById('eger-expiry')?.value||'',notes:uc(document.getElementById('eger-notes').value),purchasePrice:pprice,supplierId,supplierName}:x),
+      generalInventory:d.generalInventory.map(x=>String(x.id)===String(id)?{...x,itemName:name,itemId:'',received:rec,good:Number(document.getElementById('eger-good').value||0),damaged:Number(document.getElementById('eger-dmg').value||0),condition:document.getElementById('eger-cond').value,rejectionReason:uc(document.getElementById('eger-reject-reason')?.value||''),creditStatus:document.getElementById('eger-credit')?.value||x.creditStatus||'paid',date:document.getElementById('eger-date').value,expiryDate:document.getElementById('eger-expiry')?.value||'',batchNo:uc(document.getElementById('eger-batch')?.value),notes:uc(document.getElementById('eger-notes').value),purchasePrice:pprice,supplierId,supplierName}:x),
       inventoryPrices:prices
     };
   });

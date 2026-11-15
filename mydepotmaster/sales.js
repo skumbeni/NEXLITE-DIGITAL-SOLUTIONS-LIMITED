@@ -775,6 +775,136 @@ const Sales = (function () {
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
+  // EXPIRY AND BATCHES OF A GENERAL ITEM  (roadmap step 30)
+  // ══════════════════════════════════════════════════════════════════════════════
+  // A BATCH is what one delivery brought in: its received rows carry an optional batchNo and an optional expiryDate ('YYYY-MM-DD'). Rows with the same batchNo AND the
+  // same expiry date are one batch; a row with neither belongs to the undated batch (stock that does not expire, and every delivery received before step 30).
+  // Nothing is stored about it, exactly like stockBook and batchBook: expiryBook() replays the records in date/time order (at the same minute: received, issued, sold,
+  // returned) and ALLOCATES every outgoing quantity to the batches FEFO (first expired, first out), so the per-batch figures always add up to the item's stockBook() balance.
+  //   - A SALE takes from the batch that expires first and is still in date on the day of the sale, then the next, and so on; undated stock goes last. Only when nothing in
+  //     date is left does it take expired stock (a sale of expired goods that was let through); anything over what is in stock goes to the batch it last took from
+  //     (it shows negative: a visible oversell), else the newest batch, else the undated batch.
+  //   - An ISSUE that names its batch (issued rows may carry batchNo and/or expiryDate: the "write off this batch" action does) takes it all from that batch (it shows negative if the
+  //     batch held less: visible, never spilled onto another batch). An issue that names none takes FEFO, expired stock first.
+  //   - A RETURN that goes back on the shelf goes to the batches its sale line came from, in the order they supplied it (a void puts back exactly what it took).
+  // EXPIRED means the expiry date has arrived: expiryDate <= today. This is the rule the dashboard alert has always used (a batch is flagged on its date, not the day after).
+  // src: { received, issued, sales, returns }   received / issued / sales exactly as for stockBook; returns are the return RECORDS (returns.js), NOT Returns.forStock().
+  // opts: idOfName / keyOf / isApproved / until / untilDate / only, exactly as in stockBook.
+  // Returns:
+  //   keys()                    every item key that has a record
+  //   batches(key)              [{ batch, exp, rec, issued, sold, ret, bal }] in FEFO order (soonest expiry first, undated last)
+  //   facts(key, today, warn)   { total, expired, soon, next, nextDays, batches }   today = 'YYYY-MM-DD'; warn = days ahead that count as "soon" (default EXPIRY_WARN)
+  //                               total = every batch with stock; expired = stock on the shelf whose date has arrived; soon = stock expiring within `warn` days (not yet expired);
+  //                               next = the soonest still-in-date batch that has stock ({ batch, exp, qty }) or null; nextDays = days until it
+  //                               batches = the batches that hold stock, FEFO order, each { batch, exp, bal, days (null = undated), expired }
+  //   allocation(key, id)       which batches a sale line (id "<saleId>#<line index>") came from: [{ batch, exp, qty }]
+  const EXPIRY_WARN = 30;
+  const dayNo = d => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d || '')); return m ? Math.round(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 864e5) : null; };
+  const daysUntil = (exp, today) => { const a = dayNo(exp), b = dayNo(today); return a == null || b == null ? null : a - b; };
+  function expiryBook(src, o) {
+    o = o || {};
+    src = src || {};
+    const idOf = o.idOfName || (n => 'name:' + String(n || '').trim().toUpperCase());
+    const ok = o.isApproved || (r => !r.approvalStatus || r.approvalStatus === 'approved');
+    const keyOf = o.keyOf || (r => r.itemId || idOf(r.itemName));
+    const upTo = o.until != null ? String(o.until) : null, upDay = o.untilDate != null ? String(o.untilDate) : null;
+    const within = (date, time) => (upTo == null || (String(date || '') + ' ' + (time || '00:00')) <= upTo) && (upDay == null || String(date || '') <= upDay);
+    const at = (date, time) => String(date || '') + ' ' + (time || '00:00');
+    const expOf = r => { const d = String(r && r.expiryDate || '').trim(); return dayNo(d) == null ? '' : d; };
+    const noOf = r => String(r && r.batchNo == null ? '' : r.batchNo).trim().toUpperCase().slice(0, 40);
+    const bkey = (no, exp) => no + '|' + exp;
+    const EPS = 1e-9;
+    const ev = new Map(), dated = new Set();                           // key -> events; keys with any batch or expiry on a received/issued row
+    const push = (k, e) => { if (!k || (o.only != null && k !== o.only)) return; let a = ev.get(k); if (!a) ev.set(k, a = []); a.push(e); };
+    (src.received || []).forEach(r => {
+      if (!r || r._sale || !ok(r) || r.condition === 'rejected' || !within(r.date, r.time)) return;
+      const k = keyOf(r), no = noOf(r), exp = expOf(r);
+      if (no || exp) dated.add(k);
+      push(k, { k: 0, at: at(r.date, r.time), id: String(r.id || ''), no, exp, q: Number(r.received) || 0 });
+    });
+    (src.issued || []).forEach(r => {
+      if (!r || r._sale || !ok(r) || !within(r.date, r.time)) return;
+      const k = keyOf(r), no = noOf(r), exp = expOf(r);
+      push(k, { k: 1, at: at(r.date, r.time), id: String(r.id || ''), no, exp, tagged: !!(no || exp), q: Number(r.issued) || 0 });
+    });
+    (src.sales || []).forEach(s => {
+      if (!s || !within(s.date, s.time)) return;
+      arr(s.lines).forEach((l, i) => { if (l) push(l.itemId, { k: 2, at: at(s.date, s.time), id: s.id + '#' + i, day: String(s.date || ''), q: baseQty(l) }); });
+    });
+    (src.returns || []).forEach(r => {
+      if (!r || !within(r.date, r.time)) return;
+      arr(r.lines).forEach(l => { if (l && l.restock !== false) push(l.itemId, { k: 3, at: at(r.date, r.time), id: r.id + '#' + l.lineNo, sl: r.saleId + '#' + l.lineNo, q: baseQty(l) }); });
+    });
+
+    const done = new Map();
+    function replay(key) {
+      let got = done.get(key);
+      if (got) return got;
+      const list = (ev.get(key) || []).slice();
+      list.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : (a.k - b.k) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
+      const st = new Map(), order = [], lines = new Map(), back = new Map();
+      const slot = (no, exp) => { const b = bkey(no, exp); let s = st.get(b); if (!s) { s = { no, exp, rec: 0, issued: 0, sold: 0, ret: 0, i: order.length }; st.set(b, s); order.push(s); } return s; };
+      const bal = s => s.rec - s.issued - s.sold + s.ret;
+      const rank = s => s.exp || '9999-12-31';                           // undated stock never expires: it goes last
+      const fefo = () => order.slice().sort((a, b) => (rank(a) < rank(b) ? -1 : rank(a) > rank(b) ? 1 : a.i - b.i));
+      // takes `need` from the batches in `seq` that hold stock, in that order; returns what is still needed
+      const drain = (seq, need, f) => { for (const s of seq) { if (need <= EPS) break; const have = bal(s); if (have > EPS) { const t = Math.min(have, need); f(s, t); need -= t; } } return need; };
+      list.forEach(e => {
+        if (e.k === 0) { slot(e.no, e.exp).rec += e.q; return; }
+        if (e.k === 1) {
+          if (e.tagged) { slot(e.no, e.exp).issued += e.q; return; }       // names its batch: that batch gives all of it (negative when it holds less: visible, never spilled onto another batch)
+          const need = drain(fefo(), e.q, (s, t) => { s.issued += t; });
+          if (need > EPS) (order.length ? order[order.length - 1] : slot('', '')).issued += need;
+          return;
+        }
+        if (e.k === 3) {
+          let need = e.q;
+          const parts = lines.get(e.sl) || [];
+          for (const p of parts) {
+            if (need <= EPS) break;
+            const bk = e.sl + '|' + bkey(p.s.no, p.s.exp), free = p.qty - (back.get(bk) || 0);
+            if (free > EPS) { const t = Math.min(free, need); p.s.ret += t; back.set(bk, (back.get(bk) || 0) + t); need -= t; }
+          }
+          if (need > EPS) (parts.length ? parts[parts.length - 1].s : (order.length ? order[order.length - 1] : slot('', ''))).ret += need;
+          return;
+        }
+        let need = e.q, last = null;
+        const parts = [];
+        const take = (s, t) => { s.sold += t; last = s; const p = parts.find(x => x.s === s); if (p) p.qty += t; else parts.push({ s, qty: t }); };
+        const live = fefo().filter(s => bal(s) > EPS);
+        need = drain(live.filter(s => !s.exp || s.exp > e.day), need, take);          // in date on the day of the sale
+        need = drain(live.filter(s => s.exp && s.exp <= e.day), need, take);          // expired: only when nothing in date is left
+        if (need > EPS) take(last || (order.length ? order[order.length - 1] : slot('', '')), need);
+        lines.set(e.id, parts);
+      });
+      got = { order, st, lines, bal, fefo };
+      done.set(key, got);
+      return got;
+    }
+    const fin = s => ({ batch: s.no, exp: s.exp, rec: r3(s.rec), issued: r3(s.issued), sold: r3(s.sold), ret: r3(s.ret), bal: r3(s.rec - s.issued - s.sold + s.ret) });
+    const batches = k => replay(k).fefo().map(fin);
+    return {
+      keys: () => Array.from(ev.keys()),
+      has: k => dated.has(k),                                          // true when the item has any batch number or expiry date at all
+      batches,
+      facts: (k, today, warn) => {
+        const w = warn == null ? EXPIRY_WARN : Number(warn);
+        const hold = batches(k).filter(b => b.bal > EPS).map(b => {
+          const days = b.exp ? daysUntil(b.exp, today) : null;
+          return { batch: b.batch, exp: b.exp, bal: b.bal, days, expired: days != null && days <= 0 };
+        });
+        const sum = f => r3(hold.filter(f).reduce((a, b) => a + b.bal, 0));
+        const nx = hold.find(b => b.exp && !b.expired);
+        return {
+          total: sum(() => true), expired: sum(b => b.expired), soon: sum(b => b.exp && !b.expired && b.days <= w),
+          next: nx ? { batch: nx.batch, exp: nx.exp, qty: nx.bal } : null, nextDays: nx ? nx.days : null, batches: hold
+        };
+      },
+      allocation: (k, id) => (replay(k).lines.get(id) || []).map(p => ({ batch: p.s.no, exp: p.s.exp, qty: r3(p.qty) }))
+    };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
   // STORAGE ADAPTERS — every method is async; d = depot key
   //   add(d, rec)                       save a sale AND queue it for upload, in one transaction; EXISTS if the id is taken
   //   get(d, id) / all(d)               read
@@ -965,7 +1095,7 @@ const Sales = (function () {
     return { append, all, pending, push, pull, importMany };
   }
 
-  return { V, ID_RE, BATCH_NAME, DISC_MAX_PCT, PROMO_BY, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, fOf, baseQty, unitList, FACTOR_MAX, linePaid, methodsOf, netPrice, discountPolicy, discountSplit, discountJudge, pctText, promoCheck, promoList, promoDay, promoActive, promoMatches, promoText, promoLine, promoApply, discountParts, WHOLESALE, levelPolicy, levelApply, create, memAdapter, idbAdapter };
+  return { V, ID_RE, BATCH_NAME, DISC_MAX_PCT, PROMO_BY, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, expiryBook, EXPIRY_WARN, daysUntil, fOf, baseQty, unitList, FACTOR_MAX, linePaid, methodsOf, netPrice, discountPolicy, discountSplit, discountJudge, pctText, promoCheck, promoList, promoDay, promoActive, promoMatches, promoText, promoLine, promoApply, discountParts, WHOLESALE, levelPolicy, levelApply, create, memAdapter, idbAdapter };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Sales; // lets Node load it for tests

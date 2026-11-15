@@ -25,7 +25,24 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.71 (2026-11-15) — Till roadmap step 29, follow-ups: stock counts are measured against the stock AT THE TIME OF THE COUNT, a count can be applied to stock, and a stocktake is approved in one tap (index.html + sw.js; no database, rules, pos.html, sales.js or gate.js change).
+// Current version: v0.3.72 (2026-11-15) — Till roadmap step 30: expiry dates and batches (sales.js + pos.html + index.html + sw.js; no database, rules, returns.js, shifts.js, till_verify.js or gate.js change).
+//   - BATCHES. A batch is what one delivery brought in: the optional Batch / Lot No. (new on the Receive and Edit Receive forms; Scan Receive already had it) and the Expiry Date of its received row. Same batch no. + same date = one
+//     batch; a row with neither is the undated batch (stock that does not expire, and every delivery before this version). Nothing is stored: Sales.expiryBook() (sales.js) replays the records the stock formula reads, in date/time
+//     order, and gives every sale and issue to the batches FIRST-EXPIRED-FIRST-OUT, so the batches of an item always add up to its stockBook() balance (property-tested over 300 random histories).
+//     A sale takes the batch that expires first and is still in date on the day of the sale (undated stock last); expired stock only when nothing in date is left. A return that goes back on the shelf goes to the batches its sale
+//     line came from. An issue that names its batch (batchNo / expiryDate on the generalIssued row, as the write-off below does) comes off that batch only; an issue that names none goes FEFO, expired stock first.
+//   - EXPIRED = the expiry date has arrived (today or earlier), the rule the dashboard alert always used, on the app's own date (today() = the UTC date, so a date turns expired at 02:00 Zambia time).
+//   - TILL (pos.html). An item with expiry data shows "N expired - do not sell" and, within 30 days, "N expire <date>" on its tile; "in stock" and the low-stock test count only stock that is in date (the main app still shows the full
+//     stock, expired included); an item that is all expired reads "All expired". Charge is refused while the cart would have to be sold from expired stock (a line in the cart says so); the way out is to remove it, write it off, or
+//     correct a wrongly typed date. There is no manager-PIN override: a PIN approval would need a new audit event in shifts.js and database_rules.json, and the sale record has nowhere to say who allowed it. Items with no expiry data
+//     behave exactly as before, and commodities keep their own per-batch stock (v0.3.36).
+//   - MAIN APP (index.html). General > Actions > "Expiry" lists the batches that are expired or expire within 30 days (or all batches with stock), with what is LEFT of each, and a Write off button on expired ones: one ordinary
+//     internal generalIssued row (reason Expired, no price, never a sale) that names its batch, with an audit entry. The dashboard EXPIRED STOCK / EXPIRING SOON warnings now come from the same batches: a batch is flagged only while
+//     it still has stock on the shelf, and the quantity is what is left (before, a batch stayed flagged for ever, even when it had all been sold, and showed what was received).
+//   - ALL TILLS MUST BE UPDATED TOGETHER: pos.html now calls Sales.expiryBook, so a phone that still has the old sales.js cannot load the till catalog. sales.js and pos.html are both precached; the CACHE bump above refreshes them.
+//   - Tests: test_expiry.js (the engine, 631 checks, run against the real sales.js and returns.js), test_expiry_till.js (the catalog, tile and Charge block cut out of pos.html), test_expiry_main.js (the Expiry screen, write-off and
+//     dashboard alerts cut out of index.html). scripts/till/ (nightly check) is unaffected: till_verify.js and the records it reads did not change.
+// Previous: v0.3.71 (2026-11-15) — Till roadmap step 29, follow-ups: stock counts are measured against the stock AT THE TIME OF THE COUNT, a count can be applied to stock, and a stocktake is approved in one tap (index.html + sw.js; no database, rules, pos.html, sales.js or gate.js change).
 //   - FALSE SURPLUS FIXED. The Stock Count tab's "Latest Count vs System" table and the dashboard STOCK VARIANCE warnings compared the latest count with TODAY'S stock (itemAvail), so after a big count everything that sold
 //     afterwards looked like a surplus. Both now compare with the system stock at the moment of the count (Sales.stockBook until that minute: the same formula and 'until' as the count history and the Scan Stocktake review).
 //     _countSysFor(rows) works the counts out in time order, one stock book alive at a time, and keeps the answers while the records stay the same. The tab shows "System Now" and "System at Count" side by side; the
@@ -2305,7 +2322,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.71';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.72';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

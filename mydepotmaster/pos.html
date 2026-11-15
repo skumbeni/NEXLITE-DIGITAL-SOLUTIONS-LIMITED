@@ -97,6 +97,8 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 .tile .offer{display:block;font-size:12px;font-weight:700;color:var(--green)}
 .tile .whl{display:block;font-size:11px;font-weight:600;color:var(--green);line-height:1.3}
 .tile .alt{display:block;font-size:11px;color:var(--muted);line-height:1.3}
+.tile .xp{display:block;font-size:11px;font-weight:700;line-height:1.3}.tile .xp.bad{color:var(--red)}.tile .xp.warn{color:var(--amber)}
+.line .lx{grid-column:1/-1;font-size:12px;font-weight:700;color:var(--red)}
 .line .lu{grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
 .line .lu select{font:inherit;font-weight:600;font-size:14px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);max-width:100%}
 .qty{display:flex;align-items:center;gap:4px;justify-self:end}
@@ -636,6 +638,9 @@ function loadCatalog(){
   const idByName=new Map(items.map(x=>[x.name,x.id||legacyId(x.name)]));
   // ONE formula for the whole app (sales.js): stock = received - issued - sold + returns. Returns are the restocked lines of the void/refund records (step 19, Returns.forStock).
   const book=Sales.stockBook({received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:SALES_ALL,returns:Returns.forStock(RETS_ALL)},{idOfName:n=>idByName.get(n)||legacyId(n)});
+  // Step 30: expiry and batches. Sales.expiryBook (sales.js) replays the same records into batches, first-expired-first-out, and only items that have a batch number or an expiry date on a received
+  // row are worked out. o.xp = { total, expired, soon, next, nextDays, batches } (see sales.js) or null. o.ok = what can be SOLD: stock minus what is past its date (an item with no expiry data: all of it).
+  const exb=Sales.expiryBook({received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:SALES_ALL,returns:RETS_ALL},{idOfName:n=>idByName.get(n)||legacyId(n)}),tday=new Date().toISOString().slice(0,10);   // the app's date rule (UTC), like the dates on the sales
   const prices=DATA.inventoryPrices||{};
   const general=items.map(x=>{
     const o={
@@ -652,10 +657,13 @@ function loadCatalog(){
     o.wprice=o.price>0?ul[0].wprice:0;
     o.wmin=o.wprice>0&&Number(pe.wholesaleMin)>0?Number(pe.wholesaleMin):0;
     o.units=ul.length>1&&o.price>0?ul:null;
+    o.xp=exb.has(o.id)?exb.facts(o.id,tday):null;
+    o.ok=o.xp?Math.round((o.avail-o.xp.expired)*1000)/1000:o.avail;
     o.hay=(o.name+' '+o.sku+' '+o.barcode+' '+o.category+(o.units?' '+o.units.filter(u=>!u.isBase).map(u=>u.barcode+' '+u.name).join(' '):'')).toLowerCase();
     return o;
   });
   ITEMS=general.concat(commodityItems()).sort((a,b)=>a.name.localeCompare(b.name));
+  ITEMS.forEach(i=>{if(i.ok==null){i.ok=i.avail;i.xp=null;}});      // commodities keep their own per-batch stock (v0.3.36); expiry dates are for general items
   BYID=new Map(ITEMS.map(i=>[i.id,i]));
 }
 function matches(q){
@@ -709,15 +717,31 @@ function tile(i){
   b.append(pr);
   let st,cls='st';
   if(!i.price){st='Not priced yet';}
-  else if(i.avail<=0){st='Out of stock';cls+=' out';}
-  else if(i.min&&i.avail<=i.min){st=fq(i.avail)+' left';cls+=' low';}
-  else st=fq(i.avail)+' in stock';
+  else if(i.ok<=0){st=i.xp&&i.xp.expired>0&&i.avail>0?'All expired':'Out of stock';cls+=' out';}      // step 30: stock that is past its date is not stock you can sell
+  else if(i.min&&i.ok<=i.min){st=fq(i.ok)+' left';cls+=' low';}
+  else st=fq(i.ok)+' in stock';
   b.append(el('span',cls,st));
+  if(i.xp&&i.price){                                           // step 30
+    if(i.xp.expired>0)b.append(el('span','xp bad',fq(i.xp.expired)+' expired \u2013 do not sell'));
+    if(i.xp.soon>0&&i.xp.next)b.append(el('span','xp warn',fq(i.xp.soon)+' expire'+(i.xp.soon===1?'s':'')+' '+dShort(i.xp.next.exp)+(i.xp.nextDays<=1?' ('+(i.xp.nextDays===1?'tomorrow':'today')+')':'')));
+  }
   if(i.units&&i.price)b.append(el('span','alt',i.units.filter(u=>!u.isBase).map(u=>u.name+' \u00D7'+fq(u.factor)).join(' \u00B7 ')));   // step 26: it is also sold by the pack or carton
   const of=offerFor(i);if(of&&i.price)b.append(el('span','offer',of));      // step 25: a live offer covers this item
   if(i.price&&i.wprice>0&&levelPolicy().on)b.append(el('span','whl','Wholesale '+money(i.wprice)+(i.wmin>0?' from '+fq(i.wmin):'')));   // step 27
   if(!i.price)b.disabled=true;
   return b;
+}
+const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const dShort=d=>{const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d||''));return m?(+m[3])+' '+MON[+m[2]-1]:String(d||'');};
+// Step 30: the items in the cart that would have to be sold from stock that is past its date (an item with nothing past its date is never in this list).
+function expiredInCart(){
+  const out=[],seen=new Set();
+  CART.forEach(l=>{
+    if(seen.has(l.id))return;seen.add(l.id);
+    const it=BYID.get(l.id);
+    if(it&&it.xp&&it.xp.expired>0&&inCartBase(l.id)>it.ok)out.push(it);
+  });
+  return out;
 }
 function renderGrid(){
   const list=matches(Q.value),frag=document.createDocumentFragment();
@@ -1043,6 +1067,7 @@ function openPay(){
   if(!reconcileDisc()){renderCart();return;}          // step 18: a discount that is no longer allowed comes off first
   if(isReadOnly()){say('The till is read-only right now.','bad');return;}
   if(toC(cartTotal())<=0){say('Nothing to charge.','bad');return;}
+  {const ex=expiredInCart();if(ex.length){renderCart();say(ex.map(i=>i.name).join(', ')+(ex.length>1?' have':' has')+' stock past its expiry date and cannot be sold. Remove it from the sale and take it off the shelf. '+(isCashier()?'Ask a manager to write it off.':'Write it off in the main app (General > Expiry), or correct the date if it was entered wrongly.'),'bad',10000);return;}}   // step 30
   PAY={method:'cash',tenders:[],onAccount:false,customer:(LV&&LV.cust)||'',practice:false};   // step 27: a wholesale customer's basket starts with that customer
   const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Payment'});
   const box=el('div','pay'),head=el('div','pay-h');
@@ -2682,7 +2707,8 @@ function lineEl(l,pr){                           // pr: this line's offer from p
     row.append(lu);
   }
   const need=it?inCartBase(l.id):0,bu=it&&it.units?' '+String(it.units[0].name||'').toLowerCase():'';
-  if(it&&need>it.avail)row.append(el('div','lw',it.avail>0?'Only '+fq(it.avail)+bu+' in stock':'None in stock'));
+  if(it&&it.xp&&it.xp.expired>0&&need>it.ok)row.append(el('div','lx',fq(it.xp.expired)+bu+' of this item are past their expiry date and cannot be sold'+(it.ok>0?'. Only '+fq(it.ok)+bu+' in date.':'.')));   // step 30
+  else if(it&&need>it.ok)row.append(el('div','lw',it.ok>0?'Only '+fq(it.ok)+bu+' in stock':'None in stock'));
   if(pr&&pr.promo){const o=el('div','lo');o.append(el('span','','Offer: '+pr.promo.name),el('span','','\u2212'+money(pr.discC/100)));row.append(o);}   // step 25
   if(l.lv)row.append(el('div','lv','Wholesale price (retail '+money(l.lp)+')'));    // step 27
   if(pr&&pr.hint)row.append(el('div','lh',pr.hint));
@@ -2839,8 +2865,8 @@ function camAccept(me,val){
   const r=resolveCode(val,{camera:true});
   if(r.err){camBeep(me,false);camStatus(me,r.err,'bad');camFlash(me,'bad');return;}
   const it=r.hit,ru=r.unit&&!r.unit.isBase?r.unit:null;addItem(it,1,ru);camBeep(me,true);
-  const l=CART.find(x=>lineKey(x)===it.id+(ru?'|'+ru.name.toUpperCase():'')),over=!!l&&inCartBase(it.id)>it.avail;
-  camStatus(me,'\u2713 '+it.name+(ru?' ('+ru.name+')':'')+(l&&l.qty>1?' \u00D7'+fq(l.qty):'')+(over?(it.avail>0?' \u00B7 only '+fq(it.avail)+' in stock':' \u00B7 none in stock'):''),over?'warn':'ok');
+  const l=CART.find(x=>lineKey(x)===it.id+(ru?'|'+ru.name.toUpperCase():'')),over=!!l&&inCartBase(it.id)>it.ok;
+  camStatus(me,'\u2713 '+it.name+(ru?' ('+ru.name+')':'')+(l&&l.qty>1?' \u00D7'+fq(l.qty):'')+(over?(it.xp&&it.xp.expired>0?' \u00B7 EXPIRED stock: cannot be sold':(it.ok>0?' \u00B7 only '+fq(it.ok)+' in stock':' \u00B7 none in stock')):''),over?'warn':'ok');
   camFlash(me,over?'warn':'ok');camSum(me);
 }
 function stopCam(){
