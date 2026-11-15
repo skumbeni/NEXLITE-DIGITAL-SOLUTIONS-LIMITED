@@ -401,6 +401,8 @@ const Shifts = (function () {
   // The id is built from the record's own id, so the same record is always the same entry, whoever builds the list.
   //   OPEN  Till Shift     CLOSE  Till Shift (variance; forced = closed by someone other than the opener)
   //   DISCOUNT  Till Sale  (every sale with a discount: who allowed it, the reason)
+  //   WHOLESALE  Till Sale  (step 27: a basket the till sold at wholesale prices because it was chosen as a wholesale basket: who allowed it, how much below retail. A line that
+  //                         reached its "wholesale from" quantity by itself is not logged: nobody chose it)
   //   VOID / REFUND  Till Sale  (reason, who allowed it, money back)
   //   REPORT  X Report / Z Report      APPROVE  Till Exit PIN      DENY  Manager PIN (wrong PIN / pad locked)
   function auditEntries(events, sales, returns, o) {
@@ -445,6 +447,16 @@ const Shifts = (function () {
       add('T:disc:' + s.id, s.at, s.date, s.time, s.cashier, s.cashierRole, 'DISCOUNT', 'Till Sale',
         (s.receiptNo || s.id) + ' \u00B7 ' + money(man / 100) + ' off ' + money(gross) + ' (' + pct + '%) \u00B7 Allowed by: ' + (by || '\u2014') + (by && !who(by, s.cashier) ? ' (manager PIN)' : '')
         + (s.discountReason ? ' \u00B7 Reason: ' + s.discountReason : ''));
+    });
+    (sales || []).forEach(s => {                                  // step 27: wholesale baskets
+      if (!s || s.priceLevel !== 'wholesale') return;
+      const lines = Array.isArray(s.lines) ? s.lines.filter(l => l && l.level === 'wholesale') : [];
+      if (!lines.length) return;
+      const savedC = lines.reduce((a, l) => a + Math.round(((Number(l.listPrice) || 0) - (Number(l.price) || 0)) * (Number(l.qty) || 0) * 100), 0);
+      const by = String(s.priceLevelBy || ''), cust = by.indexOf('Customer: ') === 0;
+      add('T:whl:' + s.id, s.at, s.date, s.time, s.cashier, s.cashierRole, 'WHOLESALE', 'Till Sale',
+        (s.receiptNo || s.id) + ' \u00B7 Wholesale prices on ' + lines.length + (lines.length === 1 ? ' line' : ' lines') + ' \u00B7 ' + money(savedC / 100) + ' below retail \u00B7 Allowed by: '
+        + (cust ? 'wholesale customer ' + by.slice(10) : (by || '\u2014') + (by && !who(by, s.cashier) ? ' (manager PIN)' : '')));
     });
     (returns || []).forEach(r => {
       if (!r) return;

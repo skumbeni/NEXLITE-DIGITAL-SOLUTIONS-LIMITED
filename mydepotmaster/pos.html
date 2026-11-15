@@ -93,7 +93,9 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 .line .lw{grid-column:1/-1;font-size:12px;color:var(--amber)}
 .line .lo{grid-column:1/-1;display:flex;justify-content:space-between;gap:8px;font-size:12px;font-weight:600;color:var(--green)}
 .line .lh{grid-column:1/-1;font-size:12px;color:var(--muted)}
+.line .lv{grid-column:1/-1;font-size:12px;font-weight:600;color:var(--green)}
 .tile .offer{display:block;font-size:12px;font-weight:700;color:var(--green)}
+.tile .whl{display:block;font-size:11px;font-weight:600;color:var(--green);line-height:1.3}
 .tile .alt{display:block;font-size:11px;color:var(--muted);line-height:1.3}
 .line .lu{grid-column:1/-1;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
 .line .lu select{font:inherit;font-weight:600;font-size:14px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);max-width:100%}
@@ -623,6 +625,8 @@ function commodityItems(){
       unit,per:/.s$/i.test(unit)?unit.slice(0,-1):unit,   // "bags" -> price shown "per bag"
       category:'Commodity',min:0,price:Number(c.sellingPrice)||0,avail
     };
+    o.wprice=o.price>0?Sales.unitList({},o.price,Number(c.wholesalePrice)||0)[0].wprice:0;      // step 27: DATA.commodities[i].wholesalePrice (and wholesaleMin)
+    o.wmin=o.wprice>0&&Number(c.wholesaleMin)>0?Number(c.wholesaleMin):0;
     o.hay=(o.name+' commodity '+unit).toLowerCase();
     return o;
   });
@@ -640,8 +644,13 @@ function loadCatalog(){
       price:Number((prices[x.name]||{}).sellingPrice)||0,
       avail:book.get(x.id||legacyId(x.name)).bal      // always in the BASE unit (step 26)
     };
+    const pe=prices[x.name]||{};
     // Step 26: the units this item is sold in (base first). null for an item with just its one unit. A unit that comes to no price is not offered.
-    const ul=Sales.unitList({unit:x.unit,barcode:x.barcode,units:x.units},o.price).filter(u=>u.isBase||u.price>0);
+    // Step 27: the wholesale price per base unit (DATA.inventoryPrices[name].wholesalePrice) and the quantity from which the item is wholesale by itself (wholesaleMin). 0 = none.
+    // unitList() hands back each unit's wholesale price too, and 0 for any that is not below its retail price.
+    const ul=Sales.unitList({unit:x.unit,barcode:x.barcode,units:x.units},o.price,Number(pe.wholesalePrice)||0).filter(u=>u.isBase||u.price>0);
+    o.wprice=o.price>0?ul[0].wprice:0;
+    o.wmin=o.wprice>0&&Number(pe.wholesaleMin)>0?Number(pe.wholesaleMin):0;
     o.units=ul.length>1&&o.price>0?ul:null;
     o.hay=(o.name+' '+o.sku+' '+o.barcode+' '+o.category+(o.units?' '+o.units.filter(u=>!u.isBase).map(u=>u.barcode+' '+u.name).join(' '):'')).toLowerCase();
     return o;
@@ -706,6 +715,7 @@ function tile(i){
   b.append(el('span',cls,st));
   if(i.units&&i.price)b.append(el('span','alt',i.units.filter(u=>!u.isBase).map(u=>u.name+' \u00D7'+fq(u.factor)).join(' \u00B7 ')));   // step 26: it is also sold by the pack or carton
   const of=offerFor(i);if(of&&i.price)b.append(el('span','offer',of));      // step 25: a live offer covers this item
+  if(i.price&&i.wprice>0&&levelPolicy().on)b.append(el('span','whl','Wholesale '+money(i.wprice)+(i.wmin>0?' from '+fq(i.wmin):'')));   // step 27
   if(!i.price)b.disabled=true;
   return b;
 }
@@ -741,17 +751,21 @@ const lineF=l=>{const f=Number(l&&l.f);return f>0?f:1;};
 const lineKey=l=>l.id+(lineF(l)!==1?'|'+String(l.unit||'').toUpperCase():'');
 const baseOf=l=>Sales.baseQty({qty:l.qty,factor:lineF(l)});
 const inCartBase=id=>Math.round(CART.reduce((a,l)=>l.id===id?a+baseOf(l):a,0)*1000)/1000;
-const cartShape=l=>{const o={id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:Number(l.price),qty:Number(l.qty)};if(lineF(l)!==1){o.f=lineF(l);o.bu=String(l.bu||'');}return o;};   // what a held basket / draft keeps
+const cartShape=l=>{const o={id:l.id,kind:l.kind||'item',name:l.name,unit:l.unit||'',per:l.per||'',price:lvRetail(l),qty:Number(l.qty)};if(lineF(l)!==1){o.f=lineF(l);o.bu=String(l.bu||'');}return o;};   // what a held basket / draft keeps
 function unitFor(it,l){                          // the item's current unit that this line is in (null: the item has no such unit any more)
   if(!it)return null;
   if(lineF(l)===1)return it.units?it.units[0]:null;
   return it.units?it.units.find(u=>!u.isBase&&u.name.toUpperCase()===String(l.unit||'').toUpperCase())||null:null;
 }
 function putUnit(l,it,u){                        // make line l a line in unit u (price, label and size follow)
-  if(u.isBase){l.unit=it.unit;l.per=it.per;l.price=it.price;delete l.f;delete l.bu;}
-  else{l.unit=u.name;l.per=u.name;l.price=u.price;l.f=u.factor;l.bu=it.units[0].name;}
+  if(u.isBase){l.unit=it.unit;l.per=it.per;l.price=it.price;l.rp=it.price;l.wp=it.wprice||0;delete l.f;delete l.bu;}
+  else{l.unit=u.name;l.per=u.name;l.price=u.price;l.rp=u.price;l.wp=u.wprice||0;l.f=u.factor;l.bu=it.units[0].name;}
+  l.wm=it.wmin||0;                               // step 27: the quantity (base units) from which the item is wholesale by itself
 }
-const cartGross=()=>Math.round(CART.reduce((a,l)=>a+lineTotal(l),0)*100)/100;
+// Step 27: every cart line keeps its RETAIL price (rp), its WHOLESALE price (wp, 0 = none) and the item's wholesale quantity (wm). l.price is what one unit costs NOW: promoRes() works
+// it out (Sales.levelApply) and writes it back, so the first thing every total does is ask promoRes(). A held basket or a draft keeps the retail price only.
+const lvRetail=l=>Number(l.rp!=null?l.rp:l.price);
+const cartGross=()=>{promoRes();return Math.round(CART.reduce((a,l)=>a+lineTotal(l),0)*100)/100;};
 // ── PROMOTIONS (roadmap step 25) ───────────────────────────────────────────────
 // Offers the Admin keeps in Settings -> Promotions (DATA.promotions: a percentage off, a special price, N for a price, buy N get M free; on items
 // or categories, between dates, on chosen weekdays). They are applied by the till itself, line by line, by Sales.promoApply() (sales.js): each line
@@ -765,16 +779,21 @@ const cartGross=()=>Math.round(CART.reduce((a,l)=>a+lineTotal(l),0)*100)/100;
 let PNOW=Date.now(),PL_RAW=null,PL=[];
 const promoClock=()=>{PNOW=Date.now();};
 function promoList(){const raw=DATA&&DATA.promotions;if(raw!==PL_RAW){PL_RAW=raw;PL=Sales.promoList(raw);}return PL;}
+// Step 27: the price of each line (retail, or wholesale when the basket is a wholesale basket or the item reached its wholesale quantity) is settled TOGETHER with the offers by
+// Sales.levelApply(): a line gets the cheaper of its wholesale price and its retail price with the offer, never both. The result is written back onto the lines (l.price, l.lp, l.lv).
 function promoRes(){
   if(!CART.length)return {lines:[],totalC:0};
-  return Sales.promoApply(CART.map(l=>{const it=BYID.get(l.id),f=lineF(l);return {itemId:l.id,category:it?it.category:'',qty:f===1?l.qty:baseOf(l),price:f===1?l.price:l.price/f};}),promoList(),{now:PNOW,money});   // step 26: in base units
+  const r=Sales.levelApply(CART.map(l=>{const it=BYID.get(l.id);return {itemId:l.id,category:it?it.category:'',qty:l.qty,f:lineF(l),rp:lvRetail(l),wp:l.wp||0,wm:l.wm||0};}),
+    {on:levelPolicy().on,level:LV?Sales.WHOLESALE:'retail',promos:promoList(),now:PNOW,money});
+  r.lines.forEach((x,i)=>{const l=CART[i];l.price=x.price;l.lp=x.listPrice;if(x.level)l.lv=1;else delete l.lv;});
+  return r;
 }
 // The tag on an item tile: the first live offer that covers the item, in words. Uses the real clock (the tile is not a sale).
 function offerFor(i){
   const day=Sales.promoDay(Date.now()),p=promoList().find(x=>Sales.promoActive(x,day)&&Sales.promoMatches(x,{itemId:i.id,category:i.category}));
   return p?Sales.promoText(p,{money}):'';
 }
-const cartTotal=()=>(Math.round(cartGross()*100)-promoRes().totalC-discSplit().total)/100;
+const cartTotal=()=>(Math.round(cartGross()*100)-promoRes().totalC-discSplit().total)/100;   // cartGross() settles the prices first (step 27)
 
 // ── BASKET: the cart frozen into one record = one receipt ─────────────────────
 // This is the shape sales.js stores as sales/{saleId}: header + lines, with the selling price copied
@@ -786,6 +805,7 @@ function makeBasket(pay){
     const pc=pr.lines[i]?pr.lines[i].discC:0,dc=pc+sp.lines[i];      // step 25: what the offer took off + the manual share
     const o={itemId:l.id,kind:l.kind||'item',name:l.name,unit:l.unit,qty:l.qty,price:l.price,total:(toC(lineTotal(l))-dc)/100};
     if(lineF(l)!==1){o.factor=lineF(l);o.base=String(l.bu||'');}               // step 26: sold in a pack or carton
+    if(l.lv){o.level=Sales.WHOLESALE;o.listPrice=l.lp;}   // step 27: sold at the wholesale price; price is what was charged, listPrice the retail price of the same unit
     if(dc>0)o.discount=dc/100;                         // step 18: line.total is AFTER the discount, line.discount is ALL that came off (offer and manual)
     if(pc>0){o.promoDiscount=pc/100;o.promoId=pr.lines[i].promo.id;o.promoName=pr.lines[i].promo.name;}   // step 25: the part that an offer gave
     return o;
@@ -797,6 +817,7 @@ function makeBasket(pay){
     qtyTotal:Math.round(lines.reduce((a,l)=>a+l.qty,0)*1000)/1000,
     total:Math.round(lines.reduce((a,l)=>a+Math.round(l.total*100),0))/100
   },pay||{});
+  if(LV&&lines.some(l=>l.level)){b.priceLevel=Sales.WHOLESALE;b.priceLevelBy=LV.by;}   // step 27: the basket was chosen as a wholesale basket (and a line really got the lower price)
   if(pr.totalC+sp.total>0){                        // the same fields sales.js toRecord() writes, so the preview and the saved sale read alike
     b.discount=(pr.totalC+sp.total)/100;
     if(pr.totalC>0)b.promoDiscount=pr.totalC/100;
@@ -846,6 +867,7 @@ function receiptEl(b,tag){
     const r2=el('tr'),q=el('td','mu',fq(l.qty)+(l.unit?' '+l.unit.toLowerCase():'')+' × '+money(l.price)),a=el('td','r b',money(Math.round(l.price*l.qty*100)/100));
     r2.append(q,a);const tb=el('tbody');tb.append(r1,r2);
     if(l.promoDiscount>0){const r3=el('tr');r3.append(el('td','mu','Offer: '+l.promoName),el('td','r mu','\u2212'+money(l.promoDiscount)));tb.append(r3);}   // step 25
+    if(l.level==='wholesale'){const r4=el('tr');r4.append(el('td','mu','Wholesale price (retail '+money(l.listPrice)+')',{colspan:'2'}));tb.append(r4);}   // step 27
     t.append(tb);   // one tbody per item so a page break never separates its name from its price
   });
   paper.append(t,el('hr','dash'));
@@ -934,7 +956,8 @@ function escposReceipt(b,tag,pf){
   if(b.cashier)ctr('Served by: '+b.cashier);
   rule('-');
   b.lines.forEach(l=>{bd(1);wrap(l.name).forEach(ln);bd(0);lr(fq(l.qty)+(l.unit?' '+l.unit.toLowerCase():'')+' x '+money(l.price),money(Math.round(l.price*l.qty*100)/100));
-    if(l.promoDiscount>0)lr('  Offer: '+l.promoName,'-'+money(l.promoDiscount));});   // step 25
+    if(l.promoDiscount>0)lr('  Offer: '+l.promoName,'-'+money(l.promoDiscount));
+    if(l.level==='wholesale')wrap('  Wholesale price (retail '+money(l.listPrice)+')').forEach(ln);});   // step 25, step 27
   rule('-');
   if(b.discount>0){                                 // step 25: offers and a person's discount apart
     const dC=toC(b.discount),pC=Math.min(dC,toC(b.promoDiscount)),mC=dC-pC;
@@ -1016,11 +1039,11 @@ function fld(label,input){const w=el('label','fld');w.append(el('span','',label)
 
 function openPay(){
   if(!CART.length||PAYOVL)return;
-  {const was=toC(cartTotal());promoClock();if(toC(cartTotal())!==was){renderCart();say('An offer has ended, so the total changed.','warn',6000);}}   // step 25: an offer that ended since the cart was drawn
+  {const was=toC(cartTotal());promoClock();if(!reconcileLevel()){renderCart();return;}if(toC(cartTotal())!==was){renderCart();say('An offer has ended, so the total changed.','warn',6000);}}   // step 25: an offer that ended since the cart was drawn; step 27: wholesale prices that are no longer allowed
   if(!reconcileDisc()){renderCart();return;}          // step 18: a discount that is no longer allowed comes off first
   if(isReadOnly()){say('The till is read-only right now.','bad');return;}
   if(toC(cartTotal())<=0){say('Nothing to charge.','bad');return;}
-  PAY={method:'cash',tenders:[],onAccount:false,customer:'',practice:false};
+  PAY={method:'cash',tenders:[],onAccount:false,customer:(LV&&LV.cust)||'',practice:false};   // step 27: a wholesale customer's basket starts with that customer
   const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Payment'});
   const box=el('div','pay'),head=el('div','pay-h');
   const cx=el('button','sm','Cancel',{type:'button'});cx.onclick=cancelPay;
@@ -1132,8 +1155,10 @@ function renderPay(){
   cs.forEach(c=>sel.append(el('option','',String(c.name||'')+(c.phone?' · '+c.phone:''),{value:c.id})));
   if(!cs.some(c=>c.id===PAY.customer))PAY.customer='';
   sel.value=PAY.customer;
+  if(LV&&LV.cust)sel.disabled=true;                          // step 27: the wholesale prices were given to this customer
   sel.onchange=()=>{PAY.customer=sel.value;renderPayFoot(settle(toC(cartTotal()),PAY.tenders));};
   fr.append(fld(S.rem>0&&PAY.onAccount?'Customer (required for credit)':'Customer (optional)',sel));
+  if(LV&&LV.cust)fr.append(el('div','pay-note mu','These are the wholesale prices of this customer. To sell to someone else, go back and change the prices first.'));
   if(S.rem>0&&PAY.onAccount&&!cs.length)fr.append(el('div','pay-note',isCashier()?'No customers yet. Ask your admin or a manager to add the customer.':'No customers yet. Add the customer in the main app under Contacts, then come back.'));
 
   PAYBODY.replaceChildren(fr);
@@ -1166,7 +1191,7 @@ function renderPayFoot(S){
 }
 function completePay(){
   if(!PAY||FINALIZING)return;
-  if(!reconcileDisc()){renderCart();renderPay();return;}   // step 18: the total changed; the payments entered stay, the screen is redrawn
+  if(!reconcileLevel()||!reconcileDisc()){renderCart();renderPay();return;}   // step 18: the total changed; the payments entered stay, the screen is redrawn (step 27: the same for wholesale prices)
   const S=settle(toC(cartTotal()),PAY.tenders);
   if(!payReady(S))return;
   const cust=customers().find(c=>c.id===PAY.customer);
@@ -1245,7 +1270,7 @@ function addItem(i,n,u){                         // u: the unit (from i.units) w
   const key=i.id+(u?'|'+u.name.toUpperCase():'');
   const l=CART.find(x=>lineKey(x)===key);
   if(l)l.qty=Math.round((l.qty+(n||1))*1000)/1000;
-  else{const o={id:i.id,kind:i.kind,name:i.name,unit:i.unit,per:i.per,price:i.price,qty:n||1};if(u)putUnit(o,i,u);CART.push(o);}
+  else{const o={id:i.id,kind:i.kind,name:i.name,unit:i.unit,per:i.per,price:i.price,rp:i.price,wp:i.wprice||0,wm:i.wmin||0,qty:n||1};if(u)putUnit(o,i,u);CART.push(o);}
   renderCart();say('Added '+i.name+(u?' ('+u.name+')':''),'ok');
 }
 function setQty(key,q){                          // key: lineKey(line)
@@ -1368,6 +1393,66 @@ function openDisc(){
   inp.focus();
 }
 
+// ── WHOLESALE PRICES (till roadmap step 27) ─────────────────────────────────────
+// The Admin sets a wholesale price per item (Price List and item details) and switches the feature on (Settings -> Wholesale prices; OFF by default). A line is sold at the wholesale
+// price when (a) the basket is a wholesale basket, chosen here, or (b) the item's total in the basket reaches the item's own "wholesale from" quantity. (b) needs nobody's say-so: it is
+// printed on the tile, and the cart tells the cashier what to add. (a) is a decision, so it is controlled like a discount: an Admin or Manager login makes a basket wholesale on its own;
+// a Cashier or Staff login needs a manager PIN (or the Admin lets anyone do it); a WHOLESALE CUSTOMER (a contact the Admin marked wholesale) needs no PIN, and the basket then belongs to that
+// customer (the payment screen starts with them and cannot change them). Who allowed it is saved on the sale. The prices and offers are settled together by Sales.levelApply().
+// Like a discount it is NOT kept when a sale is held, resumed from Held, or restored after a reload: choose it again.
+let LV=null,LOVL=null;               // LV: null = retail basket, otherwise { by: who allowed it, cust: the wholesale customer's id, or '' }
+const LEVEL_LOST='the wholesale prices were not kept, choose them again';
+const levelPolicy=()=>Sales.levelPolicy(DATA&&DATA.depotInfo);
+const wholesaleCustomers=()=>customers().filter(c=>c.priceLevel==='wholesale');
+// true when nothing changed; false when the basket had to go back to retail (it says why).
+function reconcileLevel(){
+  if(!LV)return true;
+  if(!CART.length){LV=null;return true;}
+  if(!levelPolicy().on){LV=null;say('Wholesale prices are switched off, so the sale is back at retail prices.','warn',7000);return false;}
+  if(LV.cust&&!wholesaleCustomers().some(c=>c.id===LV.cust)){LV=null;say('That customer is not a wholesale customer any more, so the sale is back at retail prices.','warn',7000);return false;}
+  return true;
+}
+function closeLevel(){if(!LOVL)return;LOVL.remove();LOVL=null;if(!COARSE)focusSearch();}
+function openLevel(){
+  if(LOVL||DOVL||PAYOVL||HOVL||PINOVL||SHOVL||MOVL||RPOVL||ROVL||CAMOVL||!CART.length)return;
+  const pol=levelPolicy();
+  if(!pol.on){say('Wholesale prices are not switched on for this depot.','bad');return;}
+  if(isReadOnly()){say('The till is read-only right now.','bad');return;}
+  const alone=isHolder(USER)||pol.anyone,cs=wholesaleCustomers();
+  const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Prices'});
+  const box=el('div','pay'),head=el('div','pay-h');
+  const cx=el('button','sm','Cancel',{type:'button'});cx.onclick=closeLevel;
+  head.append(el('h2','','Prices'),cx);
+  const body=el('div','pay-body');
+  const cname=LV&&LV.cust?((cs.find(c=>c.id===LV.cust)||{}).name||''):'';
+  body.append(el('div','pay-note mu',LV?'This sale is at wholesale prices'+(cname?' for '+cname:' (allowed by '+LV.by+')')+'. Items without a wholesale price stay at retail.':'This sale is at retail prices. An item with a \u201Cwholesale from\u201D quantity is already wholesale once enough of it is in the basket.'));
+  if(!CART.some(l=>l.wp>0))body.append(el('div','pay-note','No item in this sale has a wholesale price, so nothing would change.'));
+  const mt=el('div','methods');mt.style.gridTemplateColumns='1fr';
+  const done=(msg)=>{closeLevel();renderCart();say(msg,'ok');};
+  const bR=el('button',LV?'':'on','Retail prices',{type:'button'});
+  bR.onclick=()=>{LV=null;done('Retail prices.');};
+  const bW=el('button',LV&&!LV.cust?'on':'','Wholesale prices'+(alone?'':' \u00B7 manager PIN'),{type:'button'});
+  bW.onclick=()=>{
+    if(alone){LV={by:String(USER.username).slice(0,80),cust:''};done('Wholesale prices.');return;}
+    askManagerPin(who=>{const nm=approverName(who);LV={by:nm,cust:''};done('Wholesale prices allowed by '+nm+'.');},
+      'A manager must type their PIN to give wholesale prices.','Allow wholesale prices','allow wholesale prices');
+  };
+  mt.append(bR,bW);body.append(mt);
+  if(cs.length){
+    body.append(el('div','pay-note mu','Wholesale customers. No PIN is needed: the Admin has already marked them.'));
+    const ct=el('div','methods');ct.style.gridTemplateColumns='1fr';
+    cs.forEach(c=>{
+      const b=el('button',LV&&LV.cust===c.id?'on':'',String(c.name||'')+(c.phone?' \u00B7 '+c.phone:''),{type:'button'});
+      b.onclick=()=>{LV={by:('Customer: '+String(c.name||'')).slice(0,80),cust:c.id};done('Wholesale prices for '+String(c.name||'')+'.');};
+      ct.append(b);
+    });
+    body.append(ct);
+  }
+  box.append(head,body);ovl.append(box);
+  ovl.addEventListener('click',e=>{if(e.target===ovl)closeLevel();});
+  document.body.append(ovl);LOVL=ovl;
+}
+
 // ── HELD / PARKED SALES (roadmap step 7) ─────────────────────────────────────
 // "Hold sale" parks the cart so the next customer can be served; "Held (n)" beside the search box lists the parked
 // baskets and brings one back. A held basket is NOT a sale: nothing is recorded, no stock moves and no receipt number
@@ -1413,22 +1498,22 @@ function holdCart(quiet){
   if(a.length>=HELD_MAX){say('Too many held sales ('+HELD_MAX+'). Resume or discard one first.','bad');return false;}
   a.push(cartAsHeld());
   if(!writeHeld(a)){say('Could not hold the sale: no storage space left on this device.','bad');return false;}
-  const hadDisc=!!DISC;
+  const hadDisc=!!DISC,hadLV=!!LV;
   CART=[];renderCart();renderHeldBtn();
-  if(!quiet)say('Sale held. Serve the next customer.'+(hadDisc?' Its discount is not kept: apply it again when you resume.':''),'ok');
+  if(!quiet)say('Sale held. Serve the next customer.'+(hadDisc?' Its discount is not kept: apply it again when you resume.':'')+(hadLV?' Its wholesale prices are not kept: choose them again when you resume.':''),'ok');
   return true;
 }
 function parkOnExit(){try{if(CART&&CART.length)holdCart(true);}catch{}}
 function resumeHeld(id){
   const a=readHeld(),i=a.findIndex(h=>h.id===id);   // read fresh: another till tab may have resumed it already
   if(i<0){say('That held sale was already resumed or discarded.','bad');renderHeldBtn();renderHeldList();return;}
-  const h=a.splice(i,1)[0],parked=CART.length>0,hadDisc=!!DISC;
+  const h=a.splice(i,1)[0],parked=CART.length>0,hadDisc=!!DISC,hadLV=!!LV;
   if(parked)a.push(cartAsHeld());                   // one out, one in: never over the limit
   if(!writeHeld(a)){say('Could not resume: no storage space left on this device.','bad');return;}
-  const r=repriceLines(h.lines);CART=r.lines;DISC=null;   // step 18: the discount of the sale that was open is not carried over
+  const r=repriceLines(h.lines);CART=r.lines;DISC=null;LV=null;   // step 18: the discount of the sale that was open is not carried over; step 27: nor are its wholesale prices
   closeHeld();renderCart();renderHeldBtn();openCart();
   const note=priceNotes(r,'held');
-  if(parked)note.push('the sale you had open is now held'+(hadDisc?' without its discount':''));
+  if(parked)note.push('the sale you had open is now held'+(hadDisc||hadLV?' without its '+(hadDisc&&hadLV?'discount and wholesale prices':hadDisc?'discount':'wholesale prices'):''));
   say('Held sale resumed'+(note.length?'. '+note.join('. '):'')+'.',r.repriced||r.unlisted.length?'warn':'ok',note.length?7000:null);
 }
 // Lines coming back from storage (a held basket, a restored cart) are re-read from the Price List, exactly as if the
@@ -1443,6 +1528,7 @@ function repriceLines(lines){
       if(Math.abs(np-line.price)>0.004)repriced++;
       putUnit(line,it,u&&!u.isBase?u:{isBase:true});line.name=it.name;line.kind=it.kind;
     }else unlisted.push(String(l.name));
+    if(line.rp==null){line.rp=Number(line.price);line.wp=0;line.wm=0;}     // step 27: an item that is not listed any more keeps its stored (retail) price and has no wholesale price
     return line;
   });
   return {lines:out,repriced,unlisted};
@@ -2086,7 +2172,7 @@ let RTOVL=null,RTBODY=null,RTTTL=null,RT=null,RTBUSY=false;
 const cashOutNow=id=>Returns.cashOutOf(id,RETS_ALL);
 const retNum=s=>String((s&&(s.receiptNo||s.id))||'');
 function parseQty(v){const t=String(v==null?'':v).trim().replace(',','.');if(!/^\d*\.?\d{0,3}$/.test(t)||t===''||t==='.')return 0;return Number(t);}
-function anyOverlay(){return !!(RTOVL||PAYOVL||HOVL||PINOVL||SHOVL||MOVL||CAMOVL||DOVL||ROVL||RPOVL||PRNOVL);}
+function anyOverlay(){return !!(RTOVL||PAYOVL||HOVL||PINOVL||SHOVL||MOVL||CAMOVL||DOVL||LOVL||ROVL||RPOVL||PRNOVL);}
 function openReturns(){
   if(anyOverlay()||RTBUSY)return;
   if(isReadOnly()){say('The till is read-only right now.','bad',4000);return;}
@@ -2486,7 +2572,7 @@ function saveDraft(){
   if(!TAB)return;                                   // before boot has claimed a tab id
   try{
     if(!CART.length){localStorage.removeItem(draftKey(TAB));return;}
-    localStorage.setItem(draftKey(TAB),JSON.stringify({v:1,tab:TAB,at:Date.now(),by:USER?String(USER.username):'',disc:DISC?1:0,
+    localStorage.setItem(draftKey(TAB),JSON.stringify({v:1,tab:TAB,at:Date.now(),by:USER?String(USER.username):'',disc:DISC?1:0,lv:LV?1:0,
       lines:CART.map(cartShape)}));
   }catch{}                                          // storage full or blocked: the cart still works, it just is not saved
 }
@@ -2537,7 +2623,8 @@ async function recoverDrafts(boot){
       if(!boot)continue;                                                              // our own live draft
       if(!CART.length&&String(d.by||'').toLowerCase()===me){
         const r=repriceLines(lines);CART=r.lines;out.restored=r.lines.length;out.notes=priceNotes(r,'saved');
-        if(d.disc)out.notes.push(DISC_LOST);continue;
+        if(d.disc)out.notes.push(DISC_LOST);
+        if(d.lv)out.notes.push(LEVEL_LOST);continue;
       }
       // someone else's cart, or this tab already has items: park it below
     }else{
@@ -2545,6 +2632,7 @@ async function recoverDrafts(boot){
       if(!dead)continue;                                                              // another tab is still using it
     }
     if(d.disc&&!out.notes.includes(DISC_LOST))out.notes.push(DISC_LOST);
+    if(d.lv&&!out.notes.includes(LEVEL_LOST))out.notes.push(LEVEL_LOST);
     adopt.push({id:'r_'+String(d.tab)+'_'+String(d.at),at:Number(d.at)||Date.now(),by:String(d.by||''),rec:true,
       lines:lines.map(cartShape),key:k});
   }
@@ -2596,11 +2684,13 @@ function lineEl(l,pr){                           // pr: this line's offer from p
   const need=it?inCartBase(l.id):0,bu=it&&it.units?' '+String(it.units[0].name||'').toLowerCase():'';
   if(it&&need>it.avail)row.append(el('div','lw',it.avail>0?'Only '+fq(it.avail)+bu+' in stock':'None in stock'));
   if(pr&&pr.promo){const o=el('div','lo');o.append(el('span','','Offer: '+pr.promo.name),el('span','','\u2212'+money(pr.discC/100)));row.append(o);}   // step 25
+  if(l.lv)row.append(el('div','lv','Wholesale price (retail '+money(l.lp)+')'));    // step 27
   if(pr&&pr.hint)row.append(el('div','lh',pr.hint));
   return row;
 }
 function renderCart(){
   promoClock();                                  // step 25: offers are judged now, and stay judged this way until the cart is redrawn or Charge opens
+  reconcileLevel();                              // step 27: wholesale prices that are no longer allowed come off before the discount is checked
   reconcileDisc();                               // step 18: a discount the basket no longer justifies comes off before anything is drawn
   const pr=promoRes(),lines=document.createDocumentFragment();
   if(!CART.length)lines.append(el('div','empty','Scan a barcode or tap an item to start a sale.'));
@@ -2616,6 +2706,9 @@ function renderCart(){
   $('dsv').textContent=dT>0?'\u2212'+money(dT/100)+' ('+Sales.pctText(Math.round(dT*10000/Math.max(1,grossLinesC().reduce((a,b)=>a+b,0))))+'%)':'';
   $('ofr-row').hidden=!(n&&pr.totalC>0);         // step 25: what the offers saved on this basket
   $('ofv').textContent=pr.totalC>0?'\u2212'+money(pr.totalC/100):'';
+  $('lv-row').hidden=!(n&&levelPolicy().on);      // step 27: the Prices row, only where the Admin has switched wholesale prices on
+  $('lvb').textContent=LV?'Change prices':'Wholesale prices';
+  $('lvv').textContent=LV?'Wholesale'+(LV.cust?' \u00B7 '+((customers().find(c=>c.id===LV.cust)||{}).name||''):''):'';
   if(!n&&!ROVL_SALE)hideReceipt();               // a recorded sale's receipt stays up after the cart is emptied
   CARTBAR.classList.toggle('has',n>0);
   $('cb-a').textContent=n?n+(n===1?' item':' items'):'Cart is empty';
@@ -2798,7 +2891,9 @@ function buildSell(){
   const drow=el('div','drow','',{id:'dsc-row'}),dbtn=el('button','sm','Discount',{id:'dsc',type:'button'});dbtn.onclick=openDisc;
   drow.hidden=true;drow.append(dbtn,el('span','dv','',{id:'dsv'}));      // shown only when the Admin has switched discounts on
   const orow=el('div','drow','',{id:'ofr-row'});orow.hidden=true;orow.append(el('span','','Offers applied'),el('span','dv','',{id:'ofv'}));   // step 25: shown only when an offer applies
-  foot.append(orow,drow,tot,secrow,CHARGE,el('div','hint','',{id:'shint'}));
+  const lrow=el('div','drow','',{id:'lv-row'}),lbtn=el('button','sm','Wholesale prices',{id:'lvb',type:'button'});lbtn.onclick=openLevel;
+  lrow.hidden=true;lrow.append(lbtn,el('span','dv','',{id:'lvv'}));      // step 27: shown only when the Admin has switched wholesale prices on
+  foot.append(orow,lrow,drow,tot,secrow,CHARGE,el('div','hint','',{id:'shint'}));
   cart.append(grab,head,LINES,foot);
   // phone: bar that opens the sheet, and the dimmed backdrop behind it
   CARTBAR=el('button','cartbar','',{id:'cartbar',type:'button','aria-controls':'cart','aria-expanded':'false'});
@@ -2843,6 +2938,7 @@ function buildSell(){
     if(PINOVL){if(e.key==='Escape')closePin();return;}
     if(RTOVL){if(e.key==='Escape')closeReturns();return;}
     if(DOVL){if(e.key==='Escape')closeDisc();return;}
+    if(LOVL){if(e.key==='Escape')closeLevel();return;}
     if(SHOVL){if(e.key==='Escape')closeShiftSheet();return;}
     if(MOVL){if(e.key==='Escape')closeMine();return;}
     if(e.key==='Escape'&&ROVL){hideReceipt();return;}

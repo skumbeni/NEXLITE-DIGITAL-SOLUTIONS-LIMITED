@@ -25,7 +25,83 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.65 (2026-11-15) — Till roadmap step 26: multiple units, each / pack / carton (sales.js + returns.js + shifts.js + pos.html + index.html + database_rules.json + sw.js).
+// Current version: v0.3.71 (2026-11-15) — Till roadmap step 29, follow-ups: stock counts are measured against the stock AT THE TIME OF THE COUNT, a count can be applied to stock, and a stocktake is approved in one tap (index.html + sw.js; no database, rules, pos.html, sales.js or gate.js change).
+//   - FALSE SURPLUS FIXED. The Stock Count tab's "Latest Count vs System" table and the dashboard STOCK VARIANCE warnings compared the latest count with TODAY'S stock (itemAvail), so after a big count everything that sold
+//     afterwards looked like a surplus. Both now compare with the system stock at the moment of the count (Sales.stockBook until that minute: the same formula and 'until' as the count history and the Scan Stocktake review).
+//     _countSysFor(rows) works the counts out in time order, one stock book alive at a time, and keeps the answers while the records stay the same. The tab shows "System Now" and "System at Count" side by side; the
+//     history table uses the same helper (2,000 counts: about 0.6 s, was about 5.8 s with one stock book per count).
+//   - APPLY COUNTS TO STOCK (Admin, never automatic; General > Stock Count > "Apply counts to stock", asks for the admin password). Until now a count only measured the gap, so a shortage stayed in the system for ever. Applying a
+//     count writes ordinary rows that the ONE stock formula (and the till) already read, so the formula itself is unchanged: adjustment = counted - system stock at the moment of the count (sales since stay as they are).
+//     A shortage is a generalIssued row (internal, reason "Stock count shortage", issueType 'count': no price, no customer, never a sale); a surplus is a generalInventory row received at no cost (purchasePrice 0, so purchases
+//     and the weighted-average cost do not move). Rows are dated now, carry countAdj = the count's id and have the id 'cadj_<count id>', so the same count can never be applied twice (two phones, a double tap). The rows ARE the
+//     record that a count was applied: deleting them makes the count applicable again. Only the latest approved count of an item is offered, only if no newer count waits for approval and no adjustment is dated after it.
+//     The Stock Count tab marks applied counts ADJUSTED and the dashboard raises no variance warning for them. The new issue type is hidden in the Issue Item forms. One audit entry per application: "Stock Count Adjustment".
+//   - APPROVE BY STOCKTAKE. In Pending Approvals the pending rows of one stocktake (same stId) are ONE card: short / over / exact against the system at count time, the ten largest gaps, and Approve all / Reject all
+//     (Admin or Manager, with a confirmation; one audit entry per stocktake). Single counts and one-row stocktakes keep their own cards.
+//   - Not changed: the commodity batch variance warnings (batchAvail / batchPhysical), which the stocktake does not write.
+//   Test: test_stocktake_followups.js (the new code cut out of index.html, run against the real sales.js; 37 checks).
+// Previous: v0.3.70 (2026-11-15) — Till roadmap step 29: stocktake by scanning (index.html + sw.js; no database, rules, pos.html, sales.js or gate.js change).
+//   - General tab > Actions > "Scan Count" (Pro, pos_till; Admin and Manager, like Scan Receive). Scan with a USB/Bluetooth scanner or the phone camera: one scan = one more of that item, in the unit whose barcode it was
+//     (a carton scan counts its whole factor). Codes are found exactly as in Scan Receive and the Till; an unknown or shared code counts nothing and is listed. Each line has - / + and a typed quantity.
+//   - The count is blind: while scanning the screen shows only what was counted. Review then shows system against counted per item, biggest gaps first, with the gap valued at cost where the item has a cost price.
+//     A counted total can be typed over in Review; an item with no barcode (or none on the shelf) is counted from "Not counted yet" (type the quantity, or 0), filtered by category or name.
+//   - Save writes ONE normal generalStockCounts row per counted item (the same shape the Stock Count form writes: physicalCount in the BASE unit, itemName, itemId, date, time, notes; stampEntry, so a Manager's counts wait for
+//     approval) plus an additive stId that groups the rows of one stocktake. So the Stock Count tab, its history, the approval list and the audit log need no change. One audit entry: "Scan Stocktake".
+//   - Each row's date and time are the moment THAT item was last scanned or changed, not the moment Save was pressed. The Stock Count history already works the variance out against genStock(until that moment), so a sale made
+//     after the shelf was counted is never a shortage or surplus. Review uses the same book (Sales.stockBook until), built once per distinct minute.
+//   - Items not counted are NOT saved and keep their last count; nothing is ever set to 0 for the user. No stock is adjusted (like every stock count, this measures the gap; whether a count should adjust stock is an open decision).
+//   - Draft: the count is kept on this phone (localStorage, per depot and login) after every change, like Scan Receive. Pause closes the screen and keeps it; Discard (after the question) removes it; Save removes it.
+//   - Known, not changed here: the Stock Count tab's "Latest Count vs System" table and the dashboard STOCK VARIANCE warnings compare the latest count with TODAY'S stock (itemAvail), so after a big count every item that sells
+//     afterwards shows a false surplus there. The history table (count-time stock) is right. A Manager's stocktake makes one pending approval per item (there is no approve-all).
+//   Test: test_scan_stocktake.js (the stocktake code cut out of index.html, run against the real sales.js).
+// Previous: v0.3.69 (2026-11-15) — Till roadmap step 28, follow-up 2: Scan Receive keeps an unsaved delivery, and takes damaged, expiry and batch per line (index.html + sw.js; no database, rules, pos.html, sales.js or gate.js change).
+//   - Draft: the scanned list, supplier, date and payment are saved on this phone (localStorage, per depot and login) after every change and when the app goes to the background. Opening Scan Receive again
+//     offers to continue it (OK) or delete it and start fresh (Cancel). Save and Cancel (after the discard question) remove it. Another phone or login never sees it.
+//   - Per line, under "Damaged, expiry, batch": Damaged (in the scanned unit, at most the quantity), Expiry date, Batch / lot no. Same convention as the Receive form: received = everything that came, good + damaged = received,
+//     condition good / damaged / all-damaged. So damaged units are still counted in stock until issued as "Damaged / spoiled" (step 24), exactly as with Receive. Expiry goes in the row's expiryDate (the Received tab already shows it);
+//     the batch goes in a new additive batchNo and in the notes (BATCH ...). Edit and reports keep working: the data node is open, no rule is needed.
+//   - Not covered yet (step 30): expiry alerts, selling the oldest batch first, stock by batch. Two batches of one item in a delivery: use "Another batch of this item" on the line (it opens a new line; scans go to the newest).
+//   Test: test_scan_receive.js also covers the draft and the damaged / expiry / batch rows.
+// Previous: v0.3.68 (2026-11-15) — Till roadmap step 28, follow-up: scanning a code no item has (index.html + sw.js; no database, rules, pos.html, sales.js or gate.js change).
+//   - Scan Receive: a code no item has is no longer a dead end. It is listed under the scan box (several can wait) and an Admin can CREATE the item with that barcode (name, unit; it goes into the delivery at once;
+//     the Price List still needs its selling price) or GIVE the barcode to an existing item that has none. Both follow Manage's rules (Admin only, plan item cap, no duplicate name) and are audit-logged. A Cashier,
+//     Manager or Staff login is told to ask an admin. Skip drops a code. An item that already has a barcode is never changed here: a second code for it is a pack or carton in item details.
+//   Test: test_scan_receive.js now also covers the unknown code, new item and give-barcode paths.
+// Previous: v0.3.67 (2026-11-15) — Till roadmap step 28: receiving stock by scanning (index.html + sw.js; no database, rules, pos.html, sales.js or gate.js change).
+//   - Receive tab > "Scan Receive" (Pro, pos_till): scan a delivery with a USB/Bluetooth scanner (scan box + Enter) or the phone camera (BarcodeDetector, same rules as the Till camera). One scan = +1 of that item,
+//     in the unit whose barcode it was (item, pack or carton, step 26). EXACT barcode / SKU / unit barcode only: an unknown or shared code adds nothing and says so. Each line: qty and cost (per the scanned unit,
+//     prefilled from the last cost). One supplier, date and payment status for the delivery. Save writes one normal generalInventory row per line in the BASE unit (qty x factor, cost / factor, notes "SCANNED..."),
+//     updates the item's cost, and logs one "Scan Receive" audit entry. Staff entries follow the usual pending-approval rule. Stock, Received tab, reports and the Till are unchanged.
+//   Test: test_scan_receive.js (the scan and save logic cut out of index.html). Previous version below.
+// Previous: v0.3.66 (2026-11-15) — Till roadmap step 27: retail and wholesale price levels (sales.js + shifts.js + pos.html + index.html + database_rules.json + sw.js).
+//   - Prices: an item keeps its RETAIL price (Price List, as before) and may have a WHOLESALE price per base unit, plus an optional "wholesale from" quantity. Set in the Price List (two new boxes
+//     under each item and commodity) or in the item's details (which also has an optional wholesale price for each pack / carton; blank = wholesale price x contains). Saved as
+//     DATA.inventoryPrices[name].wholesalePrice / wholesaleMin, DATA.commodities[i].wholesalePrice / wholesaleMin and item.units[].wprice. A wholesale price that is not BELOW the retail price
+//     (of that unit) is never used, and the editors refuse it.
+//   - Customers: Contacts > a customer > "Price level at the till" = Wholesale customer (contact.priceLevel = 'wholesale').
+//   - Settings > Wholesale prices (Admin): OFF until switched on (depotInfo.wholesaleOn), and who may make a sale wholesale (depotInfo.wholesaleBy): 'pin' (default: a Cashier or Staff login needs a
+//     manager PIN, an Admin or Manager login does not) or 'any'. Takes effect on each till after it syncs.
+//   - Till: a line is sold at the wholesale price when (a) the sale is a wholesale sale, chosen on the new "Wholesale prices" row of the cart (a wholesale customer needs no PIN and the payment
+//     screen then starts with, and keeps, that customer), or (b) the item's total in the basket reaches its "wholesale from" quantity (counted in base units over every line of the item, so a carton
+//     plus singles add up; the tile says "Wholesale K8.00 from 12" and the cart says what to add). Items with no wholesale price stay retail. The cart shows "Wholesale price (retail K10.00)" under
+//     the line; the receipt, the printed slip and the Sales History reprint say it too.
+//   - Offers (step 25) and wholesale are never added together: each line takes whichever is CHEAPER for the customer, the wholesale price or the retail price with its offer (a tie goes to wholesale).
+//     A manual discount (step 18) is a share of the value after wholesale prices and offers. A held basket, a resumed one or one restored after a reload does NOT keep its wholesale prices
+//     (like a discount): choose them again. Wholesale prices switched off, or a customer who stops being wholesale, put an open sale back at retail with a message.
+//   - Record: a wholesale line is simply sold at its lower price (line.price is what was charged), so totals, stock value, voids and refunds, Sales History and every report need NO change.
+//     New, additive: line.level ('wholesale') + line.listPrice (the retail price per sold unit, higher than price) and, when the sale was chosen as a wholesale sale, the header's priceLevel
+//     ('wholesale') + priceLevelBy (the person, the manager whose PIN approved it, or "Customer: <name>"). A line that reached its quantity by itself is tagged but has no header (nobody chose it).
+//   - Audit log: a WHOLESALE entry for every sale chosen as wholesale (who allowed it, how much below retail). Nothing else in the audit log changed.
+//   - database_rules.json MUST BE PUBLISHED BEFORE the phones update: sale lines accept level and listPrice, the sale accepts priceLevel and priceLevelBy. Until it is published a wholesale sale
+//     (or a line that reached its quantity) is refused by the cloud and waits in the phone's outbox; retail sales upload as before. DATA prices and contacts need no rule (the data node is open).
+//     ALL TILLS MUST BE UPDATED before wholesale prices are switched on: a phone still on the old till would sell at retail and could drop a wholesale sale it downloads.
+//   - scripts/till/ (nightly check) needs the new sales.js and shifts.js beside till_verify.js, which itself is unchanged (it runs sales.js validate(), which now checks the wholesale fields).
+//     New Node tests: test_levels.js (engine, record, ledger, audit log, nightly check), test_pos_levels.js (the till's cart code cut out of pos.html), test_price_levels_admin.js (item details and
+//     Price List saves cut out of index.html).
+//   - Not covered yet: the CSV import / export has no wholesale columns; there is no third price level; the Z report and the day close-out do not show a "wholesale given" figure (the sale's
+//     lines and the audit log do); the quantity break counts one item at a time (no "any 12 drinks" across items); margin reports are step 31.
+//   Files: sales.js + shifts.js + pos.html + index.html (Price List, item details, Contacts, Settings card, reprinted receipt, SW_VERSION) + database_rules.json + sw.js. returns.js, gate.js and till_verify.js are unchanged.
+// Previous: v0.3.65 (2026-11-15) — Till roadmap step 26: multiple units, each / pack / carton (sales.js + returns.js + shifts.js + pos.html + index.html + database_rules.json + sw.js).
 //   - Item details (Manage Inventory Items): OTHER UNITS, up to 3 per item: name, contains (how many of the item's base UNIT), barcode (optional), price (optional; blank = selling price x contains).
 //     Saved as item.units. Stock, receiving, issuing, stock counts and the Price List stay in the BASE unit. A barcode, SKU or unit barcode must belong to ONE item and ONE unit: the editor,
 //     the CSV import and the till all check it (the till refuses an ambiguous scan, as before).
@@ -2229,7 +2305,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.65';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.71';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

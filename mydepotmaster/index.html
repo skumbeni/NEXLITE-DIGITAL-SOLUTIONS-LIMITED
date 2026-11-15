@@ -413,7 +413,7 @@ body.light .clockout-btn{border-color:var(--amber);color:var(--amber);}
 .modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-xl) var(--radius-xl) 0 0;padding:24px;width:100%;max-width:480px;max-height:90vh;overflow-y:auto;overflow-x:hidden;box-sizing:border-box;box-shadow:var(--shadow-lg);}
 .mtitle{font-family:var(--fh);font-size:24px;font-weight:800;color:var(--white);margin-bottom:18px;letter-spacing:-0.3px;}
 .mact{display:flex;gap:10px;margin-top:20px;}
-.pl-row{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);}
+.pl-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);}
 .pl-nm{flex:1;min-width:0;}
 .pl-nm b{display:block;font-weight:700;overflow-wrap:anywhere;}
 .pl-sub{font-size:15px;color:var(--muted);margin-top:2px;}
@@ -425,6 +425,12 @@ body.light .clockout-btn{border-color:var(--amber);color:var(--amber);}
 .pl-flag.bad{color:var(--red);font-weight:700;}
 .pl-use{background:none;border:none;color:var(--blue);font-size:15px;padding:0;margin-top:2px;cursor:pointer;text-decoration:underline;font-family:var(--fb);}
 .pl-head{font-family:var(--fh);font-size:18px;font-weight:800;color:var(--white);margin:12px 0 2px;}
+.pl-wh{flex:0 0 100%;display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;}
+.pl-wh label{display:flex;flex-direction:column;gap:2px;flex:1;min-width:120px;font-size:14px;color:var(--muted);}
+.pl-wi,.pl-wm{width:100%;background:var(--surface2);border:1.5px solid var(--border);border-radius:8px;padding:6px 10px;color:var(--text);font-size:17px;text-align:right;font-family:var(--fb);outline:none;}
+.pl-wi:focus,.pl-wm:focus{border-color:var(--green);}
+.pl-wi.chg,.pl-wm.chg{border-color:var(--amber);}
+.pl-wh .pl-flag{flex:0 0 100%;margin-top:0;}
 #pl-list{max-height:50vh;overflow-y:auto;}
 .twobox{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 
@@ -4714,7 +4720,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.65';
+const SW_VERSION  = 'v0.3.71';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -5904,7 +5910,17 @@ function renderPendingApprovals(){
   if(items.length===0){
     return `<div style="text-align:center;padding:32px 16px"><div style="font-size:36px;margin-bottom:8px">✅</div><div style="font-size:18px;color:var(--muted)">No entries waiting for approval.</div></div>`;
   }
-  const rows=items.map(({cat,cid,rec})=>{
+  // v0.3.71: the pending rows of one scan stocktake (same stId) become ONE card with Approve all / Reject all
+  const _stG=new Map();
+  items.forEach(x=>{if(x.cat==='genSC'&&/^st_[\w-]{3,40}$/.test(String(x.rec.stId||''))){const g=_stG.get(x.rec.stId);if(g)g.push(x);else _stG.set(x.rec.stId,[x]);}});
+  const _stSeen=new Set(),shown=[];
+  items.forEach(x=>{
+    const g=x.cat==='genSC'?_stG.get(x.rec.stId):null;
+    if(g&&g.length>1){if(!_stSeen.has(x.rec.stId)){_stSeen.add(x.rec.stId);shown.push({cat:'stGroup',cid:null,rec:{stId:x.rec.stId},rows:g});}}
+    else shown.push(x);
+  });
+  const rows=shown.map(({cat,cid,rec,rows:_gr})=>{
+    if(cat==='stGroup')return _stGroupCard(rec.stId,_gr);
     const meta=_APPROVAL_CATS[cat];
     const comLabel=cid?` · ${esc(getCom(cid).name)}`:'';
     const when=rec.enteredAt?new Date(rec.enteredAt).toLocaleString('en-GB',{dateStyle:'short',timeStyle:'short'}):'—';
@@ -5934,6 +5950,61 @@ function renderPendingApprovals(){
     </div>`;
   }).join('');
   return `<div style="margin-bottom:10px;font-size:15px;color:var(--muted)">${items.length} entr${items.length===1?'y':'ies'} awaiting approval — excluded from balances and totals until approved.</div>${rows}`;
+}
+// ── Stocktake card (v0.3.71): the pending rows of ONE scan stocktake (same stId) are one card with Approve all / Reject all, instead of one card per item ──
+function _stGroupCard(stId,grp){
+  const recs=grp.map(x=>x.rec),sys=_countSysFor(recs),nf=x=>Number(x).toLocaleString(undefined,{maximumFractionDigits:3});
+  let sh=0,ov=0,ex=0,shU=0,ovU=0;const gaps=[];
+  recs.forEach(c=>{
+    const s=sys.get(c.id);if(s==null)return;
+    const v=_countVar(c,s);
+    if(v<0){sh++;shU+=-v;}else if(v>0){ov++;ovU+=v;}else ex++;
+    if(v!==0)gaps.push({n:c.itemName,p:Number(c.physicalCount),s,v});
+  });
+  gaps.sort((a,b)=>Math.abs(b.v)-Math.abs(a.v));
+  const first=recs.slice().sort((a,b)=>(a.enteredAt||0)-(b.enteredAt||0))[0]||{};
+  const at=recs.reduce((m,c)=>Math.max(m,c.enteredAt||0),0);
+  const when=at?new Date(at).toLocaleString('en-GB',{dateStyle:'short',timeStyle:'short'}):'—';
+  const top=gaps.slice(0,10).map(g=>`<div style="font-size:14px;padding:3px 0;display:flex;justify-content:space-between;gap:8px"><span>${esc(g.n)}</span><span style="white-space:nowrap">counted ${nf(g.p)} vs ${nf(g.s)} &middot; <strong style="color:${g.v<0?'var(--red)':'var(--amber)'}">${g.v>0?'+':''}${nf(g.v)}</strong></span></div>`).join('');
+  const sid=esc(stId);
+  return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--surface2)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px">
+        <div style="font-weight:700;color:var(--white)">General — Stocktake &middot; ${recs.length} item${recs.length===1?'':'s'}</div>
+        <div style="font-size:13px;color:var(--muted);white-space:nowrap">${when}</div>
+      </div>
+      <div style="font-size:15px;color:var(--text);margin-bottom:4px">${sh} short (${nf(shU)} units) &middot; ${ov} over (${nf(ovU)} units) &middot; ${ex} exact</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:8px">Entered by ${first.enteredBy?enteredByLabel(first):'<strong>—</strong>'} &middot; measured against the system stock at the time of each count</div>
+      ${gaps.length?`<details style="margin-bottom:8px"><summary style="cursor:pointer;font-size:14px;color:var(--blue)">Largest gaps (${Math.min(10,gaps.length)} of ${gaps.length})</summary>${top}</details>`:''}
+      <div style="display:flex;gap:8px">
+        <button class="btn bg bsm" style="flex:1" onclick="approveStocktake('${sid}')">✓ Approve all ${recs.length}</button>
+        <button class="btn bo bsm" style="flex:1;color:var(--red);border-color:var(--red)" onclick="rejectStocktake('${sid}')">✕ Reject all ${recs.length}</button>
+      </div>
+    </div>`;
+}
+function _stPendingRows(stId){return (DATA.generalStockCounts||[]).filter(r=>r&&r.stId===stId&&isPending(r));}
+function approveStocktake(stId){
+  if(!(isAdmin()||isManagerRole())){ alert('⛔ Only an Admin or Manager can approve entries.'); return; }
+  if(!/^st_[\w-]{3,40}$/.test(String(stId||'')))return;
+  const n=_stPendingRows(stId).length;
+  if(!n){_refreshPendingApprovalsModal();return;}
+  if(!confirm('Approve all '+n+' count(s) of this stocktake?\n\nThey become official counts. Stock itself is not changed.'))return;
+  const by=USER.username,at=Date.now();
+  updateData(d=>({...d,generalStockCounts:(d.generalStockCounts||[]).map(r=>r&&r.stId===stId&&isPending(r)?{...r,approvalStatus:'approved',approvedBy:by,approvedAt:at}:r)}));
+  logAuditEvent('APPROVE','General — Stocktake',`${stId} · ${n} item(s)`);
+  showToast('✅ '+n+' stock count(s) approved');
+  _refreshPendingApprovalsModal();
+}
+function rejectStocktake(stId){
+  if(!(isAdmin()||isManagerRole())){ alert('⛔ Only an Admin or Manager can reject entries.'); return; }
+  if(!/^st_[\w-]{3,40}$/.test(String(stId||'')))return;
+  const n=_stPendingRows(stId).length;
+  if(!n){_refreshPendingApprovalsModal();return;}
+  const reason=(prompt('Reason for rejecting all '+n+' count(s) of this stocktake (optional, shown to the staff member):')||'').trim();
+  const by=USER.username,at=Date.now();
+  updateData(d=>({...d,generalStockCounts:(d.generalStockCounts||[]).map(r=>r&&r.stId===stId&&isPending(r)?{...r,approvalStatus:'rejected',rejectedBy:by,rejectedAt:at,approvalRejectionReason:reason}:r)}));
+  logAuditEvent('REJECT','General — Stocktake',`${stId} · ${n} item(s)${reason?' · Reason: '+reason:''}`);
+  showToast('❌ '+n+' stock count(s) rejected');
+  _refreshPendingApprovalsModal();
 }
 function openPendingApprovalsModal(){
   if(!(isAdmin()||isManagerRole())){ alert('⛔ Only an Admin or Manager can review pending approvals.'); return; }
@@ -8329,15 +8400,18 @@ function renderDash(){
     });
   });
   const genItems=[...new Set([...(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean),...DATA.generalInventory.map(x=>x.itemName)])];
-  genItems.forEach(name=>{
-    const avail=itemAvail(name);
-    const latest=itemPhysical(name);
-    if(latest!==null){
-      const variance=Number(latest.physicalCount)-avail;
-      if(variance!==0){
-        const dir=variance<0?'SHORTAGE':'SURPLUS';
-        warnings.push({icon:'⚖️',title:`STOCK VARIANCE — ${name}`,msg:`Physical count: <strong>${Number(latest.physicalCount).toLocaleString()}</strong> · System available: <strong>${avail.toLocaleString()}</strong> · <strong style="color:${variance<0?'var(--red)':'var(--amber)'}">${variance>=0?'+':''}${variance} units (${dir})</strong>`});
-      }
+  // v0.3.71: the latest count of an item is compared with the system stock AT THE MOMENT of that count (not today's), so what sold after the shelf was counted is no gap;
+  // a count that was applied to stock is settled and raises no warning.
+  const _gDone=_adjustedCountIds();
+  const _gLatest=genItems.map(name=>[name,itemPhysical(name)]).filter(x=>x[1]&&!_gDone.has(x[1].id));
+  const _gSys=_countSysFor(_gLatest.map(x=>x[1]));
+  _gLatest.forEach(([name,latest])=>{
+    const avail=_gSys.get(latest.id);
+    if(avail==null)return;
+    const variance=_countVar(latest,avail);
+    if(variance!==0){
+      const dir=variance<0?'SHORTAGE':'SURPLUS';
+      warnings.push({icon:'⚖️',title:`STOCK VARIANCE — ${name}`,msg:`Physical count: <strong>${Number(latest.physicalCount).toLocaleString()}</strong> · System at count: <strong>${avail.toLocaleString()}</strong> · <strong style="color:${variance<0?'var(--red)':'var(--amber)'}">${variance>=0?'+':''}${variance} units (${dir})</strong>`});
     }
   });
   const warnItems=[...(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean),...new Set(DATA.generalInventory.map(x=>x.itemName))];
@@ -8670,7 +8744,9 @@ function renderGeneral(){
         <button class="btn bg bsm pri" id="btn-add-gen-rec">+ Receive</button>
         <button class="btn ba bsm pri" id="btn-add-gen-iss">+ Issue</button>
         <button class="btn bo bsm" id="btn-add-gen-sc">&#x1F4E6; Stock Count</button>
+        <button class="btn bo bsm" onclick="openScanStocktake()" title="Count stock by scanning barcodes">&#x1F4F7; Scan Count</button>
         <button class="btn bo bsm" onclick="openMultiEntryForm('receive')" title="Receive multiple items/commodities in one transaction">&#x1F500; Multi Receive</button>
+        <button class="btn bo bsm" onclick="openScanReceive()" title="Receive a delivery by scanning barcodes">&#x1F4F7; Scan Receive</button>
         <button class="btn bo bsm" onclick="openMultiEntryForm('issue')" title="Issue multiple items/commodities in one transaction">&#x1F500; Multi Issue</button>
         ${USER.role==='admin'?`<button class="btn bo bsm" onclick="openManageInventory()">⚙️ Manage</button>`:''}
         ${USER.role==='admin'?`<button class="btn bo bsm" onclick="openPriceList()">💲 Prices</button>`:''}
@@ -9686,7 +9762,8 @@ var ISSUE_TYPES=[
   {id:'expired', icon:'⌛',label:'Expired',                 to:'',           ph:'',               need:false},
   {id:'lost',    icon:'❓',label:'Lost / stolen',           to:'',           ph:'',               need:false},
   {id:'sample',  icon:'🎁',label:'Sample / donation',       to:'Given to',   ph:'WHO',            need:false},
-  {id:'other',   icon:'📝',label:'Other internal use',      to:'Purpose',    ph:'WHAT FOR',       need:true}
+  {id:'other',   icon:'📝',label:'Other internal use',      to:'Purpose',    ph:'WHAT FOR',       need:true},
+  {id:'count',   icon:'⚖️',label:'Stock count shortage',    to:'',           ph:'',               need:false, auto:true}   // v0.3.71: written only by Apply counts to stock, never offered in the forms
 ];
 function _tillSells(){try{return !window.PLAY_MODE&&hasFeature('pos_till');}catch(e){return false;}}
 function _issueTypeOf(id){return (ISSUE_TYPES||[]).find(t=>t.id===id)||null;}
@@ -9698,7 +9775,7 @@ function _issueNames(extra){
   const fromData=[...new Set(DATA.generalInventory.map(x=>x.itemName))];
   return [...new Set([...defined,...fromData,...(extra?[extra]:[])])].sort();
 }
-function _issTypeOpts(sel){return ISSUE_TYPES.map(t=>`<option value="${t.id}"${t.id===sel?' selected':''}>${t.icon} ${t.label}</option>`).join('');}
+function _issTypeOpts(sel){return ISSUE_TYPES.filter(t=>!t.auto||t.id===sel).map(t=>`<option value="${t.id}"${t.id===sel?' selected':''}>${t.icon} ${t.label}</option>`).join('');}
 // shows or hides the "Sent to / Taken by / …" box for the chosen reason; p = 'gi' (new) or 'egei' (edit)
 function _issTypeUi(p){
   const t=_issueTypeOf((document.getElementById(p+'-type')||{}).value),wrap=document.getElementById(p+'-to-wrap'),lab=document.getElementById(p+'-to-label'),inp=document.getElementById(p+'-to');
@@ -10095,6 +10172,35 @@ function genStock(name,at){
   const o=_stockOpts(at);o.only=o.idOfName(name);
   return Sales.stockBook(_stockSrc(),o).byName(name);
 }
+// ── STOCK AT THE MOMENT OF A COUNT (v0.3.71) ─────────────────────────────────────────────────────────────────────────
+// A count measures the shelf at ONE moment, so it is compared with the system stock at THAT moment (Sales.stockBook until), never with today's
+// stock: whatever sells or arrives after the shelf was counted is not a shortage or a surplus. _countSysFor(rows) -> Map(count id -> system stock when
+// that count was taken), with the same formula and the same 'until' as the count history table and the Scan Stocktake review. The counts are worked out
+// in time order, so only ONE stock book is alive at a time (memory stays flat for a 2,000-item count), and the answers are kept while the records
+// they read stay the same (the same array-identity key as genStockBook). Used by the Stock Count tab, the dashboard variance warnings, Apply counts to
+// stock and the Pending Approvals stocktake card.
+var _csMap=null,_csKey=null,_acSet=null,_acKey=null;
+function _countMin(c){return String(c.date||'')+' '+(c.time||'00:00');}
+function _countSysFor(rows){
+  const k=[DATA.generalInventory,DATA.generalIssued,DATA.inventoryItems,_SALE_LIST,_RET_LIST];
+  if(!_csMap||!_csKey||!k.every((x,j)=>x===_csKey[j])){_csMap=new Map();_csKey=k;}
+  const todo=(rows||[]).filter(c=>c&&c.id&&c.itemName&&!_csMap.has(c.id)).sort((a,b)=>_countMin(a).localeCompare(_countMin(b)));
+  let u=null,b=null;
+  todo.forEach(c=>{
+    const m=_countMin(c);
+    if(m!==u){u=m;b=Sales.stockBook(_stockSrc(),_stockOpts({until:m}));}
+    _csMap.set(c.id,b.byName(c.itemName).bal);
+  });
+  return _csMap;
+}
+function _countVar(c,sys){return Math.round((Number(c.physicalCount)-sys)*1000)/1000;}      // counted - system, to 3 decimals like the stock book
+// ids of the counts that were applied to stock: their adjustment rows (generalInventory / generalIssued) carry countAdj = the count's id
+function _adjustedCountIds(){
+  const k=[DATA.generalInventory,DATA.generalIssued];
+  if(_acSet&&_acKey&&k.every((x,j)=>x===_acKey[j]))return _acSet;
+  const s=new Set();k.forEach(a=>(a||[]).forEach(r=>{if(r&&r.countAdj)s.add(r.countAdj);}));
+  _acSet=s;_acKey=k;return s;
+}
 function _saleLockToast(){showToast('\u{1F9FE} A till sale is a permanent record and cannot be edited or deleted here. To take something back, make a void or refund at the till (Returns).');}
 // The receipt of a whole till basket (every line, every payment) for a Sales History row that came from the till.
 function _printSaleBasket(sid){
@@ -10106,7 +10212,7 @@ function _printSaleBasket(sid){
     ?`<img src="${depot.logoDataUrl}" style="height:56px;max-width:140px;object-fit:contain;display:block;margin:0 auto 6px" alt="${esc(depot.name||'')} logo">`
     :`<div style="width:56px;height:56px;border-radius:10px;background:${esc(accent)};color:#fff;font-size:17px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto 6px">${esc(initials)}</div>`;
   const payLabel=s.creditStatus==='paid'?'PAID - SETTLED IN FULL':s.creditStatus==='partial'?`PARTIAL - ${zm(s.amountPaid)} PAID, ${zm(s.balance)} DUE`:'CREDIT - ON ACCOUNT';
-  const lines=s.lines.map(l=>`<tr><td colspan="3" class="bold">${esc(l.name)}</td></tr><tr><td class="muted">${Number(l.qty).toLocaleString()} ${esc(l.unit||'')}</td><td class="right muted">x ${zm(l.price)}</td><td class="right bold">${zm(Math.round(l.price*l.qty*100)/100)}</td></tr>${l.promoDiscount>0?`<tr><td colspan="2" class="muted">Offer: ${esc(l.promoName||'')}</td><td class="right muted">\u2212${zm(l.promoDiscount)}</td></tr>`:''}`).join('');
+  const lines=s.lines.map(l=>`<tr><td colspan="3" class="bold">${esc(l.name)}</td></tr><tr><td class="muted">${Number(l.qty).toLocaleString()} ${esc(l.unit||'')}</td><td class="right muted">x ${zm(l.price)}</td><td class="right bold">${zm(Math.round(l.price*l.qty*100)/100)}</td></tr>${l.promoDiscount>0?`<tr><td colspan="2" class="muted">Offer: ${esc(l.promoName||'')}</td><td class="right muted">\u2212${zm(l.promoDiscount)}</td></tr>`:''}${l.level==='wholesale'?`<tr><td colspan="3" class="muted">Wholesale price (retail ${zm(l.listPrice)})</td></tr>`:''}`).join('');
   const gross=s.lines.reduce((a,l)=>a+Math.round(l.price*l.qty*100),0)/100, dp=Sales.discountParts(s);   // step 25: offers and a person's discount are shown apart
   const pays=(s.payments||[]).map(p=>`<tr><td class="muted">${esc(p.label||p.method)}${p.ref?' ('+esc(p.ref)+')':''}</td><td class="right muted">${zm(p.amount)}</td></tr>`).join('')
     +(s.change>0?`<tr><td class="muted">Change</td><td class="right muted">${zm(s.change)}</td></tr>`:'');
@@ -10956,38 +11062,47 @@ function renderGenStockCount(){
   const allItems=[...(DATA.inventoryItems||[]).map(_invItemName).filter(Boolean),...new Set(DATA.generalInventory.map(x=>x.itemName))];
   const uniqueItems=[...new Set(allItems)].sort();
   const counts=filterPeriod(DATA.generalStockCounts||[], PERIOD.general, 'date', 'general');
+  // v0.3.71: every count is compared with the system stock AT THE MOMENT it was taken, not with today's stock (a sale made after the shelf was counted is not a gap)
+  const latestOf=new Map(uniqueItems.map(n=>[n,itemPhysical(n)]));
+  const sysAt=_countSysFor(counts.concat(Array.from(latestOf.values()).filter(Boolean)));
+  const adjusted=_adjustedCountIds();
+  const nApply=isAdmin()?_countAdjustable().length:0;
+  const nf=x=>Number(x).toLocaleString(undefined,{maximumFractionDigits:3});
 
   // Per-item variance summary table
   const summaryRows=uniqueItems.map(name=>{
     const avail=itemAvail(name);
-    const latest=itemPhysical(name);
+    const latest=latestOf.get(name);
     const physCount=latest?Number(latest.physicalCount):null;
-    const variance=physCount!==null?physCount-avail:null;
+    const sysC=latest?sysAt.get(latest.id):null;
+    const variance=(physCount!==null&&sysC!=null)?_countVar(latest,sysC):null;
+    const done=!!(latest&&adjusted.has(latest.id));
     const varColor=variance===null?'var(--muted)':variance<0?'var(--red)':variance===0?'var(--green)':'var(--amber)';
-    const varLabel=variance===null?'&#x2014;':variance<0?`${variance.toLocaleString()} (SHORT)`:(variance===0?'0 (EXACT)':'+'+variance.toLocaleString()+' (SURPLUS)');
+    const varLabel=variance===null?'&#x2014;':(variance<0?`${nf(variance)} (SHORT)`:(variance===0?'0 (EXACT)':'+'+nf(variance)+' (SURPLUS)'))+(done&&variance!==0?' &middot; ADJUSTED':'');
     return `<tr>
       <td style="font-weight:700">${esc(name)}</td>
-      <td style="color:var(--blue);font-weight:700;text-align:right">${avail.toLocaleString()}</td>
-      <td style="color:var(--green);text-align:right">${physCount!==null?physCount.toLocaleString():'<span style="color:var(--muted)">Not counted</span>'}</td>
+      <td style="color:var(--blue);font-weight:700;text-align:right">${nf(avail)}</td>
+      <td style="color:var(--blue);text-align:right">${sysC!=null?nf(sysC):'<span style="color:var(--muted)">&#x2014;</span>'}</td>
+      <td style="color:var(--green);text-align:right">${physCount!==null?nf(physCount):'<span style="color:var(--muted)">Not counted</span>'}</td>
       <td style="color:${varColor};font-weight:700;text-align:right">${varLabel}</td>
       <td style="font-size:16px;color:var(--muted);white-space:nowrap">${latest?fmtDate(latest.date):'&#x2014;'}</td>
       <td style="font-size:16px;color:var(--muted)">${latest&&latest.notes?esc(latest.notes):'&#x2014;'}</td>
     </tr>`;
   }).join('');
 
-  // Count history table for current period — compute system qty AT TIME OF COUNT
-  const countRows=counts.slice().sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time)).map(c=>{
-    // System available at the time of this count: sum of records on or before count date/time
-    const countDT=c.date+(c.time||'00:00');
-    const availAtCount=genStock(c.itemName,{until:c.date+' '+(c.time||'00:00')}).bal;
-    const variance=Number(c.physicalCount)-availAtCount;
+  // Count history table for current period — system qty AT TIME OF COUNT
+  const countRows=counts.slice().sort((a,b)=>(b.date+(b.time||'')).localeCompare(a.date+(a.time||''))).map(c=>{
+    const sysC=sysAt.get(c.id);
+    const availAtCount=sysC!=null?sysC:genStock(c.itemName,{until:_countMin(c)}).bal;
+    const variance=_countVar(c,availAtCount);
     const varColor=variance<0?'var(--red)':variance===0?'var(--green)':'var(--amber)';
-    const varTxt=(variance>=0?'+':'')+variance.toLocaleString();
+    const varTxt=(variance>=0?'+':'')+nf(variance);
+    const adjTag=adjusted.has(c.id)?` <span style="display:inline-block;font-size:12px;font-weight:800;background:var(--surface2);border:1px solid var(--border);color:var(--muted);border-radius:20px;padding:1px 8px;margin-left:4px;white-space:nowrap;vertical-align:middle">&#x2696;&#xFE0F; ADJUSTED</span>`:'';
     return `<tr>
       <td style="font-weight:600">${esc(c.itemName)}</td>
-      <td style="white-space:nowrap">${fmtDate(c.date)}${approvalBadge(c)}<br><span style="font-size:15px;color:var(--muted)">${c.time||'&#x2014;'}</span></td>
-      <td style="color:var(--blue);text-align:right">${availAtCount.toLocaleString()}</td>
-      <td style="color:var(--green);text-align:right">${Number(c.physicalCount).toLocaleString()}</td>
+      <td style="white-space:nowrap">${fmtDate(c.date)}${approvalBadge(c)}${adjTag}<br><span style="font-size:15px;color:var(--muted)">${c.time||'&#x2014;'}</span></td>
+      <td style="color:var(--blue);text-align:right">${nf(availAtCount)}</td>
+      <td style="color:var(--green);text-align:right">${nf(c.physicalCount)}</td>
       <td style="color:${varColor};font-weight:700;text-align:right">${varTxt}</td>
       <td style="font-size:16px;color:var(--muted)">${esc(c.notes)||'&#x2014;'}</td>
       ${USER.role==='admin'?`<td><button class="delbtn" onclick="delGenStockCount('${c.id}')">&#x1F5D1;</button></td>`:''}
@@ -10996,17 +11111,21 @@ function renderGenStockCount(){
 
   return `
     <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 13px;margin-bottom:12px;font-size:17px;color:var(--muted)">
-      <strong style="color:var(--text)">VARIANCE = PHYSICAL COUNT &#x2212; SYSTEM AVAILABLE</strong><br>
-      Negative = shortage (missing units) &nbsp;&#x2022;&nbsp; Positive = surplus (extra units found)
+      <strong style="color:var(--text)">VARIANCE = PHYSICAL COUNT &#x2212; SYSTEM STOCK AT THE TIME OF THE COUNT</strong><br>
+      Negative = shortage (missing units) &nbsp;&#x2022;&nbsp; Positive = surplus (extra units found) &nbsp;&#x2022;&nbsp; Sales and receipts after the count do not change it
     </div>
     ${uniqueItems.length===0
       ?`<div class="card"><div class="empty">No inventory items yet. Add items in Settings and receive stock first.</div></div>`
       :`<div class="card" style="padding:0">
-          <div style="padding:14px 16px 8px;font-family:var(--fh);font-size:20px;font-weight:700;color:var(--white)">&#x2696;&#xFE0F; Latest Count vs System</div>
+          <div style="padding:14px 16px 8px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+            <div style="font-family:var(--fh);font-size:20px;font-weight:700;color:var(--white)">&#x2696;&#xFE0F; Latest Count vs System</div>
+            ${isAdmin()?`<button class="btn bo bsm" onclick="openApplyCounts()">&#x2696;&#xFE0F; Apply counts to stock${nApply?' ('+nApply+')':''}</button>`:''}
+          </div>
           <div class="tw"><table>
             <thead><tr>
               <th>Item</th>
-              <th style="text-align:right;color:var(--blue)">System Avail.</th>
+              <th style="text-align:right;color:var(--blue)">System Now</th>
+              <th style="text-align:right;color:var(--blue)">System at Count</th>
               <th style="text-align:right;color:var(--green)">Physical Count</th>
               <th style="text-align:right">Variance</th>
               <th>Last Counted</th>
@@ -11027,6 +11146,83 @@ function renderGenStockCount(){
       </tr></thead>
       <tbody>${counts.length===0?`<tr><td colspan="${USER.role==='admin'?7:6}" class="empty">No stock counts recorded for this period</td></tr>`:countRows}</tbody>
     </table></div></div>`;
+}
+
+// ── APPLY A COUNT TO STOCK (v0.3.71, Admin only, never automatic) ─────────────────────────────────────────────────────
+// A count only MEASURES the gap, so a shortage would stay in the system for ever. Applying a count makes stock equal what was counted, WITHOUT touching the
+// stock formula: it writes ordinary rows that the formula (and the till) already read. For each item the adjustment is  counted - system stock at the moment
+// of the count  (so whatever sold or arrived since stays as it is):
+//   a shortage -> a generalIssued row, internal, reason 'Stock count shortage' (issueType 'count'): no price, no customer, never a sale
+//   a surplus  -> a generalInventory row, received at no cost (purchasePrice 0, so purchases and the weighted-average cost are not moved)
+// Both rows are dated NOW (the count's own history, taken at its own moment, keeps showing the gap it found) and carry countAdj = the count's id. The
+// adjustment row's id is 'cadj_' + the count's id, so applying the same count twice (two phones, a double tap) can never add it twice; the rows ARE the
+// record that a count was applied, so deleting them makes the count applicable again. Only the LATEST approved count of an item is offered, and only when
+// the item has no newer count waiting for approval and no adjustment dated after that count.
+function _countGroupKey(c){return /^st_[\w-]{3,40}$/.test(String(c&&c.stId||''))?c.stId:'manual';}
+function _countAdjustable(){          // -> [{c,sys,v}] (+ .waiting = items held back by a newer count that still waits for approval)
+  const sc=DATA.generalStockCounts||[],done=_adjustedCountIds(),pend=new Map(),adjAt=new Map();
+  sc.forEach(c=>{if(isPending(c)){const m=_countMin(c);if(m>(pend.get(c.itemName)||''))pend.set(c.itemName,m);}});
+  [DATA.generalInventory,DATA.generalIssued].forEach(a=>(a||[]).forEach(r=>{if(r&&r.countAdj){const m=String(r.date||'')+' '+(r.time||'00:00');if(m>(adjAt.get(r.itemName)||''))adjAt.set(r.itemName,m);}}));
+  const names=[...new Set(sc.map(c=>c.itemName).filter(Boolean))];
+  const latest=names.map(n=>itemPhysical(n)).filter(c=>c&&!done.has(c.id));
+  const sys=_countSysFor(latest),out=[];out.waiting=0;
+  latest.forEach(c=>{
+    const s=sys.get(c.id);if(s==null)return;
+    const v=_countVar(c,s);if(Math.abs(v)<0.0005)return;
+    if((pend.get(c.itemName)||'')>_countMin(c)){out.waiting++;return;}
+    if((adjAt.get(c.itemName)||'')>_countMin(c))return;
+    out.push({c,sys:s,v});
+  });
+  return out;
+}
+function openApplyCounts(){
+  if(!requireAdmin('apply counts to stock'))return;
+  const list=_countAdjustable(),G=new Map(),nf=x=>Number(x).toLocaleString(undefined,{maximumFractionDigits:3});
+  list.forEach(({c,v})=>{
+    const k=_countGroupKey(c);let g=G.get(k);
+    if(!g){g={k,n:0,sh:0,shU:0,shC:0,ov:0,ovU:0,at:''};G.set(k,g);}
+    g.n++;if(v<0){g.sh++;g.shU+=-v;g.shC+=-v*_stCost(c.itemName);}else{g.ov++;g.ovU+=v;}
+    const m=_countMin(c);if(m>g.at)g.at=m;
+  });
+  const cards=Array.from(G.values()).sort((a,b)=>b.at.localeCompare(a.at)).map(g=>`<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--surface2)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:4px"><div style="font-weight:700;color:var(--white)">${g.k==='manual'?'Single counts':'Stocktake'}</div><div style="font-size:13px;color:var(--muted);white-space:nowrap">${esc(fmtDate(g.at.slice(0,10)))}</div></div>
+      <div style="font-size:15px;margin-bottom:4px">${g.n} item${g.n===1?'':'s'} with a gap</div>
+      <div style="font-size:15px;color:var(--red)">${g.sh} short &middot; stock goes down by ${nf(g.shU)} units${g.shC>0?' ('+esc(zm(g.shC))+' at cost)':''}</div>
+      <div style="font-size:15px;color:var(--amber);margin-bottom:8px">${g.ov} over &middot; stock goes up by ${nf(g.ovU)} units</div>
+      <button class="btn bg bsm" style="width:100%" onclick="applyCountGroup('${g.k}')">&#x2696;&#xFE0F; Apply to stock</button>
+    </div>`).join('');
+  openModal(`<div class="mtitle">&#x2696;&#xFE0F; Apply counts to stock</div>
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 13px;margin-bottom:12px;font-size:15px;line-height:1.5;color:var(--muted)">A count only measures the gap. Applying it makes stock equal what you counted: a shortage is written as an internal issue (&ldquo;Stock count shortage&rdquo;), a surplus as stock received at no cost. Each adjustment is the counted quantity minus the system stock <b style="color:var(--text)">at the moment of the count</b>, so sales made since stay as they are. Only the latest approved count of an item can be applied.</div>
+    ${cards||`<div style="text-align:center;padding:24px 12px;font-size:17px;color:var(--muted)">No approved count has a gap left to apply.</div>`}
+    ${list.waiting?`<div style="font-size:14px;color:var(--amber);margin:4px 0 8px">${list.waiting} item${list.waiting===1?'':'s'} left out: a newer count is still waiting for approval.</div>`:''}
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Close</button></div>`);
+}
+function applyCountGroup(k){
+  if(!requireAdmin('apply counts to stock'))return;
+  if(isReadOnly()){alert('\u{1F512} This account is in read-only mode. Contact your administrator.');return;}
+  if(!/^(manual|st_[\w-]{3,40})$/.test(String(k||'')))return;
+  requireAdminPassword('apply these counts to stock',()=>{
+    const list=_countAdjustable().filter(x=>_countGroupKey(x.c)===k);        // worked out again now: the screen may be minutes old
+    if(!list.length){showToast('Nothing left to apply here.');openApplyCounts();return;}
+    let sh=0,shU=0,ov=0,ovU=0;
+    list.forEach(({v})=>{if(v<0){sh++;shU+=-v;}else{ov++;ovU+=v;}});
+    const nf=x=>Number(x).toLocaleString(undefined,{maximumFractionDigits:3});
+    if(!confirm('Apply '+list.length+' count(s) to stock?\n\n\u2022 '+sh+' short: stock goes DOWN by '+nf(shU)+' units\n\u2022 '+ov+' over: stock goes UP by '+nf(ovU)+' units\n\nOne adjustment is written per item. Each appears in Issued (internal) or Received and is in the audit log.\n\nProceed?'))return;
+    const dt=today(),tm=nowTime(),adj=list.map(({c,v})=>{
+      const why=uc('STOCK COUNT ADJUSTMENT \u00B7 COUNTED '+c.date+(c.time?' '+c.time:'')+(c.stId?' \u00B7 '+c.stId:''));
+      if(v<0)return {iss:true,row:stampEntry({id:'cadj_'+c.id,date:dt,time:tm,itemName:c.itemName,issued:-v,notes:why,sellingPrice:0,creditStatus:'paid',partialPaid:0,customerId:'',customerName:'',internal:true,issueType:'count',issueTo:'',countAdj:c.id})};
+      return {iss:false,row:stampEntry({id:'cadj_'+c.id,date:dt,time:tm,itemName:c.itemName,received:v,good:v,damaged:0,condition:'good',purchasePrice:0,creditStatus:'paid',supplierId:'',supplierName:'',notes:why,countAdj:c.id})};
+    });
+    updateData(d=>{
+      const haveI=new Set((d.generalIssued||[]).map(r=>r&&r.id)),haveR=new Set((d.generalInventory||[]).map(r=>r&&r.id));
+      return {...d,
+        generalIssued:[...(d.generalIssued||[]),...adj.filter(a=>a.iss&&!haveI.has(a.row.id)).map(a=>a.row)],
+        generalInventory:[...(d.generalInventory||[]),...adj.filter(a=>!a.iss&&!haveR.has(a.row.id)).map(a=>a.row)]};
+    });
+    logAuditEvent('CREATE','Stock Count Adjustment',(k==='manual'?'single counts':k)+' \u00B7 '+list.length+' item(s) \u00B7 '+sh+' short ('+nf(shU)+' units), '+ov+' over ('+nf(ovU)+' units)');
+    showToast('\u2705 '+list.length+' count(s) applied to stock');
+    openApplyCounts();
+  });
 }
 
 // ── ITEM NAMES SUBTAB (General tab) ──────────────────────────────────────────
@@ -12271,6 +12467,523 @@ async function _mriSave(){
 }
 // ══ END MULTI RECEIVE / ISSUE ═══════════════════════════════
 
+// ══ SCAN RECEIVE (till roadmap step 28) ═══════════════════════════════════════════════════════════════════════════════
+// Receive a delivery by scanning: one scan = one more of that item, in the unit whose barcode it was (item, pack or carton). EXACT barcode / SKU / unit
+// barcode only, the same rule as the Till; an unknown or shared code adds nothing. Each line saves as a normal generalInventory row in the BASE unit
+// (qty x factor, cost / factor), exactly like Receive and Multi Receive, so stock, the Received tab, reports and the Till need no change. Pro (pos_till).
+var _sr=null;
+function _srHits(code){
+  const c=String(code||'').trim().toLowerCase(),out=[];if(!c)return out;
+  (DATA.inventoryItems||[]).map(_invItemObj).forEach(it=>{
+    if((it.barcode&&String(it.barcode).toLowerCase()===c)||(it.sku&&String(it.sku).toLowerCase()===c)){out.push({it,u:null});return;}
+    (Array.isArray(it.units)?it.units:[]).forEach(u=>{if(u&&u.barcode&&String(u.barcode).toLowerCase()===c&&Number(u.factor)>0)out.push({it,u});});
+  });
+  return out;
+}
+function _srScan(raw,cam){            // -> {err} or {l}; adds 1 to the matching line (or makes it)
+  const v=String(raw||'').trim();if(!v||!_sr)return {err:''};
+  let h=_srHits(v);
+  if(!h.length&&cam){const a=/^0\d{12}$/.test(v)?v.slice(1):(/^\d{12}$/.test(v)?'0'+v:'');if(a)h=_srHits(a);}
+  if(h.length>1)return {err:'Two items have the code \u201c'+v+'\u201d: '+h.slice(0,3).map(x=>x.it.name).join(', ')+'. Nothing was added. Fix the barcode in Manage.'};
+  if(!h.length)return {err:'No item has the code \u201c'+v.slice(0,40)+'\u201d.',unknown:v};
+  return _srAdd(h[0].it,h[0].u);
+}
+function _srAdd(it,u){                // add 1 of the item (in the unit u, or its base unit) to the delivery
+  const un=u?String(u.name||'').toUpperCase():'',f=u?Number(u.factor):1;
+  let l=_sr.lines.find(x=>x.id===it.id&&x.unit===un);
+  if(l)l.qty+=1;
+  else{
+    const pp=Number(((DATA.inventoryPrices||{})[it.name]||{}).purchasePrice)||0;
+    l={id:it.id,name:it.name,unit:un,factor:f,baseUnit:it.unit||'',qty:1,cost:pp>0?Math.round(pp*f*100)/100:0,dmg:0,exp:'',batch:''};
+    _sr.lines.unshift(l);
+  }
+  return {l};
+}
+function _srBuild(lines,o){            // lines -> generalInventory rows (BASE unit) + the new cost per base unit of each item
+  const recs=[],prices={},R=x=>Math.round(x*1e6)/1e6;
+  lines.forEach(l=>{
+    const f=Number(l.factor)||1,q=Number(l.qty),base=R(q*f),cost=Number(l.cost)||0,pp=cost>0?Math.round(cost/f*1e4)/1e4:0;
+    const dq=Math.min(Math.max(Number(l.dmg)||0,0),q),dm=R(dq*f),bn=String(l.batch||'').trim().toUpperCase();
+    // Same convention as the Receive form: received is everything that came, good + damaged = received, condition says which kind of row it is.
+    recs.push({date:o.date,time:o.time,itemName:l.name,received:base,good:R(base-dm),damaged:dm,condition:dm<=0?'good':dq>=q?'all-damaged':'damaged',purchasePrice:pp,creditStatus:o.creditStatus||'paid',supplierId:o.supplierId||'',supplierName:o.supplierName||'',expiryDate:l.exp||'',...(bn?{batchNo:bn}:{}),notes:'SCANNED'+(l.unit?': '+q+' \u00D7 '+l.unit+' (\u00D7'+f+')':'')+(bn?' \u00B7 BATCH '+bn:'')});
+    if(pp>0)prices[l.name]=pp;
+  });
+  return {recs,prices};
+}
+// The unsaved delivery is kept on this phone (per depot and login) after every change, so a reload, a crash or a dead battery does not lose a scanned delivery.
+function _srKey(){try{return 'mdm_srdraft_'+(DATA.installId||'')+'_'+String(USER&&USER.username||'').toLowerCase();}catch(e){return 'mdm_srdraft';}}
+function _srDraft(){
+  if(!_sr)return;
+  try{
+    if(!_sr.lines.length){localStorage.removeItem(_srKey());return;}
+    const g=id=>document.getElementById(id)?.value||'';
+    localStorage.setItem(_srKey(),JSON.stringify({at:Date.now(),lines:_sr.lines,sup:g('sr-sup'),date:g('sr-date'),pay:g('sr-pay')||'paid'}));
+  }catch(e){}
+}
+function _srDraftClear(){try{localStorage.removeItem(_srKey());}catch(e){}}
+function _srDraftLoad(){       // -> {at,lines,sup,date,pay} or null; every field is re-typed, so nothing odd in storage can reach the screen
+  try{
+    const d=JSON.parse(localStorage.getItem(_srKey())||'null');if(!d||!Array.isArray(d.lines))return null;
+    const lines=d.lines.filter(l=>l&&l.name&&Number(l.factor)>0).map(l=>({id:String(l.id||''),name:String(l.name),unit:String(l.unit||''),factor:Number(l.factor),baseUnit:String(l.baseUnit||''),qty:Number(l.qty)||0,cost:Number(l.cost)||0,dmg:Number(l.dmg)||0,exp:String(l.exp||''),batch:String(l.batch||''),more:!!l.more}));
+    return lines.length?{at:Number(d.at)||0,lines,sup:String(d.sup||''),date:String(d.date||''),pay:String(d.pay||'paid')}:null;
+  }catch(e){return null;}
+}
+function openScanReceive(){
+  if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+  if(!hasFeature('pos_till')){showUpgradePrompt('pos_till');return;}
+  if(!requireAddPermission('receive stock'))return;
+  const dr=_srDraftLoad();let use=null;
+  if(dr){const t=new Date(dr.at);use=confirm('You have an unsaved scanned delivery ('+dr.lines.length+' item(s)'+(dr.at?', '+t.toLocaleString():'')+').\n\nOK = continue it\nCancel = delete it and start a new delivery')?dr:null;if(!use)_srDraftClear();}
+  _sr={lines:use?use.lines:[],cam:null};
+  const sups=(DATA.contacts||[]).filter(c=>c.type==='supplier');
+  openModal(`<div class="mtitle">📷 Scan Receive</div>
+    <div style="display:flex;gap:8px"><input class="fi" id="sr-q" placeholder="Scan barcode, then Enter" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();_srEnter(this)}"/>${('BarcodeDetector' in window)?'<button class="btn bo" style="width:auto;padding:10px 14px" onclick="_srCam()">📷</button>':''}</div>
+    <div id="sr-msg" style="min-height:22px;font-size:15px;margin:4px 0"></div>
+    <div id="sr-unk"></div>
+    <div id="sr-lines" style="max-height:36vh;overflow:auto"></div>
+    <div id="sr-sum" style="font-weight:700;margin:6px 0"></div>
+    <div class="fw"><div class="fl">Supplier <span style="font-size:15px;color:var(--muted)">(optional)</span></div><select class="fi" id="sr-sup" onchange="_srDraft()"><option value="">— None / Unknown —</option>${sups.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select></div>
+    <div class="twobox"><div class="fw"><div class="fl">Date Received</div><input class="fi" type="date" id="sr-date" value="${today()}" onchange="_srDraft()"/></div>
+    <div class="fw"><div class="fl">Payment</div><select class="fi" id="sr-pay" onchange="_srDraft()"><option value="paid">✅ PAID</option><option value="partial">🔶 PARTIAL</option><option value="credit">🔴 CREDIT</option></select></div></div>
+    <div class="mact"><button class="btn bo" onclick="_srClose()">Cancel</button><button class="btn bg" onclick="_srSave()">✓ Save</button></div>`,'uncloseable');
+  if(use){const set=(id,v)=>{const e=document.getElementById(id);if(e&&v)e.value=v;};set('sr-sup',use.sup);set('sr-date',use.date);set('sr-pay',use.pay);}
+  _srRender();setTimeout(()=>{const q=document.getElementById('sr-q');if(q)q.focus();},120);
+}
+function _srMsg(t,bad){const m=document.getElementById('sr-msg');if(m){m.textContent=t||'';m.style.color=bad?'var(--red)':'var(--green)';}}
+function _srEnter(inp){const v=inp.value;inp.value='';const r=_srScan(v,false);if(r.err){_srMsg(r.err,true);if(r.unknown)_srUnk(r.unknown);}else if(r.l){_srMsg('✓ '+r.l.name+(r.l.unit?' ('+r.l.unit+')':'')+' × '+r.l.qty,false);_srRender();}inp.focus();}
+function _srRender(){
+  if(!_sr)return;const box=document.getElementById('sr-lines'),L=_sr.lines;if(!box)return;
+  box.innerHTML=L.length?L.map((l,i)=>`<div style="border:1px solid var(--border);border-radius:10px;padding:8px;margin-bottom:6px">
+    <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(l.name)}</b><button class="delbtn" onclick="_srDel(${i})">🗑</button></div>
+    <div style="font-size:14px;color:var(--muted)">${l.unit?esc(l.unit)+' contains '+l.factor+' '+esc(l.baseUnit||'units')+' · stock +'+Math.round(l.qty*l.factor*1e6)/1e6:esc(l.baseUnit||'')}</div>
+    <div class="twobox" style="margin-top:6px"><div><div class="fl">Qty${l.unit?' ('+esc(l.unit)+')':''}</div><input class="fi" type="number" inputmode="decimal" min="0" step="any" value="${l.qty}" onchange="_srSet(${i},'qty',this.value)"/></div>
+    <div><div class="fl">Cost${l.unit?' per '+esc(l.unit):' each'}</div><input class="fi" type="number" inputmode="decimal" min="0" step="any" value="${l.cost||''}" placeholder="0.00" onchange="_srSet(${i},'cost',this.value)"/></div></div>
+    <details ${l.more?'open':''} ontoggle="_srMore(${i},this.open)" style="margin-top:6px"><summary style="font-size:14px;color:var(--muted);cursor:pointer">Damaged, expiry, batch${(l.dmg||l.exp||l.batch)?' ✓':''}</summary>
+    <div class="twobox" style="margin-top:6px"><div><div class="fl">Damaged${l.unit?' ('+esc(l.unit)+')':''}</div><input class="fi" type="number" inputmode="decimal" min="0" step="any" value="${l.dmg||''}" placeholder="0" onchange="_srSet(${i},'dmg',this.value)"/></div>
+    <div><div class="fl">Expiry</div><input class="fi" type="date" value="${esc(l.exp||'')}" onchange="_srSetS(${i},'exp',this.value)"/></div></div>
+    <div class="fw" style="margin-top:6px"><div class="fl">Batch / lot no.</div><input class="fi" value="${esc(l.batch||'')}" placeholder="OPTIONAL" autocomplete="off" oninput="this.value=this.value.toUpperCase()" onchange="_srSetS(${i},'batch',this.value)"/></div><button class="btn bo bsm" style="margin-top:6px" onclick="_srSplit(${i})">＋ Another batch of this item</button></details></div>`).join(''):'<div class="empty">Nothing scanned yet</div>';
+  _srSum();_srDraft();
+}
+function _srSum(){const s=document.getElementById('sr-sum');if(!s||!_sr)return;const L=_sr.lines;s.textContent=L.length?L.length+' item(s) · cost '+cur()+L.reduce((a,l)=>a+(Number(l.qty)||0)*(Number(l.cost)||0),0).toFixed(2):'';}
+function _srSet(i,k,v){const l=_sr&&_sr.lines[i];if(!l)return;l[k]=Number(v)||0;_srSum();_srDraft();}
+function _srSetS(i,k,v){const l=_sr&&_sr.lines[i];if(!l)return;l[k]=String(v||'').trim();_srDraft();}
+function _srMore(i,o){if(_sr&&_sr.lines[i])_sr.lines[i].more=!!o;}
+function _srDel(i){if(_sr){_sr.lines.splice(i,1);_srRender();}}
+function _srClose(done){
+  if(_sr&&!done&&_sr.lines.length&&!confirm('Discard the '+_sr.lines.length+' scanned item(s)?'))return;
+  _srDraftClear();_srCamStop();_sr=null;closeModal();
+}
+function _srSave(){
+  if(!_sr||isReadOnly())return;if(!requireAddPermission('receive stock'))return;
+  const L=_sr.lines;
+  if(!L.length){alert('Scan at least one item.');return;}
+  if(L.some(l=>!(Number(l.qty)>0))){alert('Every line needs a quantity above 0.');return;}
+  const bd=L.find(l=>(Number(l.dmg)||0)>Number(l.qty));if(bd){alert('Damaged is more than the quantity for '+bd.name+'.');return;}
+  const supId=document.getElementById('sr-sup')?.value||'',c=(DATA.contacts||[]).find(x=>x.id===supId);
+  const B=_srBuild(L,{date:document.getElementById('sr-date').value||today(),time:nowTime(),supplierId:supId,supplierName:c?c.name:'',creditStatus:document.getElementById('sr-pay').value});
+  if(!confirm('Confirm Scan Receive — '+B.recs.length+' line(s):\n\n'+B.recs.map((r,i)=>'• '+r.itemName+' · '+r.received+(L[i].unit?' ('+L[i].qty+' '+L[i].unit+')':'')+(r.damaged?' · '+r.damaged+' damaged':'')).join('\n')+'\n\nProceed?'))return;
+  updateData(d=>{
+    const prices={...(d.inventoryPrices||{})};
+    Object.keys(B.prices).forEach(n=>{prices[n]={...(prices[n]||{}),purchasePrice:B.prices[n]};});
+    return{...d,generalInventory:[...d.generalInventory,...B.recs.map(r=>stampEntry({id:uid(),...r,notes:uc(r.notes)}))],inventoryPrices:prices};
+  });
+  logAuditEvent('CREATE','Scan Receive',B.recs.length+' line(s) · '+B.recs.map(r=>r.itemName+':'+r.received).join(', '));
+  _srClose(true);showToast('✅ '+B.recs.length+' line(s) received');
+}
+function _srCamStop(){
+  const me=_sr&&_sr.cam;if(!me)return;_sr.cam=null;clearTimeout(me.t);
+  try{me.video.pause();me.video.srcObject=null;}catch(e){}
+  if(me.stream)me.stream.getTracks().forEach(t=>{try{t.stop();}catch(e){}});
+  me.ovl.remove();
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden){_srCamStop();_srDraft();}});
+addEventListener('pagehide',_srDraft);
+async function _srCam(){
+  if(!_sr||_sr.cam)return;
+  const ovl=document.createElement('div');ovl.style.cssText='position:fixed;inset:0;z-index:99999;background:#000;display:flex;flex-direction:column';
+  ovl.innerHTML='<video playsinline autoplay muted style="flex:1;min-height:0;width:100%;object-fit:cover"></video><div style="padding:12px;background:#111;color:#fff;font-size:17px"><div class="sr-st">Starting camera…</div><div class="sr-ct" style="color:#9aa;font-size:14px;margin:4px 0 8px"></div><button class="btn bg" onclick="_srCamStop()">Done</button></div>';
+  document.body.appendChild(ovl);
+  const me=_sr.cam={ovl,video:ovl.querySelector('video'),st:ovl.querySelector('.sr-st'),ct:ovl.querySelector('.sr-ct'),stream:null,last:'',seenAt:0,pend:'',pendN:0,t:0};
+  let det;
+  try{const sup=await BarcodeDetector.getSupportedFormats();det=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','qr_code'].filter(x=>sup.includes(x))});}
+  catch(e){me.st.textContent='Camera scanning is not supported on this device. Use a scanner or type the code.';return;}
+  try{me.stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});}
+  catch(e){me.st.textContent=(e&&e.name==='NotAllowedError')?'The camera is blocked. Allow it in the phone\u2019s site settings.':'Could not start the camera.';return;}
+  if(!_sr||_sr.cam!==me){me.stream.getTracks().forEach(t=>t.stop());return;}
+  me.video.srcObject=me.stream;try{await me.video.play();}catch(e){}
+  me.st.textContent='Aim at one barcode. Keep scanning, tap Done when finished.';
+  const tick=async()=>{
+    if(!_sr||_sr.cam!==me)return;
+    let found=[];try{if(me.video.readyState>=2)found=await det.detect(me.video);}catch(e){}
+    if(!_sr||_sr.cam!==me)return;
+    const W=me.video.videoWidth,H=me.video.videoHeight,seen=new Map(),now=Date.now();
+    found.forEach(r=>{const val=String(r.rawValue||'').trim();if(!val)return;const b=r.boundingBox;if(b&&W&&H){const cx=b.x+b.width/2,cy=b.y+b.height/2;if(cx<W*.1||cx>W*.9||cy<H*.25||cy>H*.75)return;}seen.set(val,r.format);});
+    if(!seen.size){me.pend='';me.pendN=0;if(me.last&&now-me.seenAt>700)me.last='';}
+    else if(seen.size>1){me.pend='';me.st.textContent='Several barcodes in view. Aim at one.';}
+    else{
+      const [val,fmt]=[...seen][0];
+      if(val===me.last)me.seenAt=now;
+      else{
+        let go=['ean_13','ean_8','upc_a','upc_e','code_128'].includes(fmt);      // check-digit formats: one read; the rest must be read twice in a row
+        if(!go){if(me.pend===val)go=++me.pendN>=2;else{me.pend=val;me.pendN=1;}}
+        if(go){
+          me.pend='';me.pendN=0;me.last=val;me.seenAt=now;
+          const r=_srScan(val,true);if(r.unknown)_srUnk(r.unknown);
+          try{navigator.vibrate&&navigator.vibrate(r.err?[80,60,80]:40);}catch(e){}
+          me.st.textContent=r.err?r.err+(r.unknown?' Tap Done to add it.':''):('✓ '+r.l.name+(r.l.unit?' ('+r.l.unit+')':'')+' × '+r.l.qty);me.st.style.color=r.err?'#ff8a80':'#b9f6ca';
+          me.ct.textContent=_sr.lines.length+' item(s) scanned';if(!r.err)_srRender();
+        }
+      }
+    }
+    me.t=setTimeout(tick,120);
+  };
+  tick();
+}
+// A code no item has (a new product, or a barcode the item never had): kept in _sr.unk and offered once, here, so the delivery does not stop.
+// Admin only (the item master is admin-only): create the item with this barcode, or give the barcode to an existing item that has none. Either way the item is added to the delivery.
+function _srUnk(code){if(!_sr||!code)return;_sr.unk=_sr.unk||[];if(!_sr.unk.includes(code))_sr.unk.push(code);_srUnkRender();}
+function _srUnkRender(){
+  const box=document.getElementById('sr-unk');if(!box||!_sr)return;
+  const q=_sr.unk||[];if(!q.length){box.innerHTML='';return;}
+  const free=(DATA.inventoryItems||[]).map(_invItemObj).filter(x=>!x.barcode).sort((a,b)=>String(a.name).localeCompare(b.name));
+  box.innerHTML=`<div style="border:1.5px solid var(--amber);border-radius:10px;padding:8px;margin:6px 0">
+    <div style="font-weight:700">New code <span style="font-family:monospace">${esc(q[0])}</span>${q.length>1?' <span style="font-weight:400;color:var(--muted)">('+(q.length-1)+' more waiting)</span>':''}</div>
+    ${isAdmin()?`<div class="twobox" style="margin-top:6px"><input class="fi" id="sr-nn" placeholder="NEW ITEM NAME" autocomplete="off" oninput="this.value=this.value.toUpperCase()"/><input class="fi" id="sr-nu" list="sr-units" placeholder="UNIT (E.G. PCS)" autocomplete="off" oninput="this.value=this.value.toUpperCase()"/><datalist id="sr-units">${_itemUnitSuggestions().map(u=>`<option value="${u}">`).join('')}</datalist></div>
+      <button class="btn bg bsm" style="margin-top:6px" onclick="_srNewItem()">Create item and add</button>
+      ${free.length?`<div style="margin-top:8px;font-size:14px;color:var(--muted)">Or this is the barcode of an item that has none yet:</div><div style="display:flex;gap:8px;margin-top:4px"><select class="fi" id="sr-ne" style="flex:1"><option value="">— Select item —</option>${free.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('')}</select><button class="btn bo bsm" onclick="_srAttach()">Give code</button></div>`:''}`
+      :`<div style="font-size:14px;color:var(--muted);margin-top:4px">Ask an admin to add this code to an item, then scan it again.</div>`}
+    <button class="btn bo bsm" style="margin-top:8px" onclick="_srUnkNext()">Skip this code</button></div>`;
+}
+function _srUnkNext(){if(_sr&&_sr.unk)_sr.unk.shift();_srUnkRender();const q=document.getElementById('sr-q');if(q)q.focus();}
+function _srNewItem(){
+  if(!_sr||!(_sr.unk||[]).length||!requireAdmin('add inventory items'))return;
+  const code=_sr.unk[0],name=uc(document.getElementById('sr-nn')?.value),unit=uc(document.getElementById('sr-nu')?.value),items=DATA.inventoryItems||[];
+  if(!name){alert('Enter the item name.');return;}
+  if(isAtCap('inventoryItems',items.length)){showCapReachedPrompt('inventoryItems','Inventory Items');return;}
+  if(items.some(x=>_itemKey(_invItemName(x))===_itemKey(name))){alert(name+' already exists. If this code belongs to it, give the code to it from the list (items with no barcode only), or fix its barcode in Manage.');return;}
+  const it={..._newInvItem(name),barcode:code,unit};
+  updateData(d=>({...d,inventoryItems:[...(d.inventoryItems||[]),it]}));
+  logAuditEvent('CREATE','Inventory Item','Item: '+name+' · barcode '+code+' (Scan Receive)');
+  const r=_srAdd(_invItemObj(it),null);_srUnkNext();_srRender();_srMsg('✓ New item '+name+' × '+r.l.qty+'. Set its selling price in Prices before the Till can sell it.',false);
+}
+function _srAttach(){
+  if(!_sr||!(_sr.unk||[]).length||!requireAdmin('edit inventory item details'))return;
+  const code=_sr.unk[0],id=document.getElementById('sr-ne')?.value,it=(DATA.inventoryItems||[]).map(_invItemObj).find(x=>x.id===id);
+  if(!it||it.barcode){alert('Choose an item that has no barcode.');return;}
+  updateData(d=>({...d,inventoryItems:(d.inventoryItems||[]).map(x=>_invItemId(x)===id?{..._invItemObj(x),barcode:code}:x)}));
+  logAuditEvent('EDIT','Inventory Item','Item: '+it.name+' · barcode '+code+' (Scan Receive)');
+  const r=_srAdd({...it,barcode:code},null);_srUnkNext();_srRender();_srMsg('✓ '+it.name+' now has the barcode. × '+r.l.qty,false);
+}
+// A second batch of the same item and unit (another expiry date or lot) is its own line. The newest line takes the next scans of that item.
+function _srSplit(i){const l=_sr&&_sr.lines[i];if(!l)return;_sr.lines.unshift({...l,qty:1,dmg:0,exp:'',batch:'',more:true});_srRender();_srMsg('New batch line for '+l.name+'. Scans of this item now go to it.',false);}
+// ══ END SCAN RECEIVE ═════════════════════════════════════════════════════════════════════════════════════════════════
+
+// ══ SCAN STOCKTAKE (till roadmap step 29) ═════════════════════════════════════════════════════════════════════════════
+// Count the shelves by scanning: one scan = one more of that item, in the unit whose barcode it was (item, pack or carton). Codes are found EXACTLY
+// as in Scan Receive and the Till (_srHits: barcode, SKU or unit barcode; an unknown or shared code counts nothing). The count is BLIND: while scanning the
+// screen shows only what you counted, never what the system expects, so nobody counts towards a number. Review then shows system against counted per item,
+// largest gaps first, and lets you fix a quantity, count an item that has no barcode, or put an item at 0. Nothing is saved until Save. Pro (pos_till).
+// Save writes ONE normal generalStockCounts row per counted item, exactly what the Stock Count form writes (physicalCount in the BASE unit, itemName, date,
+// time, notes, stampEntry: a Manager's counts wait for approval like any stock count), so the Stock Count tab, its history and its variance maths need no change.
+// An item's date and time are the moment it was LAST SCANNED or changed, not the moment you pressed Save: the history works out the variance against the stock at
+// that moment (genStock until), so a sale made after the shelf was counted never shows up as a shortage or surplus. Items you did not count are NOT saved and
+// keep their last count (they are never set to 0 for you). No stock is adjusted by saving: like every stock count, this only measures the gap (v0.3.71: an Admin can apply it afterwards, see Apply counts to stock).
+// The unfinished count is kept on this phone (per depot and login) after every change, like Scan Receive; Pause closes the screen and keeps it.
+var _stk=null,_stBk=null,_stBkKey=null;
+function _stR(x){return Math.round(x*1e6)/1e6;}
+function _stN(n){return Number(n).toLocaleString(undefined,{maximumFractionDigits:3});}
+function _stStamp(at){const d=new Date(at);return {date:d.toISOString().slice(0,10),time:d.toTimeString().slice(0,5)};}   // the same date and time rules as today() and nowTime(), and as the till's sales
+function _stCost(name){return Number(((DATA.inventoryPrices||{})[name]||{}).purchasePrice)||0;}
+function _stScan(raw,cam){            // -> {err[,unknown]} or {l}; adds 1 to the matching line (or makes it)
+  const v=String(raw||'').trim();if(!v||!_stk)return {err:''};
+  let h=_srHits(v);
+  if(!h.length&&cam){const a=/^0\d{12}$/.test(v)?v.slice(1):(/^\d{12}$/.test(v)?'0'+v:'');if(a)h=_srHits(a);}
+  if(h.length>1)return {err:'Two items have the code \u201c'+v.slice(0,40)+'\u201d: '+h.slice(0,3).map(x=>x.it.name).join(', ')+'. Nothing was counted. Fix the barcode in Manage.'};
+  if(!h.length){const k=v.slice(0,48);if(_stk.unk.has(k)||_stk.unk.size<100)_stk.unk.set(k,(_stk.unk.get(k)||0)+1);return {err:'No item has the code \u201c'+v.slice(0,40)+'\u201d. Not counted.',unknown:k};}
+  return _stAdd(h[0].it,h[0].u);
+}
+function _stAdd(it,u){                // add 1 of the item (in the unit u, or its base unit); the line moves to the top so the newest scan is always in view
+  const un=u?String(u.name||'').toUpperCase():'',f=u?Number(u.factor):1,now=Date.now();
+  const i=_stk.lines.findIndex(x=>x.id===it.id&&x.unit===un&&!x.hand);let l;
+  if(i>=0){l=_stk.lines.splice(i,1)[0];l.qty=_stR(l.qty+1);l.at=now;}
+  else l={id:it.id,name:it.name,unit:un,factor:f,baseUnit:it.unit||'',qty:1,at:now,hand:false,edited:false};
+  _stk.lines.unshift(l);
+  return {l};
+}
+function _stTotals(){                 // lines -> one total per ITEM, in the base unit: {id,name,baseUnit,base,at (= last scan / change),parts,nScan,nAdj}
+  const m=new Map();
+  _stk.lines.forEach(l=>{
+    let t=m.get(l.id);
+    if(!t){t={id:l.id,name:l.name,baseUnit:l.baseUnit,base:0,at:0,parts:[],nScan:0,nAdj:0};m.set(l.id,t);}
+    t.base+=(Number(l.qty)||0)*(Number(l.factor)||1);
+    if(l.at>t.at)t.at=l.at;
+    t.parts.push({unit:l.unit,factor:l.factor,qty:l.qty});
+    if(!l.hand)t.nScan++;
+    if(l.hand||l.edited)t.nAdj++;
+  });
+  const out=Array.from(m.values());out.forEach(t=>{t.base=_stR(t.base);});return out;
+}
+// The system stock of every item as it was at one moment, built once per distinct minute and kept while the records it reads stay the same
+// (an item counted at 10:05 is measured against 10:05, so sales made after that never count against the shelf).
+function _stSysAt(name,at){
+  const k=[DATA.generalInventory,DATA.generalIssued,DATA.inventoryItems,_SALE_LIST,_RET_LIST];
+  if(!_stBkKey||!k.every((x,j)=>x===_stBkKey[j])){_stBk=new Map();_stBkKey=k;}
+  const s=_stStamp(at),u=s.date+' '+s.time;
+  let b=_stBk.get(u);if(!b){b=Sales.stockBook(_stockSrc(),_stockOpts({until:u}));_stBk.set(u,b);}
+  return b.byName(name).bal;
+}
+function _stSub(t){                   // '2 \u00D7 CARTON (\u00D724) + 7' when more than the base unit was counted, else ''
+  if(!t.parts.some(p=>p.unit&&p.qty>0))return '';
+  return t.parts.filter(p=>p.qty>0).map(p=>p.unit?_stN(p.qty)+' \u00D7 '+p.unit+' (\u00D7'+_stN(p.factor)+')':_stN(p.qty)).join(' + ');
+}
+function _stRows(){                   // the totals with system, variance (counted - system) and cost, the biggest gaps first
+  return _stTotals().map(t=>{
+    const sys=_stSysAt(t.name,t.at);
+    return Object.assign(t,{sys,v:_stR(t.base-sys),c:_stCost(t.name),sub:_stSub(t)});
+  }).sort((a,b)=>Math.abs(b.v)-Math.abs(a.v)||String(a.name).localeCompare(b.name));
+}
+function _stBuild(rows,o){            // rows -> generalStockCounts rows (the same shape as the Stock Count form), BEFORE stampEntry and the id
+  return rows.map(t=>{
+    const s=_stStamp(t.at),how=t.nScan?(t.nAdj?'SCANNED, ADJUSTED BY HAND':'SCANNED'):'COUNTED BY HAND';
+    return {itemId:t.id,itemName:t.name,date:s.date,time:s.time,physicalCount:t.base,stId:o.sid,notes:uc(how+(t.nScan&&t.sub?': '+t.sub:'')+(o.note?' \u00B7 '+o.note:''))};
+  });
+}
+// ── the unfinished count, kept on this phone ──
+function _stKey(){try{return 'mdm_stdraft_'+(DATA.installId||'')+'_'+String(USER&&USER.username||'').toLowerCase();}catch(e){return 'mdm_stdraft';}}
+function _stDraft(){
+  if(!_stk)return;
+  try{
+    if(!_stk.lines.length&&!_stk.unk.size){localStorage.removeItem(_stKey());return;}
+    localStorage.setItem(_stKey(),JSON.stringify({at:_stk.at,sid:_stk.sid,lines:_stk.lines,unk:Array.from(_stk.unk),scope:_stk.scope,note:_stk.note}));
+  }catch(e){}
+}
+function _stDraftClear(){try{localStorage.removeItem(_stKey());}catch(e){}}
+function _stDraftLoad(){              // -> {at,sid,lines,unk,scope,note} or null; every field is re-typed, so nothing odd in storage can reach the screen
+  try{
+    const d=JSON.parse(localStorage.getItem(_stKey())||'null');if(!d||!Array.isArray(d.lines))return null;
+    const lines=d.lines.filter(l=>l&&l.id&&l.name&&Number(l.factor)>0&&isFinite(Number(l.qty))&&Number(l.qty)>=0).map(l=>({id:String(l.id),name:String(l.name),unit:String(l.unit||''),factor:Number(l.factor),baseUnit:String(l.baseUnit||''),qty:Number(l.qty),at:Number(l.at)||0,hand:!!l.hand,edited:!!l.edited}));
+    const unk=(Array.isArray(d.unk)?d.unk:[]).filter(x=>Array.isArray(x)&&x[0]).slice(0,100).map(x=>[String(x[0]).slice(0,48),Math.max(1,Number(x[1])||1)]);
+    return lines.length||unk.length?{at:Number(d.at)||0,sid:/^st_[\w-]{3,40}$/.test(String(d.sid||''))?String(d.sid):'st_'+uid(),lines,unk,scope:String(d.scope||''),note:String(d.note||'')}:null;
+  }catch(e){return null;}
+}
+// ── open, and the counting screen ──
+function openScanStocktake(){
+  if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+  if(!hasFeature('pos_till')){showUpgradePrompt('pos_till');return;}
+  if(!requireAddPermission('count stock'))return;
+  if(!(DATA.inventoryItems||[]).length){alert('There are no items yet. Add the items and their barcodes in Manage first.');return;}
+  const dr=_stDraftLoad();let use=null;
+  if(dr){const t=new Date(dr.at);use=confirm('You have an unfinished stocktake ('+dr.lines.length+' line(s)'+(dr.at?', started '+t.toLocaleString():'')+').\n\nOK = continue it\nCancel = delete it and start a new stocktake')?dr:null;if(!use)_stDraftClear();}
+  _stk={lines:use?use.lines:[],unk:new Map(use?use.unk:[]),scope:use?use.scope:'',note:use?use.note:'',sid:use?use.sid:'st_'+uid(),at:use&&use.at?use.at:Date.now(),view:'count',all:false,rvAll:false,flt:'',cam:null,rv:[],nc:[]};
+  const cats=Array.from(new Set((DATA.inventoryItems||[]).map(x=>String(_invItemObj(x).category||'').trim()).filter(Boolean))).sort();
+  openModal(`<div class="mtitle">📷 Scan Stocktake</div>
+    <div id="st-count">
+      <div style="font-size:14px;color:var(--muted);margin-bottom:8px;line-height:1.5">Blind count: scan every item on the shelf. What the system expects stays hidden until you press Review.</div>
+      <div style="display:flex;gap:8px"><input class="fi" id="st-q" placeholder="Scan barcode, then Enter" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done" style="flex:1" onkeydown="if(event.key==='Enter'){event.preventDefault();_stEnter(this)}"/>${('BarcodeDetector' in window)?'<button class="btn bo" style="width:auto;padding:10px 14px" onclick="_stCam()">📷</button>':''}</div>
+      <div id="st-msg" style="min-height:22px;font-size:15px;margin:4px 0"></div>
+      <div id="st-unk"></div>
+      <div id="st-lines" style="max-height:38vh;overflow:auto"></div>
+      <div id="st-sum" style="font-weight:700;margin:6px 0"></div>
+      <div class="mact"><button class="btn bo" onclick="_stPause()">Pause</button><button class="btn bg" onclick="_stReview()">Review \u2192</button></div>
+      <div style="text-align:center;margin-top:8px"><button class="btn bo bsm" style="color:var(--red)" onclick="_stClose()">🗑 Discard this count</button></div>
+    </div>
+    <div id="st-review" style="display:none">
+      <div id="st-rv-sum"></div>
+      <div class="sh">Counted items, biggest gaps first</div>
+      <div id="st-rv-tab"></div>
+      <div class="fw" style="margin-top:10px"><div class="fl">Note <span style="font-size:15px;color:var(--muted)">(optional, goes on every count)</span></div><input class="fi" id="st-note" placeholder="E.G. FULL COUNT AFTER CLOSING" autocomplete="off" oninput="this.value=this.value.toUpperCase();_stNote(this.value)"/></div>
+      <div class="sh" style="margin-top:14px">Not counted yet</div>
+      <div id="st-nc-head" style="font-size:14px;color:var(--muted);line-height:1.5;margin-bottom:6px"></div>
+      <div class="twobox"><select class="fi" id="st-scope" onchange="_stScope(this.value)"><option value="">All items</option>${cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select><input class="fi" id="st-flt" placeholder="Find an item" autocomplete="off" oninput="_stFlt(this.value)"/></div>
+      <div id="st-nc-list" style="margin-top:8px"></div>
+      <div class="mact"><button class="btn bo" onclick="_stBack()">\u2190 Keep scanning</button><button class="btn bg" onclick="_stSave()">✓ Save counts</button></div>
+    </div>`,'uncloseable');
+  const sc=document.getElementById('st-scope');if(sc){sc.value=_stk.scope;if(sc.value!==_stk.scope){_stk.scope='';sc.value='';}}
+  const nt=document.getElementById('st-note');if(nt)nt.value=_stk.note;
+  _stRenderCount();_stUnkRender();setTimeout(()=>{const q=document.getElementById('st-q');if(q)q.focus();},120);
+}
+function _stMsg(t,bad){const m=document.getElementById('st-msg');if(m){m.textContent=t||'';m.style.color=bad?'var(--red)':'var(--green)';}}
+function _stEnter(inp){
+  const v=inp.value;inp.value='';const r=_stScan(v,false);
+  if(r.err){_stMsg(r.err,true);if(r.unknown)_stUnkRender();_stDraft();}
+  else if(r.l){_stMsg('✓ '+r.l.name+(r.l.unit?' ('+r.l.unit+')':'')+' \u00D7 '+_stN(r.l.qty),false);_stRenderCount();}
+  inp.focus();
+}
+function _stRenderCount(){
+  if(!_stk)return;const box=document.getElementById('st-lines'),L=_stk.lines;if(!box)return;
+  const shown=_stk.all?L:L.slice(0,30);
+  box.innerHTML=L.length?shown.map((l,i)=>`<div style="border:1px solid var(--border);border-radius:10px;padding:8px;margin-bottom:6px">
+    <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(l.name)}</b><button class="delbtn" onclick="_stDel(${i})">🗑</button></div>
+    <div style="font-size:14px;color:var(--muted)">${l.unit?esc(l.unit)+' contains '+_stN(l.factor)+' '+esc(l.baseUnit||'units')+' \u00B7 counts as '+_stN(_stR(l.qty*l.factor)):esc(l.baseUnit||'')}${l.hand?' \u00B7 typed by hand':''}</div>
+    <div style="display:flex;gap:6px;align-items:center;margin-top:6px"><button class="btn bo" style="width:auto;padding:8px 18px" onclick="_stStep(${i},-1)">\u2212</button><input class="fi" type="number" inputmode="decimal" min="0" step="any" value="${l.qty}" style="text-align:center" onchange="_stSet(${i},this.value)"/><button class="btn bo" style="width:auto;padding:8px 18px" onclick="_stStep(${i},1)">+</button></div></div>`).join('')
+    +(L.length>shown.length?`<button class="btn bo bsm" style="margin-bottom:6px" onclick="_stShowAll()">Show all ${L.length} lines</button>`:''):'<div class="empty">Nothing counted yet</div>';
+  _stSum();_stDraft();
+}
+function _stShowAll(){if(_stk){_stk.all=true;_stRenderCount();}}
+function _stSum(){const s=document.getElementById('st-sum');if(!s||!_stk)return;const n=_stTotals().length;s.textContent=n?n+' item(s) counted':'';}
+function _stStep(i,d){const l=_stk&&_stk.lines[i];if(!l)return;l.qty=Math.max(0,_stR(l.qty+d));l.at=Date.now();l.edited=true;_stRenderCount();}
+function _stSet(i,v){
+  const l=_stk&&_stk.lines[i];if(!l)return;
+  const n=Number(v);if(String(v).trim()===''||!isFinite(n)||n<0){showToast('Type a number, 0 or more.');_stRenderCount();return;}
+  l.qty=_stR(n);l.at=Date.now();l.edited=true;_stRenderCount();
+}
+function _stDel(i){
+  const l=_stk&&_stk.lines[i];if(!l)return;
+  if(l.qty>1&&!confirm('Remove '+l.name+' (counted '+_stN(l.qty)+')?'))return;
+  _stk.lines.splice(i,1);_stRenderCount();
+}
+function _stUnkRender(){
+  const b=document.getElementById('st-unk');if(!b||!_stk)return;
+  const u=Array.from(_stk.unk);
+  b.innerHTML=u.length?`<div style="border:1px solid var(--amber);border-radius:10px;padding:8px;margin:6px 0;font-size:14px;line-height:1.5"><b style="color:var(--amber)">Not counted: ${u.length} unknown code(s)</b><div style="color:var(--muted);margin-top:2px">${u.slice(0,6).map(x=>esc(x[0])+(x[1]>1?' \u00D7'+x[1]:'')).join(' \u00B7 ')}${u.length>6?' \u00B7 \u2026':''}</div><div style="color:var(--muted);margin-top:2px">No item has these codes. Give the barcode to the item (Manage, or Scan Receive), then scan it again.</div><button class="btn bo bsm" style="margin-top:6px" onclick="_stUnkClear()">Dismiss</button></div>`:'';
+}
+function _stUnkClear(){if(_stk){_stk.unk=new Map();_stUnkRender();_stDraft();}}
+function _stNote(v){if(_stk){_stk.note=String(v||'');_stDraft();}}
+// ── pause, discard, leave ──
+function _stPause(){_stDraft();_stCamStop();_stk=null;closeModal();showToast('Stocktake paused. Open Scan Count to carry on.');}
+function _stClose(done){
+  if(_stk&&!done&&(_stk.lines.length||_stk.unk.size)&&!confirm('Discard this stocktake ('+_stTotals().length+' item(s) counted)? Nothing has been saved.'))return;
+  _stDraftClear();_stCamStop();_stk=null;closeModal();
+}
+// ── review: system against counted ──
+function _stReview(){
+  if(!_stk)return;
+  if(!_stk.lines.length){alert('Count at least one item first.');return;}
+  _stCamStop();_stk.view='review';
+  const c=document.getElementById('st-count'),r=document.getElementById('st-review');if(c)c.style.display='none';if(r)r.style.display='block';
+  _stRvRender();
+}
+function _stBack(){
+  if(!_stk)return;_stk.view='count';
+  const c=document.getElementById('st-count'),r=document.getElementById('st-review');if(r)r.style.display='none';if(c)c.style.display='block';
+  _stRenderCount();setTimeout(()=>{const q=document.getElementById('st-q');if(q)q.focus();},60);
+}
+function _stRvRender(){
+  if(!_stk)return;
+  const rows=_stk.rv=_stRows();
+  let sh=0,ov=0,ex=0,shV=0,ovV=0,noCost=0;
+  rows.forEach(r=>{if(r.v<0){sh++;shV+=-r.v*r.c;}else if(r.v>0){ov++;ovV+=r.v*r.c;}else ex++;if(r.v!==0&&!(r.c>0))noCost++;});
+  const sum=document.getElementById('st-rv-sum');
+  if(sum)sum.innerHTML=`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 13px;margin-bottom:10px;font-size:16px;line-height:1.7">
+    <b>${rows.length}</b> item(s) counted \u00B7 <span style="color:var(--green)">${ex} exact</span> \u00B7 <span style="color:var(--red)">${sh} short</span> \u00B7 <span style="color:var(--amber)">${ov} over</span>
+    ${(shV>0||ovV>0)?`<br>At cost: <span style="color:var(--red)">short ${zm(shV)}</span> \u00B7 <span style="color:var(--amber)">over ${zm(ovV)}</span> \u00B7 net ${ovV-shV>=0?'+':'\u2212'}${zm(Math.abs(ovV-shV))}`:''}
+    ${noCost?`<br><span style="font-size:14px;color:var(--muted)">${noCost} item(s) with a gap have no cost price and are left out of the value.</span>`:''}
+    <br><span style="font-size:14px;color:var(--muted)">System = the stock when each item was last counted, as far as this phone knows. Stock is not changed by saving.</span></div>`;
+  const shown=_stk.rvAll?rows:rows.slice(0,60);
+  const tab=document.getElementById('st-rv-tab');
+  if(tab)tab.innerHTML=`<div class="card" style="padding:0"><div class="tw"><table>
+    <thead><tr><th>Item</th><th style="text-align:right;color:var(--blue)">System</th><th style="text-align:right;color:var(--green)">Counted</th><th style="text-align:right">Gap</th></tr></thead>
+    <tbody>${shown.map((r,i)=>{const col=r.v<0?'var(--red)':r.v===0?'var(--green)':'var(--amber)';return `<tr>
+      <td style="font-weight:600">${esc(r.name)}${r.sub?`<div style="font-size:13px;color:var(--muted);font-weight:400">${esc(r.sub)}</div>`:''}</td>
+      <td style="text-align:right;color:var(--blue)">${_stN(r.sys)}</td>
+      <td style="text-align:right"><input class="fi" type="number" inputmode="decimal" min="0" step="any" value="${r.base}" style="width:84px;padding:6px 8px;text-align:right" onchange="_stOverride(${i},this.value)"/></td>
+      <td style="text-align:right;font-weight:700;color:${col}">${r.v>0?'+':''}${_stN(r.v)}</td></tr>`;}).join('')}</tbody></table></div></div>`
+    +(rows.length>shown.length?`<button class="btn bo bsm" style="margin-top:6px" onclick="_stRvAll()">Show all ${rows.length} items</button>`:'');
+  _stNcRender();_stDraft();
+}
+function _stRvAll(){if(_stk){_stk.rvAll=true;_stRvRender();}}
+function _stOverride(i,v){            // the counted total of ONE item typed in Review: it replaces that item\u2019s lines with one line in the base unit, counted now
+  const r=_stk&&_stk.rv[i];if(!r)return;
+  const n=Number(v);if(String(v).trim()===''||!isFinite(n)||n<0){showToast('Type a number, 0 or more.');_stRvRender();return;}
+  if(_stR(n)===r.base)return;
+  _stk.lines=_stk.lines.filter(l=>l.id!==r.id);
+  _stk.lines.unshift({id:r.id,name:r.name,unit:'',factor:1,baseUnit:r.baseUnit,qty:_stR(n),at:Date.now(),hand:true,edited:true});
+  _stRvRender();
+}
+// ── items not counted: no barcode, or really none on the shelf ──
+function _stNcRender(){
+  const box=document.getElementById('st-nc-list');if(!box||!_stk)return;
+  const have=new Set(_stk.lines.map(l=>l.id)),q=String(_stk.flt||'').trim().toLowerCase(),book=genStockBook();
+  const rest=(DATA.inventoryItems||[]).map(_invItemObj).filter(it=>it.name&&!have.has(it.id)&&(!_stk.scope||String(it.category||'')===_stk.scope)).map(it=>({it,sys:book.byName(it.name).bal}));
+  const withStock=rest.filter(x=>x.sys>0).length;
+  const pool=(q?rest.filter(x=>(x.it.name+' '+x.it.sku+' '+x.it.barcode+' '+x.it.category).toLowerCase().indexOf(q)>=0):rest.filter(x=>x.sys>0)).sort((a,b)=>String(a.it.name).localeCompare(String(b.it.name)));
+  _stk.nc=pool.slice(0,40).map(x=>x.it);
+  const head=document.getElementById('st-nc-head');
+  if(head)head.textContent=withStock+' item(s) with stock in the system were not counted. They are NOT saved and keep their last count. Type what you found and press Add, or press 0 if there is none.';
+  box.innerHTML=pool.length?pool.slice(0,40).map((x,k)=>`<div style="border:1px solid var(--border);border-radius:10px;padding:8px;margin-bottom:6px">
+    <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(x.it.name)}</b><span style="color:var(--blue);white-space:nowrap">system ${_stN(x.sys)} ${esc(x.it.unit||'')}</span></div>
+    <div style="display:flex;gap:6px;margin-top:6px"><input class="fi" id="st-nc-${k}" type="number" inputmode="decimal" min="0" step="any" placeholder="Counted" onkeydown="if(event.key==='Enter'){event.preventDefault();_stNcAdd(${k})}"/><button class="btn bg bsm" onclick="_stNcAdd(${k})">Add</button><button class="btn bo bsm" onclick="_stNcZero(${k})">0</button></div></div>`).join('')
+    +(pool.length>40?`<div style="font-size:14px;color:var(--muted);margin-bottom:6px">${pool.length-40} more. Type in Find an item to narrow the list.</div>`:''):`<div class="empty" style="padding:14px">${q?'No item matches.':'Every item with stock has been counted.'}</div>`;
+}
+function _stScope(v){if(_stk){_stk.scope=String(v||'');_stNcRender();_stDraft();}}
+function _stFlt(v){if(_stk){_stk.flt=String(v||'');_stNcRender();}}
+function _stManual(it,qty){
+  if(!_stk||!it)return;
+  _stk.lines.unshift({id:it.id,name:it.name,unit:'',factor:1,baseUnit:it.unit||'',qty:_stR(qty),at:Date.now(),hand:true,edited:false});
+  _stRvRender();
+}
+function _stNcAdd(k){
+  const it=_stk&&_stk.nc[k];if(!it)return;
+  const e=document.getElementById('st-nc-'+k),v=e?e.value:'',n=Number(v);
+  if(String(v).trim()===''||!isFinite(n)||n<0){showToast('Type how many you counted, or press 0.');return;}
+  _stManual(it,n);
+}
+function _stNcZero(k){const it=_stk&&_stk.nc[k];if(it)_stManual(it,0);}
+// ── save ──
+function _stSave(){
+  if(!_stk||isReadOnly())return;if(!requireAddPermission('count stock'))return;
+  if(!_stk.lines.length){alert('Count at least one item.');return;}
+  const note=uc((document.getElementById('st-note')||{}).value||_stk.note||'');
+  const rows=_stRows(),B=_stBuild(rows,{note,sid:_stk.sid});
+  let sh=0,ov=0,shU=0;rows.forEach(r=>{if(r.v<0){sh++;shU+=-r.v;}else if(r.v>0)ov++;});
+  if(!confirm('Save '+B.length+' stock count(s)?\n\n\u2022 '+sh+' short, '+ov+' over, '+(B.length-sh-ov)+' exact'+(_stk.unk.size?'\n\u2022 '+_stk.unk.size+' unknown code(s) were not counted':'')+'\n\nItems you did not count keep their last count. Stock itself is not changed.\n\nProceed?'))return;
+  const sid=_stk.sid;
+  updateData(d=>({...d,generalStockCounts:[...(d.generalStockCounts||[]),...B.map(r=>stampEntry({id:uid(),...r}))]}));
+  logAuditEvent('CREATE','Scan Stocktake',B.length+' item(s) counted \u00B7 '+sh+' short, '+ov+' over, '+(B.length-sh-ov)+' exact \u00B7 '+sid);
+  GTAB='stockcount';_stClose(true);showToast('✅ '+B.length+' stock count(s) saved');
+}
+// ── camera: the same reader as Scan Receive. The camera stays open; a code is counted once, and again only after it has left the picture ──
+function _stCamStop(){
+  const me=_stk&&_stk.cam;if(!me)return;_stk.cam=null;clearTimeout(me.t);
+  try{me.video.pause();me.video.srcObject=null;}catch(e){}
+  if(me.stream)me.stream.getTracks().forEach(t=>{try{t.stop();}catch(e){}});
+  me.ovl.remove();
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden){_stCamStop();_stDraft();}});
+addEventListener('pagehide',_stDraft);
+async function _stCam(){
+  if(!_stk||_stk.cam)return;
+  const ovl=document.createElement('div');ovl.style.cssText='position:fixed;inset:0;z-index:99999;background:#000;display:flex;flex-direction:column';
+  ovl.innerHTML='<video playsinline autoplay muted style="flex:1;min-height:0;width:100%;object-fit:cover"></video><div style="padding:12px;background:#111;color:#fff;font-size:17px"><div class="st-s">Starting camera\u2026</div><div class="st-c" style="color:#9aa;font-size:14px;margin:4px 0 8px"></div><button class="btn bg" onclick="_stCamStop()">Done</button></div>';
+  document.body.appendChild(ovl);
+  const me=_stk.cam={ovl,video:ovl.querySelector('video'),say:ovl.querySelector('.st-s'),ct:ovl.querySelector('.st-c'),stream:null,last:'',seenAt:0,pend:'',pendN:0,t:0};
+  let det;
+  try{const sup=await BarcodeDetector.getSupportedFormats();det=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','qr_code'].filter(x=>sup.includes(x))});}
+  catch(e){me.say.textContent='Camera scanning is not supported on this device. Use a scanner or type the code.';return;}
+  try{me.stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});}
+  catch(e){me.say.textContent=(e&&e.name==='NotAllowedError')?'The camera is blocked. Allow it in the phone\u2019s site settings.':'Could not start the camera.';return;}
+  if(!_stk||_stk.cam!==me){me.stream.getTracks().forEach(t=>t.stop());return;}
+  me.video.srcObject=me.stream;try{await me.video.play();}catch(e){}
+  me.say.textContent='Aim at one barcode. Keep scanning, tap Done when finished.';
+  const tick=async()=>{
+    if(!_stk||_stk.cam!==me)return;
+    let found=[];try{if(me.video.readyState>=2)found=await det.detect(me.video);}catch(e){}
+    if(!_stk||_stk.cam!==me)return;
+    const W=me.video.videoWidth,H=me.video.videoHeight,seen=new Map(),now=Date.now();
+    found.forEach(r=>{const val=String(r.rawValue||'').trim();if(!val)return;const b=r.boundingBox;if(b&&W&&H){const cx=b.x+b.width/2,cy=b.y+b.height/2;if(cx<W*.1||cx>W*.9||cy<H*.25||cy>H*.75)return;}seen.set(val,r.format);});
+    if(!seen.size){me.pend='';me.pendN=0;if(me.last&&now-me.seenAt>700)me.last='';}
+    else if(seen.size>1){me.pend='';me.say.textContent='Several barcodes in view. Aim at one.';}
+    else{
+      const [val,fmt]=Array.from(seen)[0];
+      if(val===me.last)me.seenAt=now;
+      else{
+        let go=['ean_13','ean_8','upc_a','upc_e','code_128'].includes(fmt);      // check-digit formats: one read; the rest must be read twice in a row
+        if(!go){if(me.pend===val)go=++me.pendN>=2;else{me.pend=val;me.pendN=1;}}
+        if(go){
+          me.pend='';me.pendN=0;me.last=val;me.seenAt=now;
+          const r=_stScan(val,true);if(r.unknown)_stUnkRender();
+          try{navigator.vibrate&&navigator.vibrate(r.err?[80,60,80]:40);}catch(e){}
+          me.say.textContent=r.err?r.err:('✓ '+r.l.name+(r.l.unit?' ('+r.l.unit+')':'')+' \u00D7 '+_stN(r.l.qty));me.say.style.color=r.err?'#ff8a80':'#b9f6ca';
+          me.ct.textContent=_stTotals().length+' item(s) counted';if(!r.err)_stRenderCount();else _stDraft();
+        }
+      }
+    }
+    me.t=setTimeout(tick,120);
+  };
+  tick();
+}
+// ══ END SCAN STOCKTAKE ═══════════════════════════════════════════════════════════════════════════════════════════════
+
 // ══════════════════════════════════════════════════════════
 // FIX 24 — Transport Log
 // ══════════════════════════════════════════════════════════
@@ -12838,10 +13551,31 @@ function _plLastSold(cid){   // most recent approved issue that carried a sale p
 }
 function _plSingular(u){u=String(u||'');return /.s$/i.test(u)?u.slice(0,-1):u;}
 function _plVal(el){const raw=String(el.value).trim();if(raw==='')return 0;const v=Number(raw);return isFinite(v)?Math.round(v*100)/100:NaN;}
+// Step 27: the wholesale price (DATA.inventoryPrices[name].wholesalePrice, or DATA.commodities[i].wholesalePrice) and the quantity from which the item is wholesale by itself (wholesaleMin),
+// under each row. The till uses the wholesale price only where it is BELOW the selling price. Blank = none.
+function _plWholeOf(name){return Number(((DATA.inventoryPrices||{})[name]||{}).wholesalePrice)||0;}
+function _plMinOf(name){return Number(((DATA.inventoryPrices||{})[name]||{}).wholesaleMin)||0;}
+function _plQty(el){const raw=String(el&&el.value||'').trim();if(raw==='')return 0;const v=Number(raw);return isFinite(v)&&v>=0&&v<=1e6?Math.round(v*1000)/1000:NaN;}
+function _plWholeHtml(o){
+  const at=`data-kind="${o.kind}" data-k="${esc(o.id)}" data-nm="${esc(o.name)}" data-cost="${o.cost>0?o.cost:''}"`;
+  return `<div class="pl-wh"><label>Wholesale price<input class="pl-wi" type="number" inputmode="decimal" min="0" step="0.01" placeholder="none" value="${o.wh>0?o.wh:''}" data-orig="${o.wh>0?o.wh:''}" ${at} aria-label="Wholesale price of ${esc(o.name)}" oninput="_plChanged(this)" onkeydown="_plKey(event)"/></label><label>Wholesale from (qty)<input class="pl-wm" type="number" inputmode="decimal" min="0" step="any" placeholder="any" value="${o.wm>0?o.wm:''}" data-orig="${o.wm>0?o.wm:''}" ${at} aria-label="Quantity from which ${esc(o.name)} is wholesale" oninput="_plChanged(this)" onkeydown="_plKey(event)"/></label><div class="pl-flag pl-wflag"></div></div>`;
+}
+function _plFlagW(row){
+  const wi=row&&row.querySelector('.pl-wi'),wmEl=row&&row.querySelector('.pl-wm');if(!wi||!wmEl)return;
+  const f=row.querySelector('.pl-wflag'),w=_plVal(wi),r=_plVal(row.querySelector('.pl-in')),m=_plQty(wmEl),cost=Number(wi.dataset.cost)||0;
+  wi.classList.toggle('chg',w!==(Number(wi.dataset.orig)||0));wmEl.classList.toggle('chg',m!==(Number(wmEl.dataset.orig)||0));
+  let t='',bad=false;
+  if(w>0&&!(r>0)){t='Set the selling price first.';bad=true;}
+  else if(w>0&&w>=r){t='Must be lower than the selling price.';bad=true;}
+  else if(w>0&&cost>0&&w<cost){t='Below cost';bad=true;}
+  else if(w>0){t=Math.round((r-w)/r*100)+'% below the selling price';}
+  else if(m>0){t='Type the wholesale price too.';bad=true;}
+  f.textContent=t;f.className='pl-flag pl-wflag'+(bad?' bad':'');
+}
 function _plRowHtml(o){
   const inp=`<input class="pl-in" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00" value="${o.price>0?o.price:''}" data-kind="${o.kind}" data-k="${esc(o.id)}" data-nm="${esc(o.name)}" data-orig="${o.price>0?o.price:''}" data-cost="${o.cost>0?o.cost:''}" aria-label="Selling price of ${esc(o.name)}" oninput="_plChanged(this)" onkeydown="_plKey(event)"/>`;
   const use=(o.hint>0&&!(o.price>0))?`<button type="button" class="pl-use" onclick="_plUse(this,${o.hint})">Last sold ${esc(zm(o.hint))} · use</button>`:'';
-  return `<div class="pl-row" data-q="${esc(o.q)}"><div class="pl-nm"><b>${o.icon?esc(o.icon)+' ':''}${esc(o.name)}</b><div class="pl-sub">${o.sub}</div></div><div class="pl-pc">${inp}<div class="pl-flag"></div>${use}</div></div>`;
+  return `<div class="pl-row" data-q="${esc(o.q)}"><div class="pl-nm"><b>${o.icon?esc(o.icon)+' ':''}${esc(o.name)}</b><div class="pl-sub">${o.sub}</div></div><div class="pl-pc">${inp}<div class="pl-flag"></div>${use}</div>${_plWholeHtml(o)}</div>`;
 }
 function openPriceList(){
   if(!requireAdmin('edit the price list'))return;
@@ -12853,15 +13587,15 @@ function openPriceList(){
   const orphans=[...new Set([...(DATA.generalInventory||[]),...(DATA.generalIssued||[])].map(x=>x&&x.itemName).filter(Boolean))].filter(n=>!known.has(n)).sort();
   const orphanRows=orphans.map(n=>{
     const cost=Number((pr[n]||{}).purchasePrice)||0;
-    return _plRowHtml({kind:'name',id:n,name:n,icon:'',price:_plPriceOf('item',n),cost,hint:0,q:n.toLowerCase(),sub:cost>0?'Cost '+esc(zm(cost)):'&nbsp;'});
+    return _plRowHtml({kind:'name',id:n,name:n,icon:'',price:_plPriceOf('item',n),wh:_plWholeOf(n),wm:_plMinOf(n),cost,hint:0,q:n.toLowerCase(),sub:cost>0?'Cost '+esc(zm(cost)):'&nbsp;'});
   }).join('');
   const itemRows=items.map(it=>{
     const cost=Number((pr[it.name]||{}).purchasePrice)||0;
-    return _plRowHtml({kind:'item',id:it.id,name:it.name,icon:'',price:_plPriceOf('item',it.name),cost,hint:0,
+    return _plRowHtml({kind:'item',id:it.id,name:it.name,icon:'',price:_plPriceOf('item',it.name),wh:_plWholeOf(it.name),wm:_plMinOf(it.name),cost,hint:0,
       q:(it.name+' '+it.barcode+' '+it.sku+' '+it.category).toLowerCase(),
       sub:[it.unit?esc(it.unit):'',cost>0?'Cost '+esc(zm(cost)):''].filter(Boolean).join(' · ')||'&nbsp;'});
   }).join('');
-  const comRows=coms.map(c=>_plRowHtml({kind:'com',id:c.id,name:c.name,icon:c.icon||'',price:Number(c.sellingPrice)||0,cost:0,hint:_plLastSold(c.id),
+  const comRows=coms.map(c=>_plRowHtml({kind:'com',id:c.id,name:c.name,icon:c.icon||'',price:Number(c.sellingPrice)||0,wh:Number(c.wholesalePrice)||0,wm:Number(c.wholesaleMin)||0,cost:0,hint:_plLastSold(c.id),
     q:(c.name+' commodity '+(c.unit||'')).toLowerCase(),
     sub:'per '+esc(_plSingular(c.unit)||'unit')})).join('');
   const sections=
@@ -12870,7 +13604,7 @@ function openPriceList(){
     (orphans.length?`<div class="pl-sec"><div class="pl-head">📋 Other stock, not in Manage Inventory Items (${orphans.length})</div>${orphanRows}</div>`:'');
   openModal(`
     <div class="mtitle">💲 Price List</div>
-    <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">Set the <strong style="color:var(--text)">selling price</strong> of every item and commodity here, before you sell. The Till and the Issue forms use these prices. Press <strong style="color:var(--text)">Enter</strong> to jump to the next price. Leave a price blank for none.</div>
+    <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">Set the <strong style="color:var(--text)">selling price</strong> of every item and commodity here, before you sell. The Till and the Issue forms use these prices. Press <strong style="color:var(--text)">Enter</strong> to jump to the next price. Leave a price blank for none.<br>Under each one you can also set a <strong style="color:var(--text)">wholesale price</strong> (lower than the selling price) and the quantity from which the item is sold at it by itself. The Till uses wholesale prices only after you switch them on in Settings.</div>
     ${sections?`
     <input class="fi" id="pl-q" placeholder="🔍 Search" autocomplete="off" style="margin-bottom:8px" oninput="_plFilter()"/>
     <label style="display:flex;align-items:center;gap:8px;font-size:17px;color:var(--muted);margin-bottom:6px"><input type="checkbox" id="pl-nb" onchange="_plFilter()"/> Only show unpriced <span id="pl-count" style="margin-left:auto"></span></label>
@@ -12887,14 +13621,16 @@ function _plFlag(el){
     else{f.textContent='Margin '+Math.round((v-cost)/v*100)+'%';f.className='pl-flag';}
   }else{f.textContent='';f.className='pl-flag';}
 }
-function _plChangeCount(){let n=0;document.querySelectorAll('#pl-list .pl-in').forEach(el=>{if(_plVal(el)!==(Number(el.dataset.orig)||0))n++;});return n;}
+function _plChangeCount(){let n=0;document.querySelectorAll('#pl-list .pl-in').forEach(el=>{if(_plVal(el)!==(Number(el.dataset.orig)||0))n++;});
+  document.querySelectorAll('#pl-list .pl-wi').forEach(el=>{if(_plVal(el)!==(Number(el.dataset.orig)||0))n++;});
+  document.querySelectorAll('#pl-list .pl-wm').forEach(el=>{if(_plQty(el)!==(Number(el.dataset.orig)||0))n++;});return n;}
 function _plSummary(){
   const all=[...document.querySelectorAll('#pl-list .pl-in')];
   const c=document.getElementById('pl-count');if(c)c.textContent=all.filter(e=>_plVal(e)>0).length+' of '+all.length+' priced';
   const ch=_plChangeCount(),b=document.getElementById('pl-save');if(b)b.textContent=ch?'Save prices ('+ch+')':'Save prices';
 }
-function _plRefreshAll(){document.querySelectorAll('#pl-list .pl-in').forEach(_plFlag);_plSummary();}
-function _plChanged(el){_plFlag(el);_plSummary();}
+function _plRefreshAll(){document.querySelectorAll('#pl-list .pl-in').forEach(_plFlag);document.querySelectorAll('#pl-list .pl-row').forEach(_plFlagW);_plSummary();}
+function _plChanged(el){if(el.classList.contains('pl-in'))_plFlag(el);_plFlagW(el.closest('.pl-row'));_plSummary();}
 function _plFilter(){
   const q=String((document.getElementById('pl-q')||{}).value||'').trim().toLowerCase();
   const nb=!!(document.getElementById('pl-nb')||{}).checked;
@@ -12910,7 +13646,7 @@ function _plFilter(){
 function _plKey(e){
   if(e.key!=='Enter')return;
   e.preventDefault();
-  const all=[...document.querySelectorAll('#pl-list .pl-in')].filter(i=>i.offsetParent!==null);
+  const all=[...document.querySelectorAll('#pl-list .pl-in,#pl-list .pl-wi,#pl-list .pl-wm')].filter(i=>i.offsetParent!==null);
   const nx=all[all.indexOf(e.target)+1];
   if(nx){nx.focus();try{nx.select();}catch{}}else e.target.blur();
 }
@@ -12934,37 +13670,67 @@ function savePriceList(){
     ch.push({kind:el.dataset.kind,key:el.dataset.k,name:el.dataset.nm,from:orig,to:v,cost:Number(el.dataset.cost)||0});
   });
   if(bad){alert('Prices must be numbers, 0 or more.');bad.focus();return;}
-  if(!ch.length){closeModal();showToast('No price changes');return;}
+  // Step 27: wholesale price and "from" quantity, row by row. A row counts when either changed; the rules are checked against the selling price as it will be SAVED.
+  const wch=new Map(),belowW=[];
+  let badW=null;
+  document.querySelectorAll('#pl-list .pl-row').forEach(row=>{
+    const wi=row.querySelector('.pl-wi'),wmEl=row.querySelector('.pl-wm'),ri=row.querySelector('.pl-in');if(!wi||!wmEl||!ri||badW)return;
+    const w=_plVal(wi),m=_plQty(wmEl),retail=_plVal(ri),retail0=Number(ri.dataset.orig)||0,w0=Number(wi.dataset.orig)||0,m0=Number(wmEl.dataset.orig)||0,nm=wi.dataset.nm;
+    if(Number.isNaN(w)||w<0||Number.isNaN(m)||m<0){badW={el:wi,msg:nm+': the wholesale price and the quantity must be numbers, 0 or more.'};return;}
+    const wChanged=w!==w0||m!==m0;
+    if((wChanged||retail!==retail0)&&w>0&&retail>0&&w>=retail){badW={el:wi,msg:nm+': the wholesale price ('+w.toFixed(2)+') must be lower than the selling price ('+retail.toFixed(2)+').'};return;}
+    if(wChanged&&w>0&&!(retail>0)){badW={el:ri,msg:nm+': set the selling price first. The wholesale price must be lower than it.'};return;}
+    if(wChanged&&m>0&&!(w>0)){badW={el:wi,msg:nm+': type the wholesale price too, or clear the quantity.'};return;}
+    if(!wChanged)return;
+    const cost=Number(wi.dataset.cost)||0;
+    if(w>0&&cost>0&&w<cost)belowW.push({name:nm,w,cost});
+    wch.set(wi.dataset.kind+'|'+wi.dataset.k,{kind:wi.dataset.kind,key:wi.dataset.k,name:nm,w,m,w0,m0});
+  });
+  if(badW){alert(badW.msg);badW.el.focus();return;}
+  if(belowW.length&&!confirm(belowW.length+' wholesale price(s) are below cost:\n'+belowW.slice(0,5).map(c=>'• '+c.name+' (cost '+c.cost.toFixed(2)+', wholesale '+c.w.toFixed(2)+')').join('\n')+(belowW.length>5?'\n…':'')+'\n\nSave anyway?'))return;
+  if(!ch.length&&!wch.size){closeModal();showToast('No price changes');return;}
   const below=ch.filter(c=>c.to>0&&c.cost>0&&c.to<c.cost);
   if(below.length&&!confirm(below.length+' price(s) are below cost:\n'+below.slice(0,5).map(c=>'• '+c.name+' (cost '+c.cost.toFixed(2)+', price '+c.to.toFixed(2)+')').join('\n')+(below.length>5?'\n…':'')+'\n\nSave anyway?'))return;
   const byItem=new Map(ch.filter(c=>c.kind==='item').map(c=>[c.key,c.to]));
   const byCom=new Map(ch.filter(c=>c.kind==='com').map(c=>[c.key,c.to]));
   const byName=new Map(ch.filter(c=>c.kind==='name').map(c=>[c.key,c.to]));   // stock with records but no item-master entry
+  const wItem=new Map(),wName=new Map(),wCom=new Map();
+  wch.forEach(x=>(x.kind==='com'?wCom:x.kind==='name'?wName:wItem).set(x.key,x));
+  const setW=(p,x)=>{                                              // step 27: write (or clear) a row's wholesale price and quantity on a price entry / commodity
+    if(!x)return;
+    if(x.w>0){p.wholesalePrice=x.w;if(x.m>0)p.wholesaleMin=x.m;else delete p.wholesaleMin;}
+    else{delete p.wholesalePrice;delete p.wholesaleMin;}
+  };
   updateData(d=>{
     const prices={...(d.inventoryPrices||{})};
     (d.inventoryItems||[]).forEach(it=>{
-      const id=_invItemId(it);if(!byItem.has(id))return;
-      const nm=_invItemObj(it).name,v=byItem.get(id),p={...(prices[nm]||{})};
-      if(v>0)p.sellingPrice=v;else delete p.sellingPrice;
+      const id=_invItemId(it),nm=_invItemObj(it).name;
+      if(!byItem.has(id)&&!wItem.has(id))return;
+      const p={...(prices[nm]||{})};
+      if(byItem.has(id)){const v=byItem.get(id);if(v>0)p.sellingPrice=v;else delete p.sellingPrice;}
+      setW(p,wItem.get(id));
       if(Object.keys(p).length)prices[nm]=p;else delete prices[nm];
     });
-    byName.forEach((v,nm)=>{
+    new Set([...byName.keys(),...wName.keys()]).forEach(nm=>{
       const p={...(prices[nm]||{})};
-      if(v>0)p.sellingPrice=v;else delete p.sellingPrice;
+      if(byName.has(nm)){const v=byName.get(nm);if(v>0)p.sellingPrice=v;else delete p.sellingPrice;}
+      setW(p,wName.get(nm));
       if(Object.keys(p).length)prices[nm]=p;else delete prices[nm];
     });
     const commodities=(d.commodities||[]).map(c=>{
-      if(!byCom.has(c.id))return c;
-      const v=byCom.get(c.id),o={...c};
-      if(v>0)o.sellingPrice=v;else delete o.sellingPrice;
+      if(!byCom.has(c.id)&&!wCom.has(c.id))return c;
+      const o={...c};
+      if(byCom.has(c.id)){const v=byCom.get(c.id);if(v>0)o.sellingPrice=v;else delete o.sellingPrice;}
+      setW(o,wCom.get(c.id));
       return o;
     });
     return {...d,inventoryPrices:prices,commodities};
   });
-  logAuditEvent('EDIT','Price List',`${ch.length} price(s) changed: `+ch.slice(0,10).map(c=>`${c.name} ${c.from||'—'} → ${c.to||'cleared'}`).join(' · ')+(ch.length>10?` · +${ch.length-10} more`:''),
+  if(wch.size)logAuditEvent('EDIT','Price List',`${wch.size} wholesale price(s) changed: `+[...wch.values()].slice(0,10).map(x=>`${x.name} ${x.w0||'—'} → ${x.w||'cleared'}${x.w>0&&x.m>0?' from '+x.m:''}`).join(' · ')+(wch.size>10?` · +${wch.size-10} more`:''));
+  if(ch.length)logAuditEvent('EDIT','Price List',`${ch.length} price(s) changed: `+ch.slice(0,10).map(c=>`${c.name} ${c.from||'—'} → ${c.to||'cleared'}`).join(' · ')+(ch.length>10?` · +${ch.length-10} more`:''),
     {prices:ch.map(c=>({name:c.name,price:c.from||null}))});
   closeModal();
-  showToast('✅ '+ch.length+(ch.length===1?' price':' prices')+' saved');
+  showToast('✅ '+(ch.length?ch.length+(ch.length===1?' price':' prices'):'')+(ch.length&&wch.size?' and ':'')+(wch.size?wch.size+(wch.size===1?' wholesale price':' wholesale prices'):'')+' saved');
 }
 
 // ── Manage Inventory Items (admin)
@@ -13163,10 +13929,11 @@ function _itemChipsHtml(item){
   if(it.barcode)c.push(chip('Barcode '+esc(it.barcode)));
   if(it.sku)c.push(chip('SKU '+esc(it.sku)));
   if(it.unit)c.push(chip(esc(it.unit)));
-  (Array.isArray(it.units)?it.units:[]).forEach(u=>{if(u&&u.name)c.push(chip(esc(u.name)+' ×'+Number(u.factor)+(Number(u.price)>0?' · '+zm(u.price):'')));});   // step 26
+  (Array.isArray(it.units)?it.units:[]).forEach(u=>{if(u&&u.name)c.push(chip(esc(u.name)+' ×'+Number(u.factor)+(Number(u.price)>0?' · '+zm(u.price):'')+(Number(u.wprice)>0?' · wholesale '+zm(u.wprice):'')));});   // step 26
   if(it.category)c.push(chip(esc(it.category)));
   if(Number(pr.purchasePrice)>0)c.push(chip('Cost '+zm(pr.purchasePrice)));
   if(Number(pr.sellingPrice)>0)c.push(chip('Price '+zm(pr.sellingPrice)));
+  if(Number(pr.wholesalePrice)>0)c.push(chip('Wholesale '+zm(pr.wholesalePrice)+(Number(pr.wholesaleMin)>0?' from '+Number(pr.wholesaleMin):'')));   // step 27
   if(it.vat)c.push(chip('VAT: '+esc(vc[it.vat]||it.vat)));
   return c.length?`<div style="margin:2px 0 6px">${c.join('')}</div>`:'';
 }
@@ -13218,6 +13985,11 @@ function openItemDetails(id,from){
       ${fld('COST PRICE'+(cur()?' ('+esc(cur())+')':''),`<input class="fi" id="idt-cost" type="number" inputmode="decimal" min="0" step="any" value="${Number(pr.purchasePrice)>0?Number(pr.purchasePrice):''}" placeholder="0.00"/>`)}
       ${fld('SELLING PRICE'+(cur()?' ('+esc(cur())+')':''),`<input class="fi" id="idt-price" type="number" inputmode="decimal" min="0" step="any" value="${Number(pr.sellingPrice)>0?Number(pr.sellingPrice):''}" placeholder="0.00"/>`)}
     </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${fld('WHOLESALE PRICE'+(cur()?' ('+esc(cur())+')':'')+' (OPTIONAL)',`<input class="fi" id="idt-wprice" type="number" inputmode="decimal" min="0" step="any" value="${Number(pr.wholesalePrice)>0?Number(pr.wholesalePrice):''}" placeholder="Lower than selling price"/>`)}
+      ${fld('WHOLESALE FROM QTY (OPTIONAL)',`<input class="fi" id="idt-wmin" type="number" inputmode="decimal" min="0" step="any" value="${Number(pr.wholesaleMin)>0?Number(pr.wholesaleMin):''}" placeholder="E.G. 12"/>`)}
+    </div>
+    <div style="font-size:14px;color:var(--muted);margin:-4px 0 10px;line-height:1.6">Sold at the wholesale price when the Till sale is made a wholesale sale, or by itself once the customer buys the <b>from</b> quantity (counted in <b>${esc(it.unit||'the unit above')}</b>). A wholesale price that is not below the selling price is never used. Wholesale prices work only after they are switched on in Settings.</div>
     <div style="font-size:15px;color:var(--muted);margin:4px 0 6px">OTHER UNITS (OPTIONAL)</div>
     <div style="font-size:14px;color:var(--muted);margin-bottom:8px;line-height:1.6">Sell this item by the pack or carton too. Stock is always counted in <b>${esc(it.unit||'the unit above')}</b>. A blank price means selling price × contains.</div>
     ${[0,1,2].map(n=>{const u=(Array.isArray(it.units)?it.units:[])[n]||{};return `<div style="border:1px solid var(--border);border-radius:10px;padding:8px 8px 0;margin-bottom:8px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -13225,6 +13997,7 @@ function openItemDetails(id,from){
       ${fld('CONTAINS ('+esc(it.unit||'UNITS')+')',`<input class="fi" id="idt-u${n}-f" type="number" inputmode="decimal" min="0" step="any" value="${Number(u.factor)>0?Number(u.factor):''}" placeholder="E.G. 24"/>`)}
       ${fld('BARCODE (OPTIONAL)',`<div style="display:flex;gap:6px"><input class="fi" id="idt-u${n}-bc" value="${esc(u.barcode||'')}" placeholder="Scan or type" autocomplete="off" style="flex:1;min-width:0"/><button class="btn bo" style="width:auto;padding:10px 10px" onclick="genItemBarcode('idt-u${n}-bc')">Gen</button></div>`)}
       ${fld('PRICE'+(cur()?' ('+esc(cur())+')':'')+' (OPTIONAL)',`<input class="fi" id="idt-u${n}-pr" type="number" inputmode="decimal" min="0" step="any" value="${Number(u.price)>0?Number(u.price):''}" placeholder="Selling price × contains"/>`)}
+      ${fld('WHOLESALE PRICE (OPTIONAL)',`<input class="fi" id="idt-u${n}-wp" type="number" inputmode="decimal" min="0" step="any" value="${Number(u.wprice)>0?Number(u.wprice):''}" placeholder="Wholesale price × contains"/>`)}
     </div></div>`;}).join('')}
     ${fld('VAT',`<select class="fi" id="idt-vat">${Object.keys(vc).map(k=>`<option value="${k}"${it.vat===k?' selected':''}>${esc(vc[k])}</option>`).join('')}</select>`)}
     <div style="font-size:14px;color:var(--muted);margin-bottom:8px;line-height:1.6">Cost and selling price are the same prices the Receive and Issue forms already use, so they stay in step. The item name can't be changed here yet.</div>
@@ -13247,6 +14020,12 @@ function saveItemDetails(id,from){
   if(barcode&&!/^[\x21-\x7E]{1,48}$/.test(barcode)){alert('Barcode must be 1–48 characters with no spaces.');return;}
   if(sku.length>40){alert('SKU is too long (40 characters max).');return;}
   if(!Number.isFinite(cost)||cost<0||!Number.isFinite(price)||price<0){alert('Prices must be zero or more.');return;}
+  const wprice=num('wprice'), wmin=num('wmin');                                  // step 27
+  if(!Number.isFinite(wprice)||wprice<0||!Number.isFinite(wmin)||wmin<0||wmin>1e6||Math.abs(wmin*1000-Math.round(wmin*1000))>1e-6){alert('The wholesale price and quantity must be zero or more (the quantity with at most 3 decimals).');return;}
+  if(wprice>0&&!(price>0)){alert('Set the selling price first. The wholesale price must be lower than it.');return;}
+  if(wprice>0&&wprice>=price){alert('The wholesale price ('+wprice+') must be lower than the selling price ('+price+').');return;}
+  if(wmin>0&&!(wprice>0)){alert('Type the wholesale price too, or clear the wholesale quantity.');return;}
+  if(wprice>0&&cost>0&&wprice<cost&&!confirm('Wholesale price ('+wprice+') is below cost ('+cost+'). Save anyway?'))return;
   if(!(vat in _itemVatCodes())){alert('Choose a VAT option.');return;}
   const items=(DATA.inventoryItems||[]).map(_invItemObj);
   const before=items.find(x=>x.id===id);
@@ -13262,15 +14041,21 @@ function saveItemDetails(id,from){
   // Step 26: the other units (up to 3). Every code must still identify exactly one item AND one unit, or a scan would be ambiguous.
   const units=[],seenCodes=new Set([barcode.toLowerCase(),sku.toLowerCase()].filter(Boolean));
   for(let n=0;n<3;n++){
-    const nm=uc(g('u'+n+'-name')).trim(),fs=g('u'+n+'-f').trim(),bc=g('u'+n+'-bc').trim(),ps=g('u'+n+'-pr').trim();
-    if(!nm&&!fs&&!bc&&!ps)continue;
-    const f=Number(fs),pu=ps===''?0:Number(ps);
+    const nm=uc(g('u'+n+'-name')).trim(),fs=g('u'+n+'-f').trim(),bc=g('u'+n+'-bc').trim(),ps=g('u'+n+'-pr').trim(),ws=g('u'+n+'-wp').trim();
+    if(!nm&&!fs&&!bc&&!ps&&!ws)continue;
+    const f=Number(fs),pu=ps===''?0:Number(ps),uw=ws===''?0:Number(ws);
     if(!nm){alert('Give the other unit a name, e.g. CARTON.');return;}
     if(nm.length>40){alert(nm.slice(0,20)+'… is too long a unit name (40 characters max).');return;}
     if(!unit){alert('Set the UNIT first (e.g. PCS). Packs and cartons are counted in it.');return;}
     if(nm===unit||units.some(u=>u.name===nm)){alert('"'+nm+'" is used twice. Each unit needs its own name.');return;}
     if(!(f>0)||f===1||f>100000||Math.abs(f*1000-Math.round(f*1000))>1e-6){alert(nm+': type how many '+unit+' it contains (not 1, at most 3 decimals).');return;}
     if(!Number.isFinite(pu)||pu<0){alert(nm+': the price must be zero or more.');return;}
+    if(!Number.isFinite(uw)||uw<0){alert(nm+': the wholesale price must be zero or more.');return;}
+    if(uw>0){                                                                   // step 27: below this unit's own retail price (its own price, or selling price x contains)
+      const ur=pu>0?pu:Math.round(price*f*100)/100;
+      if(!(ur>0)){alert(nm+': set the selling price (or this unit\u2019s price) first. Its wholesale price must be lower than it.');return;}
+      if(uw>=ur){alert(nm+': the wholesale price ('+uw+') must be lower than its price ('+ur+').');return;}
+    }
     if(bc){
       if(!/^[\x21-\x7E]{1,48}$/.test(bc)){alert(nm+': the barcode must be 1–48 characters with no spaces.');return;}
       const lv=bc.toLowerCase();
@@ -13280,7 +14065,7 @@ function saveItemDetails(id,from){
       seenCodes.add(lv);
     }
     if(pu>0&&cost>0&&pu<cost*f&&!confirm(nm+' price ('+pu+') is below its cost ('+(Math.round(cost*f*100)/100)+'). Save anyway?'))return;
-    units.push({name:nm,factor:f,...(bc?{barcode:bc}:{}),...(pu>0?{price:pu}:{})});
+    units.push({name:nm,factor:f,...(bc?{barcode:bc}:{}),...(pu>0?{price:pu}:{}),...(uw>0?{wprice:uw}:{})});
   }
   if(price>0&&cost>0&&price<cost&&!confirm('Selling price ('+price+') is below cost ('+cost+'). Save anyway?'))return;
   const pr0=(DATA.inventoryPrices||{})[before.name]||{};
@@ -13294,10 +14079,12 @@ function saveItemDetails(id,from){
     const nm=arr[i].name, p={...(prices[nm]||{})};
     if(cost>0)p.purchasePrice=cost;else delete p.purchasePrice;
     if(price>0)p.sellingPrice=price;else delete p.sellingPrice;
+    if(wprice>0)p.wholesalePrice=wprice;else delete p.wholesalePrice;          // step 27
+    if(wprice>0&&wmin>0)p.wholesaleMin=wmin;else delete p.wholesaleMin;
     if(Object.keys(p).length)prices[nm]=p;else delete prices[nm];
     return {...d,inventoryItems:arr,inventoryPrices:prices};
   });
-  logAuditEvent('EDIT','Inventory Item',`Item: ${before.name} · Barcode: ${barcode||'—'} · SKU: ${sku||'—'} · Unit: ${unit||'—'} · Category: ${category||'—'} · Cost: ${cost||'—'} · Price: ${price||'—'} · VAT: ${vat||'—'} · Units: ${units.map(u=>u.name+'×'+u.factor+(u.price?' @'+u.price:'')).join(', ')||'—'}`,{...before,purchasePrice:pr0.purchasePrice||0,sellingPrice:pr0.sellingPrice||0});
+  logAuditEvent('EDIT','Inventory Item',`Item: ${before.name} · Barcode: ${barcode||'—'} · SKU: ${sku||'—'} · Unit: ${unit||'—'} · Category: ${category||'—'} · Cost: ${cost||'—'} · Price: ${price||'—'} · Wholesale: ${wprice||'—'}${wprice&&wmin?' from '+wmin:''} · VAT: ${vat||'—'} · Units: ${units.map(u=>u.name+'×'+u.factor+(u.price?' @'+u.price:'')+(u.wprice?' wholesale '+u.wprice:'')).join(', ')||'—'}`,{...before,purchasePrice:pr0.purchasePrice||0,sellingPrice:pr0.sellingPrice||0,wholesalePrice:pr0.wholesalePrice||0,wholesaleMin:pr0.wholesaleMin||0});
   closeModal();
   showToast('✅ Item details saved');
   if(from==='manage')renderManageInventoryModal();
@@ -21165,6 +21952,42 @@ function saveTillDiscounts(){
   _tdMsg(`<div class="ok-msg">✅ ${on?`The till will offer discounts: a cashier up to ${r2(cap)}%, a manager PIN up to ${r2(max)}%.`:'The till will not offer discounts.'}</div>${on&&noPin?'<div class="warn" style="margin-top:8px">⚠️ No manager PIN is set yet, so cashiers cannot go above their own limit.</div>':''}`);
 }
 
+// ── WHOLESALE PRICES (till roadmap step 27) ────────────────────────────────
+// Admin only, OFF until switched on. The prices are set in the Price List and in each item's details; wholesale CUSTOMERS are marked in Contacts. The till (pos.html) uses them only when
+// depotInfo.wholesaleOn is true. A basket is wholesale when the cashier chooses it (a Cashier or Staff login needs a manager PIN unless the Admin lets anyone), when a wholesale customer
+// is chosen (no PIN), or item by item when the customer buys that item's "wholesale from" quantity. The rules are Sales.levelApply() in sales.js, the same code the till runs.
+function _renderWholesaleCard(){
+  if(!USER||USER.role!=='admin') return '';
+  const pol=Sales.levelPolicy(DATA.depotInfo), noPin=!Gate.pinHolders(DATA).length, pr=DATA.inventoryPrices||{};
+  const nItems=(DATA.inventoryItems||[]).filter(x=>Number((pr[_invItemObj(x).name]||{}).wholesalePrice)>0).length+(DATA.commodities||[]).filter(c=>c&&Number(c.wholesalePrice)>0).length;
+  const nCust=(DATA.contacts||[]).filter(c=>c&&c.type==='customer'&&c.priceLevel==='wholesale').length;
+  return `
+    <div class="sh">Wholesale prices</div>
+    <div class="card">
+      <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">
+        Sell the same item at a lower wholesale price. Set each item's wholesale price in the <b style="color:var(--text)">Price List</b> or in its details, and mark regular wholesale buyers as <b style="color:var(--text)">Wholesale customer</b> in Contacts. At the Till a sale is wholesale when the cashier chooses it, when a wholesale customer is chosen, or by itself once an item's "wholesale from" quantity is reached. A wholesale price is only used where it is lower than the retail price, and it is never added on top of an offer: the customer gets whichever is cheaper. Every wholesale sale is saved with who allowed it.
+      </div>
+      <div id="twl-msg"></div>
+      <label style="display:flex;gap:12px;align-items:flex-start;font-size:17px;line-height:1.5;cursor:pointer;margin-bottom:12px">
+        <input type="checkbox" id="twl-on" ${pol.on?'checked':''} style="width:24px;height:24px;flex-shrink:0;margin-top:2px"/>
+        <span>Allow wholesale prices at the till</span>
+      </label>
+      <div class="fw"><div class="fl">Who may make a sale wholesale</div>
+        <select class="fi" id="twl-by"><option value="pin"${pol.anyone?'':' selected'}>Cashiers need a manager PIN (Admin and Manager do not)</option><option value="any"${pol.anyone?' selected':''}>Anyone at the till</option></select></div>
+      <div style="font-size:16px;color:var(--muted);margin:2px 0 12px">${nItems} item${nItems===1?' has':'s have'} a wholesale price · ${nCust} wholesale customer${nCust===1?'':'s'}</div>
+      ${pol.on&&!pol.anyone&&noPin?`<div class="warn" style="margin-bottom:12px">⚠️ No manager PIN is set, so a cashier cannot make a sale wholesale (a wholesale customer can still be chosen). Set a PIN under Manager PIN above.</div>`:''}
+      <button class="btn bg" onclick="saveWholesaleSettings()">Save wholesale settings</button>
+    </div>`;
+}
+function _twlMsg(html){ const m=document.getElementById('twl-msg'); if(m) m.innerHTML=html; }   // looked up when called: updateData() re-renders the card
+function saveWholesaleSettings(){
+  if(!USER||USER.role!=='admin') return;
+  const on=!!document.getElementById('twl-on')?.checked, by=document.getElementById('twl-by')?.value==='any'?'any':'pin', noPin=!Gate.pinHolders(DATA).length;
+  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),wholesaleOn:on,wholesaleBy:by}}));
+  logAuditEvent('UPDATE','Wholesale prices',on?`On · ${by==='any'?'anyone at the till may make a sale wholesale':'a cashier needs a manager PIN to make a sale wholesale'}`:'Off');
+  _twlMsg(`<div class="ok-msg">✅ ${on?`The till will sell at wholesale prices. ${by==='any'?'Anyone at the till can make a sale wholesale.':'A cashier needs a manager PIN to make a sale wholesale.'}`:'The till will sell at retail prices only.'}</div>${on&&by==='pin'&&noPin?'<div class="warn" style="margin-top:8px">⚠️ No manager PIN is set yet, so cashiers cannot make a sale wholesale (a wholesale customer can still be chosen).</div>':''}`);
+}
+
 // ── PROMOTIONS (till roadmap step 25) ──────────────────────────────────────
 // Admin only. Offers the till applies BY ITSELF: a percentage off, a special price per unit, N for a price, or buy N get M free, on chosen items and/or
 // whole categories, between two dates and on chosen weekdays. They live in DATA.promotions and reach each till phone with the next sync, like prices.
@@ -21868,7 +22691,7 @@ function _renderAdminSettings(){
 
     ${_renderChangePasswordCard()}
 
-    ${_renderManagerPinCard()}${_renderTillDiscountCard()}${_renderPrinterCard()}
+    ${_renderManagerPinCard()}${_renderTillDiscountCard()}${_renderWholesaleCard()}${_renderPrinterCard()}
     ${_renderPromotionsCard()}
 
     ${_renderLoginHistoryCard()}
@@ -23024,7 +23847,7 @@ async function viewAuditLog(){
   if(!hasFeature('audit_log')){ showUpgradePrompt('audit_log'); return; }
   const log=(await _auditAll()).slice().sort((a,b)=>String(b.ts).localeCompare(String(a.ts))).slice(0,100);
   const actionColor={CREATE:'var(--green)',EDIT:'var(--amber)',DELETE:'var(--red)',
-    OPEN:'var(--green)',CLOSE:'var(--amber)',DISCOUNT:'var(--amber)',REFUND:'var(--amber)',VOID:'var(--red)',DENY:'var(--red)',APPROVE:'var(--green)',REPORT:'var(--blue)'};   // step 20: the till's actions
+    OPEN:'var(--green)',CLOSE:'var(--amber)',DISCOUNT:'var(--amber)',WHOLESALE:'var(--amber)',REFUND:'var(--amber)',VOID:'var(--red)',DENY:'var(--red)',APPROVE:'var(--green)',REPORT:'var(--blue)'};   // step 20: the till's actions
   const rows=log.length===0
     ?`<tr><td colspan="5" class="empty">No audit events yet. Events are recorded from this point forward.</td></tr>`
     :log.map(e=>`<tr>
@@ -25662,6 +26485,9 @@ function openContactForm(id){
     <div class="fw"><div class="fl">Address</div><input class="fi" id="ci-address" value="${esc(v.address||'')}" placeholder="Street, town"></div>
     <div class="fw"><div class="fl">Balance (${cur()||'currency'})</div><input class="fi" id="ci-balance" type="number" step="0.01" value="${v.balance||''}" placeholder="0.00 — positive = they owe you"></div>
     <div class="fw"><div class="fl">Notes</div><textarea class="fi" id="contact-notes" rows="2" placeholder="Any extra info…">${esc(v.notes||'')}</textarea></div>
+    <div class="fw" id="ci-level-wrap" style="${v.type==='customer'?'':'display:none'}"><div class="fl">Price level at the till</div>
+      <select class="fi" id="ci-level"><option value="">Retail (normal prices)</option><option value="wholesale"${v.priceLevel==='wholesale'?' selected':''}>Wholesale customer</option></select>
+      <div style="font-size:14px;color:var(--muted);margin-top:4px;line-height:1.6">A wholesale customer can be chosen at the Till without a manager PIN and gets each item's wholesale price. Needs wholesale prices switched on in Settings.</div></div>
     <!-- Supplier-specific fields -->
     <div id="ci-supplier-fields" style="${isSupplier?'':'display:none'}">
       <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:10px">
@@ -25695,6 +26521,8 @@ function openContactForm(id){
 function _toggleSupplierFields(type){
   const el=document.getElementById('ci-supplier-fields');
   if(el)el.style.display=type==='supplier'?'':'none';
+  const lw=document.getElementById('ci-level-wrap');                              // step 27: only a customer has a price level
+  if(lw)lw.style.display=type==='customer'?'':'none';
 }
 function editContact(id){openContactForm(id);}
 
@@ -25717,6 +26545,7 @@ function saveContact(id){
     balance:Number(document.getElementById('ci-balance').value||0),
     notes:(document.getElementById('contact-notes').value||'').trim()
   };
+  if(type==='customer'&&document.getElementById('ci-level')?.value==='wholesale')contact.priceLevel='wholesale';   // step 27
   // Supplier-specific fields
   if(type==='supplier'){
     contact.contactPerson=(document.getElementById('ci-contactperson')?.value||'').trim();

@@ -47,6 +47,14 @@
  *   count. Lines without `factor` (the base unit, and every sale before step 26) read exactly as before. unitList(item, basePrice) is the one place that works out which units an
  *   item is sold in and at what price.
  *
+ * PRICE LEVELS (roadmap step 27): an item has its normal RETAIL price (the Price List) and may also have a WHOLESALE price, per base unit (and optionally one of its own per pack or
+ *   carton), plus an optional "wholesale from N" quantity. A line is sold at the wholesale price when the basket is a wholesale basket (the cashier or a wholesale customer chose it) or
+ *   when the item's total in the basket reaches its "from" quantity. levelApply() is the one place that decides, line by line, in whole ngwee, TOGETHER WITH the offers of step 25:
+ *   a line takes whichever is cheaper for the customer, the wholesale price or the retail price with its offer; they are never stacked. A wholesale price is only ever used when it is
+ *   BELOW the retail price. ON THE RECORD a wholesale line is simply sold at its (lower) price: line.price is what was charged, so totals, stock value, returns and every report need no
+ *   change. New, additive: line.level ('wholesale') + line.listPrice (the retail price per sold unit, higher than price) and, when the basket was chosen as a wholesale basket,
+ *   the header's priceLevel ('wholesale') + priceLevelBy (who allowed it: the person, the manager whose PIN approved it, or the wholesale customer's account).
+ *
  * WHAT THE MAIN APP DOES WITH THE LEDGER BESIDES STOCK
  *   issuedRows() turns the sales into rows shaped like generalIssued / commodityIssued rows (flag _sale:true). The
  *   main app overlays them on DATA in memory so reports, close-out and customer balances see till sales, and strips
@@ -75,6 +83,7 @@ const Sales = (function () {
   const PAGE = 300, MAX_PAGES = 40;                      // pull: records per request / requests per pull
   const OVERLAP_MS = 60000;                              // pull re-reads the last minute, so nothing near the cursor is missed
   const PROMO_BY = 'Promotion';                           // discountBy of a sale whose whole discount came from offers
+  const WHOLESALE = 'wholesale';                         // step 27: the one price level besides retail (retail has no name: it is the plain price)
   const PROMO_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
   const FACTOR_MAX = 100000;                             // step 26: the most base units one sold unit may hold (a carton of 24, a bag of 50 kg ...)
   const BATCH_NAME = 'TILL SALES';                       // pseudo batch the main app shows for commodity sold at the till
@@ -101,11 +110,14 @@ const Sales = (function () {
   const fOf = l => (l && isNum(l.factor) && l.factor > 0) ? l.factor : 1;
   const baseQty = l => { const f = fOf(l), q = Number(l && l.qty) || 0; return f === 1 ? q : r3(q * f); };
   // The units an item is sold in: item = { unit, barcode, units:[{name,factor,barcode,price}] }, basePrice = list price per base unit.
-  // -> [{ name, factor, barcode, price, isBase, own }], base unit first. A unit with no name, a repeated name, a factor of 1 or a bad factor is left out.
+  // -> [{ name, factor, barcode, price, wprice, isBase, own }], base unit first. A unit with no name, a repeated name, a factor of 1 or a bad factor is left out.
   // `own` is true when the unit carries its own price; otherwise the price is basePrice x factor, rounded to the ngwee.
-  function unitList(item, basePrice) {
+  // Step 27: wholeBase = the wholesale price per BASE unit (optional). `wprice` is each unit's wholesale price: its own (item.units[].wprice) or wholeBase x factor, and 0 (none)
+  // unless it is below that unit's retail price: a wholesale price is never used when it would not be cheaper.
+  function unitList(item, basePrice, wholeBase) {
     item = item || {};
-    const bp = Number(basePrice) || 0, alts = [], seen = new Set();
+    const bp = Number(basePrice) || 0, wb = Number(wholeBase) > 0 ? Number(wholeBase) : 0, alts = [], seen = new Set();
+    const wpOf = (retail, raw) => { const w = isNum(raw) && raw > 0 ? r2(raw) : 0; return w > 0 && w < retail ? w : 0; };
     let baseName = str(item.unit, 40).trim();
     seen.add(baseName.toUpperCase());
     arr(item.units).forEach(u => {
@@ -113,11 +125,12 @@ const Sales = (function () {
       const name = str(u.name, 40).trim(), f = Number(u.factor);
       if (!name || seen.has(name.toUpperCase()) || !isNum(f) || !(f > 0) || f === 1 || f > FACTOR_MAX || Math.abs(f * 1000 - Math.round(f * 1000)) > 1e-6) return;
       seen.add(name.toUpperCase());
-      const own = isNum(Number(u.price)) && Number(u.price) > 0;
-      alts.push({ name, factor: f, barcode: str(u.barcode, 48), price: own ? r2(Number(u.price)) : r2(bp * f), isBase: false, own });
+      const own = isNum(Number(u.price)) && Number(u.price) > 0, price = own ? r2(Number(u.price)) : r2(bp * f);
+      const ownW = isNum(Number(u.wprice)) && Number(u.wprice) > 0;
+      alts.push({ name, factor: f, barcode: str(u.barcode, 48), price, wprice: wpOf(price, ownW ? Number(u.wprice) : wb * f), isBase: false, own });
     });
     if (!baseName && alts.length) baseName = 'EACH';
-    return [{ name: baseName, factor: 1, barcode: str(item.barcode, 48), price: r2(bp), isBase: true, own: true }].concat(alts);
+    return [{ name: baseName, factor: 1, barcode: str(item.barcode, 48), price: r2(bp), wprice: wpOf(r2(bp), wb), isBase: true, own: true }].concat(alts);
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
@@ -156,6 +169,8 @@ const Sales = (function () {
         if (o.kind === 'item' && isNum(fc) && fc > 0 && fc !== 1) { o.factor = fc; o.base = str(l.base, 40); }   // step 26: absent unless sold in a unit other than the base
         const pd = Number(l.promoDiscount);
         if (isNum(pd) && pd > 0 && l.promoId) { o.promoDiscount = pd; o.promoId = str(l.promoId, 40); o.promoName = str(l.promoName, 60); }   // step 25: the part of o.discount that an offer gave
+        const lp = Number(l.listPrice);
+        if (l.level === WHOLESALE && isNum(lp) && lp > o.price) { o.level = WHOLESALE; o.listPrice = lp; }   // step 27: sold at the wholesale price; listPrice = the retail price per sold unit
         return o;
       }),
       lineCount: Number(b.lineCount), qtyTotal: Number(b.qtyTotal), total: Number(b.total),
@@ -177,6 +192,7 @@ const Sales = (function () {
       rec.discountReason = str(b.discountReason, 60) || (onlyOffers ? Array.from(new Set(rec.lines.filter(l => l.promoName).map(l => l.promoName))).join(', ').slice(0, 60) : '');
     }
     if (psum > 0) rec.promoDiscount = psum / 100;
+    if (b.priceLevel === WHOLESALE && rec.lines.some(l => l.level)) { rec.priceLevel = WHOLESALE; rec.priceLevelBy = str(b.priceLevelBy, 80); }   // step 27: only when the basket was chosen as a wholesale basket and a line really got the lower price
     return JSON.parse(JSON.stringify(rec));              // plain data only: what is stored here is what the cloud will hold
   }
 
@@ -205,6 +221,10 @@ const Sales = (function () {
         if (typeof l.base !== 'string' || !l.base || l.base.length > 40) return 'bad base unit';
       }
       if (!isNum(l.qty) || !(l.qty > 0) || !isNum(l.price) || l.price < 0 || !isNum(l.total) || l.total < 0) return 'bad line amounts';
+      if (l.level !== undefined || l.listPrice !== undefined) {   // step 27: a line sold at the wholesale price says what the retail price was
+        if (l.level !== WHOLESALE) return 'bad price level';
+        if (!isNum(l.listPrice) || !(l.listPrice > l.price) || !twoDp(l.listPrice)) return 'a wholesale line needs the retail price, and it must be higher than the price charged';
+      }
       const dsc = l.discount === undefined ? 0 : l.discount;
       if (!isNum(dsc) || dsc < 0 || Math.abs(dsc * 100 - Math.round(dsc * 100)) > 1e-6) return 'bad line discount';
       const gross = r2(l.price * l.qty);
@@ -228,6 +248,11 @@ const Sales = (function () {
     if (hd > 0) {
       if (typeof s.discountBy !== 'string' || !s.discountBy || s.discountBy.length > 80) return 'a discount needs the person who allowed it';
       if (typeof s.discountReason !== 'string' || s.discountReason.length > 60) return 'bad discount reason';
+    }
+    if (s.priceLevel !== undefined || s.priceLevelBy !== undefined) {   // step 27: the basket was chosen as a wholesale basket
+      if (s.priceLevel !== WHOLESALE) return 'bad price level';
+      if (typeof s.priceLevelBy !== 'string' || !s.priceLevelBy || s.priceLevelBy.length > 80) return 'wholesale prices need the person who allowed them';
+      if (!lines.some(l => l.level === WHOLESALE)) return 'a wholesale basket needs a wholesale line';
     }
     if (s.lineCount !== lines.length) return 'bad line count';
     if (!isNum(s.qtyTotal) || Math.abs(s.qtyTotal - r3(qty)) > 0.0015) return 'bad quantity total';
@@ -476,6 +501,48 @@ const Sales = (function () {
   function discountParts(s) {
     const all = toC(s && s.discount), promo = Math.min(all, toC(s && s.promoDiscount));
     return { allC: all, promoC: promo, manualC: all - promo };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // PRICE LEVELS (roadmap step 27) — pure functions, shared by the till, the main app and the Node tests
+  // ══════════════════════════════════════════════════════════════════════════════
+  // The depot's policy (Settings -> Wholesale prices, kept in depotInfo): wholesaleOn (default OFF: until the Admin switches it on the till sells at retail only) and
+  // wholesaleBy: 'pin' (default: a Cashier or Staff login needs a manager PIN to make a basket wholesale; an Admin or Manager login needs none) or 'any' (anyone at the till).
+  // A wholesale CUSTOMER (a contact with priceLevel 'wholesale', set by the Admin) needs no PIN: the Admin already decided that customer is wholesale.
+  function levelPolicy(depotInfo) {
+    const di = depotInfo || {};
+    return { on: di.wholesaleOn === true, anyone: di.wholesaleBy === 'any' };
+  }
+  // The price of every line of a basket, and the offers, together.  lines: [{ itemId, category, qty, f, rp, wp, wm }]
+  //   qty  in the SOLD unit;  f  base units in one of it (1 for the base unit);  rp / wp  the RETAIL and WHOLESALE price of the sold unit (wp 0 = none);
+  //   wm   the quantity, in BASE units counted over every line of that item, from which the item is wholesale by itself (0 = never by quantity).
+  // o: { on, level:'retail'|'wholesale' (the basket), promos (promoList output), now | day, money }.
+  // A line is wholesale when it has a wholesale price below its retail price AND (the basket is wholesale OR its item reaches wm) AND the wholesale line costs the
+  // customer no more than the same line at retail with its best offer. Otherwise it is retail, with that offer. Offers are never added to a wholesale line.
+  // -> { lines: [{ price, listPrice, level:''|'wholesale', discC, promo, hint }], totalC }   price = what one sold unit costs; discC = the offer's money off in ngwee.
+  function levelApply(lines, o) {
+    o = o || {};
+    const on = o.on !== false, basket = on && o.level === WHOLESALE, money = typeof o.money === 'function' ? o.money : (n => r2(n).toFixed(2));
+    const L = arr(lines).map(l => l || {});
+    const fx = l => (isNum(l.f) && l.f > 0) ? l.f : 1;
+    const bq = l => { const q = Number(l.qty) || 0, f = fx(l); return f === 1 ? q : r3(q * f); };
+    const tot = new Map();
+    L.forEach(l => tot.set(l.itemId, r3((tot.get(l.itemId) || 0) + bq(l))));
+    const retail = promoApply(L.map(l => ({ itemId: l.itemId, category: l.category, qty: bq(l), price: (Number(l.rp) || 0) / fx(l) })), o.promos, o);   // offers are judged on the base-unit equivalent, as in step 26
+    const out = L.map((l, i) => {
+      const rp = Number(l.rp) || 0, wp = Number(l.wp) || 0, wm = Number(l.wm) || 0, q = Number(l.qty) || 0, have = tot.get(l.itemId) || 0;
+      let r = retail.lines[i];
+      if (on && wp > 0 && wp < rp) {
+        if (basket || (wm > 0 && have + 1e-9 >= wm)) {
+          const wC = toC(r2(wp * q)), rC = toC(r2(rp * q)) - r.discC;
+          if (wC <= rC) return { price: wp, listPrice: rp, level: WHOLESALE, discC: 0, promo: null, hint: '' };
+        } else if (wm > 0 && fx(l) === 1 && !r.hint) {
+          r = { discC: r.discC, promo: r.promo, hint: 'Buy ' + nTxt(wm) + ' or more: wholesale price ' + money(wp) };
+        }
+      }
+      return { price: rp, listPrice: rp, level: '', discC: r.discC, promo: r.promo, hint: r.hint };
+    });
+    return { lines: out, totalC: out.reduce((a, x) => a + x.discC, 0) };
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
@@ -898,7 +965,7 @@ const Sales = (function () {
     return { append, all, pending, push, pull, importMany };
   }
 
-  return { V, ID_RE, BATCH_NAME, DISC_MAX_PCT, PROMO_BY, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, fOf, baseQty, unitList, FACTOR_MAX, linePaid, methodsOf, netPrice, discountPolicy, discountSplit, discountJudge, pctText, promoCheck, promoList, promoDay, promoActive, promoMatches, promoText, promoLine, promoApply, discountParts, create, memAdapter, idbAdapter };
+  return { V, ID_RE, BATCH_NAME, DISC_MAX_PCT, PROMO_BY, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, fOf, baseQty, unitList, FACTOR_MAX, linePaid, methodsOf, netPrice, discountPolicy, discountSplit, discountJudge, pctText, promoCheck, promoList, promoDay, promoActive, promoMatches, promoText, promoLine, promoApply, discountParts, WHOLESALE, levelPolicy, levelApply, create, memAdapter, idbAdapter };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Sales; // lets Node load it for tests
