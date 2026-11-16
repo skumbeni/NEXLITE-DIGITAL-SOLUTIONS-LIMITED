@@ -835,6 +835,7 @@
             <button type="button" onclick="closeModal('modal-sub-request')" aria-label="Close" style="position:sticky;top:0;float:right;z-index:3;width:34px;height:34px;margin:-1rem -1rem 0 .5rem;border-radius:50%;border:none;background:#eef1ea;color:#333;font-size:1.05rem;font-weight:700;line-height:1;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.15);">✕</button>
             <h3 style="margin-bottom:.5rem;color:var(--primary-dark);">📨 Request Subscription</h3>
             <p style="font-size:.85rem;color:var(--text-muted);margin-bottom:1.25rem;">Pay first via Mobile Money, then fill in your transaction ID and submit.</p>
+            <div id="subreq-pending" style="display:none;font-size:.82rem;color:#7a4b00;background:#fff8e6;border:1px solid #ffe2a8;border-radius:8px;padding:.6rem .75rem;margin-bottom:1rem;line-height:1.45;"></div>
             <div id="subreq-form">
             <div style="margin-bottom:1rem;">
                 <label style="font-size:.8rem;font-weight:600;color:var(--text-muted);display:block;margin-bottom:.35rem;">PLAN REQUESTED</label>
@@ -1031,7 +1032,7 @@
                 <!-- Tab switcher -->
                 <div style="display:flex;gap:.5rem;margin-bottom:1rem;border-bottom:2px solid var(--border);padding-bottom:.5rem;">
                     <button id="inv-tab-stock" onclick="switchInvTab('stock')" class="btn btn-sm" style="background:var(--primary);color:white;">Stock Items</button>
-                    <button id="inv-tab-adjustments" onclick="switchInvTab('adjustments')" class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);">📋 Adjustment Log</button>
+                    <button id="inv-tab-adjustments" onclick="switchInvTab('adjustments')" class="btn btn-sm" style="background:var(--surface-2);border:1.5px solid var(--border);">📋 Adjustment Log<span id="adj-badge" style="display:none;background:#d9534f;color:#fff;border-radius:10px;padding:0 .45rem;font-size:.7rem;font-weight:700;margin-left:.4rem;"></span></button>
                 </div>
                 <!-- Stock Items sub-view -->
                 <div id="inv-panel-stock">
@@ -1050,9 +1051,10 @@
                         <button class="btn btn-sm" style="background:var(--warning);color:white;" onclick="openAdjustmentModal()">⚠️ New Adjustment</button>
                         <input type="text" id="search-adjustments" placeholder="Search adjustments..." onkeyup="renderAdjustments()">
                     </div>
+                    <div id="adj-pending-note" style="display:none;font-size:.85rem;background:#fff8e6;border:1px solid #ffe2a8;color:#7a4b00;border-radius:8px;padding:.55rem .8rem;margin-bottom:.75rem;"></div>
                     <div class="table-container">
                         <table id="table-adjustments">
-                            <thead><tr><th>ID</th><th>Date</th><th>Product</th><th>Type</th><th>Qty Change</th><th>Loss Value</th><th>Reason</th><th>Notes</th><th>Actions</th></tr></thead>
+                            <thead><tr><th>ID</th><th>Date</th><th>Product</th><th>Type</th><th>Qty Change</th><th>Loss Value</th><th>Reason</th><th>Notes</th><th>Status</th><th>Actions</th></tr></thead>
                             <tbody></tbody>
                         </table>
                     </div>
@@ -2285,6 +2287,7 @@
         <div class="modal-content" style="max-width:460px;">
             <h3>⚠️ Stock Adjustment</h3>
             <p style="color:var(--text-muted);font-size:.82rem;margin:.35rem 0 1rem;">Record spoilage, breakage, theft, donation, or a stock count correction. This creates an audit trail and adjusts inventory.</p>
+            <div id="adj-approval-note" style="display:none;font-size:.8rem;background:#fff8e6;border:1px solid #ffe2a8;border-radius:8px;padding:.5rem .7rem;margin-bottom:.9rem;color:#7a4b00;">🔒 Stock does not change until the admin approves this request.</div>
             <form onsubmit="handleAddAdjustment(event)">
                 <div class="form-group">
                     <label>Product *</label>
@@ -2329,7 +2332,7 @@
                     </div>
                     <div style="font-size:.75rem;color:var(--text-muted);margin-top:.3rem;">Based on current cost price × qty. This will be recorded in P&L as a write-off expense.</div>
                 </div>
-                <button type="submit" class="btn btn-primary" style="width:100%;background:var(--warning);color:#1A2016;">Record Adjustment</button>
+                <button type="submit" id="adj-submit-btn" class="btn btn-primary" style="width:100%;background:var(--warning);color:#1A2016;">Record Adjustment</button>
             </form>
             <button onclick="closeModal('modal-adjustment')" class="btn btn-sm" style="margin-top:8px;width:100%">Cancel</button>
         </div>
@@ -2412,7 +2415,7 @@
                 <div class="grid" style="grid-template-columns: 1fr 1fr 1fr; gap: 10px;">
                     <div class="form-group"><label>Unit Cost</label><input type="number" id="edit-cost" required></div>
                     <div class="form-group"><label>Selling Price</label><input type="number" id="edit-price" required></div>
-                    <div class="form-group"><label>Quantity (Adjustment)</label><input type="number" id="edit-qty" required></div>
+                    <div class="form-group"><label id="edit-qty-label">Quantity (Adjustment)</label><input type="number" id="edit-qty" required></div>
                 </div>
                 <div class="form-group">
                     <label>Reorder Point</label>
@@ -4643,7 +4646,7 @@
             'savePO','saveGRN','saveDN','saveCD','saveRET','saveTRF','saveSupPay','receiveAgainstPO','togglePOCancel','dnSetStatus','grnSaveNewProduct',
             'saveCreditPromise','saveCreditTerm','saveQuoteDoc','dnSignFromPrint','deleteSavedDoc',
             // forms that open an "add/edit" screen
-            'openAddStockModal','openAddCustomerModal','openAddSupplierModal','openAdjustmentModal',
+            'openAddStockModal','openAddCustomerModal','openAddSupplierModal','openAdjustmentModal','approveAdjustment','rejectAdjustment',
             'openEditModal','openEditSaleModal','openEditPurchaseModal','openEditFISPModal','openEditExpenseModal','openEditCustomerModal','openEditSupplierModal','openEditCreditModal',
             'openPOModal','openGRNModal','openDNModal','openCDModal','openRETModal','openTRFModal','openSupPayModal',
             'prepareSaleModal','preparePurchaseModal','prepareFISPModal',
@@ -5133,6 +5136,23 @@
 
             // Update license info box in settings
             renderLicenseInfoBox();
+            try { updateSubReqButtons(); } catch (e) {}
+        }
+
+        // Plan-card "Request Plan" buttons: greyed when that plan cannot be requested right now.
+        function updateSubReqButtons() {
+            const lic = getLicense() || {}, ps = _srPlanState(lic);
+            document.querySelectorAll('button[onclick^="openSubRequest(\'"]').forEach(b => {
+                const m = /openSubRequest\('(\w+)'\)/.exec(b.getAttribute('onclick') || ''); if (!m) return;
+                if (b.dataset.srLabel === undefined) b.dataset.srLabel = b.textContent;
+                let off = '';
+                if (ps.kind === 'lifetime') off = m[1] === 'lifetime' ? 'Your current plan' : 'Included in Lifetime';
+                else if (ps.kind === 'active' && !_srTierOk(m[1], lic, ps)) off = m[1] === lic.tier ? 'Your current plan' : 'Not available';
+                b.disabled = !!off;
+                b.style.opacity = off ? '.55' : '';
+                b.style.cursor = off ? 'not-allowed' : '';
+                b.textContent = off || b.dataset.srLabel;
+            });
         }
 
         // ── RENEWAL REMINDER (last 7 days of the plan, trial or an extra shop) ──
@@ -7069,7 +7089,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const from = _localISO(f);
             const inR = x => { const d = _dmyToISO(x.date); return d >= from && d <= today; };
             const sales = db.sales.filter(inR), rets = db.returns.filter(inR);
-            const adjs = db.adjustments.filter(a => inR(a) && a.direction === 'down' && a.lossValue > 0);
+            const adjs = db.adjustments.filter(a => adjLive(a) && inR(a) && a.direction === 'down' && a.lossValue > 0);
             const by = {};
             const u = n => (by[n || 'unknown'] = by[n || 'unknown'] || { s: 0, sv: 0, r: 0, rv: 0, w: 0, wv: 0 });
             sales.forEach(s => { const e = u(s.recordedBy); e.s++; e.sv += s.total || 0; });
@@ -7535,6 +7555,18 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
         // ── SUBSCRIPTION REQUEST ─────────────────────────────────────────
         function openSubRequest(tier, isRenewal) {
             if (IS_PLAY_BUILD) return; // Play Store build: no in-app payment flow
+            // Nothing to request: Lifetime has no renewal or upgrade, and an active plan can only be upgraded
+            // (or renewed in its last days). Extra shops can still be paid for.
+            {
+                const _l = _srLic(), _p = _srPlanState(_l);
+                if (_p.kind === 'lifetime') {
+                    const extraDue = _srShops().some(x => x.id !== MAIN_SHOP_ID && !_srStatus(x, _l).life);
+                    if (tier || !extraDue) { showToast('You are on the Lifetime plan. There is nothing to renew or upgrade.'); return; }
+                } else if (tier && _p.kind === 'active' && !_srTierOk(tier, _l, _p)) {
+                    showToast('Your ' + (TIER_LABELS[_l.tier] || _l.tier) + ' plan is active until ' + _fmtD(_l.expiry) + '. You can only upgrade to a higher plan now.', 'danger');
+                    return;
+                }
+            }
             // Reset form state
             ['subreq-err','subreq-success'].forEach(id => {
                 const el = document.getElementById(id);
@@ -7550,6 +7582,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             document.getElementById('subreq-txnid').value = '';
             document.getElementById('subreq-note').value = '';
             document.getElementById('subreq-txnid').style.borderColor = '';
+            { const _pn = document.getElementById('subreq-pending'); if (_pn) _pn.style.display = 'none'; }
             // Pre-select the plan: the one asked for, else the plan they are on.
             {
                 const sel = document.getElementById('subreq-tier');
@@ -7558,10 +7591,49 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 const mEl = document.getElementById('subreq-months'); if (mEl) mEl.value = '1';
             }
             // Start with the shop they are working in ticked (plus the Main shop if the plan has expired).
-            _sr = { sel: subReqDefaultSel() };
+            _sr = { sel: subReqDefaultSel(tier) };
             fetchPublicPricing(); fetchOwnerPricing(true);
             onSubReqTierChange();
             openModal('modal-sub-request');
+            _srCheckPending();
+        }
+
+        // ── DUPLICATE GUARD ───────────────────────────────────────────────
+        // Reads the owner's own recent requests (rules allow an owner to read subscriptionRequests/{their uid}).
+        // Returns null when it cannot be checked (offline), in which case sending is not blocked.
+        async function _srFetchRequests() {
+            if (!cloudAuth || !cloudAuth.uid) return null;
+            try {
+                const tok = await getFreshIdToken(); if (!tok) return null;
+                const r = await fetch(FIREBASE_CONFIG.databaseURL + '/subscriptionRequests/' + cloudAuth.uid + '.json?orderBy=%22%24key%22&limitToLast=30&auth=' + tok);
+                if (!r.ok) return null;
+                const o = await r.json();
+                return Object.keys(o || {}).map(k => Object.assign({ _id: k }, o[k]));
+            } catch (e) { return null; }
+        }
+        // A request still pending after 14 days is ignored, so one the admin never answered cannot lock the owner out.
+        function _srPendingOf(list) {
+            const cutoff = Date.now() - 14 * 86400000;
+            return (list || []).filter(r => r && r.status === 'pending' && (r.ts || 0) > cutoff).sort((a, b) => (b.ts || 0) - (a.ts || 0))[0] || null;
+        }
+        function _srShowPending(r) {
+            const box = document.getElementById('subreq-pending'), btn = document.getElementById('subreq-btn');
+            if (box) {
+                if (r) {
+                    box.innerHTML = '⏳ <strong>You already have a request waiting for approval</strong> (Ref ' + esc(String(r._id).slice(-6)) +
+                        ' · sent ' + _fmtD(r.ts) + (r.quote && r.quote.total ? ' · ' + fmtK(r.quote.total) : '') +
+                        '). Please wait for the admin to approve it before sending another. If it has been more than a day, message support on WhatsApp.';
+                    box.style.display = '';
+                } else { box.style.display = 'none'; }
+            }
+            if (btn) btn.disabled = !!r;
+        }
+        async function _srCheckPending() {
+            const list = await _srFetchRequests();
+            if (!list) return;
+            const form = document.getElementById('subreq-form');
+            if (!form || form.style.display === 'none') return;   // already sent from this screen
+            _srShowPending(_srPendingOf(list));
         }
 
         // ── PER-SHOP REQUEST FORM ─────────────────────────────────────────
@@ -7577,11 +7649,33 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
         function _srShops() { try { return getShops(false); } catch (e) { return [{ id: MAIN_SHOP_ID, name: 'Main shop' }]; } }
         function _srIsTrial(lic) { return !lic.tier || lic.tier === 'trial'; }
         function _srMainExpired(lic) { return !_srIsTrial(lic) && lic.tier !== 'lifetime' && !(lic.expiry > Date.now()); }
-        function subReqDefaultSel() {
-            const lic = _srLic(), shops = _srShops(), trial = _srIsTrial(lic);
+        // Where the account plan stands: trial | lifetime | active (paid, not ended) | expired.
+        // While a paid plan is active only an upgrade is allowed, except in its last days (same window as
+        // the renewal banner) when it can also be renewed. A downgrade is only possible once it has ended.
+        const SUBREQ_RENEW_DAYS = 7;
+        const SUBREQ_TIERS = ['starter', 'standard', 'pro', 'lifetime'];
+        function _srPlanState(lic) {
+            if (lic.tier === 'lifetime') return { kind: 'lifetime' };
+            if (_srIsTrial(lic)) return { kind: 'trial' };
+            if (lic.expiry > Date.now()) {
+                const d = Math.ceil((lic.expiry - Date.now()) / 86400000);
+                return { kind: 'active', daysLeft: d, canRenew: d <= SUBREQ_RENEW_DAYS };
+            }
+            return { kind: 'expired' };
+        }
+        function _srTierOk(t, lic, ps) {
+            if (ps.kind !== 'active') return true;
+            if (t === 'lifetime') return true;
+            if (TIER_RANK[t] > TIER_RANK[lic.tier]) return true;
+            return t === lic.tier && ps.canRenew;
+        }
+        function subReqDefaultSel(wantTier) {
+            const lic = _srLic(), shops = _srShops(), trial = _srIsTrial(lic), ps = _srPlanState(lic);
+            // On an active plan the Main shop starts unticked, so the form cannot be sent as a repeat of it.
+            const mainHold = ps.kind === 'active' && !ps.canRenew && !(wantTier && _srTierOk(wantTier, lic, ps));
             let active = MAIN_SHOP_ID; try { active = getActiveShopId(); } catch (e) {}
             const sel = {};
-            shops.forEach(x => { sel[x.id] = trial || x.id === active || (x.id === MAIN_SHOP_ID && _srMainExpired(lic)); });
+            shops.forEach(x => { sel[x.id] = trial || (x.id === active && !(x.id === MAIN_SHOP_ID && mainHold)) || (x.id === MAIN_SHOP_ID && _srMainExpired(lic)); });
             return sel;
         }
         // Where the new paid-until date starts from: the current date if still paid, otherwise today.
@@ -7603,7 +7697,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
         }
         // Works out the plan, months, itemised lines and total from the form. Used for display and for saving.
         function computeSubReq() {
-            const lic = _srLic(), shops = _srShops(), trial = _srIsTrial(lic);
+            const lic = _srLic(), shops = _srShops(), trial = _srIsTrial(lic), ps = _srPlanState(lic);
             const tierEl = document.getElementById('subreq-tier'), mEl = document.getElementById('subreq-months');
             let tier = tierEl ? tierEl.value : 'starter';
             const sel = _sr.sel || {};
@@ -7611,7 +7705,10 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const mainTicked = trial ? true : !!sel[MAIN_SHOP_ID];
             let lock = '';
             if (mainLife) { tier = 'lifetime'; lock = 'You are on the Lifetime plan, so extra shops are paid once.'; }
-            else if (!mainTicked && ['starter', 'standard', 'pro'].indexOf(lic.tier) >= 0) { tier = lic.tier; lock = 'Extra shops are priced at your current plan (' + (TIER_LABELS[tier] || tier) + '). Tick the Main shop to change plan.'; }
+            else if (!mainTicked && ['starter', 'standard', 'pro'].indexOf(lic.tier) >= 0) { tier = lic.tier; lock = 'Extra shops are priced at your current plan (' + (TIER_LABELS[tier] || tier) + '). ' + (ps.kind === 'active' && !ps.canRenew ? 'Tick the Main shop to upgrade.' : 'Tick the Main shop to change plan.'); }
+            else if (mainTicked && ps.kind === 'active' && !_srTierOk(tier, lic, ps)) { tier = SUBREQ_TIERS.filter(t => _srTierOk(t, lic, ps))[0] || tier; }
+            let note = '';
+            if (!lock && mainTicked && ps.kind === 'active') note = 'Your ' + (TIER_LABELS[lic.tier] || lic.tier) + ' plan is active until ' + _fmtD(lic.expiry) + '. ' + (ps.canRenew ? 'You can renew it or upgrade.' : 'You can only upgrade now. Renewal opens in the last ' + SUBREQ_RENEW_DAYS + ' days.');
             const isLife = tier === 'lifetime';
             const months = isLife ? 1 : Math.max(1, Math.min(SUBREQ_MAX_MONTHS, parseInt(mEl ? mEl.value : '1', 10) || 1));
             const pr = getPricing();
@@ -7632,7 +7729,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 rows.push(row);
             });
             const total = lines.reduce((t, l) => t + l.amount, 0);
-            return { tier, months, isLife, lock, rows, lines, total, trial, mainTicked, mainExpired: _srMainExpired(lic), pr };
+            return { tier, months, isLife, lock, note, ps, rows, lines, total, trial, mainTicked, mainExpired: _srMainExpired(lic), pr };
         }
         function subReqToggle(id) { _sr.sel[id] = !_sr.sel[id]; renderSubReq(); }
         function renderSubReq() {
@@ -7640,8 +7737,17 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             if (!box || !sumEl) return;
             const q = computeSubReq();
             const tierEl = document.getElementById('subreq-tier'), note = document.getElementById('subreq-tier-note');
-            if (tierEl) { tierEl.value = q.tier; tierEl.disabled = !!q.lock; }
-            if (note) { note.textContent = q.lock; note.style.display = q.lock ? '' : 'none'; }
+            if (tierEl) {
+                const _lic = _srLic();
+                Array.from(tierEl.options).forEach(o => {
+                    if (o.dataset.base === undefined) o.dataset.base = o.textContent;
+                    const ok = !!q.lock || _srTierOk(o.value, _lic, q.ps);
+                    o.disabled = !ok;
+                    o.textContent = ok ? o.dataset.base : o.dataset.base + (o.value === _lic.tier ? ' (your active plan)' : ' (not available)');
+                });
+                tierEl.value = q.tier; tierEl.disabled = !!q.lock;
+            }
+            if (note) { const _nt = q.lock || q.note || ''; note.textContent = _nt; note.style.display = _nt ? '' : 'none'; }
             const mw = document.getElementById('subreq-months-wrap'); if (mw) mw.style.display = q.isLife ? 'none' : '';
             const per = q.isLife ? ' once' : ' × ' + q.months + (q.months === 1 ? ' month' : ' months');
             box.innerHTML = q.rows.map(r => {
@@ -7729,6 +7835,26 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             btn.textContent = 'Sending…';
 
             try {
+                // No second request while one is waiting, and no re-using a transaction ID.
+                const _existing = await _srFetchRequests();
+                if (_existing) {
+                    const _pend = _srPendingOf(_existing);
+                    if (_pend) {
+                        _srShowPending(_pend);
+                        btn.textContent = 'Submit Request';
+                        errEl.textContent = 'You already have a request waiting for approval. Please wait for the admin.';
+                        errEl.style.display = 'block';
+                        return;
+                    }
+                    const _dup = _existing.find(r => r && String(r.txnId || '').trim().toUpperCase() === txnId.toUpperCase());
+                    if (_dup) {
+                        btn.disabled = false; btn.textContent = 'Submit Request';
+                        errEl.textContent = 'This transaction ID was already submitted' + (_dup.status === 'approved' ? ' and approved' : '') + '. Enter the transaction ID of a new payment.';
+                        errEl.style.display = 'block';
+                        document.getElementById('subreq-txnid').style.borderColor = 'var(--danger)';
+                        return;
+                    }
+                }
                 const s            = dbLoad('settings') || {};
                 const currentLicense = getLicense() || {};
                 const currentTier  = currentLicense.tier || 'trial';
@@ -7918,7 +8044,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             } else {
                 // Season: rough gross margin (revenue - purchases - expenses - writeoffs)
                 const purchases = db.purchases.filter(p => filterFn(p.date)).reduce((sum, p) => sum + p.total, 0);
-                const writeoffs = db.adjustments.filter(a => filterFn(a.date) && a.direction === 'down' && a.lossValue > 0).reduce((sum, a) => sum + a.lossValue, 0);
+                const writeoffs = db.adjustments.filter(a => adjLive(a) && filterFn(a.date) && a.direction === 'down' && a.lossValue > 0).reduce((sum, a) => sum + a.lossValue, 0);
                 const closingStock = db.inventory.reduce((sum, i) => sum + (i.qty * i.cost), 0);
                 const cogs = Math.max(0, purchases - closingStock);
                 plNet = revenue - cogs - expenses - writeoffs;
@@ -8645,6 +8771,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             document.getElementById('edit-cost').value = p.cost;
             document.getElementById('edit-price').value = p.price || '';
             document.getElementById('edit-qty').value = p.qty;
+            { const _ql = document.getElementById('edit-qty-label'); if (_ql) _ql.textContent = currentUser === 'admin' ? 'Quantity (Adjustment)' : 'Quantity (admin approves changes)'; }
             document.getElementById('edit-reorder').value = p.reorderPt !== undefined ? p.reorderPt : '';
             
             openModal('modal-edit-product');
@@ -8655,12 +8782,38 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const id = document.getElementById('edit-id').value;
             const inv = db.inventory;
             const p = inv.find(x => x.id === id);
+            let qtyQueued = false;
             if (p) {
                 p.name = document.getElementById('edit-name').value;
                 p.cat = document.getElementById('edit-cat').value;
                 p.cost = parseFloat(document.getElementById('edit-cost').value);
                 p.price = parseFloat(document.getElementById('edit-price').value);
-                p.qty = parseInt(document.getElementById('edit-qty').value);
+                const newQty = parseInt(document.getElementById('edit-qty').value);
+                if (currentUser !== 'admin' && Number.isFinite(newQty) && newQty !== p.qty) {
+                    // Staff cannot change stock quantity directly: send the difference to the admin as a request.
+                    if (newQty < 0) { showToast('Quantity cannot be negative', 'danger'); return; }
+                    const diff = newQty - p.qty, isDown = diff < 0, q = Math.abs(diff);
+                    const list = db.adjustments;
+                    list.push({
+                        id: uid('ADJ'),
+                        date: new Date().toLocaleDateString('en-GB'),
+                        prodId: p.id, prodName: p.name,
+                        adjType: isDown ? 'correction-down' : 'correction-up',
+                        qty: q, direction: isDown ? 'down' : 'up',
+                        lossValue: isDown ? q * (p.cost || 0) : 0,
+                        costAtTime: p.cost || 0,
+                        reason: 'Stock Count Correction',
+                        notes: 'Requested from Edit Product',
+                        recordedBy: currentUser || 'unknown',
+                        status: 'pending',
+                        requestedBy: String(currentDisplayName || currentUser || 'staff').slice(0, 100),
+                        updatedAt: Date.now()
+                    });
+                    db.adjustments = list;
+                    qtyQueued = true;           // p.qty stays as it is until the admin approves
+                } else {
+                    p.qty = newQty;
+                }
                 p.status = p.qty > 0 ? "Fresh" : "Out of Stock";
                 const reorderVal = document.getElementById('edit-reorder').value;
                 if (reorderVal !== '') { p.reorderPt = parseInt(reorderVal); } else { delete p.reorderPt; }
@@ -8668,7 +8821,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             }
             closeModal('modal-edit-product');
             refreshAll();
-            showToast("Product Updated Successfully");
+            showToast(qtyQueued ? "Product updated. The quantity change was sent to the admin for approval." : "Product Updated Successfully");
         }
 
         function deleteProduct(id) {
@@ -8772,7 +8925,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                     tin: add(db.transfers.filter(x => x.direction === 'in' && !x.internal && pred(x.date)), x => x.total),
                     tout: add(db.transfers.filter(x => x.direction === 'out' && !x.internal && pred(x.date)), x => x.total),
                     exp: add(db.expenses.filter(x => pred(x.date)), x => x.amt),
-                    wo: add(db.adjustments.filter(x => pred(x.date) && x.direction === 'down' && x.lossValue > 0), x => x.lossValue),
+                    wo: add(db.adjustments.filter(x => adjLive(x) && pred(x.date) && x.direction === 'down' && x.lossValue > 0), x => x.lossValue),
                     stock: add(db.inventory, i => i.qty * i.cost)
                 }));
                 g.rows.push(Object.assign({ id: sh.id, name: sh.name, active: sh.active !== false }, r));
@@ -8863,7 +9016,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const purchases = purchasesRaw + transfersIn - transfersOut;
             const expenses  = db.expenses.filter(e => matchesMonth(e.date)).reduce((sum, e) => sum + e.amt, 0);
             // Write-off losses: downward adjustments that have a lossValue (spoilage, breakage, theft, donation)
-            const writeoffs = db.adjustments.filter(a => matchesMonth(a.date) && a.direction === 'down' && a.lossValue > 0).reduce((sum, a) => sum + a.lossValue, 0);
+            const writeoffs = db.adjustments.filter(a => adjLive(a) && matchesMonth(a.date) && a.direction === 'down' && a.lossValue > 0).reduce((sum, a) => sum + a.lossValue, 0);
 
             // Closing stock = live inventory value (qty x cost)
             const closingStock = db.inventory.reduce((sum, i) => sum + (i.qty * i.cost), 0);
@@ -9783,7 +9936,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             }
 
             // Write-off detail section
-            const periodAdj = db.adjustments.filter(a => matchesMonth(a.date) && a.direction === 'down' && a.lossValue > 0);
+            const periodAdj = db.adjustments.filter(a => adjLive(a) && matchesMonth(a.date) && a.direction === 'down' && a.lossValue > 0);
             if (periodAdj.length > 0) {
                 rows.push([], [`STOCK WRITE-OFF DETAIL (${pl.period})`]);
                 rows.push(['ID', 'Date', 'Product', 'Reason', 'Qty', 'Cost at Time (ZMW)', 'Loss Value (ZMW)', 'Notes']);
@@ -9847,11 +10000,11 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 headers = ['GRN','Date','Supplier','PO','Ref','Delivery Note','Received By','Product','Ordered','Received','Rejected','Unit Cost (ZMW)','Value (ZMW)'];
                 rows = _grnExportRows();
             } else if (type === 'adjustments') {
-                headers = ['ID', 'Date', 'Product', 'Type', 'Direction', 'Qty', 'Cost at Time (ZMW)', 'Loss Value (ZMW)', 'Reason', 'Notes'];
+                headers = ['ID', 'Date', 'Product', 'Type', 'Direction', 'Qty', 'Cost at Time (ZMW)', 'Loss Value (ZMW)', 'Reason', 'Notes', 'Status'];
                 rows = db.adjustments.map(a => [
                     a.id, a.date, a.prodName, a.adjType, a.direction, a.qty,
                     (a.costAtTime || 0).toFixed(2), (a.lossValue || 0).toFixed(2),
-                    a.reason, a.notes || ''
+                    a.reason, a.notes || '', a.status || 'approved'
                 ]);
             }
             const labelMap = { inventory: 'Stock', sales: 'Sales', purchases: 'Purchases', expenses: 'Expenses', adjustments: 'Adjustments', grns: 'GRN', pos: 'PO' };
@@ -13771,7 +13924,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 db.expenses = db.expenses.filter(e => e.id !== id);
             } else if (type === 'adjustments') {
                 const adj = db.adjustments.find(a => a.id === id);
-                if (adj) {
+                if (adj && adjLive(adj)) {
                     const inv  = db.inventory;
                     const prod = inv.find(i => i.id === adj.prodId);
                     if (prod) {
@@ -14320,8 +14473,8 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 user: r.recordedBy || '—',
                 type: 'adjustment', typeLabel: 'Adjustment',
                 id:   r.id,
-                summary: `${r.prodName} ${r.direction === 'down' ? '−' : '+'}${r.qty} (${r.reason})`,
-                value: r.lossValue || 0
+                summary: `${r.prodName} ${r.direction === 'down' ? '−' : '+'}${r.qty} (${r.reason})` + (adjLive(r) ? '' : ' — ' + (r.status === 'rejected' ? 'rejected' : 'waiting for admin approval')),
+                value: adjLive(r) ? (r.lossValue || 0) : 0
             }));
 
             // Sort newest first
@@ -14582,6 +14735,11 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             document.getElementById('adj-notes').value  = '';
             document.getElementById('adj-loss-preview').textContent = 'K0.00';
             document.getElementById('adj-loss-row').style.display = '';
+            {
+                const _adm = currentUser === 'admin';
+                const _an = document.getElementById('adj-approval-note'); if (_an) _an.style.display = _adm ? 'none' : '';
+                const _ab = document.getElementById('adj-submit-btn'); if (_ab) _ab.textContent = _adm ? 'Record Adjustment' : 'Send for Admin Approval';
+            }
             openModal('modal-adjustment');
         }
 
@@ -14611,6 +14769,18 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             document.getElementById('adj-loss-preview').textContent = formatZMW(loss);
         }
 
+        // An adjustment counts (stock, P&L, reports) only once it is approved. Records made before this
+        // feature have no status and are treated as approved.
+        function adjLive(a) { return !a || !a.status || a.status === 'approved'; }
+
+        function updateAdjBadge() {
+            const el = document.getElementById('adj-badge'); if (!el) return;
+            let n = 0; try { n = dbLoad('adjustments').filter(a => a && a.status === 'pending').length; } catch (e) {}
+            const show = n > 0 && currentUser === 'admin';
+            el.textContent = show ? String(n) : '';
+            el.style.display = show ? 'inline-block' : 'none';
+        }
+
         function handleAddAdjustment(e) {
             e.preventDefault();
             const prodEl   = document.getElementById('adj-prod');
@@ -14635,10 +14805,38 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 return;
             }
 
-            // Calculate loss value (cost × qty, only for downward)
-            const lossValue = isDown ? qty * (prod.cost || 0) : 0;
+            const rec = {
+                id:        uid('ADJ'),
+                date:      new Date().toLocaleDateString('en-GB'),
+                prodId,
+                prodName:  prod.name,
+                adjType,
+                qty,
+                direction: isDown ? 'down' : 'up',
+                lossValue: isDown ? qty * (prod.cost || 0) : 0,
+                costAtTime: prod.cost || 0,
+                reason,
+                notes,
+                recordedBy: currentUser || 'unknown',
+                updatedAt: Date.now()
+            };
 
-            // Apply qty change
+            // Staff cannot change stock themselves: the request waits for the admin. Nothing is
+            // touched (stock, P&L) until it is approved.
+            if (currentUser !== 'admin') {
+                rec.status = 'pending';
+                rec.requestedBy = String(currentDisplayName || currentUser || 'staff').slice(0, 100);
+                const list = db.adjustments;
+                list.push(rec);
+                db.adjustments = list;
+                closeModal('modal-adjustment');
+                e.target.reset();
+                refreshAll();
+                showToast('Sent to the admin for approval. Stock changes only after it is approved.');
+                return;
+            }
+
+            // Admin: applies straight away
             if (isDown) {
                 prod.qty -= qty;
                 if (prod.qty <= 0) prod.status = 'Out of Stock';
@@ -14648,46 +14846,107 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             }
             db.inventory = inv;
 
-            // Record the adjustment
+            rec.status = 'approved';
+            rec.approvedBy = String(currentDisplayName || 'Admin').slice(0, 100);
             const adjustments = db.adjustments;
-            adjustments.push({
-                id:        uid('ADJ'),
-                date:      new Date().toLocaleDateString('en-GB'),
-                prodId,
-                prodName:  prod.name,
-                adjType,
-                qty,
-                direction: isDown ? 'down' : 'up',
-                lossValue,
-                costAtTime: prod.cost || 0,
-                reason,
-                notes,
-                recordedBy: currentUser || 'unknown'
-            });
+            adjustments.push(rec);
             db.adjustments = adjustments;
 
             closeModal('modal-adjustment');
             e.target.reset();
             refreshAll();
             const msg = isDown
-                ? `Adjustment recorded — stock reduced by ${qty}, loss value ${formatZMW(lossValue)}`
+                ? `Adjustment recorded — stock reduced by ${qty}, loss value ${formatZMW(rec.lossValue)}`
                 : `Adjustment recorded — stock increased by ${qty}`;
             showToast(msg);
         }
 
+        // Admin: approve a staff request. Stock is re-checked now, because it may have changed since
+        // the request was sent. The record takes today's date, since that is when the stock and the
+        // write-off actually change; the original date is kept as requestedDate.
+        function approveAdjustment(id) {
+            if (currentUser !== 'admin') { showToast('Only the admin can approve stock adjustments', 'danger'); return; }
+            const adjustments = db.adjustments;
+            const a = adjustments.find(x => x.id === id);
+            if (!a || a.status !== 'pending') { showToast('This request is no longer pending', 'danger'); refreshAll(); return; }
+            const inv  = db.inventory;
+            const prod = inv.find(i => i.id === a.prodId);
+            if (!prod) { showToast('That product no longer exists. Reject this request.', 'danger'); return; }
+            const isDown = a.direction === 'down';
+            if (isDown && prod.qty < a.qty) {
+                showToast(`Only ${prod.qty} in stock now, so it cannot be reduced by ${a.qty}. Reject it and ask for a new request.`, 'danger');
+                return;
+            }
+            if (isDown) {
+                prod.qty -= a.qty;
+                if (prod.qty <= 0) prod.status = 'Out of Stock';
+            } else {
+                prod.qty += a.qty;
+                prod.status = 'Fresh';
+            }
+            const cost = prod.cost || 0;
+            a.costAtTime = cost;
+            a.lossValue  = isDown ? a.qty * cost : 0;
+            a.requestedDate = a.date;
+            a.date       = new Date().toLocaleDateString('en-GB');
+            a.status     = 'approved';
+            a.approvedBy = String(currentDisplayName || 'Admin').slice(0, 100);
+            a.approvedAt = Date.now();
+            a.updatedAt  = Date.now();
+            db.inventory   = inv;
+            db.adjustments = adjustments;
+            refreshAll();
+            showToast(isDown ? `Approved — stock reduced by ${a.qty}` : `Approved — stock increased by ${a.qty}`);
+        }
+
+        function rejectAdjustment(id) {
+            if (currentUser !== 'admin') { showToast('Only the admin can reject stock adjustments', 'danger'); return; }
+            const adjustments = db.adjustments;
+            const a = adjustments.find(x => x.id === id);
+            if (!a || a.status !== 'pending') { showToast('This request is no longer pending', 'danger'); refreshAll(); return; }
+            const why = prompt('Reason for rejecting (optional):', '');
+            if (why === null) return;
+            a.status       = 'rejected';
+            a.rejectReason = String(why || '').trim().slice(0, 300);
+            a.rejectedBy   = String(currentDisplayName || 'Admin').slice(0, 100);
+            a.rejectedAt   = Date.now();
+            a.updatedAt    = Date.now();
+            db.adjustments = adjustments;
+            refreshAll();
+            showToast('Request rejected. Stock was not changed.');
+        }
+
         function renderAdjustments() {
+            try { updateAdjBadge(); } catch (e) {}
             const tbody = document.querySelector('#table-adjustments tbody');
             if (!tbody) return;
+            const isAdmin = currentUser === 'admin';
             const search = (document.getElementById('search-adjustments')?.value || '').toLowerCase();
-            const adjs   = db.adjustments.filter(a =>
+            const mineAll = db.adjustments;
+            const found = mineAll.filter(a =>
                 !search ||
                 (a.prodName||'').toLowerCase().includes(search) ||
                 (a.reason||'').toLowerCase().includes(search) ||
                 (a.notes||'').toLowerCase().includes(search)
             ).slice().reverse(); // most recent first
+            // Requests waiting for approval always sit at the top
+            const adjs = found.filter(a => a.status === 'pending').concat(found.filter(a => a.status !== 'pending'));
+
+            const note = document.getElementById('adj-pending-note');
+            if (note) {
+                const nPend = mineAll.filter(a => a.status === 'pending').length;
+                let nElse = 0; try { nElse = dbLoad('adjustments').filter(a => a && a.status === 'pending').length - nPend; } catch (e) {}
+                let html = '';
+                if (nPend) html = isAdmin
+                    ? '⏳ <strong>' + nPend + '</strong> adjustment request' + (nPend !== 1 ? 's' : '') + ' waiting for your approval. Approve to change the stock, or reject.'
+                    : '⏳ ' + nPend + ' adjustment request' + (nPend !== 1 ? 's are' : ' is') + ' waiting for the admin. Stock changes only after approval.';
+                if (isAdmin && nElse > 0) html += (html ? ' ' : '⏳ ') + nElse + ' more waiting in other shops.';
+                note.innerHTML = html;
+                note.style.display = html ? '' : 'none';
+            }
 
             if (adjs.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);padding:2rem;">No adjustments recorded yet.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--text-muted);padding:2rem;">No adjustments recorded yet.</td></tr>';
                 return;
             }
 
@@ -14699,16 +14958,29 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             };
 
             tbody.innerHTML = adjs.map(a => {
+                const live = adjLive(a);
                 const qtyCell = a.direction === 'down'
-                    ? `<span style="color:var(--danger);font-weight:700;">−${a.qty}</span>`
-                    : `<span style="color:var(--success);font-weight:700;">+${a.qty}</span>`;
-                const lossCell = a.lossValue > 0
+                    ? `<span style="color:${live ? 'var(--danger)' : 'var(--text-muted)'};font-weight:700;">−${a.qty}</span>`
+                    : `<span style="color:${live ? 'var(--success)' : 'var(--text-muted)'};font-weight:700;">+${a.qty}</span>`;
+                const lossCell = (live && a.lossValue > 0)
                     ? `<span style="color:var(--danger);font-weight:600;">${formatZMW(a.lossValue)}</span>`
                     : '<span style="color:var(--text-muted);">—</span>';
-                const adminBtns = currentUser === 'admin'
-                    ? `<button class="btn btn-sm btn-danger" onclick="deleteRecord('adjustments','${esc(a.id)}')">🗑</button>`
-                    : '';
-                return `<tr>
+                let statusCell;
+                if (a.status === 'pending') {
+                    statusCell = `<span style="color:#b26a00;font-weight:700;">⏳ Pending</span>` + (a.requestedBy ? `<div style="font-size:.72rem;color:var(--text-muted);">by ${esc(a.requestedBy)}</div>` : '');
+                } else if (a.status === 'rejected') {
+                    statusCell = `<span style="color:var(--danger);font-weight:700;">✘ Rejected</span>` + (a.rejectReason ? `<div style="font-size:.72rem;color:var(--text-muted);">${esc(a.rejectReason)}</div>` : '');
+                } else {
+                    statusCell = `<span style="color:var(--success);font-weight:600;">✔ Approved</span>`;
+                }
+                let actions = '';
+                if (isAdmin) {
+                    if (a.status === 'pending') {
+                        actions += `<button class="btn btn-sm btn-primary" onclick="approveAdjustment('${esc(a.id)}')">Approve</button> <button class="btn btn-sm btn-danger" onclick="rejectAdjustment('${esc(a.id)}')">Reject</button> `;
+                    }
+                    actions += `<button class="btn btn-sm btn-danger" onclick="deleteRecord('adjustments','${esc(a.id)}')">🗑</button>`;
+                }
+                return `<tr${a.status === 'pending' ? ' style="background:#fffbf0;"' : ''}>
                     <td style="font-family:monospace;font-size:.8rem;">${esc(a.id)}</td>
                     <td>${esc(a.date)}</td>
                     <td style="font-weight:600;">${esc(a.prodName)}</td>
@@ -14717,7 +14989,8 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                     <td>${lossCell}</td>
                     <td>${esc(a.reason)}</td>
                     <td style="color:var(--text-muted);font-size:.85rem;">${esc(a.notes||'—')}</td>
-                    <td>${adminBtns}</td>
+                    <td>${statusCell}</td>
+                    <td>${actions}</td>
                 </tr>`;
             }).join('');
         }
