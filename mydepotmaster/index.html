@@ -1251,6 +1251,14 @@ body.cashier-mode #gsearch-fab,body.cashier-mode #copilot-fab{display:none!impor
     <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
     <span>General P&amp;L</span>
   </button>
+  <button class="hdr-menu-navbtn hdr-hide-staff" onclick="closeHdrMenu();TAB='general';GTAB='margin';showTab('general')">
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 5L5 19"/><circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="17" r="2.5"/></svg>
+    <span>General Margin</span>
+  </button>
+  <button class="hdr-menu-navbtn hdr-hide-staff" onclick="closeHdrMenu();openReorderScreen()">
+    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.7 13.4a2 2 0 002 1.6h9.7a2 2 0 002-1.6L23 6H6"/></svg>
+    <span>Reorder List</span>
+  </button>
   <button class="hdr-menu-navbtn hdr-hide-staff" onclick="closeHdrMenu();TAB='general';GTAB='cashflow';showTab('general')">
     <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/></svg>
     <span>General Cash Flow</span>
@@ -4720,7 +4728,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.72';
+const SW_VERSION  = 'v0.3.74';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -5183,7 +5191,7 @@ let STAB='logs'; // staff subtab
 let STAFF_LOG_TASK_FILTER='all'; // work logs task filter: 'all' or a specific task name
 let MTAB='received'; // commodity subtab
 let CCOM=''; // currently selected commodity id — resolved dynamically to first defined commodity
-let GTAB='inventory'; // general subtab: inventory|issued|stockcount|summary|itemnames|pl
+let GTAB='inventory'; // general subtab: inventory|issued|stockcount|summary|itemnames|pl|margin
 let CTAB='all'; // contacts subtab: all|supplier|customer|supperf
 let BTAB='set';  // budget subtab: set|report
 
@@ -8342,7 +8350,7 @@ function _renderTillDash(){
     :`<div style="font-size:17px;color:var(--muted);padding:6px 0">${hasMin?'All items are above their minimum.':'Set a minimum stock on your items to get low-stock alerts here.'}</div>`;
   return wrap(sales
     +`<div style="${lab}">Shifts</div>${openH}${closedH}`
-    +`<div style="${lab}">${low.length?'🔔 ':''}Low stock${low.length?' ('+low.length+')':''}</div>${lowH}`);
+    +`<div style="${lab}">${low.length?'🔔 ':''}Low stock${low.length?' ('+low.length+')':''}</div>${lowH}<div style="font-size:16px;color:var(--blue);padding-top:6px;cursor:pointer" onclick="openReorderScreen()">🛒 Reorder list →</div>`);
 }
 
 function renderDash(){
@@ -8436,7 +8444,7 @@ function renderDash(){
     if(!itemName||minStock<=0)return;
     const bal=genStock(itemName).bal;
     if(bal<=minStock&&!_tillCard){
-      warnings.push({icon:'🔔',title:`LOW STOCK — ${itemName}`,msg:`Current balance: <strong style="color:var(--amber)">${bal.toLocaleString()} units</strong> · Minimum threshold: <strong>${minStock.toLocaleString()} units</strong>. Reorder required.`});
+      warnings.push({icon:'🔔',title:`LOW STOCK — ${itemName}`,msg:`Current balance: <strong style="color:var(--amber)">${bal.toLocaleString()} units</strong> · Minimum threshold: <strong>${minStock.toLocaleString()} units</strong>. Reorder required.${(isAdmin()||isManagerRole())?` <span style="color:var(--blue);text-decoration:underline;cursor:pointer" onclick="openReorderScreen()">Reorder list →</span>`:''}`});
     }
   });
   // Reserved quantity alerts
@@ -8753,6 +8761,7 @@ function renderGeneral(){
         <button class="btn bo bsm" onclick="openScanReceive()" title="Receive a delivery by scanning barcodes">&#x1F4F7; Scan Receive</button>
         <button class="btn bo bsm" onclick="openMultiEntryForm('issue')" title="Issue multiple items/commodities in one transaction">&#x1F500; Multi Issue</button>
         <button class="btn bo bsm" onclick="openExpiryScreen()" title="Batches, expiry dates and expired stock">&#x1F4C5; Expiry</button>
+        ${(isAdmin()||isManagerRole())?`<button class="btn bo bsm" onclick="openReorderScreen()" title="What to order, and how many">&#x1F6D2; Reorder</button>`:''}
         ${USER.role==='admin'?`<button class="btn bo bsm" onclick="openManageInventory()">⚙️ Manage</button>`:''}
         ${USER.role==='admin'?`<button class="btn bo bsm" onclick="openPriceList()">💲 Prices</button>`:''}
         <button class="btn bo bsm" id="btn-add-transport" onclick="openTransportForm()">🚛 Transport</button>
@@ -8773,12 +8782,13 @@ function renderGeneral(){
       `)}
       ${_stg('Finance',`
         <button class="stab${GTAB==='pl'?' act':''}" id="gtab-pl" style="${GTAB==='pl'?'background:rgba(0,214,143,.1);color:var(--green);border-color:rgba(0,214,143,.3)':''}">📊 P&amp;L</button>
+        <button class="stab${GTAB==='margin'?' act':''}" id="gtab-margin" style="${GTAB==='margin'?'background:rgba(0,214,143,.1);color:var(--green);border-color:rgba(0,214,143,.3)':''}">📈 Margin</button>
         <button class="stab${GTAB==='cashflow'?' act':''}" id="gtab-cashflow" style="${GTAB==='cashflow'?'background:rgba(59,130,246,.1);color:var(--blue);border-color:rgba(59,130,246,.3)':''}">💵 Cash Flow</button>
         <button class="stab${GTAB==='budget'?' act':''}" id="gtab-budget" style="${GTAB==='budget'?'background:rgba(245,158,11,.1);color:var(--amber);border-color:rgba(245,158,11,.3)':''}">🎯 Budget</button>
       `)}
     </div>
     <div class="prow">${pBtns('general')}</div>
-    ${GTAB==='inventory'?renderGenReceived():GTAB==='issued'?renderGenIssued():GTAB==='sales'?renderGenSales():GTAB==='stockcount'?renderGenStockCount():GTAB==='itemnames'?renderGenItemNamesTab():GTAB==='pl'?renderProfitLoss():GTAB==='cashflow'?renderCashFlow():GTAB==='budget'?renderBudgetVsActual():renderGenSummary()}`;
+    ${GTAB==='inventory'?renderGenReceived():GTAB==='issued'?renderGenIssued():GTAB==='sales'?renderGenSales():GTAB==='stockcount'?renderGenStockCount():GTAB==='itemnames'?renderGenItemNamesTab():GTAB==='pl'?renderProfitLoss():GTAB==='margin'?renderMargin():GTAB==='cashflow'?renderCashFlow():GTAB==='budget'?renderBudgetVsActual():renderGenSummary()}`;
 }
 
 // Generic table search helper — hides rows where none of the cell text matches the query
@@ -24951,7 +24961,7 @@ function attachTabListeners(){
   if(addGenRec)addGenRec.addEventListener('click',openGenRecForm);
   if(addGenIss)addGenIss.addEventListener('click',openGenIssForm);
   if(addGenSc)addGenSc.addEventListener('click',openGenStockCountForm);
-  ['inventory','issued','sales','stockcount','summary','itemnames','pl','cashflow','budget'].forEach(t=>{
+  ['inventory','issued','sales','stockcount','summary','itemnames','pl','margin','cashflow','budget'].forEach(t=>{
     const el=document.getElementById('gtab-'+t);
     if(el)el.addEventListener('click',()=>{GTAB=t;render();});
   });
@@ -26263,6 +26273,16 @@ function exportCSV_GenSummary(){
   });
   _csvDownload(rows,_csvFilename('Inventory_Summary'));
 }
+function exportCSV_Margin(){
+  const R=_marginReport(),grouped=_mgView==='category',T=R.totals;
+  const rows=[_csvRow([grouped?'Category':'Item',grouped?'Items':'Category','Unit','Qty Sold','Revenue','Cost of Goods','Gross Profit','Margin %','Markup %','Revenue With No Cost'])];
+  _mgList(R).forEach(r=>{
+    const has=r.costedRevenue!==0||r.cost!==0;
+    rows.push(_csvRow([grouped?(r.name||'Uncategorised'):r.name,grouped?r.items:(r.category||''),grouped?'':(r.unit||''),grouped?'':r.qty,r.revenue.toFixed(2),has?r.cost.toFixed(2):'',has?r.profit.toFixed(2):'',r.marginPct==null?'':r.marginPct,r.markupPct==null?'':r.markupPct,r.notCostedRevenue?r.notCostedRevenue.toFixed(2):'']));
+  });
+  rows.push(_csvRow(['TOTAL','','','',T.revenue.toFixed(2),T.costedRevenue!==0?T.cost.toFixed(2):'',T.costedRevenue!==0?T.profit.toFixed(2):'',T.marginPct==null?'':T.marginPct,T.markupPct==null?'':T.markupPct,T.notCostedRevenue?T.notCostedRevenue.toFixed(2):'']));
+  _csvDownload(rows,_csvFilename('Margin_Report'));
+}
 function exportCSV_CommodityReceived(){
   const com=getCom(CCOM);
   const all=cRec(CCOM);
@@ -26360,6 +26380,7 @@ function exportCurrentTabCSV(){
   if(TAB==='general'){
     if(GTAB==='inventory')return exportCSV_GenReceived();
     if(GTAB==='issued')return exportCSV_GenIssued();
+    if(GTAB==='margin')return exportCSV_Margin();
     if(GTAB==='summary'||GTAB==='itemnames')return exportCSV_GenSummary();
     if(GTAB==='stockcount'){
       const sc=filterPeriod(DATA.generalStockCounts||[],PERIOD.general,'date','general').slice().sort((a,b)=>b.date.localeCompare(a.date));
@@ -27066,6 +27087,200 @@ function renderProfitLoss(){
     <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 13px;margin-top:12px;font-size:16px;color:var(--muted);line-height:1.7">
       ⚠️ <strong style="color:var(--text)">Disclaimer:</strong> This P&L is based on data entered in the app only. It is not a formal accounting statement. Verify all figures independently before making financial decisions.
     </div>`}`;
+}
+
+
+// ── MARGIN REPORT (till roadmap step 31) ─────────────────────────────────────────────────────────────────────────────
+// Gross margin by item and by category, worked from COST. Nothing is stored: Sales.marginBook (sales.js) sums the same records stock uses (received rows with their purchase price,
+// till sales, voids / refunds, the main app's priced issues), so a report can be re-run for any period and always agrees with the ledger. Cost of a sale = the average price paid for the
+// stock received up to that moment (a later price rise never rewrites an old margin); a refund reverses the cost the sale had; a sale with no cost known is shown on its own and left
+// out of the margin % (never guessed). Period = the buttons above the tab, through filterPeriod() itself, so it covers exactly the days Sales History and the P&L do.
+// Pro, behind the same switch as the P&L (profit_loss): it shows what the stock cost.
+var _mgView='item',_mgSort='profit',_mgShow='all';
+function _mgSet(k,v){if(k==='view')_mgView=v;else if(k==='sort')_mgSort=v;else if(k==='show')_mgShow=v;render();}
+function _marginReport(){
+  const names=_expItemNames(),pr=DATA.inventoryPrices||{},cat=new Map(),cost=new Map();
+  (DATA.inventoryItems||[]).forEach(x=>{const n=_invItemName(x);if(n)cat.set(_invItemId(x),String((x&&x.category)||'').trim());});
+  names.forEach((n,id)=>{const c=Number((pr[n]||{}).purchasePrice)||0;if(c>0)cost.set(id,c);});            // the item's cost today: only the fallback for sales made before any priced delivery
+  // ONE filterPeriod call over the distinct days that have a record: the rule of the period buttons (and the plan's history limit) is applied by the app's own function, once.
+  // The first item's id carries the whole list of days, so the app's memo cache holds a single entry for exactly this set of days and can never hand back another set's answer.
+  const dset=new Set();
+  (_SALE_LIST||[]).forEach(x=>{if(x&&x.date)dset.add(x.date);});
+  (_RET_LIST||[]).forEach(x=>{if(x&&x.date)dset.add(x.date);});
+  (DATA.generalIssued||[]).forEach(x=>{if(x&&!x._sale&&x.date)dset.add(x.date);});
+  const days=Array.from(dset).sort(),keep=new Set(days.length?filterPeriod(days.map((d,i)=>({id:i?'':'mg:'+days.join(','),date:d})),PERIOD.general,'date','general').map(x=>x.date):[]);
+  const within=d=>keep.has(d);
+  return Sales.marginBook({received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:_SALE_LIST||[],returns:_RET_LIST||[]},
+    _stockOpts({within,nameOf:k=>names.get(k)||'',categoryOf:k=>cat.get(k)||'',currentCost:k=>cost.get(k)||0}));
+}
+function _mgList(R){                  // the rows on screen (and in the export): the chosen grouping, filter and order
+  let L=(_mgView==='category'?R.categories:R.rows).slice();
+  if(_mgShow==='loss')L=L.filter(r=>r.loss);else if(_mgShow==='nocost')L=L.filter(r=>r.notCostedRevenue!==0);
+  const m=r=>r.marginPct==null?null:r.marginPct;
+  const by={profit:(a,b)=>b.profit-a.profit,revenue:(a,b)=>b.revenue-a.revenue,
+    high:(a,b)=>(m(a)==null)-(m(b)==null)||(m(b)-m(a)),low:(a,b)=>(m(a)==null)-(m(b)==null)||(m(a)-m(b))}[_mgSort]||((a,b)=>b.profit-a.profit);
+  return L.sort((a,b)=>by(a,b)||(String(a.name)<String(b.name)?-1:String(a.name)>String(b.name)?1:0));
+}
+function _mgPct(v){return v==null?'—':(Math.round(v*10)/10)+'%';}
+function renderMargin(){
+  if(!hasFeature('profit_loss'))return _upgradeGateCard('profit_loss');
+  const R=_marginReport(),T=R.totals,grouped=_mgView==='category';
+  const label={daily:'Today',weekly:'This week',monthly:'This month',yearly:'This year',all:'All time',range:'Date range'}[PERIOD.general]||'';
+  const col=v=>v<0?'var(--red)':'var(--green)';
+  const chip=(k,v,t)=>`<button class="stab${({view:_mgView,sort:_mgSort,show:_mgShow})[k]===v?' act':''}" onclick="_mgSet('${k}','${v}')">${t}</button>`;
+  const head=`<div style="background:linear-gradient(135deg,#001a0e,#0a1e36);border:1.5px solid var(--green);border-radius:14px;padding:14px 16px;margin-bottom:12px">
+      <div style="font-family:var(--fh);font-size:23px;font-weight:800;color:var(--white);margin-bottom:4px">📈 Margin</div>
+      <div style="font-size:16px;color:var(--muted)">General Inventory · ${label} · profit on what the stock cost</div></div>`;
+  if(!R.rows.length&&!R.skipped.commodityRevenue)return head+`<div class="empty" style="padding:32px 0">No sales in this period.<br>Margins appear here once items are sold (at the Till, or with a selling price on Issue Item).</div>`;
+  const list=_mgList(R),MAX=150,shown=list.slice(0,MAX);
+  const costed=T.costedRevenue!==0;
+  const box=(v,l,c,cls)=>`<div class="sbox${cls?' '+cls:''}"><div style="font-family:var(--fh);font-size:21px;font-weight:800;color:${c}">${v}</div><div class="sl">${l}</div></div>`;
+  const cards=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+      ${box(zm(T.revenue),'Revenue','var(--green)')}
+      ${box(costed?zm(T.cost):'—','Cost of goods','var(--amber)','am')}
+      ${box(costed?zm(T.profit):'—','Gross profit',costed?col(T.profit):'var(--muted)',costed&&T.profit<0?'rd':'')}
+      ${box(_mgPct(T.marginPct),'Margin',costed?col(T.profit):'var(--muted)','bl')}</div>`;
+  let notes='';
+  if(T.notCostedRevenue!==0)notes+=`<div class="warn">⚠️ ${zm(T.notCostedRevenue)} of the sales (${100-Math.round(T.coverage==null?0:T.coverage)}%) have no cost yet, so the margin is worked on the ${zm(T.costedRevenue)} that do. Put a <b>purchase price</b> on received stock, or a <b>cost price</b> in the item's details, to include them.</div>`;
+  if(T.estimatedRevenue!==0)notes+=`<div class="hint" style="color:var(--blue);background:rgba(59,130,246,.08);border-color:rgba(59,130,246,.2)">ℹ️ ${zm(T.estimatedRevenue)} of the sales were sold before any priced delivery was recorded, so they use the item's cost today (marked EST.).</div>`;
+  if(R.skipped.commodityRevenue)notes+=`<div class="hint" style="color:var(--muted);background:var(--surface2);border-color:var(--border)">Commodity sales (${zm(R.skipped.commodityRevenue)}) are not in these figures: commodities are bought in bulk and shown under purchases in the P&amp;L.</div>`;
+  const controls=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${chip('view','item','By item')}${chip('view','category','By category')}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">${chip('sort','profit','Profit')}${chip('sort','revenue','Revenue')}${chip('sort','high','Margin ▼')}${chip('sort','low','Margin ▲')}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${chip('show','all','All')}${chip('show','loss','Below cost')}${chip('show','nocost','No cost')}</div>`;
+  const dash='<span style="color:var(--muted)">—</span>';
+  const rowHtml=r=>{
+    const nc=r.notCostedRevenue!==0,has=r.costedRevenue!==0||r.cost!==0,nm=grouped?(r.name||'Uncategorised'):(r.name||'(no name)');
+    const sub=grouped?r.items+' item'+(r.items!==1?'s':''):(+Number(r.qty).toFixed(3)).toLocaleString()+(r.unit?' '+esc(String(r.unit).toLowerCase()):'')+(r.category?' · '+esc(r.category):'');
+    return `<tr><td style="font-weight:600">${esc(nm)}${r.loss?' <span class="bdg br2" style="font-size:13px">BELOW COST</span>':''}${nc?' <span class="bdg ba2" style="font-size:13px">NO COST</span>':''}${r.estimatedRevenue!==0?' <span class="bdg" style="font-size:13px;color:var(--blue);border:1px solid var(--blue)">EST.</span>':''}
+      <div style="font-size:14px;color:var(--muted);font-weight:400">${sub}</div></td>
+      <td style="text-align:right">${zm(r.revenue)}</td>
+      <td style="text-align:right;color:var(--muted)">${has?zm(r.cost):dash}</td>
+      <td style="text-align:right;font-weight:700;color:${has?col(r.profit):'var(--muted)'}">${has?zm(r.profit):dash}</td>
+      <td style="text-align:right;font-weight:700;color:${has?col(r.profit):'var(--muted)'}">${has?_mgPct(r.marginPct):dash}</td></tr>`;
+  };
+  const table=list.length?`<div class="card" style="padding:0"><div class="tw"><table>
+      <thead><tr><th>${grouped?'Category':'Item'}</th><th style="text-align:right">Revenue</th><th style="text-align:right">Cost</th><th style="text-align:right">Profit</th><th style="text-align:right">Margin</th></tr></thead>
+      <tbody>${shown.map(rowHtml).join('')}
+      <tr style="background:var(--overlay-light-3)"><td style="font-weight:700">Total${_mgShow!=='all'?' (all items)':''}</td><td style="text-align:right;font-weight:700">${zm(T.revenue)}</td><td style="text-align:right;font-weight:700;color:var(--muted)">${costed?zm(T.cost):dash}</td><td style="text-align:right;font-weight:700;color:${costed?col(T.profit):'var(--muted)'}">${costed?zm(T.profit):dash}</td><td style="text-align:right;font-weight:700;color:${costed?col(T.profit):'var(--muted)'}">${_mgPct(T.marginPct)}</td></tr>
+      </tbody></table></div></div>${list.length>MAX?`<div style="font-size:15px;color:var(--muted);margin:6px 2px">…and ${list.length-MAX} more (included in the totals and in the export).</div>`:''}`
+    :`<div class="empty" style="padding:18px 0">${_mgShow==='loss'?'Nothing is selling below cost in this period.':'Nothing matches.'}</div>`;
+  const how=`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 13px;margin-top:12px;font-size:16px;color:var(--muted);line-height:1.7">
+      <strong style="color:var(--text)">How this is worked out.</strong> Revenue is what was really taken (after discounts and offers), less refunds, on the day they were made. Cost is the average price you paid for the stock received up to the moment of each sale, so a later price rise never changes an old margin; a refund takes back the cost the sale had, unless the goods came back damaged. Margin is profit ÷ revenue, worked only on sales that have a cost. Amounts are as entered, with VAT not separated. Not included: write-offs, stock-count losses and commodities.</div>`;
+  return head+cards+notes+controls+table+how;
+}
+
+// ── REORDER SUGGESTIONS (till roadmap step 32) ───────────────────────────────────────────────────────────────────────
+// Which items to order, and how many. Nothing is stored about the list: Sales.reorderBook (sales.js) works it out from the records the stock formula already reads. Stock is genStock's figure (the ONE
+// stock formula); what an item has reserved, and any stock past its expiry date (the till will not sell it), come off it, and the sales of the last N complete days give the rate. The rule: an item is listed
+// when what is available is at or below its minimum + (rate x the days the supplier takes), and the order brings it back up to its minimum + (rate x (supplier days + days of stock to hold)).
+// The three numbers are kept in depotInfo (reorderLeadDays, reorderCoverDays, reorderLookDays) and set on this screen by the Admin; they are part of the DATA blob and sync like the other settings.
+// Admin and Manager only: the estimate uses each item's current purchase price. Share leaves the cost out (that list is for the supplier).
+var _roMemo=null,_roKey=null;
+function _reorderReport(){
+  const k=[DATA.generalInventory,DATA.generalIssued,DATA.inventoryItems,DATA.inventoryPrices,DATA.depotInfo,_SALE_LIST,_RET_LIST,today()];   // rebuilt only when one of these changed
+  if(_roMemo&&_roKey&&k.every((x,j)=>x===_roKey[j]))return _roMemo;
+  const pol=Sales.reorderPolicy(DATA.depotInfo),pr=DATA.inventoryPrices||{},bk=genStockBook(),eb=_expiryBook(),t0=today(),items=[];
+  (DATA.inventoryItems||[]).forEach(x=>{
+    const name=_invItemName(x);if(!name)return;
+    const o=typeof x==='string'?{}:x;
+    items.push({id:_invItemId(x),name,minStock:_invItemMin(x),reserved:_invItemReserved(x),category:String(o.category||'').trim(),unit:String(o.unit||'').trim(),cost:Number((pr[name]||{}).purchasePrice)||0});
+  });
+  const expired=id=>{try{return eb.has(id)?eb.facts(id,t0).expired:0;}catch(e){return 0;}};      // stock whose expiry date has arrived: it cannot be sold
+  _roMemo=Sales.reorderBook({items,received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:_SALE_LIST||[],returns:_RET_LIST||[]},
+    _stockOpts({today:t0,lead:pol.lead,cover:pol.cover,look:pol.look,onHand:id=>bk.get(id).bal,unsellable:expired}));
+  _roKey=k;return _roMemo;
+}
+function _roN(v){return (+Number(v).toFixed(3)).toLocaleString();}
+function _roRate(v){if(!(v>0))return '0';if(v>=10)return String(Math.round(v));const t=+v.toFixed(2);return t>0?String(t):'under 0.01';}
+function _roLasts(r){if(r.cover==null)return '';if(r.available<=0)return 'None left';if(r.cover<1)return 'Lasts under a day';const d=+r.cover.toFixed(1);return 'Lasts about '+d+' day'+(d===1?'':'s');}
+function openReorderScreen(){
+  if(!(isAdmin()||isManagerRole())){alert('⛔ The reorder list is for the Admin and Manager.');return;}
+  const p=Sales.reorderPolicy(DATA.depotInfo),RG=Sales.REORDER_RANGE;
+  const set=isAdmin()?`<details style="margin-bottom:12px"><summary style="cursor:pointer;color:var(--blue);font-size:16px;padding:4px 0">⚙️ Change these numbers</summary>
+      <div style="padding-top:10px"><div id="ro-msg"></div>
+      <div class="fw"><div class="fl">Days the supplier takes to deliver</div><input class="fi" type="number" id="ro-lead" inputmode="numeric" min="${RG.lead[0]}" max="${RG.lead[1]}" step="1" value="${p.lead}"/></div>
+      <div class="fw"><div class="fl">Days of stock to hold after a delivery</div><input class="fi" type="number" id="ro-cover" inputmode="numeric" min="${RG.cover[0]}" max="${RG.cover[1]}" step="1" value="${p.cover}"/></div>
+      <div class="fw"><div class="fl">Days of sales to average</div><input class="fi" type="number" id="ro-look" inputmode="numeric" min="${RG.look[0]}" max="${RG.look[1]}" step="1" value="${p.look}"/></div>
+      <button type="button" class="btn bg bsm" onclick="saveReorderPolicy()">Save and recalculate</button></div></details>`:'';
+  openModal(`<div class="mtitle">🛒 Reorder List</div>
+    <div id="ro-how" style="background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:10px 12px;margin-bottom:12px;font-size:15px;line-height:1.5;color:var(--muted)"></div>
+    ${set}
+    <div class="fw"><input class="fi" id="ro-q" placeholder="Search item…" autocomplete="off" oninput="_roRender()"/></div>
+    <div class="fw"><select class="fi" id="ro-v" onchange="_roRender()"><option value="order">Items to reorder</option><option value="all">All items</option></select></div>
+    <div id="ro-sum" style="font-weight:700;margin:4px 0 8px"></div>
+    <div id="ro-list" style="max-height:46vh;overflow:auto"></div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Close</button><button class="btn bo" onclick="_roShare()">📤 Share</button><button class="btn bg" onclick="_roPdf()">PDF</button></div>`);
+  _roRender();
+}
+function _roRender(){
+  const list=document.getElementById('ro-list'),sum=document.getElementById('ro-sum'),how=document.getElementById('ro-how');
+  if(!list||!sum)return;
+  const R=_reorderReport(),T=R.totals,P=R.policy,q=String((document.getElementById('ro-q')||{}).value||'').trim().toLowerCase(),all=(document.getElementById('ro-v')||{}).value==='all';
+  const dy=n=>n+' day'+(n===1?'':'s');
+  if(how)how.innerHTML=`<b style="color:var(--white)">How this works.</b> Each item is checked against its minimum stock and how fast it sold over the last ${dy(P.look)} (today is left out). Stock that is reserved, or past its expiry date, is not counted as available. An item is listed when what is available is at or below its minimum plus ${dy(P.lead)} of sales, and the order brings it up to its minimum plus ${dy(P.lead+P.cover)} of sales. An item with no minimum and no recent sales is never listed. A day the shelf was empty counts as a day with no sales, so look twice at an item that was out of stock for long.`;
+  let L=R.rows.filter(r=>all||r.flag);
+  if(q)L=L.filter(r=>(r.name+' '+r.category).toLowerCase().indexOf(q)>=0);
+  const parts=[];
+  if(T.out)parts.push(`<span style="color:var(--red)">${T.out} out</span>`);
+  if(T.low)parts.push(`<span style="color:var(--amber)">${T.low} low</span>`);
+  if(T.soon)parts.push(`<span style="color:var(--blue)">${T.soon} to order soon</span>`);
+  sum.innerHTML=T.order
+    ?`${T.order} item${T.order===1?'':'s'} to reorder: ${parts.join(' · ')}${T.value>0?' · about '+zm(T.value):''}`
+      +(T.uncosted?`<div style="font-size:14px;font-weight:400;color:var(--muted)">${T.uncosted} item${T.uncosted===1?'':'s'} with no purchase price ${T.uncosted===1?'is':'are'} not in that figure.</div>`:'')
+    :'<span style="color:var(--green)">Nothing needs ordering right now</span>';
+  const MAX=120,shown=L.slice(0,MAX);
+  const COL={out:'var(--red)',low:'var(--amber)',soon:'var(--blue)',ok:'var(--green)',none:'var(--muted)'},LAB={out:'OUT',low:'LOW',soon:'ORDER SOON',ok:'OK',none:'NO SALES'};
+  list.innerHTML=shown.length?shown.map(r=>{
+    const unit=esc(r.unit.toLowerCase());
+    const stk=(r.reserved||r.expired)?`${_roN(r.available)} available (${_roN(r.onHand)} in stock${r.reserved?' − '+_roN(r.reserved)+' reserved':''}${r.expired?' − '+_roN(r.expired)+' expired':''})`:`${_roN(r.available)} in stock`;
+    const sell=r.rate>0?`Sells about ${_roRate(r.rate)} a day${r.thin?` <span style="color:var(--amber)">(only ${dy(r.days)} of sales to go on)</span>`:''}`:`No sales in the last ${dy(P.look)}`;
+    const lasts=_roLasts(r);
+    const right=r.flag?(r.qty>0
+      ?`<div style="font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px">Order</div><div style="font-size:22px;font-weight:800;color:var(--white)">${_roN(r.qty)}</div><div style="font-size:14px;color:var(--muted)">${unit||'units'}</div>${r.value>0?`<div style="font-size:14px;color:var(--muted)">≈ ${zm(r.value)}</div>`:''}`
+      :`<div style="font-size:14px;color:var(--muted);max-width:120px">Nothing recent to size an order from</div>`):'';
+    return `<div style="border:1px solid var(--border);border-left:3px solid ${COL[r.status]};border-radius:12px;padding:10px 12px;margin-bottom:8px;display:flex;gap:10px;align-items:center;justify-content:space-between">
+      <div style="min-width:0"><div style="font-weight:800;color:var(--white);overflow-wrap:anywhere">${esc(r.name)} <span style="font-size:12px;font-weight:700;color:${COL[r.status]}">${LAB[r.status]}</span></div>
+        <div style="font-size:14px;color:var(--muted)">${stk}${r.min>0?' · minimum '+_roN(r.min):''}</div>
+        <div style="font-size:14px;color:var(--muted)">${sell}${lasts?' · '+lasts:''}</div>
+        ${r.category?`<div style="font-size:13px;color:var(--muted)">${esc(r.category)}</div>`:''}</div>
+      <div style="text-align:right;flex:none">${right}</div></div>`;
+  }).join('')+(L.length>MAX?`<div style="font-size:15px;color:var(--muted);margin:6px 2px">…and ${L.length-MAX} more. Search to find one.</div>`:'')
+  :`<div style="color:var(--muted);padding:12px 0;text-align:center">${q?'No item matches.':(all?'No items yet.':'Nothing needs ordering right now.')}</div>`;
+}
+function saveReorderPolicy(){
+  if(!isAdmin())return;
+  if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+  const msg=h=>{const m=document.getElementById('ro-msg');if(m)m.innerHTML=h;};      // looked up when called: updateData() re-renders the page
+  const rd=id=>{const v=String(document.getElementById(id)?.value||'').trim(),n=Number(v);return v!==''&&isFinite(n)&&Math.floor(n)===n?n:NaN;};
+  const RG=Sales.REORDER_RANGE,lead=rd('ro-lead'),cover=rd('ro-cover'),look=rd('ro-look');
+  if(!(lead>=RG.lead[0]&&lead<=RG.lead[1]))return msg(`<div class="err-box">Days the supplier takes: a whole number from ${RG.lead[0]} to ${RG.lead[1]}.</div>`);
+  if(!(cover>=RG.cover[0]&&cover<=RG.cover[1]))return msg(`<div class="err-box">Days of stock to hold: a whole number from ${RG.cover[0]} to ${RG.cover[1]}.</div>`);
+  if(!(look>=RG.look[0]&&look<=RG.look[1]))return msg(`<div class="err-box">Days of sales to average: a whole number from ${RG.look[0]} to ${RG.look[1]}.</div>`);
+  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),reorderLeadDays:lead,reorderCoverDays:cover,reorderLookDays:look}}));
+  logAuditEvent('UPDATE','Reorder settings',`Supplier takes ${lead} days · hold ${cover} days of stock · average the last ${look} days`);
+  msg('<div class="ok-msg">✅ Saved. The list is recalculated.</div>');
+  _roRender();
+}
+function _roOrderRows(){return _reorderReport().rows.filter(r=>r.flag&&r.qty>0);}      // the whole list to order, whatever the search box says
+function _roText(L){
+  const di=DATA.depotInfo||{};
+  return ['Reorder list'+(di.name?' — '+di.name:'')+' — '+fmtDate(today()),''].concat(L.map((r,i)=>(i+1)+'. '+r.name+' — '+_roN(r.qty)+(r.unit?' '+r.unit.toLowerCase():''))).join('\n');
+}
+function _roShare(){
+  const L=_roOrderRows();
+  if(!L.length){showToast('Nothing to order right now.');return;}
+  const t=_roText(L);
+  try{if(navigator.share){navigator.share({title:'Reorder list',text:t}).catch(()=>{});return;}}catch(e){}
+  const no=()=>{try{window.prompt('Copy this list:',t);}catch(e){alert(t);}};
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(()=>showToast('📋 List copied'),no);else no();
+}
+function _roPdf(){
+  if(!hasFeature('export_csv')){showUpgradePrompt('export_csv');return;}
+  const L=_roOrderRows();
+  if(!L.length){showToast('Nothing to order right now.');return;}
+  const rows=[_csvRow(['Item','Unit','Available','Minimum','Sells per day','Lasts (days)','Order','Est. cost'])];
+  L.forEach(r=>rows.push(_csvRow([r.name,r.unit,_roN(r.available),r.min>0?_roN(r.min):'',r.rate>0?_roRate(r.rate):'',r.cover==null?'':+r.cover.toFixed(1),_roN(r.qty),r.value>0?zm(r.value):''])));
+  _csvDownload(rows,_csvFilename('Reorder_List'));
 }
 
 

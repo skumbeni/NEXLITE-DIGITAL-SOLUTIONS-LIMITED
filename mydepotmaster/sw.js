@@ -25,7 +25,38 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.72 (2026-11-15) — Till roadmap step 30: expiry dates and batches (sales.js + pos.html + index.html + sw.js; no database, rules, returns.js, shifts.js, till_verify.js or gate.js change).
+// Current version: v0.3.74 (2026-11-16) — Till roadmap step 32: reorder suggestions from minimum stock and stock cover (sales.js + index.html + sw.js; no database, rules, pos.html, returns.js, shifts.js, till_verify.js or gate.js change).
+//   - REORDER LIST. General > Stock > "Reorder" (also in the header menu, in the dashboard's low-stock alert and in the Till Today card), Admin and Manager: which items to order and how many. Nothing is stored about the list:
+//     Sales.reorderBook() (sales.js) works it out from the records stock already reads. AVAILABLE = genStock's balance (the one stock formula) less the item's reserved quantity and less stock past its expiry date (the till will not
+//     sell it). RATE = what customers took per day over the last N COMPLETE days (today is left out): till sale lines + priced Issue Item rows, less void / refund lines of any kind; internal issues and write-offs are not demand.
+//     A young item is averaged over the days it has existed (marked "only N days of sales to go on" under 7 days). COVER = available / rate.
+//   - THE RULE. Safety = the item's minimum stock. REORDER POINT = safety + rate x supplier days: an item is listed when what is available is at or below it. ORDER UP TO = safety + rate x (supplier days + days to hold); the order is that
+//     minus what is available, rounded up to a whole base unit. An item at or under its minimum is always listed (the old low-stock alert's test, on the smaller available figure, so the list is never shorter than the alert). Status: OUT, LOW,
+//     ORDER SOON; an item with no minimum and no sales in the window is never listed. At its minimum with no recent sales there is nothing to size an order from: it is listed with no quantity.
+//   - THREE NUMBERS, set by the Admin on the screen (defaults 3 / 14 / 30 days): days the supplier takes (0-90), days of stock to hold after a delivery (1-180), days of sales to average (7-365). Kept in depotInfo
+//     (reorderLeadDays, reorderCoverDays, reorderLookDays) inside the DATA blob like the discount limits, so they sync like any setting and database_rules.json needs no change. Saving is written to the audit log.
+//   - SHARE and PDF. Share sends the list (item and quantity only, no cost) through the phone's share sheet, or copies it. PDF is the usual export (needs export_csv). The estimated cost uses each item's current purchase price; items
+//     with none are left out of the total and counted.
+//   - Not plan-gated (no new feature key, gate.js unchanged): it reads the same stock and minimums the Low stock alert does. Staff and Cashier logins do not see it (it shows purchase prices).
+//   - NO CHANGE TO RECORDS: no new fields on sales, returns or items; nothing uploaded; pos.html does not call reorderBook, so the tills do not have to update together. Only index.html calls Sales.reorderBook, so sales.js and
+//     index.html must go out together (both are precached; the CACHE bump above refreshes them). scripts/till/ may keep its copy of sales.js: till_verify.js does not use reorderBook.
+//   - Test: test_reorder.js (the engine against the real sales.js and returns.js: hand-worked cases, the stock figure from stockBook with returns, 400 random histories against a brute-force day-by-day calculation).
+// Previous: v0.3.73 (2026-11-16) — Till roadmap step 31: margin reports using cost (sales.js + index.html + sw.js; no database, rules, pos.html, returns.js, shifts.js, till_verify.js or gate.js change).
+//   - MARGIN. General > Finance > "Margin" (also in the header menu): gross profit and margin % by item or by category, for the period buttons' period, from COST. Nothing is stored: Sales.marginBook() (sales.js)
+//     sums the records stock already reads. Revenue = what was really taken (line totals after discounts, offers and wholesale prices) less voids / refunds on the day they were made, plus priced Issue Item rows
+//     (internal issues carry no price, so they are never margin). COST of a sale = the average price paid for the PRICED stock received up to that moment (approved, not rejected, purchasePrice > 0; at the same minute
+//     a receive counts first, as in stockBook), so a later price rise never rewrites an old margin. Nothing priced received yet: the item's current cost, marked EST. No cost at all: NOT COSTED, shown on its own and
+//     left out of the margin %, never guessed (coverage says what share of the revenue has a cost). A refund takes back the cost the SALE had; goods that come back damaged (restock:false) keep their cost.
+//     Packs and cartons cost their base units. Money is worked in whole ngwee per line, so rows, categories and totals add up to the ngwee.
+//   - NOT INCLUDED: commodities (bought in bulk, shown under purchases in the P&L; their revenue is reported apart), write-offs and stock-count losses. VAT is not separated (amounts as entered).
+//   - DIFFERS FROM THE P&L on purpose: the P&L costs every sale at the average of ALL receipts ever (also later ones); the Margin report costs each sale as at its own moment. They agree while prices are steady.
+//   - Pro, behind the same switch as the P&L (profit_loss): no new feature key, so gate.js is unchanged. The period is the app's own filterPeriod (one call over the days that have records, one memo entry), so it covers
+//     exactly the days Sales History and the P&L do, history limit included. Export: the existing PDF button (General > Margin), following the grouping and filter on screen; the total row is always the whole period.
+//   - NO CHANGE TO RECORDS: no new fields, nothing uploaded, no database rules, and pos.html does not call marginBook, so the tills do not have to update together. Only index.html calls Sales.marginBook, so
+//     sales.js and index.html must go out together (both are precached; the CACHE bump above refreshes them). scripts/till/ may keep its copy of sales.js: till_verify.js does not use marginBook.
+//   - Tests: test_margin.js (the engine against the real sales.js and returns.js: hand-worked cases, real validated sale and refund records, 300 random histories against a brute-force calculation) and
+//     test_margin_main.js (the screen, period rule, memo cache, escaping and export, cut out of index.html and run against the real sales.js).
+// Previous: v0.3.72 (2026-11-15) — Till roadmap step 30: expiry dates and batches (sales.js + pos.html + index.html + sw.js; no database, rules, returns.js, shifts.js, till_verify.js or gate.js change).
 //   - BATCHES. A batch is what one delivery brought in: the optional Batch / Lot No. (new on the Receive and Edit Receive forms; Scan Receive already had it) and the Expiry Date of its received row. Same batch no. + same date = one
 //     batch; a row with neither is the undated batch (stock that does not expire, and every delivery before this version). Nothing is stored: Sales.expiryBook() (sales.js) replays the records the stock formula reads, in date/time
 //     order, and gives every sale and issue to the batches FIRST-EXPIRED-FIRST-OUT, so the batches of an item always add up to its stockBook() balance (property-tested over 300 random histories).
@@ -2322,7 +2353,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.72';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.74';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

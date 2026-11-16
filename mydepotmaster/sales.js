@@ -905,6 +905,252 @@ const Sales = (function () {
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
+  // MARGIN REPORT (roadmap step 31)
+  // ══════════════════════════════════════════════════════════════════════════════
+  // What did the stock we sold cost us, and what is left? Nothing is stored (no cost on the sale record, no counter): marginBook() works the figures out from the same
+  // records stockBook() reads, so a report can be re-run for any period and always agrees with the ledger.
+  //   REVENUE   what was really taken: sale line.total (after discounts, offers and wholesale prices), less the lines of voids / refunds (booked on the day the return was made,
+  //             like Sales History and the Z report, so a day that was closed is never changed), plus the main app's own Issue Item rows that carry a selling price.
+  //   COST      the AVERAGE COST OF THE PRIORITISED STOCK RECEIVED UP TO THE MOMENT OF THE SALE: sum(received x purchasePrice) / sum(received) over the item's approved, not
+  //             rejected received rows that carry a price, at or before the sale (at the same minute a receive counts first, as in stockBook). So a later price rise never rewrites
+  //             an old margin, and a price you paid last year still counts in this year's average, exactly like the Profit & Loss report's average but as at the sale.
+  //             A received row with no price (a stock-count surplus, opening stock typed in without a price) is left out of the average: it neither lowers nor raises it.
+  //             If NOTHING priced had been received yet, the item's current cost (opts.currentCost) is used and the figure is marked ESTIMATED; with no cost at all the sale is NOT COSTED.
+  //   RETURNS   goods that go back on the shelf come off the cost at the SAME unit cost as the sale line they reverse (so a refund never depends on today's price); goods that come
+  //             back damaged (restock:false) keep their cost: the money went back, the stock is lost, and the margin shows it. A return of a sale this book cannot see is costed as at the return.
+  //   NOT COSTED sales with no cost known are never guessed: their revenue is shown on its own, and margin %, cost and profit are worked ONLY on the costed revenue, so a missing cost can
+  //             never inflate a margin. `coverage` says what share of the revenue was costed.
+  //   NOT INCLUDED commodity lines (kind 'commodity'): a commodity is bought in bulk and booked as purchases in the P&L; their revenue is reported in `skipped`, never mixed in.
+  //   VAT is not separated: revenue and cost are the amounts as entered.
+  // Money is worked in whole ngwee per line (cost = round(base qty x unit cost x 100)), so every row, category and the totals add up exactly: profit = costed revenue - cost.
+  // src:  received  generalInventory rows  {itemId?, itemName, received, purchasePrice, date, time, approvalStatus, condition}   (purchasePrice is per BASE unit)
+  //       issued    generalIssued rows: only rows that are not _sale, are approved and carry sellingPrice > 0 are sales (internal issues have price 0, so they are never margin)
+  //       sales     ledger records (sales.js)           returns  return RECORDS (returns.js), NOT Returns.forStock()
+  // opts: idOfName / keyOf / isApproved as in stockBook;  from / to  'YYYY-MM-DD' inclusive (omit for all time), or within(date) -> true for a day that is in the period (wins over from / to:
+  //       the main app passes its own period rule, so the report always covers exactly the days Sales History and the P&L do);
+  //       currentCost(key) the item's cost per base unit today (the fallback);  nameOf(key) / categoryOf(key)  for the labels (default: the name on the records, no category)
+  // Returns { rows, categories, totals, skipped, counts }
+  //   row / category: { key, name, category?, unit?, qty (net base units sold), revenue, costedRevenue, notCostedRevenue, estimatedRevenue (costed from the current cost), cost, profit,
+  //                     marginPct (profit / costed revenue), markupPct (profit / cost), loss (profit < 0), lines }     rows sorted by profit, biggest first
+  //   totals:       the same fields over everything, plus coverage (costed revenue / revenue, or null when there is no revenue)
+  //   skipped:      { commodityRevenue }       counts: { sales, returns, issued } documents inside the period
+  function marginBook(src, o) {
+    o = o || {};
+    src = src || {};
+    const idOf = o.idOfName || (n => 'name:' + String(n || '').trim().toUpperCase());
+    const ok = o.isApproved || (r => !r.approvalStatus || r.approvalStatus === 'approved');
+    const keyOf = o.keyOf || (r => r.itemId || idOf(r.itemName));
+    const from = o.from ? String(o.from) : null, to = o.to ? String(o.to) : null;
+    const inRange = o.within ? (d => !!o.within(String(d || ''))) : (d => { d = String(d || ''); return (!from || d >= from) && (!to || d <= to); });
+    const at = (date, time) => String(date || '') + ' ' + (time || '00:00');
+
+    // cost history per item: priced received rows in time order, with running totals
+    const hist = new Map();
+    (src.received || []).forEach(r => {
+      if (!r || r._sale || !ok(r) || r.condition === 'rejected') return;
+      const q = Number(r.received), p = Number(r.purchasePrice);
+      if (!isNum(q) || !(q > 0) || !isNum(p) || !(p > 0)) return;
+      const k = keyOf(r); if (!k) return;
+      let a = hist.get(k); if (!a) hist.set(k, a = []);
+      a.push({ at: at(r.date, r.time), q, v: q * p });
+    });
+    hist.forEach(a => {
+      a.sort((x, y) => (x.at < y.at ? -1 : x.at > y.at ? 1 : 0));
+      let cq = 0, cv = 0;
+      a.forEach(e => { cq += e.q; cv += e.v; e.cq = cq; e.cv = cv; });
+    });
+    // unit cost per base unit as at a moment: { unit, how: 'avg' | 'current' } or null
+    const costAt = (k, when) => {
+      const a = hist.get(k);
+      if (a) {
+        let lo = 0, hi = a.length - 1, best = -1;
+        while (lo <= hi) { const m = (lo + hi) >> 1; if (a[m].at <= when) { best = m; lo = m + 1; } else hi = m - 1; }
+        if (best >= 0) return { unit: a[best].cv / a[best].cq, how: 'avg' };
+      }
+      const cur = o.currentCost ? Number(o.currentCost(k)) : 0;
+      return isNum(cur) && cur > 0 ? { unit: cur, how: 'current' } : null;
+    };
+
+    const ev = [];                                                    // one event per sale / issue / return line inside the period
+    const lineCost = new Map();                                       // 'saleId#lineIndex' -> the cost the sale line was given (a return reverses it at the same cost)
+    const skipped = { commodityRevenue: 0 }, counts = { sales: 0, returns: 0, issued: 0 };
+    const push = (k, name, unit, d, qty, revC, cost, cogsC) => ev.push({ k, name, unit, d, qty, revC, cost, cogsC });
+
+    (src.sales || []).forEach(s => {
+      if (!s) return;
+      const day = String(s.date || ''), when = at(s.date, s.time), live = inRange(day);
+      if (live) counts.sales++;
+      arr(s.lines).forEach((l, i) => {
+        if (!l) return;
+        if (l.kind === 'commodity') { if (live) skipped.commodityRevenue += toC(l.total); return; }
+        const k = l.itemId; if (!k) return;
+        const q = baseQty(l), c = costAt(k, when);
+        lineCost.set(s.id + '#' + i, c);
+        if (live) push(k, l.name, fOf(l) === 1 ? l.unit : (l.base || l.unit), day, q, toC(l.total), c, c ? Math.round(q * c.unit * 100) : 0);
+      });
+    });
+    (src.issued || []).forEach(r => {
+      if (!r || r._sale || !ok(r) || !(Number(r.sellingPrice) > 0) || !(Number(r.issued) > 0) || !inRange(r.date)) return;
+      const k = keyOf(r); if (!k) return;
+      counts.issued++;
+      const q = Number(r.issued), c = costAt(k, at(r.date, r.time));
+      push(k, r.itemName, '', String(r.date || ''), q, toC(q * Number(r.sellingPrice)), c, c ? Math.round(q * c.unit * 100) : 0);
+    });
+    (src.returns || []).forEach(r => {
+      if (!r || !inRange(r.date)) return;
+      counts.returns++;
+      arr(r.lines).forEach(l => {
+        if (!l) return;
+        if (l.kind === 'commodity') { skipped.commodityRevenue -= toC(l.total); return; }
+        const k = l.itemId; if (!k) return;
+        const q = baseQty(l), had = lineCost.has(r.saleId + '#' + l.lineNo), c = had ? lineCost.get(r.saleId + '#' + l.lineNo) : costAt(k, at(r.date, r.time));
+        push(k, l.name, fOf(l) === 1 ? l.unit : (l.base || l.unit), String(r.date || ''), -q, -toC(l.total), c, c && l.restock !== false ? -Math.round(q * c.unit * 100) : 0);
+      });
+    });
+
+    const blank = () => ({ qty: 0, revC: 0, costedC: 0, notC: 0, estC: 0, cogsC: 0, lines: 0 });
+    const add = (t, e) => {
+      t.qty += e.qty; t.revC += e.revC; t.lines++;
+      if (e.cost) { t.costedC += e.revC; t.cogsC += e.cogsC; if (e.cost.how === 'current') t.estC += e.revC; } else t.notC += e.revC;
+    };
+    const fin = (t, base) => {
+      const profitC = t.costedC - t.cogsC;
+      return Object.assign(base, {
+        qty: r3(t.qty), revenue: t.revC / 100, costedRevenue: t.costedC / 100, notCostedRevenue: t.notC / 100, estimatedRevenue: t.estC / 100,
+        cost: t.cogsC / 100, profit: profitC / 100,
+        marginPct: t.costedC !== 0 ? r2(profitC / t.costedC * 100) : null, markupPct: t.cogsC > 0 ? r2(profitC / t.cogsC * 100) : null,
+        loss: profitC < 0, lines: t.lines
+      });
+    };
+    const items = new Map(), cats = new Map(), all = blank();
+    ev.forEach(e => {
+      let it = items.get(e.k);
+      if (!it) items.set(e.k, it = { t: blank(), name: e.name, unit: e.unit });
+      if (!it.unit && e.unit) it.unit = e.unit;
+      add(it.t, e); add(all, e);
+    });
+    const rows = [];
+    items.forEach((it, k) => {
+      if (!it.t.qty && !it.t.revC && !it.t.cogsC) return;            // a sale that was fully given back at its own cost leaves nothing to report
+      const cat = o.categoryOf ? String(o.categoryOf(k) || '') : '';
+      const row = fin(it.t, { key: k, name: (o.nameOf && o.nameOf(k)) || it.name || k, category: cat, unit: it.unit || '' });
+      rows.push(row);
+      let c = cats.get(cat); if (!c) cats.set(cat, c = { t: blank(), items: 0 });
+      c.items++;
+      ['qty', 'revC', 'costedC', 'notC', 'estC', 'cogsC', 'lines'].forEach(f => { c.t[f] += it.t[f]; });
+    });
+    const byProfit = (a, b) => (b.profit - a.profit) || (b.revenue - a.revenue) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    rows.sort(byProfit);
+    const categories = Array.from(cats.entries()).map(([cat, c]) => fin(c.t, { key: cat, name: cat, items: c.items })).sort(byProfit);
+    skipped.commodityRevenue = skipped.commodityRevenue / 100;
+    const totals = fin(all, {});
+    totals.coverage = totals.revenue !== 0 ? r2(totals.costedRevenue / totals.revenue * 100) : null;
+    totals.items = rows.length;
+    return { rows, categories, totals, skipped, counts };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
+  // REORDER SUGGESTIONS (roadmap step 32)
+  // ══════════════════════════════════════════════════════════════════════════════
+  // What should we order, and how many? Nothing is stored (no reorder level, no counter): reorderBook() works the list out from the records stock already reads, so it always agrees with the ledger.
+  //   AVAILABLE  what can be sold today = the item's stock (the caller's onHand(key): stockBook's balance, so there is ONE stock formula) less its reserved quantity and less any stock past its
+  //              expiry date (opts.unsellable(key), from expiryBook: the till will not sell it). It can be negative (an oversell).
+  //   RATE       what customers take per day over the last `look` COMPLETE days (today is left out: it is not finished): till sale lines + the main app's priced Issue Item rows (the same rule as
+  //              marginBook: an issue with a selling price is a sale), less what customers gave back (void / refund lines, restocked or not). Internal issues, write-offs and stock-count losses are
+  //              not demand. Commodity lines are not in this list. Quantities are in BASE units. An item younger than the window is averaged over the complete days since its first receive or
+  //              sale, so a new line is not under-counted; `thin` marks a rate worked from fewer than 7 days (a rough guess). A day the shelf was empty counts as a day of no demand.
+  //   COVER      days the available stock lasts at that rate = available / rate (null when nothing sells).
+  //   THE RULE   safety = the item's minimum stock (set by the Admin on the item); lead = days the supplier takes; cover = days of stock to hold after a delivery.
+  //                REORDER POINT = safety + rate x lead              order when what is available is at or below it: it would dip into the safety stock before a delivery can arrive
+  //                ORDER UP TO   = safety + rate x (lead + cover)
+  //                ORDER         = ORDER UP TO - available, to the nearest thousandth and then UP to a whole base unit
+  //   STATUS     'out' (nothing available) > 'low' (at or under the minimum: the same test as the low-stock alert, on a smaller number) > 'soon' (above the minimum, at or under the reorder point)
+  //              > 'ok' (never listed). 'none': no minimum and nothing sold in the window, so there is nothing to size an order from (never listed).
+  //              At or under its minimum with no recent sales, the order is only what brings it back to the minimum (0 when it sits exactly on it: flagged, but there is nothing to size an order from).
+  // Money is the item's CURRENT cost per base unit (items[].cost), an estimate: value = round(order x cost x 100) / 100 per row, and the total adds the rows.
+  // src:   items     [{ id, name, minStock, reserved?, category?, unit?, cost? }]   the item master (an item with no id is skipped)
+  //        received  generalInventory rows (only to find when an item first appeared)      issued  generalIssued rows      sales  ledger records      returns  return RECORDS (returns.js)
+  // opts:  today 'YYYY-MM-DD' (default: the UTC date);  lead / cover / look  the policy in whole days (see reorderPolicy: anything missing or out of range takes the default);
+  //        onHand(key) REQUIRED;  unsellable(key) optional;  idOfName / keyOf / isApproved as in stockBook
+  // Returns { rows, totals, policy }
+  //   row:    { key, name, category, unit, onHand, reserved, expired, available, min, demand (net units over `days`), days (complete days averaged), rate (per day), thin, cover (days), reorderPoint, orderUpTo,
+  //             status, flag (out / low / soon), qty (to order), cost, value }      sorted: out, low, soon, ok, none; then the shortest cover first; then by name
+  //   totals: { items, order (flagged), out, low, soon, ok, none, value (of what has a cost), uncosted (flagged items with something to order but no cost) }
+  const REORDER_DEFAULTS = { lead: 3, cover: 14, look: 30 };
+  const REORDER_RANGE = { lead: [0, 90], cover: [1, 180], look: [7, 365] };
+  // The depot's policy (kept in depotInfo, set on the Reorder screen by the Admin): reorderLeadDays, reorderCoverDays, reorderLookDays, whole days. Missing or out of range = the default.
+  function reorderPolicy(depotInfo) {
+    const di = depotInfo || {};
+    const pick = (v, k) => {
+      const n = typeof v === 'number' ? v : (typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN);
+      return isFinite(n) && Math.floor(n) === n && n >= REORDER_RANGE[k][0] && n <= REORDER_RANGE[k][1] ? n : REORDER_DEFAULTS[k];
+    };
+    return { lead: pick(di.reorderLeadDays, 'lead'), cover: pick(di.reorderCoverDays, 'cover'), look: pick(di.reorderLookDays, 'look') };
+  }
+  function reorderBook(src, o) {
+    o = o || {};
+    src = src || {};
+    if (typeof o.onHand !== 'function') throw err('INVALID', 'reorderBook needs onHand(key): the stock figure comes from stockBook, never from a second formula');
+    const idOf = o.idOfName || (n => 'name:' + String(n || '').trim().toUpperCase());
+    const ok = o.isApproved || (r => !r.approvalStatus || r.approvalStatus === 'approved');
+    const keyOf = o.keyOf || (r => r.itemId || idOf(r.itemName));
+    const pol = reorderPolicy({ reorderLeadDays: o.lead, reorderCoverDays: o.cover, reorderLookDays: o.look });
+    const tn = dayNo(o.today || new Date().toISOString().slice(0, 10));
+    if (tn == null) throw err('INVALID', 'today must be YYYY-MM-DD');
+    const lo = tn - pol.look, hi = tn - 1;                              // the complete days that are averaged
+
+    const first = new Map(), dem = new Map();                           // key -> first day number with a record;  key -> net base units taken inside the window
+    const seen = (k, d) => { const n = dayNo(d); if (!k || n == null) return; const f = first.get(k); if (f === undefined || n < f) first.set(k, n); };
+    const take = (k, d, q) => { const n = dayNo(d); if (!k || n == null || n < lo || n > hi) return; dem.set(k, (dem.get(k) || 0) + q); };
+    (src.received || []).forEach(r => { if (r && !r._sale && ok(r) && r.condition !== 'rejected' && Number(r.received) > 0) seen(keyOf(r), r.date); });
+    (src.sales || []).forEach(s => {
+      if (!s) return;
+      arr(s.lines).forEach(l => { if (!l || l.kind === 'commodity' || !l.itemId) return; seen(l.itemId, s.date); take(l.itemId, s.date, baseQty(l)); });
+    });
+    (src.issued || []).forEach(r => {
+      if (!r || r._sale || !ok(r) || !(Number(r.sellingPrice) > 0) || !(Number(r.issued) > 0)) return;      // only an issue with a selling price is a sale
+      const k = keyOf(r); seen(k, r.date); take(k, r.date, Number(r.issued));
+    });
+    (src.returns || []).forEach(r => {
+      if (!r) return;
+      arr(r.lines).forEach(l => { if (!l || l.kind === 'commodity' || !l.itemId) return; take(l.itemId, r.date, -baseQty(l)); });
+    });
+
+    const E = 1e-9, rows = [], sumC = { v: 0 };
+    arr(src.items).forEach(it => {
+      if (!it || !it.id) return;
+      const key = String(it.id), min = Math.max(0, Number(it.minStock) || 0), rsv = Math.max(0, Number(it.reserved) || 0);
+      const onHand = Number(o.onHand(key)) || 0, exp = typeof o.unsellable === 'function' ? Math.max(0, Number(o.unsellable(key)) || 0) : 0;
+      const avail = r3(onHand - rsv - exp);
+      const f = first.get(key), hist = f === undefined ? 0 : Math.max(0, tn - f);                 // complete days since the first record (a record from today gives 0)
+      const days = Math.min(hist, pol.look), used = Math.max(0, dem.get(key) || 0);
+      const rate = days > 0 ? used / days : 0;
+      const rop = min + rate * pol.lead, up = min + rate * (pol.lead + pol.cover);
+      let status;
+      if (!(rate > 0) && !(min > 0)) status = 'none';
+      else if (avail <= 0) status = 'out';
+      else if (min > 0 && avail <= min) status = 'low';
+      else if (rate > 0 && avail <= rop + E) status = 'soon';
+      else status = 'ok';
+      const flag = status === 'out' || status === 'low' || status === 'soon';
+      const qty = flag ? Math.max(0, Math.ceil(r3(up - avail))) : 0;
+      const cost = Number(it.cost) > 0 ? Number(it.cost) : 0, valueC = cost && qty > 0 ? Math.round(qty * cost * 100) : 0;
+      if (flag && valueC) sumC.v += valueC;
+      rows.push({
+        key, name: String(it.name || ''), category: String(it.category || ''), unit: String(it.unit || ''),
+        onHand: r3(onHand), reserved: r3(rsv), expired: r3(exp), available: avail, min: r3(min),
+        demand: r3(used), days, rate: r3(rate), thin: days > 0 && days < 7, cover: rate > 0 ? r2(Math.max(0, avail) / rate) : null,
+        reorderPoint: r3(rop), orderUpTo: r3(up), status, flag, qty, cost, value: valueC / 100
+      });
+    });
+    const RANK = { out: 0, low: 1, soon: 2, ok: 3, none: 4 };
+    rows.sort((a, b) => (RANK[a.status] - RANK[b.status]) || ((a.cover == null) - (b.cover == null)) || ((a.cover || 0) - (b.cover || 0)) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    const totals = { items: rows.length, order: 0, out: 0, low: 0, soon: 0, ok: 0, none: 0, value: sumC.v / 100, uncosted: 0 };
+    rows.forEach(r => { totals[r.status]++; if (r.flag) { totals.order++; if (r.qty > 0 && !r.cost) totals.uncosted++; } });
+    return { rows, totals, policy: pol };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
   // STORAGE ADAPTERS — every method is async; d = depot key
   //   add(d, rec)                       save a sale AND queue it for upload, in one transaction; EXISTS if the id is taken
   //   get(d, id) / all(d)               read
@@ -1095,7 +1341,7 @@ const Sales = (function () {
     return { append, all, pending, push, pull, importMany };
   }
 
-  return { V, ID_RE, BATCH_NAME, DISC_MAX_PCT, PROMO_BY, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, expiryBook, EXPIRY_WARN, daysUntil, fOf, baseQty, unitList, FACTOR_MAX, linePaid, methodsOf, netPrice, discountPolicy, discountSplit, discountJudge, pctText, promoCheck, promoList, promoDay, promoActive, promoMatches, promoText, promoLine, promoApply, discountParts, WHOLESALE, levelPolicy, levelApply, create, memAdapter, idbAdapter };
+  return { V, ID_RE, BATCH_NAME, DISC_MAX_PCT, PROMO_BY, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, expiryBook, marginBook, reorderBook, reorderPolicy, REORDER_DEFAULTS, REORDER_RANGE, EXPIRY_WARN, daysUntil, fOf, baseQty, unitList, FACTOR_MAX, linePaid, methodsOf, netPrice, discountPolicy, discountSplit, discountJudge, pctText, promoCheck, promoList, promoDay, promoActive, promoMatches, promoText, promoLine, promoApply, discountParts, WHOLESALE, levelPolicy, levelApply, create, memAdapter, idbAdapter };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Sales; // lets Node load it for tests
