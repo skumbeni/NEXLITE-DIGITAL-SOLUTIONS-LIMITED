@@ -4646,7 +4646,7 @@
             'savePO','saveGRN','saveDN','saveCD','saveRET','saveTRF','saveSupPay','receiveAgainstPO','togglePOCancel','dnSetStatus','grnSaveNewProduct',
             'saveCreditPromise','saveCreditTerm','saveQuoteDoc','dnSignFromPrint','deleteSavedDoc',
             // forms that open an "add/edit" screen
-            'openAddStockModal','openAddCustomerModal','openAddSupplierModal','openAdjustmentModal','approveAdjustment','rejectAdjustment',
+            'openAddStockModal','openAddCustomerModal','openAddSupplierModal','openAdjustmentModal','approveAdjustment','rejectAdjustment','approveTransfer','rejectTransfer',
             'openEditModal','openEditSaleModal','openEditPurchaseModal','openEditFISPModal','openEditExpenseModal','openEditCustomerModal','openEditSupplierModal','openEditCreditModal',
             'openPOModal','openGRNModal','openDNModal','openCDModal','openRETModal','openTRFModal','openSupPayModal',
             'prepareSaleModal','preparePurchaseModal','prepareFISPModal',
@@ -8922,8 +8922,8 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                     disc: add(db.sales.filter(x => pred(x.date)), x => x.discount),
                     rets: add(db.returns.filter(x => pred(x.date)), x => x.total),
                     pur: add(db.purchases.filter(x => pred(x.date)), x => x.total),
-                    tin: add(db.transfers.filter(x => x.direction === 'in' && !x.internal && pred(x.date)), x => x.total),
-                    tout: add(db.transfers.filter(x => x.direction === 'out' && !x.internal && pred(x.date)), x => x.total),
+                    tin: add(db.transfers.filter(x => trfLive(x) && x.direction === 'in' && !x.internal && pred(x.date)), x => x.total),
+                    tout: add(db.transfers.filter(x => trfLive(x) && x.direction === 'out' && !x.internal && pred(x.date)), x => x.total),
                     exp: add(db.expenses.filter(x => pred(x.date)), x => x.amt),
                     wo: add(db.adjustments.filter(x => adjLive(x) && pred(x.date) && x.direction === 'down' && x.lossValue > 0), x => x.lossValue),
                     stock: add(db.inventory, i => i.qty * i.cost)
@@ -8932,7 +8932,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 g.grossSales += r.sales; g.discounts += r.disc || 0; g.returnsTotal += r.rets; g.purchasesRaw += r.pur; g.extIn += r.tin; g.extOut += r.tout;
                 g.expenses += r.exp; g.writeoffs += r.wo; g.closingShops += r.stock;
             });
-            const out = dbLoad('transfers').filter(t => t && t.internal && t.direction === 'out');
+            const out = dbLoad('transfers').filter(t => t && trfLive(t) && t.internal && t.direction === 'out');
             g.inTransit = _r2(add(out.filter(t => t.status === 'in_transit'), t => t.total));
             g.lostInTransit = _r2(add(out.filter(t => t.status === 'received' && t.shortQty > 0 && pred(t.date)),
                 t => add(t.items || [], it => Math.max(0, (it.qty || 0) - (it.recvQty != null ? it.recvQty : it.qty || 0)) * (it.unitCost || 0))));
@@ -9011,8 +9011,8 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const returnsTotal = db.returns.filter(r => matchesMonth(r.date)).reduce((sum, r) => sum + (r.total || 0), 0);
             const revenue   = grossSales - returnsTotal;
             const purchasesRaw = db.purchases.filter(p => matchesMonth(p.date)).reduce((sum, p) => sum + p.total, 0);
-            const transfersIn  = db.transfers.filter(t => t.direction === 'in'  && matchesMonth(t.date)).reduce((sum, t) => sum + (t.total || 0), 0);
-            const transfersOut = db.transfers.filter(t => t.direction === 'out' && matchesMonth(t.date)).reduce((sum, t) => sum + (t.total || 0), 0);
+            const transfersIn  = db.transfers.filter(t => trfLive(t) && t.direction === 'in'  && matchesMonth(t.date)).reduce((sum, t) => sum + (t.total || 0), 0);
+            const transfersOut = db.transfers.filter(t => trfLive(t) && t.direction === 'out' && matchesMonth(t.date)).reduce((sum, t) => sum + (t.total || 0), 0);
             const purchases = purchasesRaw + transfersIn - transfersOut;
             const expenses  = db.expenses.filter(e => matchesMonth(e.date)).reduce((sum, e) => sum + e.amt, 0);
             // Write-off losses: downward adjustments that have a lossValue (spoilage, breakage, theft, donation)
@@ -11592,6 +11592,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
         let grnNewProdTarget = 'grn';
 
         function openGRNModal(editId) {
+            if (editId && currentUser !== 'admin') { showToast('Only the admin can edit a posted GRN', 'danger'); return; }
             const g = editId ? db.grns.find(x => x.id === editId) : null;
             if (editId && !g) return;
             grnEditId = g ? g.id : null;
@@ -12249,24 +12250,38 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const _dest = (trfDir === 'out' && _destRow && !_destRow.classList.contains('hidden')) ? document.getElementById('trf-to-shop').value : '';
             if (_dest && !shopLicense(_dest).active) { showToast(getShopName(_dest) + ' is view-only right now, so it can\'t receive stock.' + (IS_PLAY_BUILD ? '' : ' Pay for that shop first.'), 'danger'); return; }
             const id = uid('TRF');
-            items.forEach(it => {
-                const p = inv.find(x => x.id === it.prodId);
-                if (trfDir === 'out') { p.qty -= it.qty; p.status = p.qty > 0 ? 'Fresh' : 'Out of Stock'; }
-                else { p.qty += it.qty; p.status = 'Fresh'; if (it.unitCost > 0) p.cost = it.unitCost; }
-            });
-            db.inventory = inv;
             const total = _r2(items.reduce((s, i) => s + i.qty * i.unitCost, 0));
             const toRow = document.getElementById('trf-to-row');
             const toId = (trfDir === 'out' && toRow && !toRow.classList.contains('hidden')) ? document.getElementById('trf-to-shop').value : '';
-            const list = db.transfers;
-            list.push(Object.assign({
+            const rec = Object.assign({
                 id: id, direction: trfDir, date: new Date().toLocaleDateString('en-GB'),
                 shop: toId ? getShopName(toId) : document.getElementById('trf-shop').value.trim(),
                 ref: trfDir === 'in' ? document.getElementById('trf-ref').value.trim() : '',
                 person: document.getElementById('trf-person').value.trim(),
                 notes: document.getElementById('trf-notes').value.trim(),
                 items: items, total: total, recordedBy: currentUser || 'unknown'
-            }, toId ? { internal: true, toShopId: toId, status: 'in_transit' } : {}));
+            }, toId ? { internal: true, toShopId: toId } : {});
+
+            // Staff cannot move stock by themselves: the transfer waits for the admin. Nothing is touched
+            // (stock, reports, the other shop's "receive" list) until it is approved.
+            if (currentUser !== 'admin') {
+                rec.approval = 'pending';
+                rec.requestedBy = String(currentDisplayName || currentUser || 'staff').slice(0, 100);
+                rec.updatedAt = Date.now();
+                const plist = db.transfers;
+                plist.push(rec);
+                db.transfers = plist;
+                closeModal('modal-trf');
+                refreshAll();
+                showToast('Sent to the admin for approval. Stock changes only after it is approved.');
+                return;
+            }
+
+            _trfApplyStock(inv, items, trfDir);
+            db.inventory = inv;
+            if (toId) rec.status = 'in_transit';
+            const list = db.transfers;
+            list.push(rec);
             db.transfers = list;
             closeModal('modal-trf');
             refreshAll();
@@ -12274,10 +12289,73 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             printTRF(id);
         }
 
+        function _trfApplyStock(inv, items, dir) {
+            items.forEach(it => {
+                const p = inv.find(x => x.id === it.prodId);
+                if (!p) return;
+                if (dir === 'out') { p.qty -= it.qty; p.status = p.qty > 0 ? 'Fresh' : 'Out of Stock'; }
+                else { p.qty += it.qty; p.status = 'Fresh'; if (it.unitCost > 0) p.cost = it.unitCost; }
+            });
+        }
+
+        // A transfer counts (stock, reports, in-transit list) only once approved. Records made before this
+        // feature, and the admin's own, have no approval field and are treated as approved.
+        function trfLive(t) { return !t || !t.approval || t.approval === 'approved'; }
+
+        // Admin: approve a staff transfer. Stock is re-checked now, because it may have changed since the request.
+        // The note takes today's date (when the stock really moves); the original date is kept as requestedDate.
+        function approveTransfer(id) {
+            if (currentUser !== 'admin') { showToast('Only the admin can approve transfers', 'danger'); return; }
+            const list = db.transfers;
+            const t = list.find(x => x.id === id);
+            if (!t || t.approval !== 'pending') { showToast('This transfer is no longer pending', 'danger'); refreshAll(); return; }
+            const inv = db.inventory;
+            for (const it of (t.items || [])) {
+                const p = inv.find(x => x.id === it.prodId);
+                if (!p) { showToast('A product on this transfer no longer exists. Reject it.', 'danger'); return; }
+                if (t.direction === 'out' && p.qty < it.qty) { showToast(`Only ${p.qty} of ${p.name} in stock now, so ${it.qty} cannot be sent. Reject it and ask for a new transfer.`, 'danger'); return; }
+            }
+            if (t.internal && !shopLicense(t.toShopId).active) { showToast(getShopName(t.toShopId) + ' is view-only right now, so it can\'t receive stock.', 'danger'); return; }
+            _trfApplyStock(inv, t.items || [], t.direction);
+            t.requestedDate = t.date;
+            t.date = new Date().toLocaleDateString('en-GB');
+            t.approval = 'approved';
+            t.approvedBy = String(currentDisplayName || 'Admin').slice(0, 100);
+            t.approvedAt = Date.now();
+            t.updatedAt = Date.now();
+            if (t.internal) t.status = 'in_transit';
+            db.inventory = inv;
+            db.transfers = list;
+            refreshAll();
+            showToast(t.direction === 'out' ? 'Approved. Stock was reduced.' + (t.internal ? ' It now shows as In transit.' : '') : 'Approved. Stock was increased.');
+        }
+
+        function rejectTransfer(id) {
+            if (currentUser !== 'admin') { showToast('Only the admin can reject transfers', 'danger'); return; }
+            const list = db.transfers;
+            const t = list.find(x => x.id === id);
+            if (!t || t.approval !== 'pending') { showToast('This transfer is no longer pending', 'danger'); refreshAll(); return; }
+            const why = prompt('Reason for rejecting (optional):', '');
+            if (why === null) return;
+            t.approval = 'rejected';
+            t.rejectReason = String(why || '').trim().slice(0, 300);
+            t.rejectedBy = String(currentDisplayName || 'Admin').slice(0, 100);
+            t.rejectedAt = Date.now();
+            t.updatedAt = Date.now();
+            db.transfers = list;
+            refreshAll();
+            showToast('Transfer rejected. Stock was not changed.');
+        }
+
         // Returns true if deleted. Undoes the stock movement.
         function trfDelete(id) {
             const t = db.transfers.find(x => x.id === id);
             if (!t) return true;
+            if (t.approval === 'pending' || t.approval === 'rejected') {
+                if (!confirm(`Delete ${t.id}?\n\nIt never changed your stock.`)) return false;
+                db.transfers = db.transfers.filter(x => x.id !== id);
+                return true;
+            }
             if (t.internal && t.direction === 'out' && t.status === 'received') { showToast('Already received by ' + t.shop + '. Delete the receiving record in that shop first.', 'danger'); return false; }
             if (!confirm(`Delete ${t.id}?\n\nYour stock will go ${t.direction === 'out' ? 'back up' : 'back down'} by the quantities on it.`)) return false;
             const inv = db.inventory;
@@ -12308,8 +12386,14 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             renderTRFRecvBtn();
             const all = db.transfers;
             const sum = document.getElementById('trf-summary');
-            const tot = d => _r2(all.filter(t => t.direction === d).reduce((s, t) => s + (t.total || 0), 0));
-            if (sum) sum.innerHTML = `<span><strong>Sent:</strong> ${formatZMW(tot('out'))}</span><span><strong>Received:</strong> ${formatZMW(tot('in'))}</span>`;
+            const tot = d => _r2(all.filter(t => trfLive(t) && t.direction === d).reduce((s, t) => s + (t.total || 0), 0));
+            if (sum) {
+                const nP = all.filter(t => t.approval === 'pending').length;
+                let nE = 0; try { nE = dbLoad('transfers').filter(t => t && t.approval === 'pending').length - nP; } catch (e) {}
+                sum.innerHTML = `<span><strong>Sent:</strong> ${formatZMW(tot('out'))}</span><span><strong>Received:</strong> ${formatZMW(tot('in'))}</span>` +
+                    (nP ? `<span style="color:#b26a00;font-weight:700;">⏳ ${nP} awaiting ${currentUser === 'admin' ? 'your ' : 'admin '}approval</span>` : '') +
+                    (currentUser === 'admin' && nE > 0 ? `<span style="color:#b26a00;">${nE} more in other shops</span>` : '');
+            }
             const q = (document.getElementById('search-trf')?.value || '').toLowerCase();
             const f = document.getElementById('trf-filter')?.value || '';
             const list = all.filter(t => (!f || t.direction === f) && (!q || [t.id, t.shop, t.ref, t.person, ...(t.items || []).map(i => i.prodName)].some(x => String(x || '').toLowerCase().includes(q))))
@@ -12324,7 +12408,8 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 const itemsCell = !first ? '—' : esc(first.prodName) + ' × ' + esc(first.qty) + (its.length > 1 ? ` <span class="badge" style="background:var(--surface-2);color:var(--text-muted);border:1px solid var(--border);">+${its.length - 1} more</span>` : '');
                 const eid = esc(t.id);
                 const badge = trfBadge(t);
-                const del = currentUser === 'admin' ? `<button class="btn btn-sm btn-danger" onclick="deleteRecord('transfers','${eid}')">🗑</button>` : '';
+                const apr = (currentUser === 'admin' && t.approval === 'pending') ? `<button class="btn btn-sm btn-primary" onclick="approveTransfer('${eid}')">Approve</button><button class="btn btn-sm btn-danger" onclick="rejectTransfer('${eid}')">Reject</button>` : '';
+                const del = apr + (currentUser === 'admin' ? `<button class="btn btn-sm btn-danger" onclick="deleteRecord('transfers','${eid}')">🗑</button>` : '');
                 return `<tr><td>${eid}${t.ref ? `<div style="font-size:.75rem;color:var(--text-muted);">their ref ${esc(t.ref)}</div>` : ''}</td><td>${esc(t.date)}</td><td>${badge}</td><td>${esc(t.shop)}</td><td>${itemsCell}</td><td>${formatZMW(t.total || 0)}</td><td style="white-space:nowrap;display:flex;gap:4px;"><button class="btn btn-sm" style="background:#eee;" onclick="printTRF('${eid}')">🖨</button>${del}</td></tr>`;
             }).join('');
         }
@@ -12364,6 +12449,8 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             b.classList.remove('hidden');
         }
         function trfBadge(t) {
+            if (t.approval === 'pending') return '<span class="badge status-warn">⏳ Awaiting approval</span>' + (t.requestedBy ? `<div style="font-size:.72rem;color:var(--text-muted);">by ${esc(t.requestedBy)}</div>` : '');
+            if (t.approval === 'rejected') return '<span class="badge" style="background:#fde8e8;color:var(--danger);">✘ Rejected</span>' + (t.rejectReason ? `<div style="font-size:.72rem;color:var(--text-muted);">${esc(t.rejectReason)}</div>` : '');
             const out = t.direction === 'out';
             if (t.internal && out) {
                 if (t.status === 'in_transit') return '<span class="badge status-warn">In transit</span>';
@@ -12412,6 +12499,10 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 const q = parseInt(trfrQty[i]);
                 if (isNaN(q) || q < 0 || q > out.items[i].qty) { showToast(`Received quantity for ${out.items[i].prodName} must be 0 to ${out.items[i].qty}`, 'danger'); return; }
                 recv.push(q);
+            }
+            if (currentUser !== 'admin' && out.items.some((it, i) => recv[i] < it.qty)) {
+                showToast('Only the admin can record a shortage. Receive the full quantity, or ask the admin to receive this transfer.', 'danger');
+                return;
             }
             if (!recv.some(q => q > 0) && !confirm('Nothing was received. Record the whole transfer as lost in transit?')) return;
             const inv = db.inventory;
