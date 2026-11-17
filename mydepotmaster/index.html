@@ -1412,6 +1412,8 @@ body.cashier-mode #gsearch-fab,body.cashier-mode #copilot-fab{display:none!impor
 <!-- The shift ledger (till roadmap steps 16-17): open/close records and the X / Z / day report maths. Same file pos.html loads. Keep shifts.js in the sw.js precache list. -->
 <script src="shifts.js"></script>
 <script src="returns.js"></script>
+<!-- Barcodes (v0.3.78): drawing (EAN-13, EAN-8, Code 128), label sheets, thermal labels, and a camera reader for browsers with no BarcodeDetector (iPhone Safari). Same file pos.html loads. Plain synchronous script, BEFORE the main script, because it installs the fallback BarcodeDetector. Keep barcode.js in the sw.js precache list. -->
+<script src="barcode.js"></script>
 <script>
 
 // TEMP DEBUG: add ?acdebug=1 to the URL to see App Check token diagnostics as toasts.
@@ -2533,21 +2535,36 @@ function _fbUploadTimeout(bodyLen) {
   return Math.min(300000, Math.max(20000, 15000 + Math.round(bodyLen / 10)));
 }
 
-// ── DELTA SYNC — send only what changed ─────────────────────────────────────
-// Before: every sync PUT the ENTIRE depot data (books, photos, contracts, all
-// logs) even when one entry changed. Now the app remembers a fingerprint
-// ("baseline") of every piece of data as the cloud last held it, and each sync
-// sends (PATCH) only the pieces whose fingerprint changed, plus nulls for
-// pieces that were deleted. A "piece" is one top-level value, or one entry of a
-// top-level list (staffLogs/12), or one entry of a top-level group
-// (commodityReceived/Maize/3). The baseline is kept in IndexedDB so it survives
-// app restarts. If anything looks off (no baseline yet, someone else synced
-// since, cloud copy missing, server refuses PATCH) the code falls back to the
-// old full upload, so the worst case is exactly the previous behaviour.
-let _fbBaseline = null;          // { key, ts, h:{ path: fingerprint } }
+// <<FBSYNC2:UNITS:BEGIN>>
+// ── DELTA SYNC v2 — merge, never overwrite ──────────────────────────────────
+// WHAT CHANGED. Before: rows of a list were stored by POSITION (generalIssued/7), the push compared one
+// shared timestamp, and a phone that saw a newer cloud copy either uploaded its whole stale copy or threw
+// its own unsent edits away. Now:
+//  1. ROWS ARE STORED BY ID. A row with an id lives at  <list>/r~<seq>~<id>  (seq = its place in the list,
+//     fixed when the row is first added). Two phones adding rows to the same list write different keys, and
+//     the 2000-entry audit log costs 2 paths per event (1 add + 1 trim) instead of 2000. Lists whose rows have
+//     no id (or users: username) are stored whole, as before. A list the cloud still holds as a plain array
+//     is read as if it had these keys, and is converted the first time that list has something to write:
+//     its rows are written under their keys and the old numeric slots are cleared in the SAME update, so two
+//     phones converting at once write identical keys and never replace each other's rows.
+//  2. EVERY PHONE WRITES ITS OWN STAMP. _syncTs is still written (old phones read it), but each phone also
+//     writes _devTs/<its id>. A phone that finds _syncTs or ANY other phone's stamp different from what it
+//     last saw knows the cloud has something it has not merged, even when its own write was the last one.
+//  3. MERGE BEFORE EVERY PUSH, AND ON EVERY PULL. When the stamps moved, the phone reads the cloud and merges it
+//     with its own copy piece by piece (a piece = one row, one scalar, one whole list): a piece only the cloud
+//     changed is taken, a piece only this phone changed is kept and sent, a piece both changed keeps this
+//     phone's version (a delete never beats an edit). Nothing is replaced wholesale, so unsent edits survive a
+//     pull and a stale phone can no longer upload its old copy over newer data.
+//  4. NOTHING TO SEND = NOTHING WRITTEN. The cloud timestamp only moves when a row or value really changed.
+//     Bookkeeping fields that are local to a phone (_lastFbSync, _v, _syncTs) are not data and are not synced.
+//  5. After a write the phone looks at the stamps again; if another phone wrote in the meantime it merges again.
+let _fbBaseline = null;          // { v:2, key, ts, dev:{deviceId:ts}, h:{path:fingerprint}, k:{list:{encId:rowKey}}, lists:{list:'keyed'|'legacy'|'whole'}, leg:{list:[old numeric slots]}, dups:[path] } = the cloud as this phone last saw it
 let _fbBaselineLoaded = false;
-let _fbDeltaDisabled = false;    // set for the session if the server ever refuses PATCH
-const _FB_BASELINE_IDB_KEY = 'fbBaseline';
+let _fbNeedRender = false;       // a push brought in another phone's rows while a form was open: redraw when it is closed
+const _FB_BASELINE_IDB_KEY = 'fbBaseline2';
+const _FB_SKIP = { _syncTs: 1, _baseTs: 1, _devTs: 1, _lastFbSync: 1, _v: 1, gdrive: 1 };   // never synced as data
+const _FB_ROW_RE = /\/r~[0-9a-z]{7}~[^\/]*$/;
+const _FB_KEY_RE = /^r~[0-9a-z]{7}~/;
 
 function _hash53(str) {          // fast 53-bit string hash (cyrb53)
   let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
@@ -2560,48 +2577,241 @@ function _hash53(str) {          // fast 53-bit string hash (cyrb53)
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
 }
-function _fbFingerprint(v) {
-  const s = JSON.stringify(v);
-  return s === undefined ? 'u' : _hash53(s) + '.' + s.length;
-}
-// Split a data object into pieces: { vals:{path:value}, hs:{path:fingerprint} }
-function _fbUnits(obj) {
-  const vals = {}, hs = {};
-  const put = (path, v) => { vals[path] = v; hs[path] = _fbFingerprint(v); };
-  Object.keys(obj).forEach(k => {
-    if (k === '_syncTs') return;               // server timestamp — handled separately
-    const v = obj[k];
-    if (Array.isArray(v)) {
-      for (let i = 0; i < v.length; i++) if (v[i] !== null && v[i] !== undefined) put(k + '/' + i, v[i]);
-    } else if (v && typeof v === 'object') {
-      Object.keys(v).forEach(c => {
-        const cv = v[c];
-        if (Array.isArray(cv)) {
-          for (let i = 0; i < cv.length; i++) if (cv[i] !== null && cv[i] !== undefined) put(k + '/' + c + '/' + i, cv[i]);
-        } else if (cv !== null && cv !== undefined) put(k + '/' + c, cv);
-      });
-    } else if (v !== null && v !== undefined) put(k, v);
-  });
-  return { vals, hs };
-}
-// True if one path is inside another (e.g. "a/b" and "a/b/0") — Firebase refuses
-// such a mixed update, so we fall back to a full upload in that rare case.
-function _fbPathsConflict(paths) {
-  const set = new Set(paths);
-  for (const p of paths) {
-    let i = p.indexOf('/');
-    while (i !== -1) { if (set.has(p.slice(0, i))) return true; i = p.indexOf('/', i + 1); }
+// JSON text with sorted keys, without the things Firebase drops (null, empty list, empty object): a row
+// has the SAME text on the phone that made it and on the phone that read it back from the cloud.
+function _fbStable(v) {
+  if (v === null || v === undefined) return undefined;
+  const t = typeof v;
+  if (t === 'number') return isFinite(v) ? String(v) : undefined;
+  if (t === 'boolean') return v ? 'true' : 'false';
+  if (t === 'string') return JSON.stringify(v);
+  if (t !== 'object') return undefined;
+  if (Array.isArray(v)) {
+    let any = false; const parts = new Array(v.length);
+    for (let i = 0; i < v.length; i++) { const s = _fbStable(v[i]); if (s !== undefined) any = true; parts[i] = s === undefined ? 'null' : s; }
+    return any ? '[' + parts.join(',') + ']' : undefined;
   }
-  return false;
+  const ks = Object.keys(v).sort(), parts = [];
+  for (let i = 0; i < ks.length; i++) { const s = _fbStable(v[ks[i]]); if (s !== undefined) parts.push(JSON.stringify(ks[i]) + ':' + s); }
+  return parts.length ? '{' + parts.join(',') + '}' : undefined;
 }
-function _fbComputeDelta(payload, base) {
-  const { vals, hs } = _fbUnits(payload);
-  const upd = {};
-  let n = 0;
-  for (const p in hs) if (base.h[p] !== hs[p]) { upd[p] = vals[p]; n++; }
-  for (const p in base.h) if (!(p in hs)) { upd[p] = null; n++; }   // deleted since last sync
-  return { upd, n, hs, conflict: _fbPathsConflict(Object.keys(upd)) };
+function _fbFp(v) { const s = _fbStable(v); return s === undefined ? undefined : _hash53(s) + '.' + s.length; }
+function _fbEnc(s) { return encodeURIComponent(String(s)).replace(/\./g, '%2E'); }   // Firebase keys may not hold . $ # [ ] /
+function _fbIdOf(r) {                      // what makes a row the same row on every phone
+  if (!r || typeof r !== 'object' || Array.isArray(r)) return null;
+  const id = r.id;
+  if ((typeof id === 'string' && id !== '') || (typeof id === 'number' && isFinite(id))) return 'i' + id;
+  if (typeof r.username === 'string' && r.username) return 'u' + r.username.toLowerCase();
+  return null;
 }
+function _fbRowKey(seq, e) { return 'r~' + seq.toString(36).padStart(7, '0') + '~' + e; }
+function _fbSeqOf(key) { return parseInt(String(key).slice(2, 9), 36) || 0; }
+function _fbListOf(p) { return p.slice(0, p.lastIndexOf('/')); }
+
+// A data object (this phone's DATA as plain JSON, or the cloud's copy) cut into "pieces":
+//   h[path] fingerprint, vals[path] value, rows[list] = paths of its rows, k[list][encId] = row key,
+//   lists[list] = 'keyed' (rows by key) | 'legacy' (cloud array that we read as keyed) | 'whole' (one piece).
+// Paths: a scalar  currency | a child of a top-level object  inventoryPrices/Maize | a row  generalIssued/r~0000007~i...
+// kmIn: the keys the cloud already uses (so a row keeps its key); a new row gets the next free number.
+function _fbCanon(obj, kmIn, fromCloud) {
+  const o = { vals: {}, h: {}, k: {}, lists: {}, rows: {}, leg: {}, dups: [] };   // leg[list] = numeric child keys the cloud still holds for it (old positional slots)
+  const put = (p, v) => { const f = _fbFp(v); if (f === undefined) return false; o.vals[p] = v; o.h[p] = f; return true; };
+  const isKeyedNode = n => { const ks = Object.keys(n); return ks.some(k => _FB_KEY_RE.test(k)) && ks.every(k => _FB_KEY_RE.test(k) || /^(0|[1-9]\d*)$/.test(k)); };   // row keys, possibly still with old numeric slots beside them
+  const kind = n => Array.isArray(n) ? 'array'
+    : (n && typeof n === 'object') ? ((fromCloud && isKeyedNode(n)) ? 'keyed' : 'obj') : 'scalar';
+  const addRow = (P, key, row) => { if (put(P + '/' + key, row)) (o.rows[P] || (o.rows[P] = [])).push(P + '/' + key); };
+  const doList = (P, node, kd) => {
+    if (kd === 'keyed') {
+      const km = o.k[P] = {}, ks = Object.keys(node), rk = ks.filter(k => _FB_KEY_RE.test(k)).sort(), nk = ks.filter(k => !_FB_KEY_RE.test(k));
+      rk.forEach(key => {
+        const row = node[key], id = _fbIdOf(row), e = id === null ? null : _fbEnc(id);
+        if (e !== null) { if (km[e]) { o.dups.push(P + '/' + key); return; } km[e] = key; }   // the same row twice (two phones made it at once): keep the first, clean up the other
+        addRow(P, key, row);
+      });
+      nk.sort((a, b) => a - b).forEach(i => {                      // old numeric slots still beside the keyed rows (list being converted): read them, the keyed copy wins
+        const row = node[i], id = _fbIdOf(row), e = id === null ? null : _fbEnc(id);
+        if (e === null || km[e]) return;
+        const key = _fbRowKey(Number(i), e); km[e] = key; addRow(P, key, row);
+      });
+      o.lists[P] = nk.length ? 'legacy' : 'keyed'; if (nk.length) o.leg[P] = nk;
+      return;
+    }
+    const live = [];
+    node.forEach((r, i) => { if (r !== null && r !== undefined) live.push([i, r]); });
+    if (!live.length) return;
+    const encs = live.map(x => { const id = _fbIdOf(x[1]); return id === null ? null : _fbEnc(id); });
+    const keyable = encs.every(e => e !== null) && new Set(encs).size === encs.length && (fromCloud || live.length === node.length);
+    const idx = []; node.forEach((r, i) => { if (r !== null && r !== undefined) idx.push(String(i)); });
+    if (!keyable) { if (put(P, node)) { o.lists[P] = 'whole'; o.leg[P] = idx; } return; }
+    const km = o.k[P] = {}, known = (kmIn && kmIn[P]) || {};
+    let max = -1; for (const e in known) { const s = _fbSeqOf(known[e]); if (s > max) max = s; }
+    live.forEach((x, j) => {
+      const e = encs[j], key = fromCloud ? _fbRowKey(x[0], e) : (known[e] || _fbRowKey(++max, e));
+      km[e] = key; addRow(P, key, x[1]);
+    });
+    o.lists[P] = fromCloud ? 'legacy' : 'keyed'; if (fromCloud) o.leg[P] = idx;
+  };
+  Object.keys(obj).forEach(t => {
+    if (_FB_SKIP[t] === 1) return;
+    const v = obj[t], kd = kind(v);
+    if (kd === 'array' || kd === 'keyed') return doList(t, v, kd);
+    if (kd === 'obj') {
+      Object.keys(v).forEach(c => {
+        const cv = v[c], ck = kind(cv);
+        if (ck === 'array' || ck === 'keyed') doList(t + '/' + c, cv, ck);
+        else if (cv !== null && cv !== undefined) put(t + '/' + c, cv);
+      });
+      return;
+    }
+    if (v !== null && v !== undefined) put(t, v);
+  });
+  return o;
+}
+
+// Piece by piece: which pieces does this phone take from the cloud? (lc = this phone, cc = cloud, base = the cloud as last seen)
+function _fbMerge(lc, cc, base, cloudWins) {
+  const take = []; let conflicts = 0;
+  const ign = {};          // lists that are one piece on one side and rows on the other: this phone's shape wins (the push rewrites the list)
+  for (const P in lc.lists) { const cs = cc.lists[P]; if (cs && ((lc.lists[P] === 'whole') !== (cs === 'whole'))) ign[P] = 1; }
+  const seen = new Set();
+  const visit = p => {
+    if (seen.has(p)) return; seen.add(p);
+    if (ign[p] === 1 || (_FB_ROW_RE.test(p) && ign[_fbListOf(p)] === 1)) return;
+    const L = lc.h[p], K = cc.h[p];
+    if (L === K) return;
+    let useCloud;
+    if (base) {
+      const B = base.h[p];
+      if (L === B) useCloud = true;                 // only the cloud changed it
+      else if (K === B) useCloud = false;           // only this phone changed it
+      else if (L === undefined) useCloud = true;    // deleted here, edited elsewhere: keep the edit
+      else if (K === undefined) useCloud = false;   // deleted elsewhere, edited here: keep the edit
+      else { useCloud = false; conflicts++; }       // edited on both: this phone's version
+    } else {
+      useCloud = L === undefined ? true : (K === undefined ? false : !!cloudWins);
+    }
+    if (useCloud) take.push(p);
+  };
+  for (const p in lc.h) visit(p);
+  for (const p in cc.h) visit(p);
+  if (base) for (const p in base.h) visit(p);
+  return { take, conflicts };
+}
+
+// Rebuild one top-level value of DATA from its pieces.
+function _fbAssemble(t, entries, current) {
+  let direct; const rows = {}, obj = {}; let hasObj = false;
+  entries.forEach(e => {
+    const p = e[0], v = e[1], P = e[2];
+    if (P) (rows[P] || (rows[P] = [])).push([p.slice(P.length + 1), v]);
+    else if (p === t) direct = v;
+    else { hasObj = true; obj[p.slice(t.length + 1)] = v; }
+  });
+  Object.keys(rows).forEach(P => {
+    const arr = rows[P].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0).map(x => x[1]);
+    if (P === t) direct = arr; else { hasObj = true; obj[P.slice(t.length + 1)] = arr; }
+  });
+  if (direct !== undefined) return direct;
+  if (hasObj) return obj;
+  return Array.isArray(current) ? [] : ((current && typeof current === 'object') ? {} : undefined);
+}
+// Put the taken pieces into DATA; every other top-level value is left exactly as it is.
+function _fbApplyTake(take, lc, cc, cur) {
+  const tops = {}; take.forEach(p => { tops[p.split('/')[0]] = 1; });
+  const takeSet = new Set(take), next = Object.assign({}, cur);
+  Object.keys(tops).forEach(t => {
+    const pre = t + '/', entries = [], seen = new Set();
+    const visit = p => {
+      if (seen.has(p)) return; seen.add(p);
+      const src = takeSet.has(p) ? cc : lc;
+      if (!(p in src.h)) return;
+      entries.push([p, src.vals[p], _FB_ROW_RE.test(p) ? _fbListOf(p) : null]);
+    };
+    for (const p in lc.h) if (p === t || p.startsWith(pre)) visit(p);
+    for (const p in cc.h) if (p === t || p.startsWith(pre)) visit(p);
+    const v = _fbAssemble(t, entries, cur[t]);
+    if (v === undefined) delete next[t]; else next[t] = v;
+  });
+  return next;
+}
+
+// The whole cloud blob in the plain shape the rest of the app expects (every list an array, in order). For the few
+// places that download depots/<key>/data directly (Download from Cloud, login on a new phone).
+function _fbDecode(val) {
+  if (!val || typeof val !== 'object') return val;
+  const cc = _fbCanon(val, null, true), tops = {}, out = Object.assign({}, val);
+  for (const p in cc.h) tops[p.split('/')[0]] = 1;
+  Object.keys(tops).forEach(t => {
+    const entries = [], pre = t + '/';
+    for (const p in cc.h) if (p === t || p.startsWith(pre)) entries.push([p, cc.vals[p], _FB_ROW_RE.test(p) ? _fbListOf(p) : null]);
+    const v = _fbAssemble(t, entries, val[t]);
+    if (v !== undefined) out[t] = v;
+  });
+  delete out._devTs;
+  return out;
+}
+
+// What must be written so that the cloud equals this phone: only pieces that differ from the cloud as last seen.
+// Every write is a row path (or a scalar / whole small list), so two phones never replace each other's rows. Two special cases:
+//  - a list the cloud still holds as old numeric slots: its rows are written under their keys and the numeric slots are
+//    nulled in the same update (identical keys from every phone -> converting at once is harmless);
+//  - a list that is one piece here but rows in the cloud (a row lacked an id): the list node is replaced by the array.
+function _fbPlan(lc, base) {
+  const upd = {}, diff = [], touched = {}, conv = {}, repl = {}, bleg = base.leg || {};
+  for (const p in lc.h) if (base.h[p] !== lc.h[p]) diff.push(p);
+  for (const p in base.h) if (!(p in lc.h)) diff.push(p);
+  diff.forEach(p => { if (_FB_ROW_RE.test(p)) touched[_fbListOf(p)] = 1; });
+  Object.keys(touched).forEach(P => {
+    if (lc.lists[P] === 'whole') { if (base.lists[P] && base.lists[P] !== 'whole') repl[P] = 1; }
+    else if ((bleg[P] || []).length) conv[P] = 1;
+  });
+  for (const P in lc.lists) if (lc.lists[P] !== 'whole' && (bleg[P] || []).length && base.lists[P] === 'whole' && !touched[P]) { touched[P] = 1; conv[P] = 1; }   // cloud has the list as one piece (rows without ids there), here it has ids
+  diff.forEach(p => {
+    if (conv[p] || repl[p]) return;                                  // the list node itself is handled below
+    if (_FB_ROW_RE.test(p) && (repl[_fbListOf(p)] || conv[_fbListOf(p)])) return;
+    upd[p] = (p in lc.h) ? lc.vals[p] : null;
+  });
+  Object.keys(repl).forEach(P => { upd[P] = lc.vals[P]; });
+  Object.keys(conv).forEach(P => {
+    (lc.rows[P] || []).forEach(p => { upd[p] = lc.vals[p]; });
+    bleg[P].forEach(i => { upd[P + '/' + i] = null; });
+  });
+  (base.dups || []).forEach(p => { if (!(_FB_ROW_RE.test(p) && (repl[_fbListOf(p)] || conv[_fbListOf(p)]))) upd[p] = null; });
+  const lists = Object.assign({}, base.lists), leg = Object.assign({}, bleg);
+  for (const P in lc.lists) {
+    if (lc.lists[P] === 'whole') { lists[P] = 'whole'; leg[P] = lc.leg[P] || []; }
+    else if (conv[P] || !lists[P]) { lists[P] = 'keyed'; delete leg[P]; }
+  }
+  Object.keys(conv).forEach(P => { if (!lc.lists[P]) { delete lists[P]; delete leg[P]; } });
+  return { upd, n: Object.keys(upd).length, lists, leg };
+}
+
+// ── what the cloud shows about itself, in two tiny reads ───────────────────
+function _fbDeviceId() {
+  try {
+    let d = localStorage.getItem('mdm_devid');
+    if (!d) { d = uid().replace(/[^0-9a-zA-Z-]/g, ''); localStorage.setItem('mdm_devid', d); }
+    return d;
+  } catch (e) { return _fbDeviceId._m || (_fbDeviceId._m = uid().replace(/[^0-9a-zA-Z-]/g, '')); }
+}
+async function _fbStamp(key) {
+  const p = 'depots/' + key + '/data/';
+  const r = await Promise.all([fbGet(p + '_syncTs'), fbGet(p + '_devTs')]);
+  return { ts: typeof r[0] === 'number' ? r[0] : null, dev: (r[1] && typeof r[1] === 'object') ? r[1] : {} };
+}
+function _fbSameStamp(st, base) {
+  if (!st || !base || st.ts !== base.ts) return false;
+  const a = st.dev || {}, b = base.dev || {}, ak = Object.keys(a);
+  return ak.length === Object.keys(b).length && ak.every(d => a[d] === b[d]);
+}
+function _fbBaselineFor(key) { return (_fbBaseline && _fbBaseline.key === key) ? _fbBaseline : null; }
+async function _fbBaselineEnsure() {
+  if (_fbBaselineLoaded) return;
+  const saved = await _fbBaselineLoad();
+  if (!_fbBaseline) _fbBaseline = saved;
+  _fbBaselineLoaded = true;
+}
+
 function _fbBaselineSave() {
   try {
     openIDB().then(db => { db.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).put(_fbBaseline, _FB_BASELINE_IDB_KEY); }).catch(() => {});
@@ -2610,21 +2820,66 @@ function _fbBaselineSave() {
 function _fbBaselineLoad() {
   return openIDB().then(db => new Promise(res => {
     const r = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(_FB_BASELINE_IDB_KEY);
-    r.onsuccess = () => res(r.result || null);
+    r.onsuccess = () => res(r.result && r.result.v === 2 ? r.result : null);
     r.onerror = () => res(null);
   })).catch(() => null);
 }
-// Forget the baseline — the next sync does one full upload and starts fresh.
+// Forget the baseline — the next sync reads the whole cloud copy and merges with no history (rows only here are sent, rows only there are taken).
 function _fbBaselineInvalidate() {
   _fbBaseline = null;
   _fbBaselineLoaded = true;
   try { openIDB().then(db => { db.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).delete(_FB_BASELINE_IDB_KEY); }).catch(() => {}); } catch (e) {}
 }
-function _fbBaselineSet(key, ts, hs) {
-  _fbBaseline = { key, ts: (typeof ts === 'number' ? ts : null), h: hs };
+function _fbBaselineSet(b) {
+  _fbBaseline = Object.assign({ v: 2 }, b);
   _fbBaselineLoaded = true;
   _fbBaselineSave();
 }
+
+// Read the whole cloud copy and merge it into DATA. Returns { adopted: pieces taken from the cloud, conflicts }.
+// Everything after the read runs without an await, so a user edit can never fall between the merge and the assignment.
+async function _fbAdopt(key) {
+  const val = await fbGet('depots/' + key + '/data');
+  const hasData = val && typeof val === 'object' && Object.keys(val).some(k => _FB_SKIP[k] !== 1);
+  if (!hasData) {                      // nothing in the cloud yet: everything here is new
+    _fbBaselineSet({ key, ts: null, dev: {}, h: {}, k: {}, lists: {}, leg: {}, dups: [] });
+    return { adopted: 0, conflicts: 0 };
+  }
+  const cloudTs = typeof val._syncTs === 'number' ? val._syncTs : null;
+  const dev = (val._devTs && typeof val._devTs === 'object') ? val._devTs : {};
+  const cc = _fbCanon(val, null, true);
+  const base = _fbBaselineFor(key);
+  // A local row must find its key even when the cloud no longer has it (another phone deleted it): keys the cloud
+  // had when this phone last looked first, the cloud's current keys over them. Without this a row deleted elsewhere
+  // would look like a brand-new local row and be sent back.
+  const km = {};
+  if (base) for (const P in base.k) km[P] = Object.assign({}, base.k[P]);
+  for (const P in cc.k) km[P] = Object.assign(km[P] || {}, cc.k[P]);
+  const lc = _fbCanon(JSON.parse(JSON.stringify(DATA)), km, false);
+  const brandNew = !DATA._lastFbSync && !(DATA.users && DATA.users.length > 0);          // a new phone: the cloud is the truth
+  const m = _fbMerge(lc, cc, base, brandNew || (cloudTs || 0) > (DATA._syncTs || 0));
+  if (m.take.length) {
+    const trial0 = DATA.trialStart || 0;
+    DATA = _stampItemIds(_fbApplyTake(m.take, lc, cc, DATA));
+    if (trial0 > 0 && (!DATA.trialStart || trial0 < DATA.trialStart)) DATA.trialStart = trial0;   // never let a cloud copy reset the trial clock
+  }
+  DATA._v = Math.max(DATA._v || 0, val._v || 0);
+  DATA._syncTs = cloudTs || DATA._syncTs || 0;
+  DATA._lastFbSync = Date.now();
+  if (DATA.installId) _persistInstallId(DATA.installId);
+  _fbBaselineSet({ key, ts: cloudTs, dev, h: cc.h, k: cc.k, lists: cc.lists, leg: cc.leg, dups: cc.dups });
+  sv(DATA);
+  return { adopted: m.take.length, conflicts: m.conflicts };
+}
+// After a merge changed DATA outside a pull: redraw (not under an open form) and say so.
+function _fbAfterAdopt(adopted, conflicts) {
+  try {
+    const ovl = document.getElementById('modal-ovl');
+    if (adopted > 0) { if (ovl && ovl.style.display === 'flex') _fbNeedRender = true; else { render(); showToast('☁ Synced changes from another device'); } }
+    if (conflicts > 0) showToast('⚠️ ' + conflicts + ' record(s) were changed on two phones at once — this phone\u2019s version was kept', 8000);
+  } catch (e) {}
+}
+// <<FBSYNC2:UNITS:END>>
 
 // Same purpose as _fetchWithTimeout, but for SDK calls (like Firebase Auth's
 // signInWithEmailAndPassword) that take a plain Promise and no AbortSignal.
@@ -3200,94 +3455,62 @@ function _flagIfAuthSessionLost(e) {
   }
 }
 
+// <<FBSYNC2:PUSH:BEGIN>>
+// PUSH. Order of work, every time:
+//   1. read the two tiny stamps (_syncTs, _devTs). If they are not what this phone last saw, another phone (or an old
+//      version of the app) has written: read the cloud copy and MERGE it into DATA first (_fbAdopt).
+//   2. work out what differs between DATA and the cloud as it now is (_fbPlan). Nothing differs -> nothing is written
+//      and _syncTs does not move.
+//   3. write only those pieces (PATCH), stamped with _syncTs and this phone's _devTs/<id>.
+//   4. read the stamps again; if another phone wrote meanwhile, go round again (at most 4 times).
+// There is no longer any "upload the whole local copy" path: a phone that is behind merges, it does not overwrite.
 async function _doFbSyncImpl() {
   if (!isFbConfigured() || !navigator.onLine) return false;
   const key = depotKey();
   if (!key || key === 'MDM-????-????-????') return false;
   try {
-    // Save a clean copy
-
-    const payload = JSON.parse(JSON.stringify(DATA));
-    delete payload.gdrive; // don't store oauth tokens in Firebase
-    const now = Date.now();
-    // Fix: _v is a per-device local edit counter and is NOT safe to use for
-    // deciding which copy of the data is more recent across multiple accounts/
-    // devices (each device increments its own _v independently, so a device
-    // with more historical edits can have a higher _v than a device with the
-    // most recent actual change — causing newer changes, like deletes, from
-    // other accounts to be silently discarded/overwritten).
-    // Instead, stamp every write with a Firebase SERVER timestamp (resolved by
-    // Firebase itself, not the device clock), which gives a single shared,
-    // trustworthy clock that every device can compare against.
-    payload._syncTs = {'.sv': 'timestamp'};
-    const dataPath = 'depots/' + key + '/data';
-    const metaObj = {
-      lastSync: now,
-      depotName: (DATA.depotInfo||{}).name || '',
-      version: DATA._v || 0
-    };
-    // Lightweight credentials mirror — kept in sync automatically on every
-    // write so login can verify a password before pulling the full depot.
-    const authObj = _buildAuthSnapshot(DATA.users);
-
-    // ── Delta sync: work out what changed since the last successful sync ──
-    if (!_fbBaselineLoaded) {
-      const saved = await _fbBaselineLoad();
-      if (!_fbBaseline) _fbBaseline = saved;
-      _fbBaselineLoaded = true;
-    }
-    let plan = null;
-    const base = (!_fbDeltaDisabled && _fbBaseline && _fbBaseline.key === key) ? _fbBaseline : null;
-    if (base && base.ts !== null) {
-      // Tiny check: is the cloud copy still the one we last wrote/adopted?
-      // If it's missing, or another device has written since, do a full
-      // upload exactly as before instead of patching onto an unknown state.
-      const cloudTs = await fbGet(dataPath + '/_syncTs');
-      if (cloudTs !== null && cloudTs !== undefined && cloudTs === base.ts) {
-        const d = _fbComputeDelta(payload, base);
-        if (!d.conflict) plan = d;
+    await _fbBaselineEnsure();
+    const dataPath = 'depots/' + key + '/data', me = _fbDeviceId();
+    let adopted = 0, conflicts = 0, wrote = false;
+    for (let round = 0; round < 4; round++) {
+      let base = _fbBaselineFor(key);
+      const st = await _fbStamp(key);
+      if (!base || !_fbSameStamp(st, base)) {
+        const r = await _fbAdopt(key);
+        adopted += r.adopted; conflicts += r.conflicts;
+        base = _fbBaselineFor(key);
       }
-    }
-
-    let savedData = null;
-    let hs = null;
-    let deltaRefused = false;
-    if (plan) {
-      try {
-        plan.upd._syncTs = {'.sv': 'timestamp'};
-        [savedData] = await Promise.all([
-          fbPatch(dataPath, plan.upd),
-          fbSet('depots/' + key + '/meta', metaObj),
-          _writeAuthSnapshot(key, authObj)
-        ]);
-        hs = plan.hs;
-      } catch (e) {
-        // Timeouts and permission problems are real sync failures — report them.
-        // Anything else (server refusing PATCH, odd key, CORS) → full upload below.
-        if (e && (e.name === 'AbortError' || /HTTP (401|403)|permission denied/i.test(e.message || ''))) throw e;
-        console.warn('[MDM] Delta sync refused, falling back to full upload:', e);
-        plan = null;
-        deltaRefused = true;
+      // from here to the baseline update below nothing is awaited except the write itself
+      const snap = JSON.parse(JSON.stringify(DATA));
+      delete snap.gdrive;                                    // never store oauth tokens in Firebase
+      const lc = _fbCanon(snap, base.k, false);
+      const plan = _fbPlan(lc, base);
+      const metaObj = { lastSync: Date.now(), depotName: (DATA.depotInfo || {}).name || '', version: DATA._v || 0 };
+      if (plan.n === 0) {                                    // nothing to send: do not touch _syncTs (it would make every other phone re-read the cloud)
+        if (!wrote) await fbSet('depots/' + key + '/meta', metaObj);   // heartbeat, and it proves this phone may still write
+        break;
       }
-    }
-    if (!plan) {
-      // Fix 4: run all writes in parallel — halves round-trip time vs sequential awaits
-      [savedData] = await Promise.all([
-        fbSet(dataPath, payload),
+      const upd = plan.upd;
+      upd._syncTs = { '.sv': 'timestamp' };
+      upd['_devTs/' + me] = { '.sv': 'timestamp' };
+      upd._v = DATA._v || 0;
+      const authObj = _buildAuthSnapshot(snap.users);
+      let saved;
+      [saved] = await Promise.all([
+        fbPatch(dataPath, upd),
         fbSet('depots/' + key + '/meta', metaObj),
         _writeAuthSnapshot(key, authObj)
       ]);
-      if (deltaRefused) _fbDeltaDisabled = true;   // full worked where PATCH didn't — stop trying this session
-      hs = _fbUnits(payload).hs;
+      // The PATCH response echoes what was written with the server timestamp filled in: the authoritative time of this write.
+      const T2 = (saved && typeof saved._syncTs === 'number') ? saved._syncTs : null;
+      const dev = Object.assign({}, base.dev); if (T2 !== null) dev[me] = T2;
+      _fbBaselineSet({ key, ts: T2, dev, h: lc.h, k: lc.k, lists: plan.lists, leg: plan.leg, dups: [] });
+      DATA._syncTs = T2 || DATA._syncTs || 0;
+      wrote = true;
+      const st2 = await _fbStamp(key);
+      if (T2 !== null && _fbSameStamp(st2, _fbBaseline)) break;   // nobody else wrote meanwhile
     }
-    // Firebase's PUT/PATCH response echoes back the data actually written, with
-    // ".sv" placeholders resolved to the real server epoch millis — capture
-    // that so this device knows the authoritative timestamp of its own push
-    // (no extra round-trip needed).
-    const newTs = (savedData && savedData._syncTs) || now;
-    _fbBaselineSet(key, (savedData && typeof savedData._syncTs === 'number') ? savedData._syncTs : null, hs);
-    DATA._syncTs = newTs;
-    DATA._lastFbSync = now;
+    DATA._lastFbSync = Date.now();
     sv(DATA); // persist updated _lastFbSync to both localStorage and IDB
     _lastFbSyncError = null;
     _fbSyncFailCount = 0;
@@ -3295,6 +3518,7 @@ async function _doFbSyncImpl() {
     _fbAuthorizationDenied = false; // ...and that this uid is authorized too
     updPill();
     updateLastSyncDisplay(); // Fix: the Settings label only refreshed on a 5-min tick, so it kept showing an old failure after sync recovered
+    if (adopted > 0 || conflicts > 0) _fbAfterAdopt(adopted, conflicts);
     return true;
   } catch(e) {
     _lastFbSyncError = (e && (e.message || e.status || String(e))) || 'unknown error';
@@ -3306,6 +3530,7 @@ async function _doFbSyncImpl() {
     return false;
   }
 }
+// <<FBSYNC2:PUSH:END>>
 
 // Restore depot data from Firebase after a local wipe or on a new device.
 // Version gate: prefer cloud if it is more recent by SERVER timestamp (_syncTs),
@@ -3321,6 +3546,12 @@ async function fbRestoreData() {
   try { return await _fbSerial(_fbRestoreDataImpl); }
   finally { try { salesRefresh().catch(()=>{}); } catch (e) {} }   // pick up the till ledger for whichever depot just loaded
 }
+// <<FBSYNC2:PULL:BEGIN>>
+// PULL. Two tiny reads tell whether anything changed anywhere since this phone last looked (the cloud timestamp
+// AND every phone's own stamp). Only then is the cloud copy read, and it is MERGED into DATA piece by piece:
+// rows another phone added or changed are taken, rows this phone changed and has not sent yet are kept (the next
+// push sends them). The old "cloud is newer -> replace everything" is gone: it threw away edits still waiting in
+// the 2.5 s push delay, and it never fired when this phone's own write was the last one.
 async function _fbRestoreDataImpl() {
   if (!isFbConfigured() || !navigator.onLine) return false;
   // Use the stored installId directly — do NOT call depotKey() here because
@@ -3330,7 +3561,8 @@ async function _fbRestoreDataImpl() {
   const key = DATA.installId || _loadPersistedInstallId();
   if (!key || key === 'MDM-????-????-????') return false;
   try {
-    const val = await fbGet('depots/' + key + '/data');
+    await _fbBaselineEnsure();
+    const st = await _fbStamp(key);
     // Fix: reading depots/{key}/data needs exactly the same authorizedUids
     // entry as writing it, so a successful read proves the session and the
     // grant are both fine. Clear any stale "reconnect" / "not authorized"
@@ -3341,59 +3573,19 @@ async function _fbRestoreDataImpl() {
       updPill();
       updateLastSyncDisplay();
     }
-    if (!val || !val._v) return false;
-    // Restore if: cloud is newer, OR local has never successfully pulled from cloud.
-    // Never skip on a device that has no sync history — that is exactly the
-    // new-phone scenario where the cloud copy is the authoritative one.
-    const localNeverSynced = !DATA._lastFbSync;
-    const cloudTs = val._syncTs || 0;
-    const localTs = DATA._syncTs || 0;
-    let cloudIsNewer = cloudTs > localTs;
-    // Backward-compat fallback: data written before this fix shipped won't have
-    // _syncTs yet. If neither side has one, fall back to the old _v comparison
-    // just this once so devices don't get stuck waiting for a timestamp that
-    // will never arrive from old cloud data.
-    if (!cloudTs && !localTs) {
-      cloudIsNewer = (val._v || 0) > (DATA._v || 0);
-    }
-    // Restore only if cloud is strictly newer, OR this device has never synced AND
-    // has no local data worth keeping (users array empty = fresh install).
-    const localIsEmpty = !(DATA.users && DATA.users.length > 0);
-    if (cloudIsNewer || (localNeverSynced && localIsEmpty)) {
-    const localTrialStart = DATA.trialStart || 0;
-    // Preserve local-only users before overwriting — Fix 18: users added offline
-    // or on a device not yet synced must survive a cloud restore.
-    const localUsers = Array.isArray(DATA.users) ? DATA.users : [];
-    DATA = Object.assign(JSON.parse(JSON.stringify(DEFAULT)), val);
-    // Merge: cloud is authoritative for any username it knows; local-only users
-    // (not present in the cloud copy) are appended so they are never silently wiped.
-    const cloudUsernames = new Set((DATA.users||[]).map(u=>(u.username||'').toLowerCase()));
-    const localOnlyUsers = localUsers.filter(u=>(u.username||'') && !cloudUsernames.has((u.username||'').toLowerCase()));
-    if (localOnlyUsers.length > 0) {
-      DATA.users = [...(DATA.users||[]), ...localOnlyUsers];
-    }
-    // Always keep the earliest trialStart — never let a cloud copy reset the clock
-    if (localTrialStart > 0 && (!DATA.trialStart || localTrialStart < DATA.trialStart)) {
-      DATA.trialStart = localTrialStart;
-    }
-      DATA._syncTs = cloudTs; // remember the server timestamp we just adopted
-      DATA._lastFbSync = Date.now(); // mark this device as now synced
-      // Delta sync: the cloud copy we just adopted is the new baseline, so the
-      // next push sends only what changes locally from here (incl. local-only users).
-      _fbBaselineSet(key, cloudTs, _fbUnits(val).hs);
-      // Ensure the installId is pinned in the separate key after restore
-      if (DATA.installId) _persistInstallId(DATA.installId);
-      DATA = _stampItemIds(DATA);
-      sv(DATA); // write back to localStorage + IDB
-      return true;
-    }
-    return false;
+    const base = _fbBaselineFor(key);
+    if (base && _fbSameStamp(st, base) && DATA._lastFbSync) return false;   // nothing changed anywhere since this phone last looked
+    const r = await _fbAdopt(key);
+    if (r.conflicts > 0) _fbAfterAdopt(0, r.conflicts);
+    return r.adopted > 0;
   } catch(e) {
     console.warn('[MDM] Cloud restore error.');
     _flagIfAuthSessionLost(e);
     return false;
   }
 }
+// <<FBSYNC2:PULL:END>>
+
 // Fix: centralizes what to tell the user after any sync failure — routes
 // straight to the reconnect modal for an expired session, to the
 // authorization-denied info for a valid-but-unauthorized session, or falls
@@ -3452,7 +3644,7 @@ async function forceCloudRestore() {
     await _fbSerial(async () => {
       const localTrialStart = DATA.trialStart || 0;
       const localUsers = Array.isArray(DATA.users) ? DATA.users : [];
-      DATA = Object.assign(JSON.parse(JSON.stringify(DEFAULT)), val);
+      DATA = Object.assign(JSON.parse(JSON.stringify(DEFAULT)), _fbDecode(val));
       // Merge local-only users not present in cloud
       const cloudUsernames = new Set((DATA.users||[]).map(u=>(u.username||'').toLowerCase()));
       const localOnlyUsers = localUsers.filter(u=>(u.username||'') && !cloudUsernames.has((u.username||'').toLowerCase()));
@@ -3619,14 +3811,82 @@ function depotKey() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 // Human-readable tier labels and monthly prices (ZMW).
-// Update prices here only — all UI reads from this object.
+// The numbers here are the built-in fallback. Prices are changed in the ADMIN APP (Plan prices) and arrive from
+// Firebase (see LIVE TIER PRICES below) — all UI reads from this object.
 const TIER_META = {
-  free:      { label: 'Free',      price: 0,   currency: 'ZMW', desc: 'Core data entry, always free' },
+  free:      { label: 'Free',      price: 0,   currency: 'ZMW', desc: 'Core data entry and the Till, always free' },
   starter:   { label: 'Starter',   price: 90,   currency: 'ZMW', desc: 'Higher limits — same features as Free' },
   growth:    { label: 'Growth',    price: 150,  currency: 'ZMW', desc: 'Exports, cloud sync, reports' },
   pro:       { label: 'Pro',       price: 300,  currency: 'ZMW', desc: 'Full features — current plan' },
   multisite: { label: 'Multi-Site',price: 600,  currency: 'ZMW', desc: 'Multiple depots, enterprise' },
 };
+
+// ── LIVE TIER PRICES ─────────────────────────────────────────────────────────
+// The numbers in TIER_META above are only the FALLBACK (first run, offline, or prices never set in the admin app).
+// The real prices are set in the admin app and live in Firebase at tierPrices/<tier> (public read, operator-only
+// write: see database_rules.json). Every price on screen reads TIER_META[t].price, so applying the live prices
+// INTO TIER_META is the only step needed for all of them to follow. Free is always 0 and is never overridden.
+// The last prices seen are cached in localStorage so an offline device still shows (and quotes) the latest ones.
+const TIER_PRICE_CACHE_KEY = 'mdm_tier_prices_v1';
+const TIER_PRICE_TIERS     = ['starter', 'growth', 'pro', 'multisite'];
+const TIER_PRICE_DEFAULTS  = Object.freeze(Object.fromEntries(TIER_PRICE_TIERS.map(t => [t, TIER_META[t].price])));
+
+// Puts the prices in src ({starter, growth, pro, multisite}) into TIER_META. Anything that is not a sane
+// number is ignored (that tier keeps the price it has). Returns true if any price actually changed.
+function applyTierPrices(src) {
+  if (!src || typeof src !== 'object') return false;
+  let changed = false;
+  TIER_PRICE_TIERS.forEach(t => {
+    const v = src[t];
+    if (typeof v !== 'number' || !isFinite(v) || v < 0 || v > 1e6) return;
+    const p = Math.round(v * 100) / 100;
+    if (TIER_META[t].price !== p) { TIER_META[t].price = p; changed = true; }
+  });
+  return changed;
+}
+try { applyTierPrices(JSON.parse(localStorage.getItem(TIER_PRICE_CACHE_KEY) || 'null')); } catch (e) {}   // last prices seen, available at once and offline
+
+const _planOptLabel = t => `${TIER_META[t].label} \u2014 K${TIER_META[t].price}/month`;   // the signup plan dropdown
+
+// Re-draws whatever price is on screen right now. Screens that are built when opened (upgrade modals, the
+// subscription form) need nothing: they read TIER_META when they open.
+function _repaintPriceScreens() {
+  try {
+    const visible = id => { const el = document.getElementById(id); return !!el && getComputedStyle(el).display !== 'none'; };
+    if (visible('landing-screen')) renderLandingPricing();
+    if (visible('pricing-screen')) renderPricingScreen();
+    document.querySelectorAll('#su-plan option').forEach(o => { if (TIER_PRICE_TIERS.includes(o.value)) o.textContent = _planOptLabel(o.value); });   // in place: keeps what is typed in the form
+    if (USER) {
+      applyLicenseMode();                                                                  // the trial / renewal banner quotes a price
+      const lw = document.getElementById('license-card-wrap'), modalOpen = document.getElementById('modal-ovl').style.display === 'flex';
+      if (lw && !modalOpen) lw.innerHTML = renderLicenseCard();                             // just the Plan card in Settings: forms elsewhere on that page keep what is typed
+    }
+  } catch (e) {}
+}
+
+let _tierPricesAt = 0, _tierPricesBusy = false;
+// Fetches tierPrices from Firebase (at most once a minute unless force). Offline, or the rules not yet
+// deployed: the cached / built-in prices stay, nothing breaks.
+async function refreshTierPrices(force) {
+  if (window.PLAY_MODE || _tierPricesBusy || !navigator.onLine || !isFbConfigured()) return;
+  if (!force && Date.now() - _tierPricesAt < 60000) return;
+  _tierPricesBusy = true;
+  try {
+    const live = await fbGet('tierPrices');
+    _tierPricesAt = Date.now();
+    let changed;
+    if (live && typeof live === 'object') {
+      changed = applyTierPrices(live);
+      try { localStorage.setItem(TIER_PRICE_CACHE_KEY, JSON.stringify(live)); } catch (e) {}
+    } else {                                               // the admin removed the record: back to the built-in prices
+      changed = applyTierPrices(TIER_PRICE_DEFAULTS);
+      try { localStorage.removeItem(TIER_PRICE_CACHE_KEY); } catch (e) {}
+    }
+    if (changed) _repaintPriceScreens();
+  } catch (e) { /* offline, or not allowed yet: keep what we have */ }
+  finally { _tierPricesBusy = false; }
+}
+window.addEventListener('online', () => refreshTierPrices(true));
 
 // ══════════════════════════════════════════════════════════════════════════════
 // TIER CAPS — numeric ceilings per tier, separate from the boolean TIER_FEATURES.
@@ -3739,6 +3999,7 @@ function activeDaysRemaining(activeUntil) {
 // License check — fetches live from Firebase so admin approval is enforced in real-time.
 // Falls back to local logic only when offline.
 function checkLicense(callback) {
+  refreshTierPrices();                                    // prices are set in the admin app: refresh with every licence check
   const now = Date.now();
   const trialStart = DATA.trialStart || now;
   const key = depotKey();
@@ -3964,7 +4225,7 @@ function applyLicenseMode() {
     if (daysLeft <= 10 && trialBnr) {
       document.body.classList.add('trial-mode');
       trialBnr.style.display = 'flex';
-      if (trialMsg) trialMsg.textContent = window.PLAY_MODE ? `Trial ends in ${daysLeft} day${daysLeft===1?'':'s'}.` : `Trial ends in ${daysLeft} day${daysLeft===1?'':'s'}. Upgrade to keep full access — plans from K150/month.`;
+      if (trialMsg) trialMsg.textContent = window.PLAY_MODE ? `Trial ends in ${daysLeft} day${daysLeft===1?'':'s'}.` : `Trial ends in ${daysLeft} day${daysLeft===1?'':'s'}. Upgrade to keep full access — plans from K${TIER_META.growth.price}/month.`;
       if (trialTag) trialTag.textContent = `${daysLeft}D LEFT`;
     }
 
@@ -4063,7 +4324,7 @@ const _FEATURE_LABEL = {
   payroll_run:        { name: 'Payroll Run',               tier: 'pro'    },
   stock_check:        { name: 'Payroll Stock Check',       tier: 'pro'    },
   pos_till:           { name: 'Sell Tab (Till)',           tier: 'free'   },
-  daily_sales:        { name: 'Sales History',             tier: 'pro'    },
+  daily_sales:        { name: 'Sales History',             tier: 'free'   },
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -4081,8 +4342,10 @@ const _FEATURE_LABEL = {
 // Each entry: [emoji, label]
 const _TIER_BULLETS = {
   free: [
+    ['🧾','Till: sell, receipts, sales history'],
     ['📦','Stock receive & issue'],
     ['🌽','Commodity tracking'],
+    ['🔢','1 inventory item type · 1 commodity type'],
     ['🚛','Transport log'],
     ['👤','Staff clock-in / out'],
     ['📋','Contacts & suppliers (view)'],
@@ -4096,6 +4359,7 @@ const _TIER_BULLETS = {
     ['📋','Edit up to 50 contacts'],
   ],
   growth: [
+    ['♾️','Unlimited inventory items & commodities'],
     ['☁️','Cloud backup & sync'],
     ['⬇️','CSV & PDF exports'],
     ['📚','Books & spreadsheets'],
@@ -4393,6 +4657,7 @@ async function submitSubscriptionRequest(planTier) {
     country:     _fbStr(di.country, 200),
     requestedPlan: _fbStr(planTier, 40),
     planLabel:   _fbStr((TIER_META[planTier] || {}).label || planTier, 80),
+    planPrice:   Number((TIER_META[planTier] || {}).price) || 0,     // what this screen quoted (K/month): prices can change before the operator approves
     email:       _fbStr(email, 254),
     emailVerified: !!(_myEmail().verified && _myEmail().email === email),
     paymentMethod: _fbStr(method, 40),
@@ -4469,7 +4734,7 @@ function printSubscriptionReceipt(payload, ts){
   <hr>
   <table>
     <tr><td class="muted">Plan</td><td class="right bold">${esc(payload.planLabel||'')}</td></tr>
-    <tr><td class="muted">Amount</td><td class="right bold">K${esc(String(tm.price||''))}</td></tr>
+    <tr><td class="muted">Amount</td><td class="right bold">K${esc(String(payload.planPrice != null ? payload.planPrice : (tm.price||'')))}</td></tr>
     <tr><td class="muted">Payment Method</td><td class="right">${esc(payload.paymentMethod||'')}</td></tr>
     <tr><td class="muted">Transaction Ref</td><td class="right">${esc(payload.transactionId||'')}</td></tr>
     <tr><td class="muted">Phone</td><td class="right">${esc(payload.phone||'')}</td></tr>
@@ -4728,7 +4993,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.74';
+const SW_VERSION  = 'v0.3.80';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -6227,7 +6492,7 @@ function _syncHdrMenuRoleRows(){
 
 // Builds the landing-page plan cards from TIER_META / TIER_ORDER / _TIER_BULLETS, the same
 // single source of truth every other price/tier display in the app reads from. Update prices
-// in TIER_META only; this (and everywhere else) follows automatically. Hidden in Play mode.
+// in the admin app (they flow into TIER_META); this (and everywhere else) follows automatically. Hidden in Play mode.
 function renderLandingPricing() {
   const wrap = document.getElementById('land-plans');
   if (!wrap) return;
@@ -6278,6 +6543,7 @@ function showPricingScreen() {
   _hideMainUI();
   renderPricingScreen();
   document.getElementById('pricing-screen').style.display = 'flex';
+  refreshTierPrices();
 }
 
 function showLanding() {
@@ -6285,6 +6551,7 @@ function showLanding() {
   _hideMainUI();
   renderLandingPricing();
   document.getElementById('landing-screen').style.display = 'flex';
+  refreshTierPrices();
   // Always show signup button — multiple accounts allowed on one device
   const getStartedBtn = document.querySelector('#landing-screen button[onclick="startSignUp()"]');
   if (getStartedBtn) getStartedBtn.style.display = '';
@@ -6689,9 +6956,9 @@ function renderSignupStep() {
       <div class="fw play-hide"><div class="fl">Plan Interested In <span style="color:var(--red)">*</span></div>
         <select class="fi" id="su-plan" style="cursor:pointer">
           <option value="" disabled ${!_signupData.requestedPlan?'selected':''}>— Select a plan —</option>
-          <option value="starter" ${_signupData.requestedPlan==='starter'?'selected':''}>Starter — K90/month</option>
-          <option value="growth"  ${_signupData.requestedPlan==='growth' ?'selected':''}>Growth  — K150/month</option>
-          <option value="pro"     ${_signupData.requestedPlan==='pro'    ?'selected':''}>Pro     — K300/month</option>
+          <option value="starter" ${_signupData.requestedPlan==='starter'?'selected':''}>${_planOptLabel('starter')}</option>
+          <option value="growth"  ${_signupData.requestedPlan==='growth' ?'selected':''}>${_planOptLabel('growth')}</option>
+          <option value="pro"     ${_signupData.requestedPlan==='pro'    ?'selected':''}>${_planOptLabel('pro')}</option>
         </select>
         <div style="font-size:16px;color:var(--muted);margin-top:5px;line-height:1.6">You'll start with a free 30-day trial regardless of plan chosen.</div>
       </div>
@@ -7253,7 +7520,7 @@ async function doLogin(){
             const val = await fbGet('depots/' + _loginTargetInstallId + '/data');
             if (val && val._v) {
               const localTrialStart = DATA.trialStart || 0;
-              DATA = Object.assign(JSON.parse(JSON.stringify(DEFAULT)), val);
+              DATA = Object.assign(JSON.parse(JSON.stringify(DEFAULT)), _fbDecode(val));
               if (localTrialStart > 0 && (!DATA.trialStart || localTrialStart < DATA.trialStart)) {
                 DATA.trialStart = localTrialStart;
               }
@@ -7281,7 +7548,7 @@ async function doLogin(){
             if (_stillMissing) {
               btn.textContent = '☁ Restoring data… (fallback check)';
               try {
-                const val2 = await fbGet('depots/' + _loginTargetInstallId + '/data');
+                const val2 = _fbDecode(await fbGet('depots/' + _loginTargetInstallId + '/data'));
                 btn.textContent = '☁ Restoring data… (fallback fetched)';
                 if (val2 && val2._v && (val2.users||[]).some(x=>(x.username||'').toLowerCase()===u)) {
                   const localTrialStart2 = DATA.trialStart || 0;
@@ -8304,7 +8571,7 @@ function renderStaffDash(){
 // refunds, the shifts open right now and what each drawer should hold, today's closed shifts with their cash variance, the low-stock list and
 // the Open Till button. Nothing is stored: every figure is summed from the same ledgers as the daily close-out (sales, returns, shifts), so
 // the two cannot disagree. While it shows it replaces the Quick Actions "Open Till" button and the LOW STOCK lines of the alert block, so
-// nothing is listed twice. Pro-gated like the till itself (pos_till). Settings > Dashboard Widgets > "Till Today" switches it off.
+// nothing is listed twice. Gated like the till itself (pos_till, every plan). Settings > Dashboard Widgets > "Till Today" switches it off.
 function _tillDashOn(){return !!USER&&(isAdmin()||isManagerRole())&&!window.PLAY_MODE&&hasFeature('pos_till')&&isDashWidgetOn('till');}
 function _lowStockList(){
   const out=[];
@@ -9135,7 +9402,7 @@ function renderGenIssued(){
 // (pos.html). Since the follow-up to step 23 it reads the ledgers (_SALE_LIST, _RET_LIST) directly, one row per receipt and per void/refund, over the period
 // chosen above the tab, plus the main app's own priced Issue Item rows. It no longer touches the overlay rows.
 function renderGenSales(){
-  if(!hasFeature('daily_sales')){ return showUpgradePrompt('daily_sales'),`<div style="text-align:center;padding:48px 16px"><div style="font-size:40px;margin-bottom:12px">🔒</div><div style="font-size:19px;font-weight:700;color:var(--white);margin-bottom:8px">Sales History — Pro Feature</div><div style="font-size:16px;color:var(--muted);margin-bottom:20px">Upgrade to Pro to access Sales History: daily close-out, receipt printing and sales reports.</div><button class="btn bg" onclick="showUpgradePrompt('daily_sales')">🔓 Upgrade to Pro</button></div>`; }
+  if(!hasFeature('daily_sales')){ return showUpgradePrompt('daily_sales'),`<div style="text-align:center;padding:48px 16px"><div style="font-size:40px;margin-bottom:12px">🔒</div><div style="font-size:19px;font-weight:700;color:var(--white);margin-bottom:8px">Sales History — Not available</div><div style="font-size:16px;color:var(--muted);margin-bottom:20px">Sales History is not available on this account right now. Check the account status in Settings, or contact support.</div></div>`; }
   const todayStr=today();
   // Sales History reads the LEDGERS directly (till roadmap step 23): one document per till receipt (sales.js) and per void/refund (returns.js),
   // plus the main app's own Issue Item rows that carry a selling price (they are not in the ledger). The overlay rows (_sale) are not used here.
@@ -9148,7 +9415,7 @@ function renderGenSales(){
   const sumDocs=list=>{
     let rev=0,paid=0,credit=0,n=0;const byItem={};
     list.forEach(d=>{const r=d.r;
-      if(d.k==='sale'){n++;rev+=_n(r.total);paid+=_n(r.amountPaid);credit+=_n(r.balance);(r.lines||[]).forEach(l=>{byItem[l.name]=(byItem[l.name]||0)+_n(l.total);});}
+      if(d.k==='sale'){n+=(+r.n>0?Math.floor(+r.n):1);rev+=_n(r.total);paid+=_n(r.amountPaid);credit+=_n(r.balance);(r.lines||[]).forEach(l=>{byItem[l.name]=(byItem[l.name]||0)+_n(l.total);});}
       else if(d.k==='ret'){rev-=_n(r.total);paid-=_n(r.refunded);credit-=_n(r.creditApplied);(r.lines||[]).forEach(l=>{byItem[l.name]=(byItem[l.name]||0)-_n(l.total);});}
       else{n++;const v=_n(r.issued)*_n(r.sellingPrice),cs=r.creditStatus||'paid',p=cs==='paid'?v:cs==='partial'?_n(r.partialPaid):0;
         rev+=v;paid+=p;credit+=v-p;byItem[r.itemName]=(byItem[r.itemName]||0)+v;}
@@ -9175,6 +9442,16 @@ function renderGenSales(){
   const whenOf=d=>(d.date===todayStr?'':esc(fmtDate(d.date))+' ')+esc(d.time||'—');
   const rows=shown.map(d=>{
     const r=d.r,td='<td style="color:var(--muted);font-size:16px;white-space:nowrap">'+whenOf(d)+'</td>';
+    if(d.k==='sale'&&r._digest){      // step 33: an older day, kept as totals (see Sales.foldCold): no single receipt behind this row
+      const how=(r.payments||[]).filter(p=>_n(p.amount)>0).map(p=>esc(p.label||p.method)).join(', ');
+      return`<tr>${td}
+        <td style="font-weight:600">${r.n} sale${r.n!==1?'s':''} · ${(r.lines||[]).length} item${(r.lines||[]).length!==1?'s':''}<span style="font-size:11px;font-weight:700;color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:1px 5px;margin-left:4px;white-space:nowrap">🗂 DAY TOTAL</span><div style="font-size:14px;color:var(--muted);font-weight:400">${esc(r.till||'')}${r.shiftId?' · '+esc(r.shiftId):''}${r.cashier?' · '+esc(r.cashier):''}</div></td>
+        <td style="text-align:right;color:var(--amber);font-weight:700">${_n(r.qtyTotal).toLocaleString()}</td><td style="text-align:right">—</td>
+        <td style="text-align:right;color:var(--green);font-weight:700">${zm(r.total)}</td>
+        <td>${chipOf('paid')}${how?`<span style="font-size:14px;color:var(--muted);margin-left:4px">${how}</span>`:''}</td>
+        <td style="font-size:15px;color:var(--blue)"><span style="color:var(--muted)">—</span></td>
+        <td></td></tr>`;
+    }
     if(d.k==='sale'){
       const ls=r.lines||[],first=ls[0]||{name:'(no items)'},how=(r.payments||[]).filter(p=>_n(p.amount)>0).map(p=>esc(p.label||p.method)).join(', ');
       return`<tr>${td}
@@ -9282,6 +9559,17 @@ function renderGenSales(){
     <button onclick="${_tillSells()?'openTill()':"GTAB='issued';openGenIssForm()"}" style="width:100%;display:flex;align-items:center;justify-content:center;gap:8px;background:var(--green);color:#111;border:none;border-radius:12px;padding:13px;font-family:var(--fh);font-size:18px;font-weight:800;cursor:pointer;margin-bottom:14px;touch-action:manipulation">
       ${_tillSells()?'🧾 New Sale at the Till':'+ New Sale'}
     </button>
+
+    <!-- Find any receipt by its number, even from an older day (step 33) -->
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:${USER.role==='admin'?'6':'12'}px">
+      <input class="fi" id="rcptFind" placeholder="Find a receipt: number, e.g. K7F2-000123" autocomplete="off" autocapitalize="characters" spellcheck="false" style="flex:1;text-transform:uppercase" onkeydown="if(event.key==='Enter')_findReceipt()"/>
+      <button class="editbtn" onclick="_findReceipt()" style="padding:10px 14px;white-space:nowrap" title="Print the receipt">🧾 Find</button>
+    </div>
+    ${USER.role==='admin'?`<details style="margin-bottom:12px"><summary style="cursor:pointer;color:var(--blue);font-size:16px;padding:4px 0">⚙️ Older days</summary>
+      <div style="padding-top:8px"><div id="lw-msg"></div>
+      <div style="font-size:15px;color:var(--muted);line-height:1.5;margin-bottom:8px">Nothing is deleted. To keep the app quick on a busy till, sales older than this many days are shown as one line per day, till and shift (day totals) instead of one line per receipt. Credit and customer sales, discounts a person allowed, wholesale baskets and sales that have a void or refund always stay in full. Stock and every total stay exact.</div>
+      <div class="fw"><div class="fl">Days to keep receipt by receipt (${Sales.HOT_DAYS.min} to ${Sales.HOT_DAYS.max})</div><input class="fi" type="number" id="lw-days" inputmode="numeric" min="${Sales.HOT_DAYS.min}" max="${Sales.HOT_DAYS.max}" step="1" value="${Sales.ledgerPolicy(DATA.depotInfo).hotDays}"/></div>
+      <button type="button" class="btn bg bsm" onclick="saveLedgerWindow()">Save</button></div></details>`:''}
 
     <!-- Transactions in the chosen period -->
     <div style="font-family:var(--fh);font-size:17px;font-weight:700;margin-bottom:8px;color:var(--muted)">TRANSACTIONS · ${periodLabel.toUpperCase()}</div>
@@ -10099,10 +10387,13 @@ function _salesCloud(){return _salesCloudApi||(_salesCloudApi=Gate.restCloud({db
 async function salesReload(){
   try{
     if(!DATA||!DATA.installId)return false;
-    const depot=DATA.installId,list=await _sales().all();
+    const depot=DATA.installId;
     let rl=[];try{rl=await _returns().all();}catch(e){console.warn('[MDM] returns ledger unavailable',e);}
+    // Step 33: the last Sales.ledgerPolicy().hotDays days come in as the real records, older days as digests (one pseudo sale per day, till, shift and cashier, standing for n sales).
+    // Nothing is deleted: every record is still on this phone and in the cloud. The returns are read first because a sale that a void / refund points at always stays a real record.
+    const LD=await _sales().load({today:today(),hotDays:Sales.ledgerPolicy(DATA.depotInfo).hotDays,returns:rl}),list=LD.list;
     if(depot!==DATA.installId)return false;                       // a different depot loaded while we were reading
-    const sig=depot+'|'+list.length+'|'+rl.length;                // both ledgers are append-only: a new record always changes a length
+    const sig=depot+'|'+LD.count+'|'+rl.length+'|'+LD.cut;        // append-only: a new record changes a count; a new day (or a longer window) moves the cut
     if(sig===_salesSig)return false;
     _salesSig=sig;
     const rows=Sales.issuedRows(list,rl);                         // step 19: a void/refund is a negative row on the day it was made
@@ -10285,9 +10576,29 @@ function _adjustedCountIds(){
   _acSet=s;_acKey=k;return s;
 }
 function _saleLockToast(){showToast('\u{1F9FE} A till sale is a permanent record and cannot be edited or deleted here. To take something back, make a void or refund at the till (Returns).');}
+// Step 33: print any receipt by its number, read from this phone's ledger (an older day may be held only as totals in memory). The plan's history limit still applies.
+async function _findReceipt(){
+  const el=document.getElementById('rcptFind'),no=String(el&&el.value||'').trim().toUpperCase();
+  if(!no){showToast('Type a receipt number first.');return;}
+  let s=(_SALE_LIST||[]).find(x=>x&&x.id===no&&!x._digest);
+  if(!s){try{s=await _sales().get(no);}catch(e){}}
+  if(!s){showToast('No receipt '+no+' on this device. A till that has not synced yet may hold it.');return;}
+  if(!filterPeriod([{id:'rf',date:s.date}],'all','date','general').length){showToast('That receipt is older than your plan keeps history for.');return;}
+  _printSaleBasket(no,s);
+}
+function saveLedgerWindow(){
+  if(!isAdmin())return;
+  if(isReadOnly()){alert("🔒 This account is in read-only mode. Contact your administrator.");return;}
+  const m=document.getElementById('lw-msg'),v=String(document.getElementById('lw-days')?.value||'').trim(),n=Number(v),RG=Sales.HOT_DAYS;
+  if(!(v!==''&&isFinite(n)&&Math.floor(n)===n&&n>=RG.min&&n<=RG.max)){if(m)m.innerHTML=`<div class="err-box">Days: a whole number from ${RG.min} to ${RG.max}.</div>`;return;}
+  updateData(d=>({...d,depotInfo:{...(d.depotInfo||{}),ledgerHotDays:n}}));
+  logAuditEvent('UPDATE','Sales History older days',`Receipt by receipt for the last ${n} days; older days as day totals`);
+  salesRefresh();
+}
 // The receipt of a whole till basket (every line, every payment) for a Sales History row that came from the till.
-function _printSaleBasket(sid){
-  const s=_SALE_LIST.find(x=>x.id===sid);
+async function _printSaleBasket(sid,rec){
+  let s=rec||_SALE_LIST.find(x=>x.id===sid&&!x._digest);
+  if(!s){try{s=await _sales().get(sid);}catch(e){}}                // step 33: a sale of an older day is read from this phone's ledger when asked for
   if(!s){showToast('Receipt not found on this device yet. Try again in a minute.');return;}
   const depot=(DATA.depotInfo||{}),accent=depot.brandColor||'#1E8449';
   const initials=(depot.name||'MDM').split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,3)||'MDM';
@@ -12554,7 +12865,7 @@ async function _mriSave(){
 // ══ SCAN RECEIVE (till roadmap step 28) ═══════════════════════════════════════════════════════════════════════════════
 // Receive a delivery by scanning: one scan = one more of that item, in the unit whose barcode it was (item, pack or carton). EXACT barcode / SKU / unit
 // barcode only, the same rule as the Till; an unknown or shared code adds nothing. Each line saves as a normal generalInventory row in the BASE unit
-// (qty x factor, cost / factor), exactly like Receive and Multi Receive, so stock, the Received tab, reports and the Till need no change. Pro (pos_till).
+// (qty x factor, cost / factor), exactly like Receive and Multi Receive, so stock, the Received tab, reports and the Till need no change. Every plan (pos_till).
 var _sr=null;
 function _srHits(code){
   const c=String(code||'').trim().toLowerCase(),out=[];if(!c)return out;
@@ -12673,6 +12984,7 @@ function _srSave(){
   });
   logAuditEvent('CREATE','Scan Receive',B.recs.length+' line(s) · '+B.recs.map(r=>r.itemName+':'+r.received).join(', '));
   _srClose(true);showToast('✅ '+B.recs.length+' line(s) received');
+  _srOfferLabels(L);
 }
 function _srCamStop(){
   const me=_sr&&_sr.cam;if(!me)return;_sr.cam=null;clearTimeout(me.t);
@@ -12766,7 +13078,7 @@ function _srSplit(i){const l=_sr&&_sr.lines[i];if(!l)return;_sr.lines.unshift({.
 // Count the shelves by scanning: one scan = one more of that item, in the unit whose barcode it was (item, pack or carton). Codes are found EXACTLY
 // as in Scan Receive and the Till (_srHits: barcode, SKU or unit barcode; an unknown or shared code counts nothing). The count is BLIND: while scanning the
 // screen shows only what you counted, never what the system expects, so nobody counts towards a number. Review then shows system against counted per item,
-// largest gaps first, and lets you fix a quantity, count an item that has no barcode, or put an item at 0. Nothing is saved until Save. Pro (pos_till).
+// largest gaps first, and lets you fix a quantity, count an item that has no barcode, or put an item at 0. Nothing is saved until Save. Every plan (pos_till).
 // Save writes ONE normal generalStockCounts row per counted item, exactly what the Stock Count form writes (physicalCount in the BASE unit, itemName, date,
 // time, notes, stampEntry: a Manager's counts wait for approval like any stock count), so the Stock Count tab, its history and its variance maths need no change.
 // An item's date and time are the moment it was LAST SCANNED or changed, not the moment you pressed Save: the history works out the variance against the stock at
@@ -14035,22 +14347,233 @@ function _itemCodes(x){
 function _ean13Check(d12){let t=0;for(let i=0;i<12;i++)t+=Number(d12[i])*(i%2?3:1);return (10-t%10)%10;}
 // Internal barcode for goods that have none. GS1 reserves prefixes 20–29 for in-store use,
 // so a leading 2 can never clash with a manufacturer's code.
-function genItemBarcode(target){
-  const used=new Set();(DATA.inventoryItems||[]).forEach(x=>_itemCodes(x).forEach(c=>used.add(c)));
+// `used` = the lower-case codes already taken. The new code is added to it, so a loop that makes one per item never repeats.
+function _newInStoreCode(used){
   let code='';
-  for(let n=0;n<50;n++){
+  for(let n=0;n<200;n++){
     let b='2';for(let i=0;i<11;i++)b+=Math.floor(Math.random()*10);
     code=b+_ean13Check(b);
     if(!used.has(code))break;
   }
+  used.add(code);
+  return code;
+}
+function _usedItemCodes(){const used=new Set();(DATA.inventoryItems||[]).forEach(x=>_itemCodes(x).forEach(c=>used.add(c)));return used;}
+function genItemBarcode(target){
+  const used=_usedItemCodes();
+  ['idt-barcode','idt-u0-bc','idt-u1-bc','idt-u2-bc'].forEach(id=>{const e=document.getElementById(id);if(e&&e.value)used.add(String(e.value).trim().toLowerCase());});
   const el=document.getElementById(target||'idt-barcode');
-  if(el)el.value=code;
+  if(el)el.value=_newInStoreCode(used);
+}
+
+// ── CAMERA: read ONE barcode into a box of the item form (v0.3.78) ───────────────────────────────────────────────
+// Same reader as Scan Receive and the Till (the browser's own BarcodeDetector, or the fallback in barcode.js on iPhone and desktop).
+// Only a barcode near the middle of the picture counts; if two are in view nothing is taken. It stops after one read.
+let _idtCur='',_c1=null;
+function _camOk(){return !!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&('BarcodeDetector' in window));}
+function _camBtn(field){return _camOk()?`<button class="btn bo" style="width:auto;padding:10px 12px" onclick="_camOne('${field}')" aria-label="Read the barcode with the camera">📷</button>`:'';}
+async function _camOne(field){
+  if(_c1)return;
+  if(!_camOk()){alert('The camera cannot be used here. Use a scanner or type the code.');return;}
+  const ovl=document.createElement('div');
+  ovl.style.cssText='position:fixed;inset:0;z-index:99999;background:#000;display:flex;flex-direction:column';
+  ovl.innerHTML='<div style="position:relative;flex:1;min-height:0;overflow:hidden"><video playsinline autoplay muted style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover"></video><div style="position:absolute;left:10%;right:10%;top:32%;bottom:32%;border:3px solid rgba(255,255,255,.9);border-radius:12px;box-shadow:0 0 0 100vmax rgba(0,0,0,.35)"></div></div><div style="padding:12px;background:#111;color:#fff;font-size:17px"><div class="c1-st">Starting camera…</div><button class="btn bo" style="margin-top:8px" onclick="_camOneStop()">Cancel</button></div>';
+  document.body.appendChild(ovl);
+  const me=_c1={ovl,video:ovl.querySelector('video'),st:ovl.querySelector('.c1-st'),stream:null,t:0,pend:'',pendN:0,errs:0};
+  let det;
+  try{const sup=await BarcodeDetector.getSupportedFormats();det=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','qr_code'].filter(x=>sup.includes(x))});}
+  catch(e){if(_c1===me)me.st.textContent='Camera scanning is not supported on this device. Use a scanner or type the code.';return;}
+  try{me.stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});}
+  catch(e){if(_c1===me)me.st.textContent=(e&&e.name==='NotAllowedError')?'The camera is blocked. Allow it in the phone\u2019s site settings.':'Could not start the camera.';return;}
+  if(_c1!==me){me.stream.getTracks().forEach(t=>{try{t.stop();}catch(e){}});return;}
+  me.video.srcObject=me.stream;try{await me.video.play();}catch(e){}
+  me.st.textContent='Aim at the barcode on the product.';
+  const tick=async()=>{
+    if(_c1!==me)return;
+    let found=[];
+    try{if(me.video.readyState>=2&&me.video.videoWidth)found=await det.detect(me.video);me.errs=0;}
+    catch(e){if(++me.errs>=25){me.st.textContent='The scanner stopped working. Tap Cancel and try again.';return;}}
+    if(_c1!==me)return;
+    const W=me.video.videoWidth,H=me.video.videoHeight,seen=new Map();
+    found.forEach(r=>{const v=String(r.rawValue||'').trim();if(!v)return;const b=r.boundingBox;if(b&&W&&H){const cx=b.x+b.width/2,cy=b.y+b.height/2;if(cx<W*.1||cx>W*.9||cy<H*.25||cy>H*.75)return;}seen.set(v,r.format);});
+    if(!seen.size){me.pend='';me.pendN=0;}
+    else if(seen.size>1){me.pend='';me.pendN=0;me.st.textContent='Several barcodes in view. Aim at one.';}
+    else{
+      const [v,fmt]=[...seen][0];
+      let go=['ean_13','ean_8','upc_a','upc_e','code_128'].includes(fmt);      // check-digit formats: one read; the rest must be read twice in a row
+      if(!go){if(me.pend===v)go=++me.pendN>=2;else{me.pend=v;me.pendN=1;}}
+      if(go){try{navigator.vibrate&&navigator.vibrate(40);}catch(e){}_camOneStop();_camOneDone(field,v);return;}
+    }
+    me.t=setTimeout(tick,120);
+  };
+  tick();
+}
+function _camOneStop(){
+  const me=_c1;if(!me)return;_c1=null;clearTimeout(me.t);
+  try{me.video.pause();me.video.srcObject=null;}catch(e){}
+  if(me.stream)me.stream.getTracks().forEach(t=>{try{t.stop();}catch(e){}});
+  me.ovl.remove();
+}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)_camOneStop();});
+addEventListener('pagehide',_camOneStop);
+function _camOneDone(field,raw){
+  const el=document.getElementById(field);if(!el)return;
+  const v=String(raw||'').trim();
+  if(!/^[\x21-\x7E]{1,48}$/.test(v)){alert('That barcode ('+v.slice(0,40)+') cannot be saved as an item barcode (1–48 characters, no spaces).');return;}
+  const lv=v.toLowerCase(),clash=(DATA.inventoryItems||[]).map(_invItemObj).find(x=>x.id!==_idtCur&&_itemCodes(x).includes(lv));
+  if(clash){alert('\u201c'+v+'\u201d is already used as a barcode, SKU or unit barcode by '+clash.name+'. Nothing was filled in.');return;}
+  el.value=v;try{el.dispatchEvent(new Event('input',{bubbles:true}));}catch(e){}
+  showToast('✓ Barcode read: '+v);
+}
+
+// ── BARCODE LABELS (v0.3.78) ─────────────────────────────────────────────────────────────────────────────────────
+// A4 sticker sheets (or plain A4 paper to cut out) through the browser print dialog, and thermal rolls through RawBT (the same hand-off the
+// receipts use). The drawing is in barcode.js: EAN-13 / EAN-8 / Code 128 as SVG for paper, and whole-dot pictures for the thermal printer.
+// Settings are per device (localStorage mdm_label_prefs); nothing is uploaded and no record changes. Admin only, and the same plan feature
+// as Scan Receive (pos_till): change that one line in openLabelPrinter() to move label printing to another plan.
+let _lbl=null;
+const _LBK='mdm_label_prefs';
+function _lblPrefs(){let o=null;try{o=JSON.parse(localStorage.getItem(_LBK)||'null');}catch(e){}o=o||{};return{layout:o.layout==='thermal'?'thermal':'a4',preset:(window.MDMBarcode&&MDMBarcode.SHEETS[o.preset])?o.preset:'3x8',price:o.price!==false,shop:!!o.shop};}
+function _lblSavePrefs(){try{localStorage.setItem(_LBK,JSON.stringify({layout:_lbl.layout,preset:_lbl.preset,price:_lbl.price,shop:_lbl.shop}));}catch(e){}}
+function _lblRows(sel){                       // sel: Map(item id -> copies) of the items to tick
+  const pr=DATA.inventoryPrices||{};
+  return (DATA.inventoryItems||[]).map(_invItemObj).map(it=>{
+    const code=String(it.barcode||'').trim();
+    return{id:it.id,name:it.name,code,price:Number((pr[it.name]||{}).sellingPrice)||0,sel:sel.has(it.id)&&!!code,copies:sel.get(it.id)||1};
+  }).sort((a,b)=>a.name.localeCompare(b.name));
+}
+function openLabelPrinter(pre,from){            // pre: [{id,copies}] to tick at the start, or null
+  if(!requireAdmin('print barcode labels'))return;
+  if(!hasFeature('pos_till')){showUpgradePrompt('pos_till');return;}
+  if(!window.MDMBarcode){alert('The label printer did not load. Reload the app and try again.');return;}
+  if(!(DATA.inventoryItems||[]).length){alert('There are no items yet. Add items first.');return;}
+  const sel=new Map();(pre||[]).forEach(p=>sel.set(p.id,Math.max(1,Math.min(500,Math.round(Number(p.copies))||1))));
+  const pf=_lblPrefs();
+  _lbl={rows:_lblRows(sel),layout:pf.layout,preset:pf.preset,price:pf.price,shop:pf.shop,skip:0,from:from||''};
+  _lblDraw();
+}
+function _lblDraw(){
+  const L=_lbl,SH=MDMBarcode.SHEETS,miss=L.rows.filter(r=>!r.code).length;
+  const rowsHtml=L.rows.map((r,i)=>`<div class="lbl-r" data-k="${esc((r.name+' '+r.code).toLowerCase())}" style="display:flex;align-items:center;gap:8px;padding:7px 2px;border-bottom:1px solid var(--border)">
+    <input type="checkbox" id="lbl-c${i}" ${r.sel?'checked':''} ${r.code?'':'disabled'} onchange="_lblTick(${i},this.checked)" style="width:22px;height:22px;flex:none"/>
+    <label for="lbl-c${i}" style="flex:1;min-width:0"><b>${esc(r.name)}</b><div style="font-size:14px;color:var(--muted)">${r.code?esc(r.code)+(r.price>0?' · '+zm(r.price):''):'no barcode'}</div></label>
+    ${r.code?`<input class="fi" type="number" inputmode="numeric" min="1" max="500" value="${r.copies}" onchange="_lblCopies(${i},this.value)" style="width:68px;flex:none" aria-label="Number of labels"/>`:''}
+  </div>`).join('');
+  openModal(`<div class="mtitle">🏷️ Print barcode labels</div>
+    <div style="font-size:16px;color:var(--muted);margin-bottom:8px;line-height:1.6">Tick the items. The box on the right is how many stickers of that item.</div>
+    ${miss?`<div style="border:1px solid var(--border);border-radius:10px;padding:8px;margin-bottom:8px;font-size:15px;line-height:1.6"><b>${miss}</b> item(s) have no barcode yet.<br><button class="btn bo bsm" style="margin-top:6px" onclick="_lblGen()">Make in-store barcodes for them</button></div>`:''}
+    ${L.rows.length>8?`<input class="fi" id="lbl-q" placeholder="🔍 Search items" oninput="_lblFilter(this.value)" style="margin-bottom:6px"/>`:''}
+    <div style="display:flex;gap:8px;margin-bottom:6px"><button class="btn bo bsm" onclick="_lblAll(true)">Tick all with a barcode</button><button class="btn bo bsm" onclick="_lblAll(false)">Clear</button></div>
+    <div id="lbl-list" style="max-height:32vh;overflow:auto;border:1px solid var(--border);border-radius:10px;padding:0 8px">${rowsHtml}</div>
+    <div id="lbl-sum" style="font-weight:700;margin:8px 0"></div>
+    <div class="fw"><div class="fl">Print on</div><select class="fi" id="lbl-layout" onchange="_lblOpt()"><option value="a4">A4 paper or stickers</option><option value="thermal">Thermal roll (RawBT)</option></select></div>
+    <div id="lbl-a4">
+      <div class="fw"><div class="fl">Sheet</div><select class="fi" id="lbl-preset" onchange="_lblOpt()">${Object.keys(SH).map(k=>`<option value="${k}">${esc(SH[k].name)}</option>`).join('')}</select></div>
+      <div class="fw"><div class="fl">First free label on the first sheet (1 = top left)</div><input class="fi" id="lbl-skip" type="number" inputmode="numeric" min="1" value="${L.skip+1}" onchange="_lblOpt()"/></div>
+    </div>
+    <div id="lbl-th" style="font-size:15px;color:var(--muted);line-height:1.6;margin-bottom:8px"></div>
+    <label style="display:flex;gap:8px;align-items:center;margin:6px 0;font-size:16px"><input type="checkbox" id="lbl-price" onchange="_lblOpt()" style="width:22px;height:22px"/> Show the selling price</label>
+    <label style="display:flex;gap:8px;align-items:center;margin:6px 0;font-size:16px"><input type="checkbox" id="lbl-shop" onchange="_lblOpt()" style="width:22px;height:22px"/> Show the shop name</label>
+    <div class="mact"><button class="btn bo" onclick="_lblClose()">Close</button><button class="btn bg" onclick="_lblPrint()">🖨️ Print</button></div>`);
+  const g=id=>document.getElementById(id);
+  g('lbl-layout').value=L.layout;g('lbl-preset').value=L.preset;g('lbl-price').checked=L.price;g('lbl-shop').checked=L.shop;
+  _lblOpt(true);
+}
+function _lblOpt(init){
+  const g=id=>document.getElementById(id);if(!_lbl||!g('lbl-layout'))return;
+  if(!init){_lbl.layout=g('lbl-layout').value==='thermal'?'thermal':'a4';_lbl.preset=g('lbl-preset').value;_lbl.skip=Math.max(0,(parseInt(g('lbl-skip').value,10)||1)-1);_lbl.price=g('lbl-price').checked;_lbl.shop=g('lbl-shop').checked;}
+  g('lbl-a4').style.display=_lbl.layout==='a4'?'':'none';
+  const th=g('lbl-th');th.style.display=_lbl.layout==='thermal'?'':'none';
+  if(_lbl.layout==='thermal'){const K=_prnK(),d=K.dots(K.prefs());th.textContent='Paper: '+(d>=576?'80':'58')+' mm ('+d+' dots), the width set in Settings > Printer. Needs the free RawBT app. Each label is a picture with the name, price and barcode; a dotted line marks where to cut.';}
+  _lblSum();
+}
+function _lblSum(){
+  const s=document.getElementById('lbl-sum');if(!s||!_lbl)return;
+  const pick=_lbl.rows.filter(r=>r.sel&&r.code),n=pick.reduce((a,r)=>a+r.copies,0);
+  let t=n?n+' label(s) from '+pick.length+' item(s)':'Nothing ticked yet';
+  if(n&&_lbl.layout==='a4'){const P=MDMBarcode.SHEETS[_lbl.preset]||MDMBarcode.SHEETS['3x8'],per=P.cols*P.rows;t+=' · '+Math.ceil((_lbl.skip+n)/per)+' page(s)';}
+  s.textContent=t;
+}
+function _lblTick(i,on){const r=_lbl&&_lbl.rows[i];if(!r||!r.code)return;r.sel=!!on;_lblSum();}
+function _lblCopies(i,v){
+  const r=_lbl&&_lbl.rows[i];if(!r)return;
+  r.copies=Math.max(1,Math.min(500,Math.round(Number(v))||1));
+  const box=document.querySelector('#lbl-c'+i);if(box){const n=box.closest('.lbl-r').querySelector('input[type=number]');if(n)n.value=r.copies;}
+  if(!r.sel&&r.code){r.sel=true;if(box)box.checked=true;}                  // typing a number means "print this one"
+  _lblSum();
+}
+function _lblAll(on){if(!_lbl)return;_lbl.rows.forEach((r,i)=>{r.sel=!!on&&!!r.code;const b=document.getElementById('lbl-c'+i);if(b)b.checked=r.sel;});_lblSum();}
+function _lblFilter(q){const k=String(q||'').toLowerCase().trim();document.querySelectorAll('#lbl-list .lbl-r').forEach(e=>{e.style.display=(!k||e.dataset.k.includes(k))?'':'none';});}
+function _lblClose(){const f=_lbl&&_lbl.from;_lbl=null;if(f==='manage')renderManageInventoryModal();else closeModal();}
+function _lblGen(){                            // an in-store barcode for every item that has none, saved on the item
+  if(!_lbl||!requireAdmin('make barcodes'))return;
+  const miss=_lbl.rows.filter(r=>!r.code);if(!miss.length)return;
+  if(!confirm('Give '+miss.length+' item(s) an in-store barcode?\n\nEach gets its own number starting with 2, saved on the item. You can still change it in the item\u2019s Details.'))return;
+  const used=_usedItemCodes(),make=new Map();
+  miss.forEach(r=>make.set(r.id,_newInStoreCode(used)));
+  updateData(d=>({...d,inventoryItems:(d.inventoryItems||[]).map(x=>{const o=_invItemObj(x);return make.has(o.id)&&!String(o.barcode||'').trim()?{...o,barcode:make.get(o.id)}:x;})}));
+  logAuditEvent('EDIT','Inventory Items','In-store barcodes made for '+make.size+' item(s)');
+  const keep=new Map();_lbl.rows.forEach(r=>{if(r.sel)keep.set(r.id,r.copies);});make.forEach((c,id)=>keep.set(id,1));
+  _lbl.rows=_lblRows(keep);_lblDraw();showToast('✅ '+make.size+' barcode(s) made');
+}
+function _lblPrint(){
+  if(!_lbl)return;
+  const t0=Date.now(),L=_lbl,picked=L.rows.filter(r=>r.sel&&r.code);
+  if(!picked.length){alert('Tick at least one item that has a barcode.');return;}
+  const total=picked.reduce((a,r)=>a+r.copies,0);
+  if(total>1000){alert('That is '+total+' labels. Print at most 1000 at a time.');return;}
+  _lblSavePrefs();
+  const shop=L.shop?String((DATA.depotInfo||{}).name||''):'';
+  if(L.layout==='a4'){
+    const thin=picked.filter(r=>MDMBarcode.fitModule(r.code,L.preset)<0.24);   // too many bars for the width of this sticker: the scanner may miss it
+    if(thin.length&&!confirm(thin.length+' item(s) have a long barcode that will print very thin on this sticker size:\n\n'+thin.slice(0,5).map(r=>'\u2022 '+r.name+' ('+r.code+')').join('\n')+(thin.length>5?'\n\u2022 \u2026':'')+'\n\nA scanner may not read them. Use a bigger sticker, or a shorter barcode.\n\nPrint anyway?'))return;
+    const labels=[];picked.forEach(r=>{for(let k=0;k<r.copies;k++)labels.push({name:r.name,code:r.code,price:r.price});});
+    const html=MDMBarcode.sheetHtml(labels,{preset:L.preset,skip:L.skip,price:L.price,shop,cur:cur(),title:'Barcode labels',autoprint:true});
+    const url=URL.createObjectURL(new Blob([html],{type:'text/html'})),w=window.open(url,'_blank');
+    if(!w){URL.revokeObjectURL(url);showToast('⚠️ Allow pop-ups to print the labels');return;}
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+    logAuditEvent('EXPORT','Barcode Labels',total+' label(s) · '+picked.length+' item(s) · A4 '+L.preset);
+    return;
+  }
+  const K=_prnK();let job;
+  try{job=MDMBarcode.thermalJob(picked.map(r=>({name:r.name,code:r.code,price:r.price,copies:r.copies})),{dots:K.dots(K.prefs()),price:L.price,shop,cur:cur()},(w,h)=>{const c=document.createElement('canvas');c.width=w;c.height=h;return c;});}
+  catch(e){console.warn('[MDM] label job',e);alert('Could not prepare the labels for the printer.');return;}
+  if(!job.parts.length){alert('Nothing could be printed: '+job.skipped.join('; ')+'.');return;}
+  if(job.parts.length>20){alert('That is too many labels for the thermal printer in one go ('+job.count+' labels would need '+job.parts.length+' parts, each with its own tap). Print about '+Math.max(1,Math.floor(job.count*20/job.parts.length))+' labels at a time.');return;}
+  if(job.skipped.length)showToast('⚠️ Skipped: '+job.skipped.slice(0,2).join('; '),6000);
+  K.send(job.parts.map(p=>K.url(p)),t0);
+  logAuditEvent('EXPORT','Barcode Labels',job.count+' label(s) · '+picked.length+' item(s) · thermal');
+}
+// The Details form: print the label of the item being edited. Only a SAVED barcode is printed, so the sticker always matches the item.
+function printItemLabelFromForm(){
+  if(!requireAdmin('print barcode labels'))return;
+  const it=(DATA.inventoryItems||[]).map(_invItemObj).find(x=>x.id===_idtCur);
+  if(!it){alert('Item not found.');return;}
+  const typed=String((document.getElementById('idt-barcode')||{}).value||'').trim();
+  if(!typed){alert('This item has no barcode yet. Tap Generate (or read the one on the product), Save, then print the label.');return;}
+  if(typed!==String(it.barcode||'').trim()){alert('Save the item first, so the label shows the barcode that is saved.');return;}
+  openLabelPrinter([{id:it.id,copies:1}],'details');
+}
+// After Scan Receive: items with an in-store barcode (the ones MDM makes, starting with 2) need a sticker on every unit that came in.
+function _srOfferLabels(L){
+  try{
+    if(!isAdmin()||!hasFeature('pos_till')||!window.MDMBarcode)return;
+    const items=(DATA.inventoryItems||[]).map(_invItemObj),pre=[];
+    L.forEach(l=>{
+      const it=items.find(x=>x.id===l.id);if(!it||!/^2\d{12}$/.test(String(it.barcode||'')))return;
+      const q=Math.max(1,Math.min(500,Math.round((Number(l.qty)||0)*(Number(l.factor)||1)))),e=pre.find(p=>p.id===it.id);
+      if(e)e.copies=Math.min(500,e.copies+q);else pre.push({id:it.id,copies:q});
+    });
+    if(!pre.length)return;
+    setTimeout(()=>{if(confirm('Print barcode stickers for '+pre.length+' received item(s) that use an in-store barcode?\n\nThe number of stickers starts at the quantity received.'))openLabelPrinter(pre,'receive');},400);
+  }catch(e){}
 }
 
 function openItemDetails(id,from){
   if(!requireAdmin('edit inventory item details'))return;
   const it=(DATA.inventoryItems||[]).map(_invItemObj).find(x=>x.id===id);
   if(!it){alert('Item not found.');return;}
+  _idtCur=it.id;
   const pr=(DATA.inventoryPrices||{})[it.name]||{};
   const cats=[...new Set((DATA.inventoryItems||[]).map(x=>_invItemObj(x).category).filter(Boolean))].sort();
   const vc=_itemVatCodes();
@@ -14059,7 +14582,7 @@ function openItemDetails(id,from){
   openModal(`
     <div class="mtitle">✏️ ${esc(it.name)}</div>
     <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Item ID: ${esc(it.id)}</div>
-    ${fld('BARCODE',`<div style="display:flex;gap:8px"><input class="fi" id="idt-barcode" value="${esc(it.barcode)}" placeholder="Scan or type" autocomplete="off" style="flex:1" ${nxt('idt-sku')}/><button class="btn bo" style="width:auto;padding:10px 12px" onclick="genItemBarcode()">Generate</button></div><div style="font-size:14px;color:var(--muted);margin-top:4px">No barcode on the product? Tap Generate for an in-store code you can print on a label.</div>`)}
+    ${fld('BARCODE',`<div style="display:flex;gap:8px"><input class="fi" id="idt-barcode" value="${esc(it.barcode)}" placeholder="Scan or type" autocomplete="off" style="flex:1" ${nxt('idt-sku')}/>${_camBtn('idt-barcode')}<button class="btn bo" style="width:auto;padding:10px 12px" onclick="genItemBarcode()">Generate</button></div><div style="font-size:14px;color:var(--muted);margin-top:4px;line-height:1.6">The product already has a barcode? Scan it into the box, or tap 📷 to read it with the camera. No barcode? Tap Generate for an in-store code, Save, then print it as a label.</div><button class="btn bo bsm" style="margin-top:6px" onclick="printItemLabelFromForm()">🏷️ Print label</button>`)}
     ${fld('SKU / ITEM CODE (OPTIONAL)',`<input class="fi" id="idt-sku" value="${esc(it.sku)}" placeholder="E.G. FRT-001" autocomplete="off" oninput="this.value=this.value.toUpperCase()" ${nxt('idt-unit')}/>`)}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       ${fld('UNIT',`<input class="fi" id="idt-unit" list="idt-units" value="${esc(it.unit)}" placeholder="E.G. KG" autocomplete="off" oninput="this.value=this.value.toUpperCase()"/><datalist id="idt-units">${_itemUnitSuggestions().map(u=>`<option value="${u}">`).join('')}</datalist>`)}
@@ -14079,7 +14602,7 @@ function openItemDetails(id,from){
     ${[0,1,2].map(n=>{const u=(Array.isArray(it.units)?it.units:[])[n]||{};return `<div style="border:1px solid var(--border);border-radius:10px;padding:8px 8px 0;margin-bottom:8px"><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
       ${fld('NAME',`<input class="fi" id="idt-u${n}-name" list="idt-units" value="${esc(u.name||'')}" placeholder="E.G. CARTON" autocomplete="off" oninput="this.value=this.value.toUpperCase()"/>`)}
       ${fld('CONTAINS ('+esc(it.unit||'UNITS')+')',`<input class="fi" id="idt-u${n}-f" type="number" inputmode="decimal" min="0" step="any" value="${Number(u.factor)>0?Number(u.factor):''}" placeholder="E.G. 24"/>`)}
-      ${fld('BARCODE (OPTIONAL)',`<div style="display:flex;gap:6px"><input class="fi" id="idt-u${n}-bc" value="${esc(u.barcode||'')}" placeholder="Scan or type" autocomplete="off" style="flex:1;min-width:0"/><button class="btn bo" style="width:auto;padding:10px 10px" onclick="genItemBarcode('idt-u${n}-bc')">Gen</button></div>`)}
+      ${fld('BARCODE (OPTIONAL)',`<div style="display:flex;gap:6px"><input class="fi" id="idt-u${n}-bc" value="${esc(u.barcode||'')}" placeholder="Scan or type" autocomplete="off" style="flex:1;min-width:0"/>${_camBtn('idt-u'+n+'-bc')}<button class="btn bo" style="width:auto;padding:10px 10px" onclick="genItemBarcode('idt-u${n}-bc')">Gen</button></div>`)}
       ${fld('PRICE'+(cur()?' ('+esc(cur())+')':'')+' (OPTIONAL)',`<input class="fi" id="idt-u${n}-pr" type="number" inputmode="decimal" min="0" step="any" value="${Number(u.price)>0?Number(u.price):''}" placeholder="Selling price × contains"/>`)}
       ${fld('WHOLESALE PRICE (OPTIONAL)',`<input class="fi" id="idt-u${n}-wp" type="number" inputmode="decimal" min="0" step="any" value="${Number(u.wprice)>0?Number(u.wprice):''}" placeholder="Wholesale price × contains"/>`)}
     </div></div>`;}).join('')}
@@ -14461,7 +14984,7 @@ function exportItemsCSV(){
   showToast(items.length?'📤 '+items.length+' item(s) exported':'📤 Empty template downloaded');
 }
 function _itemImportBarHtml(from){
-  return `<div style="display:flex;gap:8px;margin:10px 0 12px"><button class="btn bo" style="width:auto;flex:1;padding:10px 8px" onclick="openItemImport('${from}')">📥 Import CSV</button><button class="btn bo" style="width:auto;flex:1;padding:10px 8px" onclick="exportItemsCSV()">📤 Export CSV</button></div>`;
+  return `<div style="display:flex;gap:8px;margin:10px 0 12px;flex-wrap:wrap"><button class="btn bo" style="width:auto;flex:1;min-width:30%;padding:10px 8px" onclick="openItemImport('${from}')">📥 Import CSV</button><button class="btn bo" style="width:auto;flex:1;min-width:30%;padding:10px 8px" onclick="exportItemsCSV()">📤 Export CSV</button><button class="btn bo" style="width:auto;flex:1;min-width:30%;padding:10px 8px" onclick="openLabelPrinter(null,'${from}')">🏷️ Labels</button></div>`;
 }
 
 // Search box for long item lists (shown once a list has more than 8 items).
@@ -22567,7 +23090,7 @@ function _renderAdminSettings(){
   return `
     ${!DATA.currency&&USER.role==='admin'?`<div class="warn" style="margin-bottom:12px">⚠️ No currency set. Go to <strong>Display Preferences → Currency</strong> below to set your currency (e.g. ZMW, USD, KES).</div>`:''}
     ${statusBanner()}
-    ${renderLicenseCard()}
+    <div id="license-card-wrap">${renderLicenseCard()}</div>
     ${_renderCompanyEditCard()}
     <div class="sh">Branding ${hasFeature('custom_branding')?'':'🔒'}</div>
     <div class="card">
@@ -23873,13 +24396,14 @@ function addInvItem(){
     if(otherInput){otherInput.value='';otherInput.style.display='none';}
   });
 }
-function exportJSON(){
+async function exportJSON(){
   if(!requireAdmin('export data'))return;
   if(!hasFeature('export_json_backup')){ showUpgradePrompt('export_json_backup'); return; }
   // Fix 9: strip password hashes before export — hashes are sensitive and
   // not needed to restore the backup (they will be re-migrated on next login).
   const exportData = JSON.parse(JSON.stringify(DATA));
-  exportData.salesLedger = JSON.parse(JSON.stringify(_SALE_LIST||[]));   // till sales live outside DATA; keep them in the backup too
+  let _allSales=_SALE_LIST||[];try{_allSales=await _sales().all();}catch(e){console.warn('[MDM] backup could not read every sale',e);}   // step 33: the backup holds EVERY sale, not the day totals older days are shown as
+  exportData.salesLedger = JSON.parse(JSON.stringify(_allSales));   // till sales live outside DATA; keep them in the backup too
   exportData.returnsLedger = JSON.parse(JSON.stringify(_RET_LIST||[]));   // and the voids/refunds (step 19)
   if (Array.isArray(exportData.users)) {
     exportData.users = exportData.users.map(u => { const c={...u}; delete c.password; return c; });
@@ -25448,6 +25972,7 @@ setInterval(()=>{
   fetchNotifications(); // badge/inbox refresh — safe even with a modal open, doesn't touch DATA
   const ovl = document.getElementById('modal-ovl');
   if (ovl && ovl.style.display === 'flex') return; // don't interrupt active data entry
+  if (_fbNeedRender) { _fbNeedRender = false; render(); }   // rows a push merged in while a form was open
   fbRestoreData().then(restored=>{
     if (restored) { render(); showToast('☁ Synced changes from another device'); }
     else { _refreshSyncChipLive(); }
@@ -25466,7 +25991,12 @@ document.addEventListener('visibilitychange', () => {
   const wasOnline = ONLINE;
   ONLINE = navigator.onLine;
   if (ONLINE !== wasOnline) { updPill(); updateConnStatus(); }
-  if (ONLINE && USER) flushOfflineQueue().then(() => scheduleFbSync()).catch(e => console.warn('[MDM] post-flush sync failed', e));
+  // Fix: a phone brought back to the foreground used to schedule a push but never a pull. The push now merges
+  // before it writes, but pulling first also shows what other phones did while this one was away.
+  if (ONLINE && USER) flushOfflineQueue().then(() => fbRestoreData()).then(restored => {
+    const ovl = document.getElementById('modal-ovl');
+    if (restored) { if (ovl && ovl.style.display === 'flex') _fbNeedRender = true; else { render(); showToast('☁ Synced changes from another device'); } }
+  }).then(() => scheduleFbSync()).catch(e => console.warn('[MDM] post-flush sync failed', e));
 });
 // Fix: "staff edit reverts after reopening the app" — scheduleFbSync() debounces
 // the actual Firebase push by 2.5s so rapid edits don't flood the network. If the
@@ -27970,7 +28500,7 @@ async function tabCloudDownload(tab, evt) {
     if (!confirm('⬇ Replace local data with cloud copy?\n\nThis will overwrite unsaved local changes.')) return;
     const localTrialStart = DATA.trialStart || 0;
     const localUsers = Array.isArray(DATA.users) ? DATA.users : [];
-    DATA = Object.assign(JSON.parse(JSON.stringify(DEFAULT)), val);
+    DATA = Object.assign(JSON.parse(JSON.stringify(DEFAULT)), _fbDecode(val));
     const cloudUsernames = new Set((DATA.users||[]).map(u=>(u.username||'').toLowerCase()));
     const localOnlyUsers = localUsers.filter(u=>(u.username||'') && !cloudUsernames.has((u.username||'').toLowerCase()));
     if (localOnlyUsers.length > 0) DATA.users = [...(DATA.users||[]), ...localOnlyUsers];

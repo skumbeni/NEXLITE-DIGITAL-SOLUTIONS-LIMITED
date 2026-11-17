@@ -1151,12 +1151,111 @@ const Sales = (function () {
   }
 
   // ══════════════════════════════════════════════════════════════════════════════
+  // COLD DAYS (roadmap step 33) — a long ledger kept small in memory
+  // ══════════════════════════════════════════════════════════════════════════════
+  // Nothing is deleted, here or in the cloud (the rules only ever allow a sale to be CREATED). The records stay in IndexedDB. What changes is what a phone
+  // holds IN MEMORY: the last `hotDays` days (default 120) as the real records, older days as DIGESTS. A digest is one pseudo sale for one cold
+  // day, one till, one shift and one cashier: its lines are that group's per-item totals, its payments the per-method totals, and `n` says how many sales it stands for.
+  // Every engine above reads it like any sale (stock, batches, expiry, margin, reorder, Sales History, the Z item list), and the money and counts
+  // come out the same: sums are worked in whole ngwee, quantities to 3 places, exactly as the sales themselves are.
+  // A sale is NEVER folded when something needs it as a receipt (keepFull): a customer's sale, anything on credit or part-paid, a discount a person
+  // allowed (the audit log names who), a wholesale basket, or a sale that a void / refund points at. Those stay real records for ever.
+  // A digest is derived, never edited: loading again from the same records gives the same digests. `load()` below keeps them in a cache so a phone does not
+  // read the whole ledger on every start; the cache is checked against the records (count per day, once per start) and is rebuilt when they disagree.
+  // What a cold day no longer shows: the receipt list of its anonymous paid sales (reprint one from Sales History by receipt number: it is read from the phone
+  // on demand), the time of each sale, per-sale payment references, and stock "as at" a minute inside the day (the day's digest sits at its last sale's time).
+  const HOT_DAYS = { def: 120, min: 30, max: 730 };
+  function ledgerPolicy(depotInfo) {
+    const n = Math.floor(Number((depotInfo || {}).ledgerHotDays));
+    return { hotDays: !isNum(n) ? HOT_DAYS.def : Math.max(HOT_DAYS.min, Math.min(HOT_DAYS.max, n)) };
+  }
+  function dayAdd(date, n) {
+    const t = Date.parse(String(date) + 'T00:00:00Z');
+    return isNaN(t) ? String(date) : new Date(t + n * 86400000).toISOString().slice(0, 10);
+  }
+  const coldCut = (today, hotDays) => dayAdd(today, -ledgerPolicy({ ledgerHotDays: hotDays }).hotDays);
+  // true when a sale must stay a real record even on a cold day. refs = Set of sale ids a void / refund points at.
+  function keepFull(s, refs) {
+    if (!s || !Array.isArray(s.lines) || !s.id || !/^\d{4}-\d{2}-\d{2}$/.test(String(s.date || ''))) return true;   // anything odd is left exactly as it is
+    if (refs && refs.has(s.id)) return true;
+    if (s.customerId || s.customerName) return true;
+    if (s.creditStatus !== 'paid' || toC(s.balance) > 0) return true;
+    const all = toC(s.discount), pr = Math.min(all, toC(s.promoDiscount));
+    if (all - pr > 0) return true;                       // a person gave a discount: the audit log names who
+    if (s.priceLevel === WHOLESALE) return true;         // a basket chosen as wholesale: the audit log names who
+    return false;
+  }
+  const accKey = s => [s.date, s.till || '', s.shiftId || '', s.cashier || ''].join('|');
+  function accNew(s) {
+    return { date: String(s.date), till: String(s.till || ''), tillId: String(s.tillId || ''), shiftId: String(s.shiftId || ''), cashier: String(s.cashier || ''), cashierRole: String(s.cashierRole || ''),
+      n: 0, at: 0, time: '', qtyTotal: 0, totalC: 0, paidC: 0, changeC: 0, discC: 0, promoC: 0, promoN: 0, items: {}, pays: {} };
+  }
+  function accAdd(a, s) {
+    a.n++;
+    if ((Number(s.at) || 0) >= a.at) { a.at = Number(s.at) || 0; a.time = String(s.time || ''); }
+    a.qtyTotal = r3(a.qtyTotal + (Number(s.qtyTotal) || 0));
+    a.totalC += toC(s.total); a.paidC += toC(s.amountPaid); a.changeC += toC(s.change);
+    a.discC += toC(s.discount); a.promoC += Math.min(toC(s.discount), toC(s.promoDiscount));
+    if (toC(s.promoDiscount) > 0) a.promoN++;
+    arr(s.lines).forEach(l => {
+      const f = fOf(l), k = String(l.itemId) + (f !== 1 ? '|' + f + '|' + String(l.unit || '') : '');   // a carton and a single are different rows: their quantities cannot be added
+      const x = a.items[k] || (a.items[k] = { itemId: String(l.itemId), kind: l.kind === 'commodity' ? 'commodity' : 'item', name: String(l.name || ''), unit: String(l.unit || ''), qty: 0, totalC: 0, discC: 0, factor: f !== 1 ? f : 0, base: f !== 1 ? String(l.base || '') : '' });
+      x.qty = r3(x.qty + (Number(l.qty) || 0)); x.totalC += toC(l.total); x.discC += toC(l.discount);
+    });
+    arr(s.payments).forEach(p => {
+      const m = String(p.method), x = a.pays[m] || (a.pays[m] = { method: m, label: String(p.label || ''), c: 0 });
+      x.c += toC(p.amount);
+    });
+  }
+  function accDigest(a) {
+    const lines = Object.keys(a.items).sort().map(k => {
+      const x = a.items[k];
+      const l = { itemId: x.itemId, kind: x.kind, name: x.name, unit: x.unit, qty: x.qty, price: x.qty > 0 ? (x.totalC + x.discC) / 100 / x.qty : 0, total: x.totalC / 100 };
+      if (x.discC > 0) l.discount = x.discC / 100;       // netPrice() then charges total / qty, as for any discounted line
+      if (x.factor) { l.factor = x.factor; l.base = x.base; }
+      return l;
+    });
+    const d = {
+      v: V, _digest: true, n: a.n, id: 'DAY:' + a.date + ':' + a.till + ':' + (a.shiftId || '-') + ':' + a.cashier, receiptNo: 'DAY ' + a.date,
+      tillId: a.tillId, till: a.till, seq: 0, at: a.at, date: a.date, time: a.time, cashier: a.cashier, cashierRole: a.cashierRole,
+      lines, lineCount: lines.length, qtyTotal: a.qtyTotal, total: a.totalC / 100,
+      payments: Object.keys(a.pays).sort().map(m => ({ method: a.pays[m].method, label: a.pays[m].label, amount: a.pays[m].c / 100 })),
+      amountPaid: a.paidC / 100, change: a.changeC / 100, balance: 0, creditStatus: 'paid', customerId: '', customerName: ''
+    };
+    if (a.shiftId) d.shiftId = a.shiftId;
+    if (a.discC > 0) d.discount = a.discC / 100;
+    if (a.promoC > 0) { d.promoDiscount = a.promoC / 100; d.promoN = a.promoN; }   // promoN: how many of the n sales had an offer (shifts.js counts them)
+    return d;
+  }
+  // The sales a digest or a list stands for.
+  const saleCount = list => (list || []).reduce((a, s) => a + (s && Number(s.n) > 0 ? Math.floor(Number(s.n)) : 1), 0);
+  const byAt = (a, b) => ((Number(a.at) || 0) - (Number(b.at) || 0)) || String(a.id).localeCompare(String(b.id));
+  // Pure: the whole fold from scratch. sales = every real record; o = { cutDate, returns }.  Days BEFORE cutDate are cold.
+  // -> { list (sorted), folded (sales turned into digests), groups, kept (cold sales left real) }
+  function foldCold(sales, o) {
+    o = o || {};
+    const cut = String(o.cutDate || ''), refs = new Set(arr(o.returns).map(r => r && r.saleId).filter(Boolean));
+    const out = [], groups = new Map();
+    let folded = 0, kept = 0;
+    arr(sales).forEach(s => {
+      if (!s || !(String(s.date || '') < cut)) { out.push(s); return; }
+      if (keepFull(s, refs)) { out.push(s); kept++; return; }
+      const k = accKey(s); let a = groups.get(k); if (!a) { a = accNew(s); groups.set(k, a); }
+      accAdd(a, s); folded++;
+    });
+    groups.forEach(a => out.push(accDigest(a)));
+    return { list: out.sort(byAt), folded, groups: groups.size, kept };
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════════
   // STORAGE ADAPTERS — every method is async; d = depot key
   //   add(d, rec)                       save a sale AND queue it for upload, in one transaction; EXISTS if the id is taken
   //   get(d, id) / all(d)               read
   //   addMany(d, recs, queue)           add those not stored yet, return how many; queue=true also queues them for upload
   //   outbox(d)                         [{id, tries, err}] still to upload      unqueue(d, id)      bump(d, id, err)
   //   getMeta(k) / setMeta(k, v)
+  //   range(d, from, to)                records with from <= date < to (from '' = no lower limit, to null = no upper limit)      (step 33)
+  //   each(d, from, to, fn)             the same range, one record at a time, nothing kept in memory      countBefore(d, date)   how many records are dated before `date`
   // ══════════════════════════════════════════════════════════════════════════════
   function memAdapter() {
     const sales = new Map(), outbox = new Map(), meta = new Map();
@@ -1182,8 +1281,15 @@ const Sales = (function () {
       async outbox(d) { const o = []; outbox.forEach(q => { if (q.d === d) o.push({ id: q.id, tries: q.tries, err: q.err }); }); return o; },
       async unqueue(d, id) { outbox.delete(K(d, id)); },
       async bump(d, id, e) { const q = outbox.get(K(d, id)); if (q) { q.tries++; q.err = String(e || ''); } },
-      async getMeta(k) { return meta.has(k) ? meta.get(k) : null; },
-      async setMeta(k, v) { meta.set(k, v); },
+      async getMeta(k) { return meta.has(k) ? JSON.parse(JSON.stringify(meta.get(k))) : null; },
+      async setMeta(k, v) { meta.set(k, JSON.parse(JSON.stringify(v))); },
+      async range(d, from, to) {
+        const o = [];
+        sales.forEach((r, k) => { if (k.startsWith(d + '|') && (!from || r.date >= from) && (to == null || r.date < to)) o.push(JSON.parse(JSON.stringify(r))); });
+        return o;
+      },
+      async each(d, from, to, fn) { (await this.range(d, from, to)).forEach(fn); },
+      async countBefore(d, date) { let n = 0; sales.forEach((r, k) => { if (k.startsWith(d + '|') && r.date < date) n++; }); return n; },
     };
   }
 
@@ -1196,12 +1302,15 @@ const Sales = (function () {
       if (!idb) return Promise.reject(err('STORAGE', 'IndexedDB is not available'));
       dbp = new Promise((res, rej) => {
         let q;
-        try { q = idb.open('mdm_sales', 1); } catch (e) { dbp = null; return rej(err('STORAGE', 'Could not open the sales store')); }
+        try { q = idb.open('mdm_sales', 2); } catch (e) { dbp = null; return rej(err('STORAGE', 'Could not open the sales store')); }
         q.onupgradeneeded = () => {
           const db = q.result;
-          db.createObjectStore('sales', { keyPath: 'k' }).createIndex('depot', 'depot');
-          db.createObjectStore('outbox', { keyPath: 'k' }).createIndex('depot', 'depot');
-          db.createObjectStore('meta', { keyPath: 'k' });
+          if (!db.objectStoreNames.contains('sales')) db.createObjectStore('sales', { keyPath: 'k' }).createIndex('depot', 'depot');
+          if (!db.objectStoreNames.contains('outbox')) db.createObjectStore('outbox', { keyPath: 'k' }).createIndex('depot', 'depot');
+          if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'k' });
+          // version 2 (step 33): sales by day, so a day or a range of days is read without reading the rest. Existing records are indexed as the index is made.
+          const st = q.transaction.objectStore('sales');
+          if (!st.indexNames.contains('depotDate')) st.createIndex('depotDate', ['depot', 'rec.date']);
         };
         q.onsuccess = () => { const db = q.result; db.onversionchange = () => { try { db.close(); } catch (e) {} dbp = null; }; res(db); };
         q.onerror = () => { dbp = null; rej(err('STORAGE', 'Could not open the sales store')); };
@@ -1261,6 +1370,23 @@ const Sales = (function () {
       },
       async getMeta(k) { const db = await open(), r = await req(tx(db, ['meta'], 'readonly').objectStore('meta').get(k)); return r ? r.v : null; },
       async setMeta(k, v) { const db = await open(), t = tx(db, ['meta'], 'readwrite'); t.objectStore('meta').put({ k, v }); await wait(t); },
+      async range(d, from, to) {
+        const db = await open(), ix = tx(db, ['sales'], 'readonly').objectStore('sales').index('depotDate');
+        const rows = await req(ix.getAll(IDBKeyRange.bound([d, from || ''], [d, to == null ? '\uffff' : to], false, to != null)));
+        return rows.map(x => x.rec);
+      },
+      async each(d, from, to, fn) {
+        const db = await open(), ix = tx(db, ['sales'], 'readonly').objectStore('sales').index('depotDate');
+        await new Promise((res, rej) => {
+          const q = ix.openCursor(IDBKeyRange.bound([d, from || ''], [d, to == null ? '\uffff' : to], false, to != null));
+          q.onsuccess = () => { const c = q.result; if (!c) return res(); try { fn(c.value.rec); } catch (e) { return rej(e); } c.continue(); };
+          q.onerror = () => rej(q.error || err('STORAGE', 'Could not read'));
+        });
+      },
+      async countBefore(d, date) {
+        const db = await open(), ix = tx(db, ['sales'], 'readonly').objectStore('sales').index('depotDate');
+        return req(ix.count(IDBKeyRange.bound([d, ''], [d, date], false, true)));
+      },
     };
   }
 
@@ -1274,12 +1400,108 @@ const Sales = (function () {
     const depot = () => String(env.depotKey() || '');
     const need = () => { const d = depot(); if (!d) throw err('NO_DEPOT', 'No depot yet'); return d; };
 
+    // ── COLD DAYS (step 33): what a phone holds in memory. See the long note above foldCold().
+    // The cache lives in this device's IndexedDB (meta). One value: { v, upTo (every day BEFORE it is folded), days {date: records}, groups {key: digest},
+    // kept {saleId: record} (cold sales that stay real), refs [sale ids a return points at that we have looked at], dirty [days to work again] }.  `groups` holds the finished DIGESTS.
+    // A tiny second key says which version of it is current, so two tabs on one phone never read the big value just to find out nothing changed.
+    const GEN = d => 'coldGen:' + d, CCK = d => 'cold:' + d, CUP = d => 'coldUpTo:' + d;
+    const freshCache = () => ({ v: 2, upTo: '', days: {}, groups: {}, kept: {}, refs: [], dirty: [] });
+    const newGen = () => Date.now() + '.' + Math.random().toString(36).slice(2, 8);
+    let mem = null, memD = '', memGen = null, verifiedD = '';
+    // One thing at a time touches the cache (two screens asking at once must not fold a day twice).
+    let chain = Promise.resolve();
+    const exclusive = fn => { const p = chain.then(fn); chain = p.catch(() => {}); return p; };
+    async function readCache(d) {
+      const g = await A.getMeta(GEN(d));
+      if (mem && memD === d && g === memGen) return mem;
+      const c = g == null ? null : await A.getMeta(CCK(d));
+      mem = c && c.v === 2 ? c : freshCache(); memD = d; memGen = c && c.v === 2 ? g : null; verifiedD = '';
+      return mem;
+    }
+    async function saveCache(d, c) {
+      const g = newGen();
+      await A.setMeta(CCK(d), c); await A.setMeta(CUP(d), c.upTo); await A.setMeta(GEN(d), g);
+      mem = c; memD = d; memGen = g;
+    }
+    // A pass of folding gathers into accumulators (`accs`), then writes the finished digests. A day is only ever finished once per pass, and a day that is worked again is
+    // first removed whole (rebuildDay), so a digest is never added to after it is written.
+    function foldInto(c, accs, rec, refs) {
+      c.days[rec.date] = (c.days[rec.date] || 0) + 1;
+      if (keepFull(rec, refs)) { c.kept[rec.id] = rec; return; }
+      const k = accKey(rec), a = accs.get(k) || (accs.set(k, accNew(rec)), accs.get(k));
+      accAdd(a, rec);
+    }
+    const finish = (c, accs) => { accs.forEach((a, k) => { c.groups[k] = accDigest(a); }); };
+    async function rebuildDay(d, c, date, refs) {
+      Object.keys(c.groups).forEach(k => { if (c.groups[k].date === date) delete c.groups[k]; });
+      Object.keys(c.kept).forEach(id => { if (c.kept[id].date === date) delete c.kept[id]; });
+      delete c.days[date];
+      const accs = new Map();
+      await A.each(d, date, dayAdd(date, 1), r => foldInto(c, accs, r, refs));
+      finish(c, accs);
+    }
+    const sumDays = c => Object.keys(c.days).reduce((a, k) => a + c.days[k], 0);
+    // A record that arrives dated BEFORE the cache's boundary (a late upload, a restore) marks its day to be worked again. A sale of today never costs more than this check of the date.
+    async function touch(d, dates) {
+      const floor = dayAdd(new Date().toISOString().slice(0, 10), -HOT_DAYS.min);
+      const old = Array.from(new Set(dates.filter(x => x && x < floor)));
+      if (!old.length) return;                                       // today's sales end here, without waiting for anything
+      return exclusive(async () => {
+        try {
+          const up = await A.getMeta(CUP(d));
+          const late = up ? old.filter(x => x < up) : [];
+          if (!late.length) return;
+          const c = await readCache(d);
+          late.forEach(x => { if (c.dirty.indexOf(x) < 0) c.dirty.push(x); });
+          await saveCache(d, c);
+        } catch (e) { console.warn('[sales] could not mark late records', e); }
+      });
+    }
+    // The ledger as this phone should hold it in memory: the last hotDays days as real records, older days as digests (and the cold sales that must stay real).
+    //   o = { today:'YYYY-MM-DD' (the app's date), hotDays (Sales.ledgerPolicy(depotInfo).hotDays), returns:[return records] }
+    //   -> { list (sorted like all()), count (sales the list stands for), cut, hotDays, folded, groups, kept }
+    const load = async o => { const d = need(); return exclusive(() => loadNow(d, o)); };
+    async function loadNow(d, o) {
+      o = o || {};
+      const hotDays = ledgerPolicy({ ledgerHotDays: o.hotDays }).hotDays;
+      const today = o.today || new Date().toISOString().slice(0, 10), cut = dayAdd(today, -hotDays);
+      let c = await readCache(d), changed = false;
+      if (c.upTo > cut) { c = freshCache(); changed = true; }                                             // the window was made longer: those days must come back
+      if (c.upTo && verifiedD !== d) {                                                                   // once per start: the cache must agree with the records
+        if ((await A.countBefore(d, c.upTo)) !== sumDays(c)) { c = freshCache(); changed = true; }
+        verifiedD = d;
+      }
+      const seen = new Set(c.refs), dirty = new Set(c.dirty);
+      const want = new Set(arr(o.returns).map(r => r && r.saleId).filter(Boolean));
+      for (const id of want) {                                                                           // a void / refund points at a sale: that sale must be a real record
+        if (seen.has(id)) continue;
+        const rec = await A.get(d, id);
+        if (!rec) continue;                                                                              // not on this phone yet: look again next time
+        c.refs.push(id); seen.add(id); changed = true;
+        if (c.upTo && rec.date < c.upTo && !c.kept[id]) dirty.add(rec.date);
+      }
+      if (dirty.size) {
+        c.dirty = [];
+        for (const day of Array.from(dirty).sort()) if (day < c.upTo) await rebuildDay(d, c, day, seen);
+        changed = true;
+      }
+      if (cut > c.upTo) { const accs = new Map(); await A.each(d, c.upTo || '', cut, r => foldInto(c, accs, r, seen)); finish(c, accs); c.upTo = cut; changed = true; }
+      if (changed) { await saveCache(d, c); verifiedD = d; }
+      const hot = await A.range(d, cut, null);
+      const dg = Object.keys(c.groups).map(k => c.groups[k]), kept = Object.keys(c.kept).map(id => c.kept[id]);
+      const list = hot.concat(kept, dg).sort(byAt);
+      return { list, count: saleCount(list), cut, hotDays, folded: sumDays(c) - kept.length, groups: dg.length, kept: kept.length };
+    }
+    // One sale as it was recorded, whatever its day: the receipt of an old, folded day is read from here.
+    async function get(id) { return A.get(need(), String(id)); }
+
     // Save one sale. It is stored and queued for upload in one transaction; only after this resolves may the receipt be shown.
     async function append(basket) {
       const d = need(), rec = toRecord(basket, env.opts);
       const bad = validate(rec);
       if (bad) throw err('INVALID', 'The sale is not valid: ' + bad);
       await A.add(d, rec);
+      touch(d, [rec.date]);                          // a sale dated long ago (a wrong clock): its day is worked again. Not awaited: never slows a sale.
       return rec;
     }
     async function all() { return (await A.all(need())).sort((a, b) => (a.at - b.at) || a.id.localeCompare(b.id)); }
@@ -1323,6 +1545,7 @@ const Sales = (function () {
           if (x.createdAt > maxC) maxC = x.createdAt;
         });
         added += await A.addMany(d, good, false);
+        await touch(d, good.map(r => r.date));
         if (maxC > cursor) cursor = maxC;
         if (ids.length < PAGE || maxC <= start) break;   // last page, or a full page that cannot move on: stop rather than loop
         start = maxC;
@@ -1335,13 +1558,15 @@ const Sales = (function () {
     async function importMany(list) {
       const d = need(), good = [];
       arr(list).forEach(r => { if (r && !validate(r)) good.push(JSON.parse(JSON.stringify(r))); });
-      return { added: await A.addMany(d, good, true), skipped: arr(list).length - good.length };
+      const added = await A.addMany(d, good, true);
+      await touch(d, good.map(r => r.date));
+      return { added, skipped: arr(list).length - good.length };
     }
 
-    return { append, all, pending, push, pull, importMany };
+    return { append, all, load, get, pending, push, pull, importMany };
   }
 
-  return { V, ID_RE, BATCH_NAME, DISC_MAX_PCT, PROMO_BY, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, expiryBook, marginBook, reorderBook, reorderPolicy, REORDER_DEFAULTS, REORDER_RANGE, EXPIRY_WARN, daysUntil, fOf, baseQty, unitList, FACTOR_MAX, linePaid, methodsOf, netPrice, discountPolicy, discountSplit, discountJudge, pctText, promoCheck, promoList, promoDay, promoActive, promoMatches, promoText, promoLine, promoApply, discountParts, WHOLESALE, levelPolicy, levelApply, create, memAdapter, idbAdapter };
+  return { V, ID_RE, BATCH_NAME, DISC_MAX_PCT, PROMO_BY, toRecord, validate, forCloud, fromCloud, issuedRows, soldById, stockBook, batchBook, expiryBook, marginBook, reorderBook, reorderPolicy, REORDER_DEFAULTS, REORDER_RANGE, EXPIRY_WARN, daysUntil, fOf, baseQty, unitList, FACTOR_MAX, linePaid, methodsOf, netPrice, discountPolicy, discountSplit, discountJudge, pctText, promoCheck, promoList, promoDay, promoActive, promoMatches, promoText, promoLine, promoApply, discountParts, WHOLESALE, levelPolicy, levelApply, ledgerPolicy, HOT_DAYS, keepFull, foldCold, saleCount, coldCut, dayAdd, create, memAdapter, idbAdapter };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = Sales; // lets Node load it for tests

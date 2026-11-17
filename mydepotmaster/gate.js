@@ -21,7 +21,9 @@ const Gate = (function () {
   // TIER FEATURE SPEC — single source of truth for the tiered licensing system.
   //
   // Tiers (low → high):
-  //   free      — permanent free plan after trial ends; core data entry, plus the Till (pos.html)
+  //   free      — permanent free plan after trial ends; core data entry, plus the whole Till side: the Till (pos.html) and Sales History
+  //               The Till is NOT tiered by feature. Every plan sells; the plans differ by the numeric caps in index.html
+  //               (TIER_CAPS: inventoryItems, commodities, staff, contacts, historyDays).
   //   starter   — first paid tier; same feature set as free, but with higher
   //               numeric caps (staff/commodity/contacts/history — enforced
   //               separately, not via TIER_FEATURES). No new unlocks here.
@@ -58,6 +60,7 @@ const Gate = (function () {
       'dashboard_view',            // Dashboard summary (read-only stats)
       'settings_basic',            // Currency, depot name, display prefs
       'pos_till',                  // Sell tab / till — separate page pos.html, on EVERY plan (pos.html reads this same table via gate.js)
+      'daily_sales',               // Sales History tab (close-out / Z report, receipts, sales list) — the back office of the till, on EVERY plan
     ],
 
     // ── STARTER ──────────────────────────────────────────────────────────────
@@ -96,7 +99,6 @@ const Gate = (function () {
       'biometric_login',           // Fingerprint / Face ID login
       'setup_checklist',           // First-run onboarding checklist
       'custom_branding',           // Custom logo & accent colour on staff ID cards
-      'daily_sales',               // Daily Sales tab (close-out, receipt printing, sales history)
       'ai_copilot',                // Depot Assistant (Gemini) — AI chat + reconciliation (Pro only)
       'payroll_run',               // Payroll Run — Prepare Payroll, lock, pay out, mobile money CSV, run payslips, NAPSA/NHIMA/PAYE
       'stock_check',               // Stock check — stock vs logged bags per task, and the "paid for" badge on stock rows

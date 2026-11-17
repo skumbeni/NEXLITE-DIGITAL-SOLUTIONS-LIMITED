@@ -231,6 +231,10 @@ const Shifts = (function () {
 
   // The figures of one shift, summed from the ledger's sales (those whose shiftId is this shift).
   // sales: ledger records. extra.out: cash paid out of the drawer so far, e.g. cash refunds (step 19), default 0.
+  // Step 33: a cold day is held in memory as DIGESTS (sales.js foldCold), one pseudo sale that stands for `n` sales. Every count of sales here counts what it stands for.
+  const cnt = s => (s && Number(s.n) > 0 ? Math.floor(Number(s.n)) : 1);
+  const cntAll = list => (list || []).reduce((a, s) => a + cnt(s), 0);
+  const promoOf = s => (s && Number(s.promoN) > 0 ? Math.floor(Number(s.promoN)) : 1);   // of those n sales, how many had an offer
   function summary(open, sales, extra) {
     extra = extra || {};
     const mine = (sales || []).filter(s => s && s.shiftId === open.shiftId).sort((a, b) => (a.at - b.at) || a.id.localeCompare(b.id));
@@ -245,7 +249,7 @@ const Shifts = (function () {
     const o = {};
     METHODS.forEach(m => { o[m] = by[m] / 100; });
     return {
-      shiftId: open.shiftId, saleCount: mine.length, total: total / 100, credit: credit / 100, byMethod: o,
+      shiftId: open.shiftId, saleCount: cntAll(mine), total: total / 100, credit: credit / 100, byMethod: o,
       float: fl / 100, cashSales: by.cash / 100, cashOut: out / 100, expectedCash: Math.max(0, expected) / 100,
       firstReceipt: mine.length ? mine[0].receiptNo : '', lastReceipt: mine.length ? mine[mine.length - 1].receiptNo : ''
     };
@@ -325,7 +329,7 @@ const Shifts = (function () {
       change += toC(s.change);
       const all = toC(s.discount), p = Math.min(all, toC(s.promoDiscount)), m = all - p;     // step 25: what an offer gave is not what a person gave
       if (m > 0) { disc += m; discN++; }
-      if (p > 0) { promo += p; promoN++; }
+      if (p > 0) { promo += p; promoN += promoOf(s); }
     });
     r.items = items;
     r.qtyTotal = Math.round(qty * 1000) / 1000;
@@ -334,7 +338,7 @@ const Shifts = (function () {
     r.discountCount = discN;
     r.promoGiven = promo / 100;              // roadmap step 25: money the offers took off, also already off `total`
     r.promoCount = promoN;                   // sales that had at least one offer
-    r.itemsComplete = mine.length === r.saleCount && sumC === toC(r.total);
+    r.itemsComplete = cntAll(mine) === r.saleCount && sumC === toC(r.total);
     r.rt = returnsSummary((o.returns || []).filter(x => x && x.shiftId === open.shiftId));   // step 19: voids and refunds paid out in this shift
     r.netTotal = (toC(r.total) - toC(r.rt.total)) / 100;
     return r;
@@ -362,8 +366,8 @@ const Shifts = (function () {
       total += toC(s.total); credit += toC(s.balance); change += toC(s.change);
       const all = toC(s.discount), pr = Math.min(all, toC(s.promoDiscount)), man = all - pr;        // step 25: offers and a person's discounts are kept apart
       if (man > 0) { disc += man; discN++; }
-      if (pr > 0) { promo += pr; promoN++; }
-      if (!s.shiftId) noShift++;
+      if (pr > 0) { promo += pr; promoN += promoOf(s); }
+      if (!s.shiftId) noShift += cnt(s);
       arr(s.payments).forEach(p => { if (by[p.method] != null) by[p.method] += toC(p.amount); });
     });
     const row = x => ({
@@ -381,7 +385,7 @@ const Shifts = (function () {
     rows.forEach(r => { if (r.closed) { varC += toC(r.variance); countedC += toC(r.countedCash) - toC(r.float); } });
     const o = {}; METHODS.forEach(m => { o[m] = by[m] / 100; });
     return {
-      date, saleCount: day.length, total: total / 100, credit: credit / 100, byMethod: o,
+      date, saleCount: cntAll(day), total: total / 100, credit: credit / 100, byMethod: o,
       cashSales: by.cash / 100, nonCash: (by.mtn + by.airtel + by.card) / 100, changeGiven: change / 100, noShift,
       discountGiven: disc / 100, discountCount: discN,    // already taken off `total` (step 18): a person's discounts
       promoGiven: promo / 100, promoCount: promoN,        // already taken off `total` (step 25): offers

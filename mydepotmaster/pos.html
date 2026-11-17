@@ -292,6 +292,8 @@ button.warnb:disabled{opacity:.45;cursor:not-allowed}
 <script src="sales.js"></script>
 <script src="shifts.js"></script>
 <script src="returns.js"></script>
+<!-- Barcodes (v0.3.78): installs a camera BarcodeDetector on browsers that have none (iPhone Safari, desktop Chrome). Same file index.html loads. Must come before the inline script. -->
+<script src="barcode.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-check-compat.js" defer></script>
@@ -533,10 +535,14 @@ const LEDGER=Sales.create({
   adapter:Sales.idbAdapter()
 });
 let SALES_ALL=[],SALES_PENDING=0,SALES_ERR='',SALES_AUTH=false,salesBusy=false;   // SALES_ALL: every sale record on this phone (own + downloaded)
+// Step 33: the last Sales.ledgerPolicy().hotDays days are held as the real sales, older days as day totals (Sales.foldCold: one pseudo sale per day, till, shift and
+// cashier, standing for n sales). Nothing is deleted. Credit and customer sales, discounts a person allowed, wholesale baskets and any sale a void / refund points at stay real.
+// A sale of an older day is read from the phone by its receipt number when the refund screen asks for it (LEDGER.get).
+const ledgerArgs=rets=>({today:new Date().toISOString().slice(0,10),hotDays:Sales.ledgerPolicy(DATA&&DATA.depotInfo).hotDays,returns:rets});
 async function loadSold(){
-  try{SALES_ALL=await LEDGER.all();SALES_PENDING=await LEDGER.pending();}
+  await loadRets();                                      // step 19: voids and refunds are read with the sales: stock and the drawer need both. Read FIRST: a sale a return points at must stay a real record
+  try{SALES_ALL=(await LEDGER.load(ledgerArgs(RETS_ALL))).list;SALES_PENDING=await LEDGER.pending();}
   catch(e){console.warn('Could not read the sales ledger',e);}
-  await loadRets();                                      // step 19: voids and refunds are read with the sales: stock and the drawer need both
 }
 // Voids and refunds (roadmap step 19): their own append-only records, returns/{returnId}, kept by returns.js. Same rules as sales:
 // saved on this phone first, uploaded when there is signal, the other tills' downloaded. See VOIDS AND REFUNDS further down.
@@ -940,7 +946,7 @@ function showReceipt(b,tag,sale){          // sale=true: the receipt of a record
 // The page title becomes the file name when the cashier chooses "Save as PDF", so it carries the receipt number.
 function printReceipt(b,tag,auto){
   const pf=prefs();
-  if(pf.mode==='rawbt'){try{sendRaw(escposReceipt(b,tag,pf));}catch{say('Could not send to RawBT.','bad');}return;}
+  if(isThermal(pf)){try{thermal(escposReceipt(b,tag,pf),pf,auto);}catch{say('Could not build the receipt for the printer.','bad');}return;}
   if(auto)return;                                  // the browser's print dialog is never opened by itself
   const t=document.title;
   document.title='Receipt '+(b&&b.receiptNo?b.receiptNo:'preview');
@@ -953,6 +959,8 @@ function hideReceipt(){
   try{if(ROPENER&&document.contains(ROPENER))ROPENER.focus();}catch{}
 }
 // ── PRINTER: built-in thermal printers on Android POS terminals ──────────────
+// Step 35 added a third route, 'ble' (Bluetooth LE printer, direct, see BLUETOOTH PRINTER below). Receipts, void/refund slips and X/Z reports all go
+// through thermal(): RawBT or Bluetooth, whichever this device chose. 'browser' still prints through the print dialog.
 // Route per device (localStorage): 'browser' = the print dialog as before; 'rawbt' = ESC/POS bytes handed to the free RawBT app, which prints
 // to the terminal's printer with no dialog, so a saved sale can print by itself. Chrome only allows that hand-off right after a tap, so
 // auto-print runs straight after Charge; if it is ever blocked, the receipt stays on screen and Print still works.
@@ -1008,6 +1016,78 @@ function sendRaw(u8){
   let s='';for(let i=0;i<u8.length;i+=0x8000)s+=String.fromCharCode.apply(null,u8.subarray(i,i+0x8000));
   location.href='intent:base64,'+btoa(s)+'#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.browser_fallback_url='+encodeURIComponent('https://play.google.com/store/apps/details?id=ru.a402d.rawbtprinter')+';end;';   // no RawBT installed: Chrome opens its Play Store page
 }
+// ── BLUETOOTH PRINTER, DIRECT (roadmap step 35) ──────────────────────────────
+// A third way to print, beside the browser dialog and RawBT: the same ESC/POS bytes go straight to a Bluetooth LOW ENERGY thermal printer
+// with Web Bluetooth, so no helper app is needed. It only works where the page runs in Chrome (the browser, or the Trusted Web Activity
+// PWABuilder makes). A WebView app such as Median has no Web Bluetooth: use RawBT there. Many cheap 58 mm printers are Bluetooth CLASSIC
+// (SPP), which Web Bluetooth cannot see: pair those in Android settings and use RawBT.
+// Chrome shows its device chooser only after a tap, so the first connection is made from the Printer dialog (or from a Print button).
+// The link then stays open while the page lives, and is re-opened without a tap if it drops. After a reload, getDevices() (where Chrome
+// has it) finds the printer again; if not, one tap on Print connects it. Auto-print after a sale never opens the chooser: if the
+// printer is not connected the receipt stays on screen and Print connects and prints.
+const BLE_SVC=['0000ff00-0000-1000-8000-00805f9b34fb','0000ffe0-0000-1000-8000-00805f9b34fb','000018f0-0000-1000-8000-00805f9b34fb','49535343-fe7d-4ae5-8fa9-9fafd205e455','e7810a71-73ae-499d-8c15-faa9aef0c3f2','0000fee7-0000-1000-8000-00805f9b34fb','0000ae30-0000-1000-8000-00805f9b34fb'];
+const BLE={dev:null,chr:null,chunk:100,job:Promise.resolve()};
+const bleSupported=()=>!!(navigator.bluetooth&&typeof navigator.bluetooth.requestDevice==='function');
+const bleLive=()=>!!(BLE.dev&&BLE.chr&&BLE.dev.gatt&&BLE.dev.gatt.connected);
+const bleErr=(code,msg)=>Object.assign(new Error(msg),{code});
+async function bleFindChar(dev){                        // the first writable characteristic of a printer-like service
+  const rank=s=>{const i=BLE_SVC.indexOf(s.uuid);return i<0?99:i;};
+  const list=(await dev.gatt.getPrimaryServices()).filter(s=>!/^0000(1800|1801|180a|180f)-/.test(s.uuid)).sort((a,b)=>rank(a)-rank(b));
+  for(const s of list){
+    let cs;try{cs=await s.getCharacteristics();}catch{continue;}
+    const c=cs.find(x=>x.properties.writeWithoutResponse)||cs.find(x=>x.properties.write);
+    if(c)return c;
+  }
+  return null;
+}
+async function bleAttach(dev){
+  if(!dev.gatt.connected)await dev.gatt.connect();
+  const c=await bleFindChar(dev);
+  if(!c){try{dev.gatt.disconnect();}catch{}throw bleErr('NOCHAR','not a printer');}
+  BLE.dev=dev;BLE.chr=c;
+  if(!dev.__mdmWatch){dev.__mdmWatch=true;dev.addEventListener('gattserverdisconnected',()=>{if(BLE.dev===dev)BLE.chr=null;});}
+  return c;
+}
+async function bleConnect(pick){                        // pick=true: called from a tap, so Chrome may show its device chooser
+  if(!bleSupported())throw bleErr('UNSUPPORTED','no Web Bluetooth');
+  if(bleLive())return BLE.chr;
+  if(BLE.dev){try{return await bleAttach(BLE.dev);}catch(e){if(e.code==='NOCHAR')throw e;}}      // same printer, link dropped: reconnect, no tap needed
+  if(typeof navigator.bluetooth.getDevices==='function'){
+    try{
+      const want=prefs().bleName,l=await navigator.bluetooth.getDevices(),d=l.find(x=>x.name===want)||(want?null:l[0]);
+      if(d){try{return await bleAttach(d);}catch(e){if(e.code==='NOCHAR')throw e;}}
+    }catch(e){if(e&&e.code==='NOCHAR')throw e;}
+  }
+  if(!pick)throw bleErr('NEEDTAP','needs a tap');
+  const d=await navigator.bluetooth.requestDevice({acceptAllDevices:true,optionalServices:BLE_SVC});
+  const c=await bleAttach(d);
+  try{localStorage.setItem(PRK,JSON.stringify(Object.assign(prefs(),{bleName:d.name||''})));}catch{}
+  return c;
+}
+async function bleWrite(c,u8){                          // small pieces: a printer's buffer is tiny. Too big for this printer: step down and retry the same bytes
+  const nr=!!c.properties.writeWithoutResponse;
+  for(let i=0;i<u8.length;){
+    const part=u8.slice(i,i+BLE.chunk);
+    try{if(nr)await c.writeValueWithoutResponse(part);else await c.writeValueWithResponse(part);}
+    catch(e){if(BLE.chunk>20){BLE.chunk=BLE.chunk>60?60:20;continue;}throw e;}
+    i+=part.length;
+    if(nr)await new Promise(r=>setTimeout(r,20));
+  }
+}
+function bleSend(u8,pick){                              // one job at a time: two overlapping GATT writes would interleave their bytes
+  const p=BLE.job.then(async()=>{const c=await bleConnect(pick);await bleWrite(c,u8);});
+  BLE.job=p.catch(()=>{});return p;
+}
+const BLE_MSG={UNSUPPORTED:'Bluetooth printing needs Chrome and is not available in this app window. Choose RawBT in Printer.',NEEDTAP:'Printer not connected. Tap Print to connect it.',NOCHAR:'That device is not a Bluetooth LE printer. Use RawBT for it.'};
+function bleFail(e){
+  if(e&&(e.name==='NotFoundError'||/cancel/i.test(e.message||'')))return;   // the person closed Chrome's chooser: nothing went wrong
+  say(BLE_MSG[e&&e.code]||'Could not print over Bluetooth. Switch the printer on, keep it close, then tap Print again.','bad',5000);
+}
+const isThermal=pf=>pf.mode==='rawbt'||pf.mode==='ble';
+function thermal(u8,pf,auto){                           // ESC/POS bytes to whichever thermal route this device uses
+  if(pf.mode==='ble'){bleSend(u8,!auto).catch(bleFail);return;}
+  try{sendRaw(u8);}catch{say('Could not send to RawBT.','bad');}
+}
 let PRNOVL=null;
 function openPrinter(){
   if(PRNOVL)return;
@@ -1018,16 +1098,23 @@ function openPrinter(){
   head.append(el('h2','','Printer'),cx);
   const body=el('div','pay-body');
   const sel=(label,opts,val)=>{const f=el('label','fld'),s=el('select');opts.forEach(o=>{const e=el('option','',o[1],{value:o[0]});if(String(o[0])===String(val))e.selected=true;s.append(e);});f.append(el('span','',label),s);body.append(f);return s;};
-  const mode=sel('Print with',[['browser','Browser print dialog'],['rawbt','RawBT thermal printer (needs the RawBT app)']],pf.mode);
+  const mode=sel('Print with',[['browser','Browser print dialog'],['rawbt','RawBT thermal printer (needs the RawBT app)'],['ble','Bluetooth thermal printer, direct (BLE printers, no app)']],pf.mode);
   const cols=sel('Paper',[[0,'Auto (58 mm on a handheld terminal)'],[32,'58 mm'],[48,'80 mm']],pf.cols);
   const siz=sel('Text size',[[0,'Normal'],[1,'Large (taller)'],[2,'Extra large (wider and taller)']],pf.size==null?1:pf.size);
   const af=el('label','fld'),au=el('input','',null,{type:'checkbox'});au.checked=!!pf.auto;
-  af.append(au,el('span','',' Print each receipt automatically after the sale (RawBT only)'));body.append(af);
+  af.append(au,el('span','',' Print each receipt automatically after the sale (thermal printing only)'));body.append(af);
   body.append(el('div','mu','RawBT: install the free app, set its printer to this terminal\u2019s built-in printer, then use Test print. Paper is not read from the printer: Auto assumes 58 mm on a handheld, so set RawBT\u2019s paper width to match.'));
+  const bleRow=el('div','fld'),bleSt=el('div','mu'),bleBtn=el('button','sec','Connect printer',{type:'button'});
+  const bleUpd=()=>{bleRow.style.display=mode.value==='ble'?'':'none';
+    bleSt.textContent=!bleSupported()?'Bluetooth printing needs Chrome. It is not available in this app window: use RawBT.':bleLive()?'Connected: '+(BLE.dev.name||'printer'):(prefs().bleName?'Last printer: '+prefs().bleName+'. It connects when you print.':'No printer chosen yet.');
+    bleBtn.disabled=!bleSupported();};
+  bleBtn.onclick=async()=>{read();try{await bleConnect(true);say('Printer connected','ok',2500);}catch(e){bleFail(e);}bleUpd();};
+  bleRow.append(bleBtn,bleSt,el('div','mu','Switch the printer on and keep it close, tap Connect printer and pick it from the list. Only Bluetooth LE printers appear there. If yours does not, pair it in Android settings and use RawBT instead.'));
+  body.append(bleRow);mode.addEventListener('change',bleUpd);bleUpd();
   const foot=el('div','pay-f'),test=el('button','sec','Test print',{type:'button'}),ok=el('button','pri','Save',{type:'button'});
   const read=()=>{const o=Object.assign(prefs(),{mode:mode.value,cols:+cols.value,size:+siz.value,auto:au.checked});try{localStorage.setItem(PRK,JSON.stringify(o));}catch{}return o;};
-  test.onclick=()=>{const o=read();if(o.mode!=='rawbt'){say('Choose RawBT first.','bad');return;}
-    sendRaw(escposReceipt({at:Date.now(),receiptNo:'TEST',cashier:USER?String(USER.username):'',lines:[{name:'Test item',qty:1,unit:'',price:1}],lineCount:1,qtyTotal:1,total:1},'TEST PRINT',o));};
+  test.onclick=()=>{const o=read();if(!isThermal(o)){say('Choose RawBT or Bluetooth first.','bad');return;}
+    thermal(escposReceipt({at:Date.now(),receiptNo:'TEST',cashier:USER?String(USER.username):'',lines:[{name:'Test item',qty:1,unit:'',price:1}],lineCount:1,qtyTotal:1,total:1},'TEST PRINT',o),o,false);};
   ok.onclick=()=>{read();shut();say('Printer settings saved','ok',2500);};
   foot.append(test,ok);box.append(head,body,foot);ovl.append(box);
   ovl.addEventListener('click',e=>{if(e.target===ovl)shut();});
@@ -2000,8 +2087,8 @@ function renderClose(sh,forced){
     let rec=null,failed='';
     try{
       rec=await withShiftLock(async()=>{
-        const sales=await LEDGER.all();                    // everything on this phone, read fresh: another tab may have sold meanwhile
-        const rets=await RETLG.all();                      // step 19: and may have handed cash back
+        const rets=await RETLG.all();                      // step 19: and may have handed cash back (read first: step 33, a sale a return points at stays a real record)
+        const sales=(await LEDGER.load(ledgerArgs(rets))).list;   // everything on this phone, read fresh: another tab may have sold meanwhile
         const cur=await SHIFTLG.current(o.tillId);
         if(!cur||cur.open.shiftId!==o.shiftId){const x=new Error('closed');x.code='ALREADY_CLOSED';throw x;}
         return SHIFTLG.close(cur,sales,c,{username:String(USER.username),role:String(USER.role||'')},note.value.trim(),{out:Returns.cashOutOf(cur.open.shiftId,rets)});
@@ -2144,19 +2231,87 @@ function showReport(r,copy){
   ovl.style.zIndex='80';                              // above the shift sheet (.povl is 70)
   const sc=el('div','rscroll');sc.append(reportEl(r,copy));
   const bar=el('div','rbar'),pr=el('button','pri','Print',{type:'button'}),cl=el('button','','Close',{type:'button'});
-  pr.onclick=()=>printReport(r);cl.onclick=hideReport;
+  pr.onclick=()=>printReport(r,copy);cl.onclick=hideReport;
   bar.append(cl,pr);ovl.append(sc,bar);document.body.append(ovl);RPOVL=ovl;pr.focus();
 }
 function hideReport(){
   if(!RPOVL)return;RPOVL.remove();RPOVL=null;
   try{if(RPOPENER&&document.contains(RPOPENER))RPOPENER.focus();}catch{}
 }
-function printReport(r){                              // the page title is the file name when the cashier picks \"Save as PDF\"
+function printReport(r,copy){                         // the page title is the file name when the cashier picks \"Save as PDF\"
+  const pf=prefs();                                    // step 35: on a thermal printer (RawBT or Bluetooth) the report prints as text, no dialog
+  if(isThermal(pf)){try{thermal(escposReport(r,!!copy,pf),pf,false);}catch(e){console.warn(e);say('Could not build the report for the printer.','bad');}return;}
   const t=document.title;
   document.title=r.kind+' report '+r.shiftId;
   const back=()=>{document.title=t;removeEventListener('afterprint',back);};
   addEventListener('afterprint',back);
   try{window.print();}catch{back();}
+}
+// The same thermal layout for an X or Z report: the figures of reportEl() above, as text.
+function escposReport(r,copy,pf){
+  const sz=pf.size==null?1:pf.size|0,SC=[0,1,17][sz]||0,base=pf.cols||(Math.min(screen.width,screen.height)<=600?32:48),W=sz===2?base>>1:base,B=[27,64,27,77,0];
+  const txt=s=>{s=asc(s);for(let i=0;i<s.length;i++)B.push(s.charCodeAt(i));};
+  const ln=s=>{txt(s);B.push(10);},al=n=>B.push(27,97,n),bd=n=>B.push(27,69,n),hi=n=>B.push(29,33,n);
+  hi(SC);
+  const wrap=s=>{s=asc(s);const o=[];while(s.length>W){let k=s.lastIndexOf(' ',W);if(k<1)k=W;o.push(s.slice(0,k));s=s.slice(k).trim();}o.push(s);return o;};
+  const lr=(l,v)=>{l=asc(l);v=asc(v);if(l.length+v.length+1>W){wrap(l).forEach(ln);al(2);ln(v);al(0);}else ln(l+' '.repeat(W-l.length-v.length)+v);};
+  const ctr=s=>{al(1);wrap(s).forEach(ln);al(0);},rule=c=>ln(c.repeat(W)),sec=s=>{bd(1);ln(s);bd(0);};
+  const Z=r.kind==='Z',di=DATA.depotInfo||{};
+  bd(1);hi(sz?SC:1);ctr(di.name||'Shop Inventory & Sales Manager');hi(SC);bd(0);
+  if(di.district)ctr(di.district);
+  if(di.contactPhone)ctr('Tel: '+di.contactPhone);
+  rule('-');ctr(Z?'Z REPORT - SHIFT CLOSE':'X REPORT - SHIFT READING');
+  bd(1);ctr(r.shiftId);bd(0);
+  ctr(Z?'** FINAL - SHIFT CLOSED **':'** READING ONLY - SHIFT STILL OPEN **');
+  if(copy)ctr('** COPY **');
+  ctr('Till '+r.till+' - Cashier: '+r.cashier);
+  ctr('Opened '+fdt(r.openedAt));
+  ctr(Z?'Closed '+fdt(r.closedAt)+(r.forced?' by '+r.closedBy:''):'Taken '+fdt(r.takenAt));
+  rule('-');
+  sec('SALES');
+  lr('Sales',String(r.saleCount));
+  if(r.itemsComplete)lr('Items sold',fq(r.qtyTotal));
+  bd(1);lr('Total sold',money(r.total));bd(0);
+  if(r.itemsComplete&&r.promoGiven>0)lr('Offers given ('+r.promoCount+')',money(r.promoGiven));
+  if(r.itemsComplete&&r.discountGiven>0)lr('Discounts given ('+r.discountCount+')',money(r.discountGiven));
+  if(r.itemsComplete&&(r.promoGiven>0||r.discountGiven>0))wrap('Offers and discounts are already off the total.').forEach(ln);
+  if(r.credit>0)lr('Left unpaid (credit)',money(r.credit));
+  if(r.firstReceipt)wrap('Receipts '+r.firstReceipt+(r.lastReceipt&&r.lastReceipt!==r.firstReceipt?' to '+r.lastReceipt:'')).forEach(ln);
+  if(r.rt&&r.rt.count){                                   // step 19: voids and refunds paid out in this shift
+    rule('-');sec('VOIDS & REFUNDS');
+    if(r.rt.voids)lr('Voids',String(r.rt.voids));
+    if(r.rt.refunds)lr('Refunds',String(r.rt.refunds));
+    lr('Value taken back','-'+money(r.rt.total));
+    if(r.rt.credit>0)lr('Off customers\u2019 balances',money(r.rt.credit));
+    Shifts.METHODS.forEach(m=>{if(r.rt.byMethod[m]>0)lr('Handed back - '+METHODS[m].label,money(r.rt.byMethod[m]));});
+    bd(1);lr('Net sales (after returns)',money(r.netTotal));bd(0);
+  }
+  rule('-');sec('MONEY COLLECTED');
+  let coll=0;
+  Shifts.METHODS.forEach(m=>{coll+=Math.round((Number(r.byMethod[m])||0)*100);if(m==='cash'||r.byMethod[m]>0)lr(METHODS[m].label,money(r.byMethod[m]));});
+  bd(1);lr('Total collected',money(coll/100));bd(0);
+  rule('-');sec('CASH DRAWER');
+  lr('Float (start)',money(r.float));
+  lr('+ Cash sales',money(r.cashSales));
+  if(r.cashOut>0)lr('- Cash paid back',money(r.cashOut));
+  bd(1);lr('Cash expected',money(r.expectedCash));bd(0);
+  if(Z){
+    bd(1);lr('Cash counted',money(r.countedCash));
+    lr(r.variance===0?'Balanced':(r.variance<0?'SHORT':'OVER'),r.variance===0?'-':money(Math.abs(r.variance)));bd(0);
+  }else lr('Cash counted','not counted yet');
+  if(r.note)wrap('Note: '+r.note).forEach(ln);
+  rule('-');sec('ITEMS SOLD');
+  if(!r.itemsComplete)wrap('Item list left out: this phone does not hold every sale of this shift yet. The totals above are correct.').forEach(ln);
+  else if(!r.items.length)ln('No items sold.');
+  else{
+    const MAXI=60;
+    r.items.slice(0,MAXI).forEach(i=>{bd(1);wrap(i.name).forEach(ln);bd(0);lr(fq(i.qty)+(i.unit?' '+i.unit.toLowerCase():''),money(i.total));});
+    if(r.items.length>MAXI)wrap('...and '+(r.items.length-MAXI)+' smaller items. The totals above include them.').forEach(ln);
+  }
+  if(Z){const sg=l=>ln(l.padEnd(12)+'_'.repeat(Math.max(4,W-12)));ln('');sg('Cashier:');ln('');sg('Checked by:');}
+  rule('-');ctr(Z?'Final figures of shift '+r.shiftId:'X report - nothing was closed or changed');
+  B.push(27,100,4);                                // ESC d 4: feed 4 lines so the text clears the tear bar
+  return Uint8Array.from(B);
 }
 // kind 'X' or 'Z'; copy = this Z is a reprint. Reads the ledger fresh first: another tab may have sold or closed meanwhile.
 async function showShiftReport(shiftId,kind,copy){
@@ -2232,7 +2387,7 @@ function renderRet(){
 // ── 1. find the sale: today's sales on this phone, or search by receipt number (or customer)
 function retFindList(q){
   const t=String(q||'').trim().toUpperCase(),today=new Date().toISOString().slice(0,10);
-  let list=SALES_ALL.filter(x=>x&&x.id);
+  let list=SALES_ALL.filter(x=>x&&x.id&&!x._digest).concat((RT&&RT.extra)||[]);   // step 33: day totals are not sales; older sales fetched by number are
   list=t?list.filter(x=>String(x.id).includes(t)||String(x.customerName||'').toUpperCase().includes(t)):list.filter(x=>x.date===today);
   return list.sort((a,b)=>(b.at||0)-(a.at||0)).slice(0,40);
 }
@@ -2248,6 +2403,8 @@ function renderRetFind(){
   const draw=()=>{
     RT.q=inp.value;
     const rows=retFindList(RT.q),f=document.createDocumentFragment();
+    const tq=RT.q.trim().toUpperCase();                                   // step 33: a full receipt number that is not in memory (an older day): read it from this phone
+    if(Sales.ID_RE.test(tq)&&!rows.some(x=>x.id===tq))LEDGER.get(tq).then(r=>{if(r&&RT&&RT.q.trim().toUpperCase()===tq&&!(RT.extra||[]).some(x=>x.id===tq)){RT.extra=(RT.extra||[]).concat([r]);draw();}}).catch(()=>{});
     if(!rows.length)f.append(el('div','h-empty',RT.q.trim()?'No sale on this phone matches \u201c'+RT.q.trim()+'\u201d.':'No sales yet today.'));
     rows.forEach(x=>{
       const rem=Returns.remaining(x,RETS_ALL);
@@ -2273,7 +2430,7 @@ function renderRetFind(){
   if(!COARSE)setTimeout(()=>{try{inp.focus();}catch{}},0);
 }
 function retChoose(id){
-  const x=SALES_ALL.find(v=>v&&v.id===id);if(!x||!RT)return;
+  const x=SALES_ALL.find(v=>v&&v.id===id&&!v._digest)||((RT&&RT.extra)||[]).find(v=>v&&v.id===id);if(!x||!RT)return;
   RT.sale=x;RT.kind='refund';RT.qty=new Map();RT.picks=[];RT.alloc=null;RT.err='';RT.reason='';RT.note='';RT.restock=true;RT.restockSet=false;RT.step='pick';
   renderRet();
 }
@@ -2535,7 +2692,7 @@ function showReturnReceipt(r){
 }
 function printReturn(r,auto){
   const pf=prefs();
-  if(pf.mode==='rawbt'){try{sendRaw(escposReturn(r,pf));}catch{say('Could not send to RawBT.','bad');}return;}
+  if(isThermal(pf)){try{thermal(escposReturn(r,pf),pf,auto);}catch{say('Could not build the slip for the printer.','bad');}return;}
   if(auto)return;                                  // the browser's print dialog is never opened by itself
   const t=document.title;
   document.title=(r.kind==='void'?'Void ':'Refund ')+r.id;
@@ -2748,8 +2905,9 @@ function closeCart(){SELL.classList.remove('open');CARTBAR.setAttribute('aria-ex
 
 // ── CAMERA SCANNER (roadmap step 12) ─────────────────────────────────────────
 // The phone camera plus the browser's own BarcodeDetector (Chrome and Samsung Internet on Android, installed PWA included).
-// No library, nothing to download, works offline. Safari and desktop Chrome on Windows/Linux do not have it: the camera button
-// is not shown there, and the scan box (USB/Bluetooth scanner, or typing) works as before.
+// No library, nothing to download, works offline. Safari (iPhone) and desktop Chrome on Windows/Linux have no BarcodeDetector of their own:
+// there barcode.js (v0.3.78) installs a fallback that reads EAN-13, EAN-8, UPC-A and Code 128 (not QR, Code 39, ITF or UPC-E), so the camera
+// button shows there too. It is slower and less forgiving than the native reader; a USB/Bluetooth scanner or typing works as before.
 // The camera stays open so a whole basket is scanned in one go. Every read goes through resolveCode(), the same exact
 // barcode/SKU rule as the scan box, so a camera read can never add an item the scan box would refuse. Only a barcode near the
 // middle of the picture counts, and if two different ones are there nothing is added. A code that stays in view is added once;
