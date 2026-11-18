@@ -33,7 +33,8 @@ button.pri{background:var(--green);border-color:var(--green);color:var(--on-gree
 
 /* ── layout shell: header on top, the rest of the screen belongs to <main> ── */
 [hidden]{display:none!important}
-body{display:flex;flex-direction:column;height:100vh;height:100dvh}
+:root{--app-h:100vh}@supports(height:100dvh){:root{--app-h:100dvh}}   /* fitView() below replaces this with the height really visible */
+body{display:flex;flex-direction:column;height:var(--app-h)}
 main{width:100%}
 header{flex:none}
 header .hr{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;justify-content:flex-end}
@@ -304,6 +305,7 @@ button[hidden]{display:none!important}
 .seg button{padding:10px 4px;font-size:14px;border-radius:10px}
 .seg button.on{background:var(--green);border-color:var(--green);color:var(--on-green)}
 .lockovl{position:fixed;inset:0;z-index:200;display:flex;align-items:center;justify-content:center;background:var(--bg);padding:env(safe-area-inset-top,0) 16px env(safe-area-inset-bottom,0);overflow-y:auto}
+.rovl,.povl,.sovl,.lockovl{bottom:auto;height:var(--app-h)}   /* v0.3.88: same visible height as the page */
 .lockbox{width:100%;max-width:340px;margin:auto;text-align:center}
 .lk-ic{font-size:44px;line-height:1.1;margin-bottom:4px}
 .lockbox h2{font-size:22px;margin-bottom:2px}
@@ -3947,7 +3949,36 @@ function buildSell(){
   });
   addEventListener('storage',e=>{if(e.key===heldKey()){renderHeldBtn();renderHeldList();}});   // another till tab held/resumed one
   renderGrid();renderCart();renderHeldBtn();focusSearch();
+  fitView();
 }
+
+// ── FIT THE SCREEN (v0.3.88) ─────────────────────────────────────────────────────────────────────────────────────────
+// Some Android windows (the installed app especially) report a page height taller than the part you can see, so the cart bar sits
+// off the bottom of the screen until you pinch-zoom. The page is sized to what is really visible instead, and checked again when the
+// window changes. If the cart bar is still pushed off the bottom, the difference is taken off. A page the person has zoomed into is left alone.
+let fitRaf=0;
+function fitView(){
+  if(fitRaf)return;
+  fitRaf=requestAnimationFrame(()=>{
+    fitRaf=0;
+    const vv=window.visualViewport,root=document.documentElement;
+    if(vv&&vv.scale>1.02)return;
+    const vis=Math.round(vv?vv.height:innerHeight);
+    if(!(vis>240))return;
+    root.style.setProperty('--app-h',vis+'px');
+    if(window.scrollY>0)scrollTo(0,0);
+    requestAnimationFrame(()=>{
+      const b=CARTBAR&&!CARTBAR.hidden?CARTBAR.getBoundingClientRect():null;
+      if(!b||!b.height)return;                           // no cart bar on this screen (tablet layout, or not built yet)
+      const over=Math.ceil(b.bottom-(vv?vv.offsetTop+vv.height:innerHeight));
+      if(over>1&&over<vis/2)root.style.setProperty('--app-h',(vis-over)+'px');
+    });
+  });
+}
+['resize','orientationchange','pageshow','focus'].forEach(e=>addEventListener(e,fitView));
+if(window.visualViewport)visualViewport.addEventListener('resize',fitView);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)fitView();});
+[0,300,1000,2500].forEach(t=>setTimeout(fitView,t));
 
 async function boot(){
   if(sessionStorage.getItem('_play')==='1')return card('🔒','Not available','The till is not available in this version of the app.',[['Back to app',toApp,true]]);
