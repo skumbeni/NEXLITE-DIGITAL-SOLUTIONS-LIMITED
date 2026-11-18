@@ -25,7 +25,15 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.85 (2026-11-18) — Phone scanner: link the two phones by QR code with NO internet (pos.html + index.html SW_VERSION + sw.js + NEW FILE qrcode.js; no database RULES change; no sale record changes)
+// Current version: v0.3.87 (2026-11-18) — Phone scanner on a PC till: the till shows a QR with its own till code and the scanner phone scans it (pos.html + index.html SW_VERSION + sw.js; no database RULES change, no new file, no new field on any record)
+//   - pos.html: 📲 on the till has Show till QR for a phone (starts receiving, then shows a code holding only the 4-character till code, which is not a secret). 📲 on the scanner phone has Scan till QR: a strict parser takes only MDM1:t|CODE, then the dialog opens with the code filled in and the person taps Start scanning, so every existing check still runs. No webcam is needed on the till.
+//   - pos.html: a browser that cannot read QR codes (Chrome on Windows and Linux, iPhone) now says so, instead of waiting silently, when Pair a phone by QR or Scan till QR is used.
+//   - Limit, unchanged: Pair by QR with no internet needs the till to READ the phone's QR code, so a PC without a QR reader cannot do it. Scanner-phone Start scanning still checks the till code online.
+//   - index.html User Guide: new section Using a PC as the till, one new tip (till_qr), three screen messages, updated steps.
+// Previous version: v0.3.86 (2026-11-18) — User Guide: new chapter "Using a second phone as a scanner" (index.html + pos.html + sw.js; no database RULES change, no new file, no new field on any record)
+//   - index.html User Guide: new chapter (setup, QR pairing, screen messages, safety habits), five new tips, one step in Selling at the Till, three Troubleshooting steps, one Words row. Fixed text only, no internals (no database paths, record names or QR contents) shown.
+//   - pos.html Till help: new item 13 Phone as scanner (Stay safe is now 14).
+// Previous version: v0.3.85 (2026-11-18) — Phone scanner: link the two phones by QR code with NO internet (pos.html + index.html SW_VERSION + sw.js + NEW FILE qrcode.js; no database RULES change; no sale record changes)
 //   - NEW FILE qrcode.js (Kazuhiko Arase's qrcode-generator, MIT licence, unchanged): pos.html loads it and sw.js precaches it. Deploy it next to pos.html.
 //   - Scanner phone: a Pair by QR button on its camera screen shows a QR. Till: 📲 then Pair a phone by QR scans it and shows its own QR, which the scanner phone then scans. The QR holds only the WebRTC details (about 200 characters); nothing goes through the database, and the till can now start receiving with no internet.
 //   - Needs both phones on the same router. Android Chrome reads QR codes natively; the iPhone camera reader (barcode.js) does not read QR.
@@ -2441,7 +2449,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.85';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.87';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

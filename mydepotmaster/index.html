@@ -5097,7 +5097,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.85';
+const SW_VERSION  = 'v0.3.87';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -28948,7 +28948,13 @@ const TIPS=new Map(Object.entries({
   stock_check:{t:'Payroll stock check',b:'In Payroll, the stock check compares the bags your workers logged with the bags in stock. A gap within the tolerance (0.5% unless changed) shows a tick.'},
   till_pin:{t:'Till PIN (not the Manager PIN)',b:'A 4 to 6 digit PIN you set for yourself in Till → Settings. It only opens the Till lock screen on this phone. It is saved on the phone as a scrambled code, never as the PIN itself. It is NOT the Manager PIN, which approves discounts, refunds and leaving the Till. Setting, changing or removing it needs your account password.'},
   till_stay:{t:'Stay logged in on the till',b:"In Till → Settings you can switch on Stay logged in (you need a Till PIN first). The Till then locks after 1, 2, 5, 10, 15 or 30 minutes of no use instead of logging you out, and you type your PIN to open it again. Your cart, shift and open sale are still there behind the lock. 5 wrong PINs in a row pause the pad for 30 seconds, 10 pause it for 2 minutes, and 15 log you out so your password is needed again."},
-  labels:{t:'Barcode labels',b:'Item list → Labels prints stickers: on A4 sticker sheets, plain A4 with cut lines, or a thermal roll. Each shows the name, optionally the price and shop name, the bars and the digits. Printing a label changes no record.'}
+  labels:{t:'Barcode labels',b:'Item list → Labels prints stickers: on A4 sticker sheets, plain A4 with cut lines, or a thermal roll. Each shows the name, optionally the price and shop name, the bars and the digits. Printing a label changes no record.'},
+  phone_scanner:{t:'Phone scanner',b:'A second phone reads barcodes with its camera and sends them to the till. The till adds each item to the sale, and only the till makes the sale and takes the money. The scanner phone sends nothing but the barcode number. Scans travel over the shop WiFi when the two phones are linked, and through the internet when they are not.'},
+  wifi_link:{t:'The WiFi link',b:'Two phones on the same router can talk to each other directly, with no internet. It needs the shop\'s own private WiFi. Guest WiFi and public WiFi often block phone-to-phone traffic on purpose, so no link forms there, and shop phones should never be on WiFi that customers or strangers use. If no link forms, scans still work through the internet.'},
+  qr_pair:{t:'Pairing by QR code',b:'The scanner phone shows a code, the till reads it and shows its own, and the scanner phone reads that. Each code is for one link between two phones that are side by side, and it closes by itself. While a code is on a screen, anyone who can scan it could try to link, so show it only to your own other phone, never photograph, screenshot or send it, and tap Cancel or Done if anything looks wrong. Both phones need Chrome or Samsung Internet on Android to read the codes. A PC browser that cannot read QR codes cannot pair this way: use Show till QR for a phone instead.'},
+  scan_busy:{t:'Why the till refuses a scan',b:'To protect the sale, the till does not take a scan while it is taking payment, is locked or has another screen open. Over the WiFi link the scanner phone is told at once. Through the internet a waiting scan is thrown away after 15 seconds and is never added to the next sale. Scan it again when the till is ready.'},
+  phone_browser:{t:'Which phones work best',b:'Chrome or Samsung Internet on Android reads barcodes and the pairing QR code best. iPhone and some computers use a built-in reader that is slower, reads fewer barcode types and cannot read QR codes. That includes Chrome on Windows and Linux. Keep the browser and the app updated.'},
+  till_qr:{t:'Show till QR for a phone',b:'The till shows a code that holds only its own 4-character till code. The scanner phone reads it so you do not have to type. It is not a password and it starts nothing by itself: the scanner phone still checks the till, and you check the code and tap Start scanning. It needs no camera on the till, so a PC can show it.'},
 }));
 
 // ── "GO TO" BUTTONS: a key → a screen. Roles decide who sees the button; the screen checks again. ──
@@ -29153,6 +29159,7 @@ const CHAPTERS=[
     ST('Add items',[
       '**Scan box:** scan a barcode or type an exact barcode or SKU and press Enter. It finds exact matches only, never a guess. Typing a name narrows the list.',
       '**Camera:** tap the camera button to scan with the phone. [[i:camera]]',
+      '**Second phone:** a second phone can scan for this till. Tap **📲**. See **Using a second phone as a scanner**. [[i:phone_scanner]]',
       '**Tiles:** tap an item to add it. The tile shows the price and whether it is out of stock, all expired or not priced yet.',
       'If it says an item has no price, ask the Admin to set it. [[i:no_price]]'
     ]),
@@ -29219,6 +29226,98 @@ const CHAPTERS=[
     ST('Leave safely',['Log out when you finish. If a PIN is needed to leave, give the phone to the manager. [[i:pin_exit]]'])
   ]),
   NOTE('warn','Never tell your password to anyone, and never type a manager\'s PIN yourself. The manager types it.')
+]},
+{id:'phonescan',part:2,icon:'📲',title:'Using a second phone as a scanner',sum:'Link two phones, scan, stay safe',r:'amc',np:true,blocks:[
+  P('A second phone can be your scanner. Its camera reads each barcode and sends it to the till, and the till adds the item to the sale. The **till phone** is the only phone that makes the sale, takes the money and saves the record. The **scanner phone** only sends barcode numbers: no prices, money, customer names, passwords or PINs. [[i:phone_scanner]]'),
+  H('What you need'),
+  UL('**Two phones** with the app installed, both signed in to the same shop. Use **Chrome or Samsung Internet on Android** on both. [[i:phone_browser]]',
+     '**Your own login** on each phone. Never lend your login so that someone else can scan, and never use one shared login on both phones. [[i:own_login]]',
+     'The **till phone** must have its **till code**. It shows at the top of the Till, for example **Till K7F2**. A new till needs signal once to get it. [[i:receipt_code]]',
+     '**Internet on the scanner phone** when you tap Start scanning, because the app checks the till code before the camera opens. Mobile data is fine for this.',
+     'For the direct link, **both phones on the shop\'s own private WiFi**, on the same router. Not guest WiFi, not WiFi that customers use. [[i:wifi_link]]',
+     'The Till must be available on your account. A read-only account cannot open it. [[i:readonly]]',
+     'A **PC can be the till**. Read **Using a PC as the till** below, because a PC cannot always read a phone\'s QR code.'),
+  H('Set it up, step by step'),
+  STEPS([
+    ST('1. On the till phone: start receiving',[
+      'Open the Till and read the till code at the top, for example **Till K7F2**.',
+      'Tap **📲** (next to the camera button), then **Start receiving**. The 📲 button lights up and a message says the phone scanner is on.',
+      'Keep this phone **open, in front and on charge**. While it is receiving it keeps its screen awake, which uses battery.',
+      'If it says to set the till up online first, go online once. The till needs its code before it can receive.'
+    ]),
+    ST('2. On the scanner phone: choose the till',[
+      'Open the Till on the scanner phone with your own login and tap **📲**.',
+      'Type the code of the **till phone** (4 characters, for example **K7F2**) and tap **Start scanning**. The phone remembers the code for next time.',
+      'Or, instead of typing, tap **Scan till QR** and point the camera at the code the till shows under **Show till QR for a phone**. The code fills in by itself. Check it matches the till, then tap **Start scanning**. [[i:till_qr]]',
+      'The app checks that a till with that code exists in your shop. A wrong code, this phone\'s own code, or no internet gives a message and nothing starts.',
+      'When asked, tap **Allow** for the camera.'
+    ]),
+    ST('3. Wait for the link',[
+      'The camera opens with the title **Send scans to till K7F2**. In the background the two phones try to link directly over the shop WiFi. [[i:wifi_link]]',
+      'When it works the scanner phone says **WiFi link ready** and the till says **Phone linked over WiFi**. From then on scans do not need the internet.',
+      'The line under the picture shows how scans travel: **WiFi link** or **internet**.',
+      'If no link forms, do nothing. Scans still go through the internet. You can also link by QR code (below).'
+    ]),
+    ST('4. Scan',[
+      'Hold **one barcode** in the middle of the picture. Scan one item at a time. Use **Torch** in poor light if the button shows.',
+      'The phone checks the code first. An unknown item, an item with no price, or a code shared by two items is refused on the scanner phone and is not sent. The scanner phone uses its own copy of your items, so if a newly added item is refused there but works on the till, open the main app on that phone with signal so it updates, then try again.',
+      'A good scan beeps and shows a green tick and the item name. A refused scan gives a low tone and a red message.',
+      'To add the same item again, take it out of the picture and scan it again. An item that stays in view is added once. Several barcodes in view adds nothing.'
+    ]),
+    ST('5. Check the cart on the till',[
+      'Every scan adds one item to the till\'s cart, exactly as if it was typed in the scan box. The till shows **✓ Phone** and the item name.',
+      'Look at the cart before you tap **Charge**. Remove anything you did not scan. Then take payment on the till as usual.'
+    ]),
+    ST('6. Finish',[
+      'On the scanner phone tap **Done**. The camera and the link close.',
+      'On the till phone tap **📲**, then **Stop receiving**. Do this when the shift ends and whenever you leave the till.'
+    ])
+  ]),
+  H('Link by QR code'),
+  P('Use this when the automatic link does not form, or after it drops. Both phones must be on the same shop WiFi and next to each other. It needs Chrome or Samsung Internet on Android on both phones, because they must read each other\'s QR code. [[i:qr_pair]]'),
+  STEPS([
+    ST('Scanner phone: show its code',['With the camera open, tap **Pair by QR**. A black-and-white code appears under the title **Show this to the till**.']),
+    ST('Till phone: scan it',['Tap **📲**, then **Pair a phone by QR**. The till\'s camera opens. Point it at the code on the scanner phone.']),
+    ST('Till phone: show its own code',['The till now shows a code under **Show this to the scanner phone**. Hold the phone steady. **Cancel** stops it.']),
+    ST('Scanner phone: scan the till\'s code',['Tap **Next: scan the till\'s code**. Point the camera at the code on the till. It says **Linking…**.']),
+    ST('Done',['Both phones say they are linked and the codes close by themselves. Use only your own two phones, side by side. While a code is on screen anyone who can scan it could try to link, so keep it out of view of others and never photograph, screenshot or send it. If anything looks wrong, tap **Cancel** or **Done**.'])
+  ]),
+  H('Using a PC as the till'),
+  P('A PC running Chrome can be the till, and the scanner phone is still the phone. The difference is the QR step.'),
+  UL('**Choose the till without typing.** On the PC tap **📲**, then **Show till QR for a phone**. On the scanner phone tap **📲**, then **Scan till QR**, point the camera at the PC screen, check the code matches the one at the top of the Till, and tap **Start scanning**. No webcam is needed on the PC. [[i:till_qr]]',
+     'Both need internet for this. When the two can link, the link forms by itself over the shop WiFi. A PC on a network cable may link if it is on the same router as the phone\'s WiFi. If no link forms, scans still go through the internet. [[i:wifi_link]]',
+     '**Pair by QR with no internet does not work on most PCs.** It needs the till to read the phone\'s QR code with a camera, and Chrome on Windows and Linux cannot read QR codes. The Till then says so. With no internet on a PC, use a USB or Bluetooth scanner, or type the code.',
+     'Keep the Till tab open and in front while it is receiving, and do not let the PC sleep. Tap **Stop receiving** when you leave. Lock the Till when you step away.'),
+  H('What the screens tell you'),
+  TB(['You see','What it means and what to do'],[
+    ['✓ and the item name, in green','The till added the item.'],
+    ['✓ Sent: and the item name','Sent through the internet. The till should add it within a second or two. If the till does not take it in 4 seconds the scanner phone removes it and warns you, so it can never arrive late.'],
+    ['Several barcodes in view. Aim at one.','More than one barcode is in the picture. Move the others out of view.'],
+    ['The till is busy. Close the screen that is open.','The till is taking payment, is locked or has another screen open. Finish or close it, then scan again. [[i:scan_busy]]'],
+    ['Till K7F2 did not take it. On that till tap 📲 and Start receiving…','The till phone is not receiving. Start receiving on it, close any open screen, and scan again.'],
+    ['Phone link lost. Scans go through the internet.','The direct link dropped. Scans keep working through the internet. Tap Pair by QR to link again.'],
+    ['No WiFi link. Are both phones on the same router (not guest WiFi)?','The phones could not link directly. Check both are on the shop\'s private WiFi. Scans use the internet meanwhile.'],
+    ['No connection and no WiFi link. That scan was not sent.','There is no internet and no direct link. Link by QR, or scan it again when you are back online.'],
+    ['On the till: N scans from the phone not added: the till was busy. Scan again.','Scans that waited more than 15 seconds were thrown away. They are never added to the next sale.'],
+    ['The camera is blocked.','Allow the camera for this app in the phone\'s site settings, then try again.'],
+    ['This browser cannot read QR codes, so it cannot pair by QR.','This PC or browser has no QR reader. Tap Done and use Show till QR for a phone, or use a scanner phone with Chrome on Android.'],
+    ['This phone cannot read QR codes. Type the till code instead.','This phone\'s browser has no QR reader, for example an iPhone. Type the 4-character till code.'],
+    ['That is not a till code from this app.','The camera read some other QR code. On the till tap 📲, then Show till QR for a phone.'],
+    ['That is not the till\'s code, or That code did not work.','Start the QR steps again from the scanner phone.'],
+    ['The database does not allow phone scans yet.','Tell your Admin. They contact support. It is not a fault on your phone.']
+  ]),
+  H('Keep it safe'),
+  UL('Link **only your own phones**, and only when you start the link yourself. If a phone or a code you do not know appears, do not scan it and tell the Admin.',
+     'The **till code** only tells the scanner phone where to send. It is not a password and it is not a secret, because receipt numbers are built from it. What protects the till is your login and linking only your own phones. Never type a password or PIN on any of these screens. None of them asks for one. If a screen does, stop and tell the Admin.',
+     'Use the **shop\'s private WiFi** with a strong password that only staff know. Never link phones on guest WiFi, café or public WiFi.',
+     'The scanner phone is signed in as **you**. Tap **Done** and log out when you finish, lock the screen, and never hand it to a customer.',
+     'A scan only **adds an item to the cart**. It cannot take payment, refund, void or close a shift. Every sale is still saved on the till under the cashier\'s own shift.',
+     'Watch the cart. If an item appears that you did not scan, remove it, tap **Stop receiving**, lock the till and tell the Admin.',
+     '**Stop receiving** when you leave the till, at the end of a shift and at closing. A **locked** till refuses every scan. [[i:till_stay]]',
+     'Keep the app and the browser updated. Install the app only from the link or store you were given.'),
+  NOTE('info','**Good to know:** one till links to one phone over WiFi at a time, and one scanner phone sends to one till at a time. A scan counts as activity, so the till does not lock itself in the middle of a basket. If the scanner phone\'s screen locks or the app goes to the background, its camera stops and you tap Start scanning again. iPhone and some computers cannot read the pairing QR code.'),
+  NOTE('warn','If the phone scanner ever behaves oddly, tap **Stop receiving** on the till, tap **Done** on the scanner phone, and ask your Admin. A Bluetooth or USB scanner, or typing the code, always works without any link.'),
+  GO('till')
 ]},
 {id:'stock',part:2,icon:'📦',title:'Receiving, counting and reordering stock',sum:'Receive, issue, count, expiry, reorder, transport',r:'am',blocks:[
   H('Receive stock (goods coming in)'),
@@ -29344,6 +29443,9 @@ const CHAPTERS=[
 {id:'trouble',part:3,icon:'🛠️',title:'Troubleshooting and questions',sum:'Quick fixes for common problems',r:'amsc',blocks:[
   STEPS([
     ST('An item will not sell at the Till',['Check four things: it has a **selling price** [[i:no_price]], it is **in stock**, it is **not expired** [[i:batch]], and its **barcode or SKU** is not shared with another item (the Till says so and adds nothing).']),
+    ST('The scanner phone will not start',['Check four things: you typed or scanned the **till phone\'s** code (4 characters, shown at the top of its Till), the scanner phone has **internet**, you allowed the **camera**, and you are using Chrome or Samsung Internet. Then read **Using a second phone as a scanner**. [[i:phone_scanner]]'],{np:true}),
+    ST('Scans from the scanner phone are not added',['On the till phone tap **📲** and make sure it says **Stop receiving** (that means it is receiving). Close any open screen, make sure it is not locked or taking payment, and scan again. [[i:scan_busy]]'],{np:true}),
+    ST('The two phones will not link over WiFi',['Put both phones on the shop\'s private WiFi, not guest WiFi. Then try **Pair by QR**. Scans keep working through the internet meanwhile. [[i:wifi_link]] [[i:qr_pair]]'],{np:true}),
     ST('The Till says the till has no receipt code',['Go online and tap **Set up this till now**. A new till needs signal once. [[i:receipt_code]]'],{np:true}),
     ST('The Till will not open at all',['The account may be read-only (suspended, pending or in grace period), or the plan may not include the Till. Ask your Admin. [[i:readonly]]'],{np:true}),
     ST('I forgot my password',['On the sign-in screen use the recovery option. The Admin can use the Recovery PIN or the recovery email. Other users ask the Admin to use 🔑 Reset on their login. If the phone has no company data, sign in with signal so it can restore from the cloud.']),
@@ -29370,8 +29472,9 @@ const CHAPTERS=[
     ['Variance','Counted stock compared with what the records say. [[i:variance]]'],
     ['SKU','Your own code for an item. [[i:sku]]'],
     ['Commodity','Bulk produce handled in bags and batches. [[i:commodity]]'],
-    ['Edit window','How long a record can still be changed. [[i:edit_window]]']
-  ],[1,2,3,4,5,6])
+    ['Edit window','How long a record can still be changed. [[i:edit_window]]'],
+    ['Scanner phone','A second phone whose camera sends barcodes to the till. [[i:phone_scanner]]']
+  ],[1,2,3,4,5,6,13])
 ]},
 {id:'help',part:3,icon:'📞',title:'Getting help',sum:'Who to contact and what to say',r:'amsc',blocks:[
   P('Ask your Admin first. For technical problems or account questions contact support. The **Contact & Support** card has the current phone, WhatsApp and email, so it is always up to date:'),

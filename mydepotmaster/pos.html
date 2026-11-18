@@ -780,7 +780,8 @@ const HELP_TXT=[
   ['10. Close your shift','Shift then Close shift. Count the whole drawer including the float and type the amount. The app expects the float plus cash sales minus cash handed back, and saves any difference. Then print the Z report.'],
   ['11. Lock, PIN and password','Settings at the top holds Appearance (Auto, Light or Dark), Stay logged in, your Till PIN and Change password. Set a Till PIN, switch on Stay logged in, and use the Lock button whenever you step away. Your Till PIN is not the manager PIN.'],
   ['12. No signal','The Till keeps working without signal. Sales are saved on the phone and sent to the cloud when you are online again. A brand-new till needs signal once to get its code.'],
-  ['13. Stay safe','Never share your password or PIN. Never type a manager PIN yourself. Log out or lock the till when you leave it. If you forget your Till PIN, tap Log out on the lock screen and sign in with your password.']
+  ['13. Phone as scanner','A second phone can scan for this till. On this till tap the phone button next to the camera button, then Start receiving. On the other phone sign in with your own login, tap the same button, then either type this till\u2019s 4-character code or tap Scan till QR and scan the code this till shows under Show till QR for a phone, then tap Start scanning. Each scan adds one item to the cart: check the cart before you charge. Link only your own phones, on the shop\u2019s private WiFi, never guest WiFi. Tap Stop receiving when you leave the till. A locked or busy till refuses scans.'],
+  ['14. Stay safe','Never share your password or PIN. Never type a manager PIN yourself. Log out or lock the till when you leave it. If you forget your Till PIN, tap Log out on the lock screen and sign in with your password.']
 ];
 function closeHelp(){if(!HELPOVL)return;HELPOVL.remove();HELPOVL=null;}
 function openHelp(){
@@ -3333,7 +3334,7 @@ const CAM_CHECKED=['ean_13','ean_8','upc_a','upc_e','code_128'];   // have a che
 let CAMOVL=null,CAM=null;
 const camOk=()=>!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&'BarcodeDetector' in window);
 function camStatus(me,text,cls){if(CAM!==me)return;me.st.textContent=text;me.st.className='sst'+(cls?' '+cls:'');}
-function camSum(me){if(CAM!==me)return;if(me.qr){me.sum.textContent='Waiting for the scanner phone\u2019s QR code';return;}if(me.relay){const L=me.link;me.sum.textContent='Sent '+me.sent+' \u00B7 till '+me.relay+' \u00B7 '+(L&&L.open?'WiFi link':'internet');return;}me.sum.textContent=CART.length?CART.length+(CART.length===1?' item':' items')+' \u00B7 '+money(cartTotal()):'Cart is empty';}
+function camSum(me){if(CAM!==me)return;if(me.pick){me.sum.textContent='Waiting for the till\u2019s QR code';return;}if(me.qr){me.sum.textContent='Waiting for the scanner phone\u2019s QR code';return;}if(me.relay){const L=me.link;me.sum.textContent='Sent '+me.sent+' \u00B7 till '+me.relay+' \u00B7 '+(L&&L.open?'WiFi link':'internet');return;}me.sum.textContent=CART.length?CART.length+(CART.length===1?' item':' items')+' \u00B7 '+money(cartTotal()):'Cart is empty';}
 function camFlash(me,cls){if(CAM!==me)return;me.aim.className='aim '+cls;clearTimeout(me.flashT);me.flashT=setTimeout(()=>{if(CAM===me)me.aim.className='aim';},700);}
 function camBeep(me,ok){
   try{navigator.vibrate&&navigator.vibrate(ok?40:[80,60,80]);}catch{}
@@ -3346,12 +3347,12 @@ function camBeep(me,ok){
   }catch{}
 }
 function camFail(me,text){camStatus(me,text,'bad');camFlash(me,'bad');}
-async function startCam(relayTo,qrPair){
+async function startCam(relayTo,qrPair,pickTill){
   if(CAMOVL)return;
   if(!camOk()){say('Camera scanning is not available on this browser. Use a scanner or type the code.','bad',5000);return;}
   const ovl=el('div','sovl','',{role:'dialog','aria-modal':'true','aria-label':'Camera barcode scanner'});
   const video=el('video','','',{playsinline:'',autoplay:'','aria-hidden':'true'});video.muted=true;
-  const head=el('div','sh');head.append(el('b','',relayTo?'Send scans to till '+relayTo:qrPair?'Link a phone by QR':'Scan barcodes'));
+  const head=el('div','sh');head.append(el('b','',relayTo?'Send scans to till '+relayTo:qrPair?'Link a phone by QR':pickTill?'Scan the till\u2019s QR code':'Scan barcodes'));
   const aim=el('div','aim');
   const st=el('div','sst','Starting camera\u2026',{role:'status','aria-live':'polite'});
   const sum=el('div','ssum');
@@ -3361,18 +3362,20 @@ async function startCam(relayTo,qrPair){
   if(relayTo&&qrOk()){const qb=el('button','','Pair by QR',{type:'button'});row.insertBefore(qb,done);qb.onclick=()=>qrOffer(CAM);}
   const foot=el('div','sf');foot.append(st,sum,row);
   ovl.append(video,head,aim,foot);document.body.append(ovl);
-  const me=CAM={video,aim,st,sum,stream:null,det:null,timer:0,flashT:0,ac:null,lastCode:'',seenAt:0,pend:'',pendN:0,multi:false,errs:0,relay:relayTo||null,qr:!!qrPair,sent:0,busy:false};
+  const me=CAM={video,aim,st,sum,stream:null,det:null,timer:0,flashT:0,ac:null,lastCode:'',seenAt:0,pend:'',pendN:0,multi:false,errs:0,relay:relayTo||null,qr:!!qrPair,pick:!!pickTill,sent:0,busy:false};
   CAMOVL=ovl;done.onclick=stopCam;camSum(me);
   if(relayTo){me.linkT=setInterval(()=>linkWatch(me),4000);linkOpen(me);}   // scanner phone: try the WiFi link in the background
   try{const AC=window.AudioContext||window.webkitAudioContext;if(AC)me.ac=new AC();}catch{}   // made inside the tap, so the beep is allowed
-  let det;
+  let det,qrRead=false;
   try{
     const sup=await BarcodeDetector.getSupportedFormats();
     const f=CAM_FORMATS.filter(x=>sup.includes(x));
     if(!f.length)throw new Error('no formats');
+    qrRead=f.includes('qr_code');
     det=new BarcodeDetector({formats:f});
   }catch{if(CAM===me)camFail(me,'Camera scanning is not supported on this device. Use a scanner or type the code.');return;}
   if(CAM!==me)return;
+  if((me.pick||me.qr)&&!qrRead){camFail(me,me.pick?'This phone cannot read QR codes. Type the till code instead.':'This browser cannot read QR codes, so it cannot pair by QR. Tap Done, then use Show till QR for a phone.');return;}
   let stream;
   try{
     stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});
@@ -3393,7 +3396,7 @@ async function startCam(relayTo,qrPair){
   }
   video.srcObject=stream;
   try{await video.play();}catch{}
-  camStatus(me,me.qr?'Point the camera at the QR code on the scanner phone.':'Aim at one barcode. Keep scanning, tap Done when finished.','');
+  camStatus(me,me.qr?'Point the camera at the QR code on the scanner phone.':me.pick?'Point the camera at the QR code on the till.':'Aim at one barcode. Keep scanning, tap Done when finished.','');
   camTick(me);
 }
 async function camTick(me){
@@ -3436,6 +3439,7 @@ function camRead(me,found){
   camAccept(me,val);
 }
 function camAccept(me,val){
+  if(me.pick){const c=qrTillCode(val);if(!c){camBeep(me,false);camStatus(me,'That is not a till code from this app. On the till tap \uD83D\uDCF2, then Show till QR for a phone.','warn');return;}camBeep(me,true);try{localStorage.setItem(scnTarget(),c);}catch{}stopCam();openScn();return;}
   if(me.relay){if(val.indexOf(QR_TAG)===0){qrAnswered(me,val);return;}if(me.busy){me.lastCode='';return;}idleReset();relaySend(me,val);return;}
   if(me.qr){qrOffered(me,val);return;}   // scanner phone: send it to the till instead of adding it here
   idleReset();                                           // scanning counts as activity: no idle logout in the middle of a basket
@@ -3712,6 +3716,7 @@ addEventListener('pagehide',()=>stopRecv());
 // (ICE user/password, the security fingerprint, up to 3 local addresses: about 200 characters); the other phone rebuilds the rest.
 const QR_TAG='MDM1:',PRIV_RE=/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
 const qrOk=()=>typeof qrcode==='function'&&rtcOk()&&camOk();
+const qrTillCode=t=>{const m=/^MDM1:t\|([A-HJ-KM-NP-Z2-9]{4})$/.exec(typeof t==='string'?t:'');return m?m[1]:null;};   // a till shows only its own 4-character code, which is not a secret; anything else is refused
 function qrPack(desc){
   const sdp=desc&&desc.sdp||'',g=re=>(sdp.match(re)||[])[1];
   const u=g(/a=ice-ufrag:(\S+)/),p=g(/a=ice-pwd:(\S+)/),f=g(/a=fingerprint:sha-256 ([0-9A-Fa-f:]+)/),c=[];
@@ -3798,6 +3803,9 @@ function openScn(){
   rb.onclick=()=>{closeScn();if(RECV){stopRecv();say('Phone scanner off.','',2500);}else startRecv();};
   m1.append(rb);
   if(qrOk()){const qb=el('button','','Pair a phone by QR',{type:'button'});qb.onclick=async()=>{closeScn();await startRecv();if(RECV)startCam(null,true);};m1.append(qb);}
+  if(own.registered&&typeof qrcode==='function'){const tq=el('button','','Show till QR for a phone',{type:'button'});
+    tq.onclick=async()=>{closeScn();await startRecv();if(RECV)qrPanel('Scan this with the scanner phone',['On the scanner phone tap \uD83D\uDCF2, then Scan till QR, and point its camera at this code.','It holds only this till\u2019s code ('+own.code+'), which is not a password. Tap Close when the phone has scanned it.'],QR_TAG+'t|'+own.code,'Close',qrPanelClose);};
+    m1.append(tq);}
   body.append(m1);
   body.append(el('div','pay-note mu','On the scanner phone: its camera sends each barcode to the till you name. Both phones need the same shop login and internet to pair; phones on the same router then keep working without internet.'));
   const inp=el('input','','',{type:'text',maxlength:'4',placeholder:'Till code',autocapitalize:'characters',autocomplete:'off',autocorrect:'off',spellcheck:'false','aria-label':'Code of the till that receives the scans'});
@@ -3820,7 +3828,9 @@ function openScn(){
     try{localStorage.setItem(scnTarget(),code);}catch{}
     closeScn();startCam(code);
   };
-  m2.append(go);body.append(inp,note,m2);
+  m2.append(go);
+  if(camOk()){const sq=el('button','','Scan till QR',{type:'button'});sq.onclick=()=>{closeScn();startCam(null,false,true);};m2.append(sq);}
+  body.append(inp,note,m2);
   box.append(head,body);ovl.append(box);
   ovl.addEventListener('click',e=>{if(e.target===ovl)closeScn();});
   ovl.addEventListener('keydown',e=>{if(e.key==='Escape')closeScn();});
