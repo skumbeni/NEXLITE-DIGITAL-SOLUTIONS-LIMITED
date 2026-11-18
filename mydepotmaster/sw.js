@@ -25,7 +25,24 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.80 (2026-11-17) — Plan prices are set in the admin app and every price in the main app follows (index.html + sw.js + mdm-admin.html + database_rules.json: RULES CHANGE, publish database_rules.json)
+// Current version: v0.3.82 (2026-11-18) — In-app User Guide, Till help, and two small fixes (index.html + pos.html + sw.js; no database RULES change, no new field on any record, no new file: nothing new to precache)
+//   - NEW: 📖 User Guide in index.html. Opens from the ☰ menu (every role), Settings > Help & About / Account & Help, the Setup Checklist pop-up, and the Cashier home card. Chapters are filtered by role (Admin, Manager, Staff, Cashier; "Show all chapters" shows the rest), with search, a 15-step set-up in order with live ticks, Till, stock, staff, money, security, plans, offline and troubleshooting chapters, and ⓘ buttons that explain a word or setting in a sheet.
+//   - SAFE BY DESIGN. All text is fixed in the code and built with createElement + textContent (no innerHTML, no inline handlers). An ⓘ or a "Go to" button carries only a key into a fixed list. It reads DATA / TIER_* for ticks, plan limits and 🔒 tags and writes nothing, calls no network, stores nothing on the phone. Go-to buttons call the normal screens, which keep their own admin checks. It closes itself on sign-out. Play mode leaves out the Till, prices and plan chapters. Plan prices in the guide come from TIER_META (so they follow tierPrices).
+//   - NEW: a ? (help) button at the start of the till header (pos.html, kept small so the header does not get tighter): a short 13-line "how to use the Till" sheet, the same read-only way, so a cashier can find help without the main app. Closed by the lock screen. Counts as an overlay (anyOverlay) and Escape closes it.
+//   - FIX: the Setup Checklist step buttons called switchTab(), which was never defined (a ReferenceError on tap). They call showTab() now.
+//   - FIX: Settings > Wholesale prices was drawn for the Admin but no Settings category matched its title, so it never appeared and wholesale could not be switched on. 'Wholesale prices' is now listed with Account & Security, next to Till discounts.
+//   - Not changed: database rules, sales.js, returns.js, shifts.js, gate.js, barcode.js, till_verify.js, what any screen writes to DATA, the audit log.
+
+// Previous version: v0.3.81 (2026-11-17) — Till settings: theme, stay logged in with a lock screen and PIN, PIN, and change password (pos.html + index.html + sw.js; no database RULES change; sales.js, returns.js, shifts.js, gate.js, barcode.js untouched)
+//   - NEW: a Settings button (and, once a PIN exists, a Lock button) in the till header. Settings holds four things, all for the till only.
+//   - THEME. Auto / Light / Dark, kept in this phone's localStorage mdm_pos_theme (the main app keeps its own mdm_theme). The till stays Dark until someone changes it, as before. The receipt paper and the camera view are the same in both.
+//   - STAY LOGGED IN. Per login, on this phone. Switched on: the till is never logged out for being idle. It LOCKS after 1 / 2 / 5 (default) / 10 / 15 / 30 minutes and the same login types its PIN. It also keeps the sign-in across an app restart (same record as the main app's Stay Signed In).
+//     The lock survives a reload (mdm_pos_locked), and a phone that was put away, or an app that was closed, for longer than the idle time opens locked. A password or fingerprint login in index.html counts as use, so a fresh sign-in is not met by the lock.
+//     Wrong PINs: 5 in a row pause the pad 30 seconds, 10 pause it 2 minutes, 15 log the user out (password needed again). The lock screen also has Log out. The cart, the open shift and any open sale screen stay as they were behind the lock.
+//   - PIN. 4 to 6 digits, saved on this phone as a salted PBKDF2 hash (never the PIN), per login. Setting, changing or removing it needs the account password (checked on the phone; the cloud only for an old password format). It is NOT the manager PIN (Settings > Manager PIN in the main app), which still approves discounts, refunds and leaving the till.
+//   - PASSWORD. Settings > Change password opens the main app on a small box (current password, new password, confirm), saves it exactly as Settings > Change Password does, pushes the sync, and returns to the till. Leaving the till this way follows the same "manager PIN to leave the till" rule as Main app / Log out.
+//   - NOT changed: the database rules (nothing new is written to the cloud), what a till writes to DATA (nothing), the audit log (no new event names).
+// Previous version: v0.3.80 (2026-11-17) — Plan prices are set in the admin app and every price in the main app follows (index.html + sw.js + mdm-admin.html + database_rules.json: RULES CHANGE, publish database_rules.json)
 //   - NEW NODE tierPrices/{starter,growth,pro,multisite,updatedAt} in the database. Public read (the landing page shows prices before anyone signs in), written only by the operator account. Free is always K0 and has no price record.
 //   - ADMIN APP: new "Plan Prices" panel (set the four monthly prices, with a confirmation that shows old and new). The Subscription Revenue panel (MRR, revenue by plan) and the application cards now use the same prices instead of their own copy.
 //   - MAIN APP: the numbers in TIER_META are now only the fallback. refreshTierPrices() reads tierPrices at the landing page, the Plans & Pricing page, and with every licence check (login, coming back to the app, the manual refresh), and when the phone comes back online. The last prices seen are cached in localStorage (mdm_tier_prices_v1), so an offline phone shows the most recent ones. Screens that are open when prices change repaint themselves.
@@ -2412,7 +2429,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.80';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.82';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
