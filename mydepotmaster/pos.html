@@ -37,7 +37,15 @@ body{display:flex;flex-direction:column;height:100vh;height:100dvh}
 main{width:100%}
 header{flex:none}
 header .hr{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;justify-content:flex-end}
-header .hb{display:flex;gap:6px}
+header .hr{min-width:0}
+/* action buttons: ONE row. If it is wider than the space it has, it scrolls sideways inside itself (the page never gets wider), and the edge with more to see fades. */
+header .hb{display:flex;flex-wrap:nowrap;align-items:center;gap:6px;min-width:0;max-width:100%;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scrollbar-width:thin}
+header .hb button{flex:0 0 auto;white-space:nowrap}
+header .hb button:focus-visible{outline-offset:-2px}
+header .hb button:last-child{margin-right:12px}
+header .hb[data-fade="r"],header .pills[data-fade="r"]{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(to right,#000 calc(100% - 28px),transparent)}
+header .hb[data-fade="l"],header .pills[data-fade="l"]{-webkit-mask-image:linear-gradient(to right,transparent,#000 28px);mask-image:linear-gradient(to right,transparent,#000 28px)}
+header .hb[data-fade="lr"],header .pills[data-fade="lr"]{-webkit-mask-image:linear-gradient(to right,transparent,#000 28px,#000 calc(100% - 28px),transparent);mask-image:linear-gradient(to right,transparent,#000 28px,#000 calc(100% - 28px),transparent)}
 button.sm{padding:5px 11px;font-size:13px;font-weight:600;border-radius:8px}
 button:focus-visible,input:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 .pill{font-size:12px}
@@ -124,8 +132,12 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
   header{flex-wrap:wrap;gap:6px 8px;padding:8px 12px}
   header b{font-size:17px}header small{display:none}
   header .hr{display:contents}
-  header>div:first-child{flex:1;min-width:0}
-  header .hb{order:2}
+  header>div:first-child{flex:1 1 100%;min-width:0}
+  /* action buttons: one full-width row you can swipe sideways, same as the status pills below it */
+  header .hb{order:2;flex:0 0 100%;touch-action:pan-x;scrollbar-width:none}
+  header .hb::-webkit-scrollbar{display:none}
+  header .hb button.sm{min-height:36px;padding:6px 13px}
+  header .hb #b-help{min-width:36px;padding-left:0;padding-right:0}
   /* status pills: one row you can swipe sideways (was overflow:hidden, so the last pills were cut off and could not be reached) */
   header .pills{order:3;width:100%;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;touch-action:pan-x;scrollbar-width:none;gap:5px;padding-bottom:2px}
   header .pills::-webkit-scrollbar{display:none}
@@ -3743,6 +3755,21 @@ async function boot(){
   maybePromptShift();                                   // no shift yet (or someone else's): open straight onto the shift sheet
   checkLockOnOpen();                                    // till settings: closed while locked, or not used for the idle time: open locked
 }
+// Header rows that can be swiped sideways (action buttons, status pills): fade the edge that has more to see.
+(function(){
+  function wire(el){
+    if(!el)return;
+    const upd=()=>{
+      const max=el.scrollWidth-el.clientWidth,x=Math.abs(el.scrollLeft);
+      el.dataset.fade=(max>2&&x>2?'l':'')+(max>2&&x<max-2?'r':'');
+    };
+    el.addEventListener('scroll',upd,{passive:true});
+    if(window.ResizeObserver){const ro=new ResizeObserver(upd);ro.observe(el);Array.from(el.children).forEach(c=>ro.observe(c));}   // a button hidden/shown or relabelled (Shift / Open shift / Close shift) changes its size
+    addEventListener('resize',upd);addEventListener('orientationchange',upd);
+    upd();
+  }
+  wire(document.querySelector('header .hb'));wire(document.querySelector('header .pills'));
+})();
 boot();
 </script>
 </body>
