@@ -345,6 +345,7 @@ document.documentElement.setAttribute('data-theme',l?'light':'dark');var m=docum
 <script src="returns.js"></script>
 <!-- Barcodes (v0.3.78): installs a camera BarcodeDetector on browsers that have none (iPhone Safari, desktop Chrome). Same file index.html loads. Must come before the inline script. -->
 <script src="barcode.js"></script>
+<script src="qrcode.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js" defer></script>
 <script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-check-compat.js" defer></script>
@@ -3332,7 +3333,7 @@ const CAM_CHECKED=['ean_13','ean_8','upc_a','upc_e','code_128'];   // have a che
 let CAMOVL=null,CAM=null;
 const camOk=()=>!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&'BarcodeDetector' in window);
 function camStatus(me,text,cls){if(CAM!==me)return;me.st.textContent=text;me.st.className='sst'+(cls?' '+cls:'');}
-function camSum(me){if(CAM!==me)return;if(me.relay){me.sum.textContent='Sent '+me.sent+' \u00B7 till '+me.relay;return;}me.sum.textContent=CART.length?CART.length+(CART.length===1?' item':' items')+' \u00B7 '+money(cartTotal()):'Cart is empty';}
+function camSum(me){if(CAM!==me)return;if(me.qr){me.sum.textContent='Waiting for the scanner phone\u2019s QR code';return;}if(me.relay){const L=me.link;me.sum.textContent='Sent '+me.sent+' \u00B7 till '+me.relay+' \u00B7 '+(L&&L.open?'WiFi link':'internet');return;}me.sum.textContent=CART.length?CART.length+(CART.length===1?' item':' items')+' \u00B7 '+money(cartTotal()):'Cart is empty';}
 function camFlash(me,cls){if(CAM!==me)return;me.aim.className='aim '+cls;clearTimeout(me.flashT);me.flashT=setTimeout(()=>{if(CAM===me)me.aim.className='aim';},700);}
 function camBeep(me,ok){
   try{navigator.vibrate&&navigator.vibrate(ok?40:[80,60,80]);}catch{}
@@ -3345,22 +3346,24 @@ function camBeep(me,ok){
   }catch{}
 }
 function camFail(me,text){camStatus(me,text,'bad');camFlash(me,'bad');}
-async function startCam(relayTo){
+async function startCam(relayTo,qrPair){
   if(CAMOVL)return;
   if(!camOk()){say('Camera scanning is not available on this browser. Use a scanner or type the code.','bad',5000);return;}
   const ovl=el('div','sovl','',{role:'dialog','aria-modal':'true','aria-label':'Camera barcode scanner'});
   const video=el('video','','',{playsinline:'',autoplay:'','aria-hidden':'true'});video.muted=true;
-  const head=el('div','sh');head.append(el('b','',relayTo?'Send scans to till '+relayTo:'Scan barcodes'));
+  const head=el('div','sh');head.append(el('b','',relayTo?'Send scans to till '+relayTo:qrPair?'Link a phone by QR':'Scan barcodes'));
   const aim=el('div','aim');
   const st=el('div','sst','Starting camera\u2026',{role:'status','aria-live':'polite'});
   const sum=el('div','ssum');
   const torch=el('button','','Torch',{type:'button'});torch.hidden=true;
   const done=el('button','pri','Done',{type:'button'});
   const row=el('div','sbtn');row.append(torch,done);
+  if(relayTo&&qrOk()){const qb=el('button','','Pair by QR',{type:'button'});row.insertBefore(qb,done);qb.onclick=()=>qrOffer(CAM);}
   const foot=el('div','sf');foot.append(st,sum,row);
   ovl.append(video,head,aim,foot);document.body.append(ovl);
-  const me=CAM={video,aim,st,sum,stream:null,det:null,timer:0,flashT:0,ac:null,lastCode:'',seenAt:0,pend:'',pendN:0,multi:false,errs:0,relay:relayTo||null,sent:0,busy:false};
+  const me=CAM={video,aim,st,sum,stream:null,det:null,timer:0,flashT:0,ac:null,lastCode:'',seenAt:0,pend:'',pendN:0,multi:false,errs:0,relay:relayTo||null,qr:!!qrPair,sent:0,busy:false};
   CAMOVL=ovl;done.onclick=stopCam;camSum(me);
+  if(relayTo){me.linkT=setInterval(()=>linkWatch(me),4000);linkOpen(me);}   // scanner phone: try the WiFi link in the background
   try{const AC=window.AudioContext||window.webkitAudioContext;if(AC)me.ac=new AC();}catch{}   // made inside the tap, so the beep is allowed
   let det;
   try{
@@ -3390,7 +3393,7 @@ async function startCam(relayTo){
   }
   video.srcObject=stream;
   try{await video.play();}catch{}
-  camStatus(me,'Aim at one barcode. Keep scanning, tap Done when finished.','');
+  camStatus(me,me.qr?'Point the camera at the QR code on the scanner phone.':'Aim at one barcode. Keep scanning, tap Done when finished.','');
   camTick(me);
 }
 async function camTick(me){
@@ -3433,7 +3436,8 @@ function camRead(me,found){
   camAccept(me,val);
 }
 function camAccept(me,val){
-  if(me.relay){if(me.busy){me.lastCode='';return;}idleReset();relaySend(me,val);return;}   // scanner phone: send it to the till instead of adding it here
+  if(me.relay){if(val.indexOf(QR_TAG)===0){qrAnswered(me,val);return;}if(me.busy){me.lastCode='';return;}idleReset();relaySend(me,val);return;}
+  if(me.qr){qrOffered(me,val);return;}   // scanner phone: send it to the till instead of adding it here
   idleReset();                                           // scanning counts as activity: no idle logout in the middle of a basket
   const r=resolveCode(val,{camera:true});
   if(r.err){camBeep(me,false);camStatus(me,r.err,'bad');camFlash(me,'bad');return;}
@@ -3445,7 +3449,7 @@ function camAccept(me,val){
 function stopCam(){
   const me=CAM;CAM=null;
   if(me){
-    clearTimeout(me.timer);clearTimeout(me.flashT);
+    if(me.relay)linkClose(me,true);clearTimeout(me.timer);clearTimeout(me.flashT);
     try{me.video.pause();me.video.srcObject=null;}catch{}
     if(me.stream)me.stream.getTracks().forEach(t=>{try{t.stop();}catch{}});
     if(me.ac){try{me.ac.close();}catch{}}
@@ -3459,7 +3463,7 @@ addEventListener('pagehide',stopCam);
 // A second phone scans with its camera and sends every barcode through the database (depots/<depot>/scans/<till code>/<id>) to a till.
 // The receiving till polls its own node about once a second, ONLY while "Start receiving" is on. It takes a scan by deleting it first, so a
 // scan is added at most once, then adds it through resolveCode() like the scan box. Scans that arrive while the till is paying, locked or in
-// another screen are dropped after 15 s (never added to the next sale). Needs internet on both phones; no new field on any sale record.
+// another screen are dropped after 15 s (never added to the next sale). Needs internet on both phones, unless they are linked over WiFi (step 37 below); no new field on any sale record.
 const SCN_RE=/^[A-HJ-KM-NP-Z2-9]{4}$/;
 let RECV=null,SCNOVL=null,SCNBTN=null;
 const scnPath=code=>'depots/'+POS.depotKey()+'/scans/'+code;
@@ -3468,75 +3472,209 @@ const scnTarget=()=>'mdm_scan_to:'+(POS.depotKey()||'local');
 const recvBusy=()=>!!(LOCKOVL||PAYOVL||CAMOVL||PINOVL||RTOVL||SHOVL||SETOVL||RPOVL||ROVL||HOVL||DOVL||LOVL||MOVL||HELPOVL);
 function recvPaint(){if(SCNBTN){SCNBTN.classList.toggle('on',!!RECV);SCNBTN.setAttribute('aria-pressed',RECV?'true':'false');}}
 
-// ── the scanner phone: the camera sends instead of adding to a cart ──
+// ── WiFi link (step 37) ──────────────────────────────────────────────────────
+// While the internet works, the two phones pair through the same scans node (a record with code '@offer' for the till, answered by an
+// '@answer' record in the scanner phone's own node), then open a direct WebRTC channel over the shop router. From then on scans, acks and
+// pings go phone to phone: no internet, and the answer (item name or error) comes back at once. If the link drops, scans go through the
+// internet as before with the SAME id, so the till never adds one twice. No STUN server: both phones must be on the same router, and
+// guest WiFi often blocks that. Pairing needs the internet; an open link does not.
+const RTC_CFG={iceServers:[]};
+const rtcOk=()=>typeof RTCPeerConnection==='function';
+const sdpEnc=d=>btoa(JSON.stringify({type:d.type,sdp:d.sdp})),sdpDec=s=>JSON.parse(atob(s));
+const scnWait=ms=>new Promise(r=>setTimeout(r,ms));
+const scnBy=()=>String(USER&&USER.username||'').slice(0,80);
+const rememberId=(me,id)=>{me.done.add(id);if(me.done.size>300)me.done.delete(me.done.values().next().value);};
+function iceDone(pc){return new Promise(r=>{if(pc.iceGatheringState==='complete')return r();const f=()=>{if(pc.iceGatheringState==='complete'){pc.removeEventListener('icegatheringstatechange',f);r();}};pc.addEventListener('icegatheringstatechange',f);setTimeout(r,3500);});}
+
+// ── the scanner phone: opens the link, sends over it, falls back to the internet ──
+function linkClose(me,final){
+  if(final)clearInterval(me.linkT);
+  const L=me.link;me.link=null;
+  if(L){L.open=false;try{L.pc.close();}catch{}L.acks.forEach(f=>f(null));L.acks.clear();}
+}
+function linkNew(me){                                                                     // one WebRTC channel to the till (the internet pairing and the QR pairing both use it)
+  const pc=new RTCPeerConnection(RTC_CFG),dc=pc.createDataChannel('scan');
+  const L=me.link={pc,dc,open:false,acks:new Map(),pong:Date.now()};
+  dc.onopen=()=>{L.open=true;L.pong=Date.now();me.linkFails=0;me.qrUntil=0;qrPanelClose();if(CAM===me){camStatus(me,'WiFi link ready. Scans no longer need the internet.','ok');camSum(me);}};
+  dc.onclose=()=>{if(L.open){L.open=false;if(CAM===me)camSum(me);}};
+  dc.onmessage=e=>{
+    let m;try{m=JSON.parse(e.data);}catch{return;}
+    if(m.k==='pong')L.pong=Date.now();
+    else if(m.k==='ack'){const f=L.acks.get(m.id);if(f){L.acks.delete(m.id);f(m);}}
+  };
+  return L;
+}
+async function linkOpen(me){
+  const own=NUM.peek()||{};
+  if(!rtcOk()||!own.registered||me.linkBusy||CAM!==me||Date.now()<(me.qrUntil||0))return;   // not while a QR pairing is under way
+  me.linkBusy=true;me.linkTry=Date.now();
+  let L=null;
+  try{
+    linkClose(me);
+    L=linkNew(me);const pc=L.pc;
+    await pc.setLocalDescription(await pc.createOffer());await iceDone(pc);
+    if(me.link!==L){me.linkBusy=false;return;}                                            // replaced meanwhile (QR pairing started)
+    await CLOUD.put(scnPath(me.relay)+'/'+scnId(),{code:'@offer',sdp:sdpEnc(pc.localDescription),at:{'.sv':'timestamp'},by:scnBy(),from:own.code});
+    for(let t0=Date.now();CAM===me&&me.link===L&&!L.open&&Date.now()-t0<12000;){          // the answer comes back to this phone's own node
+      await scnWait(700);
+      if(pc.remoteDescription)continue;
+      const d=await CLOUD.get(scnPath(own.code));
+      for(const id of Object.keys(d||{}).sort()){
+        const s=d[id];if(!s||s.code!=='@answer')continue;
+        await CLOUD.put(scnPath(own.code)+'/'+id,null);
+        if(typeof s.sdp==='string'&&me.link===L)await pc.setRemoteDescription(sdpDec(s.sdp));
+        break;
+      }
+    }
+    if(me.link===L&&!L.open){
+      me.linkFails=(me.linkFails||0)+1;
+      if(me.linkFails===1&&CAM===me)camStatus(me,'No WiFi link. Are both phones on the same router (not guest WiFi)? Using the internet. Or tap Pair by QR.','warn');
+      linkClose(me);
+    }
+  }catch(e){if(me.link===L)linkClose(me);}
+  me.linkBusy=false;
+}
+function linkWatch(me){                                                                   // every 4 s while the camera is open
+  if(CAM!==me)return;
+  const L=me.link;
+  if(L&&L.open){
+    if(Date.now()-L.pong>10000){linkClose(me);camSum(me);}                                // no answer to the pings: treat it as dead
+    else{try{L.dc.send('{"k":"ping"}');}catch{}}
+  }
+  if(!(me.link&&me.link.open)&&!me.linkBusy&&navigator.onLine&&Date.now()-(me.linkTry||0)>Math.min(120000,15000*(1+(me.linkFails||0))))linkOpen(me);
+}
 async function relaySend(me,val){
   const r=resolveCode(val,{camera:true});                  // same check as the till; a code this phone already knows is no good is not sent
   if(r.err){camBeep(me,false);camStatus(me,r.err,'bad');camFlash(me,'bad');return;}
-  const path=scnPath(me.relay)+'/'+scnId(),from=(NUM.peek()||{}).code||'';
+  const id=scnId(),L=me.link;
   me.busy=true;
+  if(L&&L.open){                                           // 1. the WiFi link: the till answers at once
+    const a=await new Promise(res=>{
+      const t=setTimeout(()=>{L.acks.delete(id);res(null);},1500);
+      L.acks.set(id,m=>{clearTimeout(t);res(m);});
+      try{L.dc.send(JSON.stringify({k:'scan',id,code:val}));}catch{clearTimeout(t);L.acks.delete(id);res(null);}
+    });
+    if(a){
+      me.busy=false;if(CAM!==me)return;
+      if(a.ok){me.sent++;camBeep(me,true);camStatus(me,'\u2713 '+(a.name||r.hit.name),'ok');camFlash(me,'ok');}
+      else{camBeep(me,false);camStatus(me,a.err||'The till did not take it.','bad');camFlash(me,'bad');}
+      camSum(me);return;
+    }
+  }                                                        // no answer in 1.5 s: the internet, with the same id (the till ignores a repeat)
+  const path=scnPath(me.relay)+'/'+id,from=(NUM.peek()||{}).code||'';
   try{
-    const rec={code:val,at:{'.sv':'timestamp'},by:String(USER&&USER.username||'').slice(0,80)};
+    const rec={code:val,at:{'.sv':'timestamp'},by:scnBy()};
     if(from)rec.from=from;
     await CLOUD.put(path,rec);
   }catch(e){
     me.busy=false;camBeep(me,false);
     const c=e&&e.code;
-    camFail(me,c==='NETWORK'||c==='NO_AUTH'?'No connection. That scan was not sent.':c==='HTTP_401'?'The database does not allow phone scans yet: the rules have not been updated.':'Could not send ('+(c||'error')+').');
+    camFail(me,c==='NETWORK'||c==='NO_AUTH'?'No connection and no WiFi link. That scan was not sent. Tap Pair by QR to link the phones.':c==='HTTP_401'?'The database does not allow phone scans yet: the rules have not been updated.':'Could not send ('+(c||'error')+').');
     return;
   }
   me.busy=false;if(CAM!==me)return;
   me.sent++;camBeep(me,true);camStatus(me,'\u2713 Sent: '+r.hit.name,'ok');camFlash(me,'ok');camSum(me);
-  setTimeout(async()=>{                                    // still there after 3 s: the till did not take it. Remove it so it cannot land later.
+  setTimeout(async()=>{                                    // still there after 4 s: the till did not take it. Remove it so it cannot land later.
     try{
       if(await CLOUD.get(path)==null)return;
       await CLOUD.put(path,null);
       if(CAM===me){me.sent=Math.max(0,me.sent-1);camBeep(me,false);camStatus(me,'Till '+me.relay+' did not take it. On that till tap \uD83D\uDCF2 and Start receiving, and close other screens.','warn');camFlash(me,'warn');camSum(me);}
     }catch{}
-  },3000);
+  },4000);
 }
 
 // ── the receiving till ──
+function rtcStop(me){const R=me.rtc;me.rtc=null;if(R){R.open=false;try{R.pc.close();}catch{}}}
+function rtcNew(me){                                                                      // the till's end of a link (the internet pairing and the QR pairing both use it)
+  rtcStop(me);
+  const pc=new RTCPeerConnection(RTC_CFG),R=me.rtc={pc,open:false,pong:Date.now()};
+  const down=()=>{if(R.open){R.open=false;if(RECV===me&&me.rtc===R)say('Phone link lost. Scans go through the internet.','warn',6000);}};
+  pc.onconnectionstatechange=()=>{if(/failed|closed|disconnected/.test(pc.connectionState))down();};
+  pc.ondatachannel=ev=>{
+    const dc=ev.channel;
+    dc.onopen=()=>{R.open=true;R.pong=Date.now();qrPanelClose();if(RECV===me)say('Phone linked over WiFi. Scans no longer need the internet.','ok',5000);};
+    dc.onclose=down;dc.onmessage=e=>rtcMsg(me,R,dc,e);
+  };
+  return R;
+}
+async function rtcAccept(me,rec){
+  if(!rtcOk()||typeof rec.sdp!=='string'||!SCN_RE.test(String(rec.from||'')))return;
+  let R=null;
+  try{
+    R=rtcNew(me);const pc=R.pc;
+    await pc.setRemoteDescription(sdpDec(rec.sdp));
+    await pc.setLocalDescription(await pc.createAnswer());await iceDone(pc);
+    if(me.rtc!==R)return;
+    await CLOUD.put(scnPath(rec.from)+'/'+scnId(),{code:'@answer',sdp:sdpEnc(pc.localDescription),at:{'.sv':'timestamp'},by:scnBy(),from:me.code});
+  }catch(e){if(R&&me.rtc===R)rtcStop(me);}
+}
+function rtcMsg(me,R,dc,e){
+  let m;try{m=JSON.parse(e.data);}catch{return;}
+  R.pong=Date.now();
+  if(m.k==='ping'){try{dc.send('{"k":"pong"}');}catch{}return;}
+  if(m.k!=='scan'||typeof m.code!=='string'||typeof m.id!=='string'||RECV!==me)return;
+  let a;
+  if(me.done.has(m.id))a={ok:true};                                                       // a repeat of one already added: say yes, add nothing
+  else if(recvBusy())a={ok:false,err:'The till is busy. Close the screen that is open.'};  // not remembered: the scanner may scan it again
+  else{rememberId(me,m.id);a=recvAdd(me,m.code);}
+  try{dc.send(JSON.stringify({k:'ack',id:m.id,ok:a.ok,name:a.name,err:a.err}));}catch{}
+}
 async function startRecv(){
   if(RECV)return;
   const t=NUM.peek();
   if(!(t&&t.registered)||!POS.depotKey()){say('Set this till up online first (it needs its till code).','bad',5000);return;}
-  const me=RECV={code:t.code,timer:0,errs:0,seen:new Map(),ac:null};
+  const me=RECV={code:t.code,timer:0,errs:0,seen:new Map(),done:new Set(),rtc:null,wl:null,ac:null};
   try{const AC=window.AudioContext||window.webkitAudioContext;if(AC)me.ac=new AC();}catch{}   // made inside the tap, so the beep is allowed
   recvPaint();
   try{await CLOUD.put(scnPath(me.code),null);}                                                  // old scans must never land in a new sale
   catch(e){
-    if(RECV===me){stopRecv();const c=e&&e.code;say(c==='HTTP_401'?'The database does not allow phone scans yet: the rules have not been updated.':c==='NETWORK'||c==='NO_AUTH'?'No connection. Phone scanning needs internet.':'Could not start the phone scanner ('+(c||'error')+').','bad',7000);}
-    return;
+    const c=e&&e.code;
+    if(c==='NETWORK'||c==='NO_AUTH'){me.fresh=true;say('No internet. A phone can still be linked by QR (tap \uD83D\uDCF2, then Pair a phone by QR).','warn',6000);}   // offline: start anyway; the first poll that works clears what is old
+    else{if(RECV===me){stopRecv();say(c==='HTTP_401'?'The database does not allow phone scans yet: the rules have not been updated.':'Could not start the phone scanner ('+(c||'error')+').','bad',7000);}return;}
   }
   if(RECV!==me)return;
-  say('Phone scanner on. Scans from your other phone are added here.','ok',4000);
+  try{if(navigator.wakeLock)me.wl=await navigator.wakeLock.request('screen');}catch{}           // keep the screen on while receiving, or the link drops when the till sleeps
+  if(RECV!==me){if(me.wl)try{me.wl.release();}catch{}return;}
+  if(!me.fresh)say('Phone scanner on. Scans from your other phone are added here.','ok',4000);
   recvTick(me);
 }
 function stopRecv(){
   const me=RECV;RECV=null;
-  if(me){clearTimeout(me.timer);if(me.ac){try{me.ac.close();}catch{}}}
+  if(me){clearTimeout(me.timer);rtcStop(me);if(me.wl){try{me.wl.release();}catch{}}if(me.ac){try{me.ac.close();}catch{}}}
   recvPaint();
 }
 async function recvTick(me){
   if(RECV!==me||me.run)return;
   if(!USER){stopRecv();return;}
-  me.run=true;let delay=900;
+  me.run=true;
+  const linked=!!(me.rtc&&me.rtc.open);
+  let delay=linked?2000:900;                                                              // an open link carries the scans: the internet is only the back-up
+  if(linked&&Date.now()-me.rtc.pong>15000){me.rtc.open=false;say('Phone link lost. Scans go through the internet.','warn',6000);delay=900;}
   try{
     if(!document.hidden&&navigator.onLine){
-      const d=await CLOUD.get(scnPath(me.code));
+      let d=await CLOUD.get(scnPath(me.code));
       if(RECV!==me)return;
+      if(me.fresh){me.fresh=false;for(const id of Object.keys(d&&typeof d==='object'?d:{}))await CLOUD.put(scnPath(me.code)+'/'+id,null);d=null;}   // started offline: whatever is there now is old
       const now=performance.now(),ids=d&&typeof d==='object'?Object.keys(d).sort():[];
       let dropped=0;
       me.seen.forEach((v,k)=>{if(!ids.includes(k))me.seen.delete(k);});
       for(const id of ids){
         if(RECV!==me)return;
+        const s=d[id],c=s&&typeof s.code==='string'?s.code:'';
         if(!me.seen.has(id))me.seen.set(id,now);
         const old=now-me.seen.get(id)>15000;
+        if(c==='@offer'||c==='@answer'){                    // pairing messages are not barcodes; an offer is answered even while the till is busy
+          await CLOUD.put(scnPath(me.code)+'/'+id,null);me.seen.delete(id);
+          if(c==='@offer'&&!old)rtcAccept(me,s);
+          continue;
+        }
+        if(me.done.has(id)){await CLOUD.put(scnPath(me.code)+'/'+id,null);me.seen.delete(id);continue;}   // already added over the WiFi link
         if(!old&&recvBusy())continue;                       // paying, locked...: wait a little, not for long
         await CLOUD.put(scnPath(me.code)+'/'+id,null);      // take it first: a scan is added at most once
         me.seen.delete(id);
         if(old){dropped++;continue;}
-        const s=d[id];if(s&&typeof s.code==='string')recvAdd(me,s.code);
+        rememberId(me,id);
+        if(c)recvAdd(me,c);
       }
       if(dropped)say(dropped+(dropped===1?' scan':' scans')+' from the phone not added: the till was busy. Scan again.','warn',7000);
       me.errs=0;
@@ -3544,22 +3682,106 @@ async function recvTick(me){
   }catch(e){
     const c=e&&e.code;
     if(c==='HTTP_401'||c==='HTTP_403'){stopRecv();say('Phone scanner stopped: the database does not allow it.','bad',7000);return;}
-    if(++me.errs===3)say('Phone scanner: no connection, still trying\u2026','warn',5000);
-    delay=Math.min(10000,1500*me.errs);
+    me.errs++;
+    if(!linked&&me.errs===3)say('Phone scanner: no connection, still trying\u2026','warn',5000);
+    delay=linked?2000:Math.min(10000,1500*me.errs);
   }
   me.run=false;
   if(RECV===me)me.timer=setTimeout(()=>recvTick(me),delay);
 }
-function recvAdd(me,val){
+function recvAdd(me,val){                                                                 // returns what the scanner phone is told
   idleReset();
   const r=resolveCode(String(val).trim(),{camera:true});
-  if(r.err){camBeep(me,false);say('Phone: '+r.err,'bad',r.ms||5000);return;}
-  const ru=r.unit&&!r.unit.isBase?r.unit:null;
+  if(r.err){camBeep(me,false);say('Phone: '+r.err,'bad',r.ms||5000);return{ok:false,err:r.err};}
+  const ru=r.unit&&!r.unit.isBase?r.unit:null,name=r.hit.name+(ru?' ('+ru.name+')':'');
   addItem(r.hit,1,ru);camBeep(me,true);
-  say('\u2713 Phone: '+r.hit.name+(ru?' ('+ru.name+')':''),'ok',2500);
+  say('\u2713 Phone: '+name,'ok',2500);
+  return{ok:true,name};
 }
-document.addEventListener('visibilitychange',()=>{if(!document.hidden&&RECV&&!RECV.run){clearTimeout(RECV.timer);recvTick(RECV);}});
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden||!RECV)return;
+  if(!RECV.run){clearTimeout(RECV.timer);recvTick(RECV);}
+  const me=RECV;                                                                          // the phone releases the screen lock when the page is hidden: take it again
+  if(navigator.wakeLock&&(!me.wl||me.wl.released))navigator.wakeLock.request('screen').then(w=>{if(RECV===me)me.wl=w;else w.release();}).catch(()=>{});
+});
 addEventListener('pagehide',()=>stopRecv());
+
+// ── QR pairing (step 38): no internet at all ─────────────────────────────────
+// For the first link, or a re-link when the internet is down. The scanner phone shows a QR with its connection details, the till scans it
+// and shows a QR with its own, the scanner phone scans that. Nothing goes through the database. The QR carries only what WebRTC needs
+// (ICE user/password, the security fingerprint, up to 3 local addresses: about 200 characters); the other phone rebuilds the rest.
+const QR_TAG='MDM1:',PRIV_RE=/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/;
+const qrOk=()=>typeof qrcode==='function'&&rtcOk()&&camOk();
+function qrPack(desc){
+  const sdp=desc&&desc.sdp||'',g=re=>(sdp.match(re)||[])[1];
+  const u=g(/a=ice-ufrag:(\S+)/),p=g(/a=ice-pwd:(\S+)/),f=g(/a=fingerprint:sha-256 ([0-9A-Fa-f:]+)/),c=[];
+  if(!u||!p||!f||(desc.type!=='offer'&&desc.type!=='answer'))return null;
+  (sdp.match(/^a=candidate:.*$/gm)||[]).forEach(l=>{const t=l.trim().split(' ');if(t[2]&&t[2].toLowerCase()==='udp'&&t[6]==='typ'&&t[7]==='host')c.push(t[4]+'/'+t[5]);});
+  if(!c.length)return null;
+  c.sort((a,b)=>(PRIV_RE.test(b)?1:0)-(PRIV_RE.test(a)?1:0));
+  return QR_TAG+(desc.type==='offer'?'o':'a')+'|'+u+'|'+p+'|'+f.replace(/:/g,'').toUpperCase()+'|'+c.slice(0,3).join(',');
+}
+function qrUnpack(text){
+  if(typeof text!=='string'||text.indexOf(QR_TAG)!==0)return null;
+  const t=text.slice(QR_TAG.length).split('|');
+  if(t.length!==5||(t[0]!=='o'&&t[0]!=='a')||!/^[\w+\/]{3,256}$/.test(t[1])||!/^[\w+\/]{16,256}$/.test(t[2])||!/^[0-9A-F]{64}$/.test(t[3]))return null;
+  const c=t[4].split(',').filter(x=>/^[0-9A-Za-z.:\-]+\/\d{1,5}$/.test(x));
+  if(!c.length)return null;
+  const sdp=['v=0','o=- 1 2 IN IP4 127.0.0.1','s=-','t=0 0','a=group:BUNDLE 0','m=application 9 UDP/DTLS/SCTP webrtc-datachannel','c=IN IP4 0.0.0.0',
+    'a=ice-ufrag:'+t[1],'a=ice-pwd:'+t[2],'a=fingerprint:sha-256 '+t[3].match(/../g).join(':'),'a=setup:'+(t[0]==='o'?'actpass':'active'),'a=mid:0','a=sctp-port:5000']
+    .concat(c.map((x,i)=>{const k=x.lastIndexOf('/');return 'a=candidate:'+(i+1)+' 1 udp '+(2113937151-i)+' '+x.slice(0,k)+' '+x.slice(k+1)+' typ host generation 0';}))
+    .concat(['a=end-of-candidates','']).join('\r\n');
+  return{type:t[0]==='o'?'offer':'answer',sdp};
+}
+function qrCanvas(text){                                                                  // black on white whatever the theme: cameras need the contrast
+  const q=qrcode(0,'M');q.addData(text);q.make();
+  const n=q.getModuleCount(),s=Math.max(3,Math.floor(Math.min(innerWidth-72,360)/(n+8))),sz=(n+8)*s;
+  const c=document.createElement('canvas');c.width=c.height=sz;c.style.cssText='width:'+sz+'px;height:auto;max-width:100%;image-rendering:pixelated;background:#fff';
+  const g=c.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,sz,sz);g.fillStyle='#000';
+  for(let r=0;r<n;r++)for(let k=0;k<n;k++)if(q.isDark(r,k))g.fillRect((k+4)*s,(r+4)*s,s,s);
+  c.setAttribute('role','img');c.setAttribute('aria-label','QR code');return c;
+}
+let QRPNL=null;
+function qrPanelClose(){if(QRPNL){QRPNL.remove();QRPNL=null;}}
+function qrPanel(title,lines,payload,btn,onBtn){
+  qrPanelClose();
+  const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':title});ovl.style.zIndex='9999';
+  const box=el('div','pay'),head=el('div','pay-h'),body=el('div','pay-body');
+  head.append(el('h2','',title));body.style.textAlign='center';body.append(qrCanvas(payload));
+  lines.forEach(t=>body.append(el('div','pay-note',t)));
+  const m=el('div','methods'),b=el('button','pri',btn,{type:'button'});m.style.gridTemplateColumns='1fr';b.onclick=onBtn;m.append(b);body.append(m);
+  box.append(head,body);ovl.append(box);document.body.append(ovl);QRPNL=ovl;
+}
+async function qrOffer(me){                                                               // scanner phone: show my QR
+  if(!me||CAM!==me)return;
+  try{
+    me.qrUntil=Date.now()+90000;linkClose(me);                                            // pause the internet pairing meanwhile
+    const L=linkNew(me),pc=L.pc;
+    await pc.setLocalDescription(await pc.createOffer());await iceDone(pc);
+    const payload=qrPack(pc.localDescription);if(!payload)throw new Error('no payload');
+    if(me.link!==L)return;
+    qrPanel('Show this to the till',['On the till tap \uD83D\uDCF2, then Pair a phone by QR, and point its camera at this code.','When the till shows its own code, tap the button below.'],payload,'Next: scan the till\u2019s code',qrPanelClose);
+  }catch(e){me.qrUntil=0;if(CAM===me)camStatus(me,'Could not make the QR code. Try again.','bad');}
+}
+async function qrAnswered(me,val){                                                        // scanner phone: the camera read the till's QR
+  const d=qrUnpack(val),L=me.link;
+  if(!d||d.type!=='answer'||!L||L.pc.remoteDescription){camBeep(me,false);camStatus(me,'That is not the till\u2019s code. Tap Pair by QR and start again.','warn');return;}
+  try{await L.pc.setRemoteDescription(d);camBeep(me,true);camStatus(me,'Linking\u2026','ok');}
+  catch{camBeep(me,false);camStatus(me,'That code did not work. Tap Pair by QR and start again.','bad');}
+}
+async function qrOffered(me,val){                                                         // till: the camera read the scanner phone's QR
+  if(me.busy)return;
+  const d=qrUnpack(val);
+  if(!d||d.type!=='offer'||!RECV){camBeep(me,false);camStatus(me,'That is not the scanner phone\u2019s code. On that phone tap Pair by QR.','warn');return;}
+  me.busy=true;
+  try{
+    const R=rtcNew(RECV),pc=R.pc;
+    await pc.setRemoteDescription(d);await pc.setLocalDescription(await pc.createAnswer());await iceDone(pc);
+    const payload=qrPack(pc.localDescription);if(!payload)throw new Error('no payload');
+    camBeep(me,true);stopCam();
+    qrPanel('Show this to the scanner phone',['On the scanner phone tap the Next button, then point its camera at this code.','This closes by itself when the phones are linked.'],payload,'Cancel',()=>{qrPanelClose();if(RECV)rtcStop(RECV);});
+  }catch(e){me.busy=false;camBeep(me,false);camStatus(me,'That code did not work. Tap Pair by QR on the scanner phone again.','bad');}
+}
 
 // ── the dialog behind the 📲 button ──
 function closeScn(){if(!SCNOVL)return;SCNOVL.remove();SCNOVL=null;if(!COARSE)focusSearch();}
@@ -3574,8 +3796,10 @@ function openScn(){
   const m1=el('div','methods');m1.style.gridTemplateColumns='1fr';
   const rb=el('button',RECV?'on':'',RECV?'Stop receiving':'Start receiving',{type:'button'});
   rb.onclick=()=>{closeScn();if(RECV){stopRecv();say('Phone scanner off.','',2500);}else startRecv();};
-  m1.append(rb);body.append(m1);
-  body.append(el('div','pay-note mu','On the scanner phone: its camera sends each barcode to the till you name. Both phones need internet and the same shop login.'));
+  m1.append(rb);
+  if(qrOk()){const qb=el('button','','Pair a phone by QR',{type:'button'});qb.onclick=async()=>{closeScn();await startRecv();if(RECV)startCam(null,true);};m1.append(qb);}
+  body.append(m1);
+  body.append(el('div','pay-note mu','On the scanner phone: its camera sends each barcode to the till you name. Both phones need the same shop login and internet to pair; phones on the same router then keep working without internet.'));
   const inp=el('input','','',{type:'text',maxlength:'4',placeholder:'Till code',autocapitalize:'characters',autocomplete:'off',autocorrect:'off',spellcheck:'false','aria-label':'Code of the till that receives the scans'});
   inp.style.cssText='width:100%;padding:12px;font-size:22px;letter-spacing:5px;text-align:center;text-transform:uppercase';
   try{inp.value=localStorage.getItem(scnTarget())||'';}catch{}

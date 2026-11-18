@@ -25,7 +25,15 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.83 (2026-11-18) — Phone scanner: a second phone scans with its camera and sends the barcodes to a till through the database (pos.html + database RULES + index.html SW_VERSION + sw.js; no new file, no new field on any sale)
+// Current version: v0.3.85 (2026-11-18) — Phone scanner: link the two phones by QR code with NO internet (pos.html + index.html SW_VERSION + sw.js + NEW FILE qrcode.js; no database RULES change; no sale record changes)
+//   - NEW FILE qrcode.js (Kazuhiko Arase's qrcode-generator, MIT licence, unchanged): pos.html loads it and sw.js precaches it. Deploy it next to pos.html.
+//   - Scanner phone: a Pair by QR button on its camera screen shows a QR. Till: 📲 then Pair a phone by QR scans it and shows its own QR, which the scanner phone then scans. The QR holds only the WebRTC details (about 200 characters); nothing goes through the database, and the till can now start receiving with no internet.
+//   - Needs both phones on the same router. Android Chrome reads QR codes natively; the iPhone camera reader (barcode.js) does not read QR.
+// Previous version: v0.3.84 (2026-11-18) — Phone scanner over the shop WiFi: the two phones link directly (WebRTC), so scans keep working with no internet (pos.html + database RULES + index.html SW_VERSION + sw.js; no new file, no new field on any sale)
+//   - Pairing goes through the existing scans node (records with code '@offer' / '@answer'), so it needs internet ONCE per link. After that the phones talk directly over the router; the till answers each scan at once (item name or error). If the link drops, scans go through the internet as in v0.3.83, with the same id, so a scan is never added twice.
+//   - The receiving till keeps its screen on while receiving (wake lock). No STUN server: both phones must be on the same router; guest WiFi often blocks phone-to-phone traffic.
+//   - RULES CHANGE: one optional field on a scan record, sdp (a string, up to 6000 characters). Publish database_rules.json BEFORE deploying. Not part of till_verify.
+// Previous version: v0.3.83 (2026-11-18) — Phone scanner: a second phone scans with its camera and sends the barcodes to a till through the database (pos.html + database RULES + index.html SW_VERSION + sw.js; no new file, no new field on any sale)
 //   - NEW in pos.html: a \uD83D\uDCF2 button in the search bar. "Start receiving" on the till; on the scanner phone type that till's 4-character code and "Start scanning" (the usual camera screen, but it sends instead of adding). Needs internet on both phones; offline use stays with a Bluetooth/USB scanner.
 //   - NEW database node depots/<depot>/scans/<till code>/<id> (RULES CHANGE: publish database_rules.json BEFORE using it). Transient: the till deletes each scan as it takes it, and clears the node when receiving starts. Not part of till_verify.
 //   - Safe by design: a scan is added at most once (taken by deleting first), goes through resolveCode() like the scan box, is dropped after 15 s if the till is paying or locked, and the scanner phone tells you if the till did not take it.
@@ -2433,7 +2441,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.83';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.85';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
@@ -2491,6 +2499,7 @@ self.addEventListener('install', e => {
         .then(() => cache.add('sales.js').catch(() => {}))      // the sales ledger: index.html AND pos.html need it to start offline
         .then(() => cache.add('shifts.js').catch(() => {}))     // the shift ledger (step 16): pos.html needs it to start offline
         .then(() => cache.add('returns.js').catch(() => {}))    // voids and refunds (step 19): index.html AND pos.html need it to start offline
+        .then(() => cache.add('qrcode.js').catch(() => {}))     // QR drawing for pairing two phones with no internet (v0.3.85): pos.html needs it to start offline
         .then(() => cache.add('barcode.js').catch(() => {}))    // barcodes (v0.3.78): drawing, labels, and the camera reader for iPhone: index.html AND pos.html need it to start offline
         .then(() => cache.add('pos.html').catch(() => {}))      // the till page (best-effort; index.html also adds it)
         .then(() => cache.add(FONTS_CSS).catch(() => {}))       // fonts (best-effort, may fail offline)
