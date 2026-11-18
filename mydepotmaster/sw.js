@@ -25,7 +25,11 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.82 (2026-11-18) — In-app User Guide, Till help, and two small fixes (index.html + pos.html + sw.js; no database RULES change, no new field on any record, no new file: nothing new to precache)
+// Current version: v0.3.83 (2026-11-18) — Phone scanner: a second phone scans with its camera and sends the barcodes to a till through the database (pos.html + database RULES + index.html SW_VERSION + sw.js; no new file, no new field on any sale)
+//   - NEW in pos.html: a \uD83D\uDCF2 button in the search bar. "Start receiving" on the till; on the scanner phone type that till's 4-character code and "Start scanning" (the usual camera screen, but it sends instead of adding). Needs internet on both phones; offline use stays with a Bluetooth/USB scanner.
+//   - NEW database node depots/<depot>/scans/<till code>/<id> (RULES CHANGE: publish database_rules.json BEFORE using it). Transient: the till deletes each scan as it takes it, and clears the node when receiving starts. Not part of till_verify.
+//   - Safe by design: a scan is added at most once (taken by deleting first), goes through resolveCode() like the scan box, is dropped after 15 s if the till is paying or locked, and the scanner phone tells you if the till did not take it.
+// Previous version: v0.3.82 (2026-11-18) — In-app User Guide, Till help, and two small fixes (index.html + pos.html + sw.js; no database RULES change, no new field on any record, no new file: nothing new to precache)
 //   - NEW: 📖 User Guide in index.html. Opens from the ☰ menu (every role), Settings > Help & About / Account & Help, the Setup Checklist pop-up, and the Cashier home card. Chapters are filtered by role (Admin, Manager, Staff, Cashier; "Show all chapters" shows the rest), with search, a 15-step set-up in order with live ticks, Till, stock, staff, money, security, plans, offline and troubleshooting chapters, and ⓘ buttons that explain a word or setting in a sheet.
 //   - SAFE BY DESIGN. All text is fixed in the code and built with createElement + textContent (no innerHTML, no inline handlers). An ⓘ or a "Go to" button carries only a key into a fixed list. It reads DATA / TIER_* for ticks, plan limits and 🔒 tags and writes nothing, calls no network, stores nothing on the phone. Go-to buttons call the normal screens, which keep their own admin checks. It closes itself on sign-out. Play mode leaves out the Till, prices and plan chapters. Plan prices in the guide come from TIER_META (so they follow tierPrices).
 //   - NEW: a ? (help) button at the start of the till header (pos.html, kept small so the header does not get tighter): a short 13-line "how to use the Till" sheet, the same read-only way, so a cashier can find help without the main app. Closed by the lock screen. Counts as an overlay (anyOverlay) and Escape closes it.
@@ -2429,7 +2433,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.82';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.83';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 

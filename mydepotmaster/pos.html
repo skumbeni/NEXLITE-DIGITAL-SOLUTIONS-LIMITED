@@ -239,7 +239,8 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 .h-empty{text-align:center;color:var(--muted);padding:28px 8px;font-size:14px}
 
 /* ── CAMERA SCANNER (roadmap step 12) ── */
-#cam{min-width:48px;padding:0 12px;font-size:20px;line-height:1}
+#cam,#scn{min-width:48px;padding:0 12px;font-size:20px;line-height:1}
+#scn.on{border-color:var(--green);box-shadow:inset 0 0 0 2px var(--green)}
 .sovl{position:fixed;inset:0;z-index:80;display:flex;flex-direction:column;background:#000;color:#fff}
 .sovl video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
 .sovl .sh{position:relative;z-index:2;padding:calc(12px + env(safe-area-inset-top,0px)) 16px 28px;background:linear-gradient(#000c,#0000)}
@@ -3319,7 +3320,7 @@ const CAM_CHECKED=['ean_13','ean_8','upc_a','upc_e','code_128'];   // have a che
 let CAMOVL=null,CAM=null;
 const camOk=()=>!!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia&&'BarcodeDetector' in window);
 function camStatus(me,text,cls){if(CAM!==me)return;me.st.textContent=text;me.st.className='sst'+(cls?' '+cls:'');}
-function camSum(me){if(CAM!==me)return;me.sum.textContent=CART.length?CART.length+(CART.length===1?' item':' items')+' \u00B7 '+money(cartTotal()):'Cart is empty';}
+function camSum(me){if(CAM!==me)return;if(me.relay){me.sum.textContent='Sent '+me.sent+' \u00B7 till '+me.relay;return;}me.sum.textContent=CART.length?CART.length+(CART.length===1?' item':' items')+' \u00B7 '+money(cartTotal()):'Cart is empty';}
 function camFlash(me,cls){if(CAM!==me)return;me.aim.className='aim '+cls;clearTimeout(me.flashT);me.flashT=setTimeout(()=>{if(CAM===me)me.aim.className='aim';},700);}
 function camBeep(me,ok){
   try{navigator.vibrate&&navigator.vibrate(ok?40:[80,60,80]);}catch{}
@@ -3332,12 +3333,12 @@ function camBeep(me,ok){
   }catch{}
 }
 function camFail(me,text){camStatus(me,text,'bad');camFlash(me,'bad');}
-async function startCam(){
+async function startCam(relayTo){
   if(CAMOVL)return;
   if(!camOk()){say('Camera scanning is not available on this browser. Use a scanner or type the code.','bad',5000);return;}
   const ovl=el('div','sovl','',{role:'dialog','aria-modal':'true','aria-label':'Camera barcode scanner'});
   const video=el('video','','',{playsinline:'',autoplay:'','aria-hidden':'true'});video.muted=true;
-  const head=el('div','sh');head.append(el('b','','Scan barcodes'));
+  const head=el('div','sh');head.append(el('b','',relayTo?'Send scans to till '+relayTo:'Scan barcodes'));
   const aim=el('div','aim');
   const st=el('div','sst','Starting camera\u2026',{role:'status','aria-live':'polite'});
   const sum=el('div','ssum');
@@ -3346,7 +3347,7 @@ async function startCam(){
   const row=el('div','sbtn');row.append(torch,done);
   const foot=el('div','sf');foot.append(st,sum,row);
   ovl.append(video,head,aim,foot);document.body.append(ovl);
-  const me=CAM={video,aim,st,sum,stream:null,det:null,timer:0,flashT:0,ac:null,lastCode:'',seenAt:0,pend:'',pendN:0,multi:false,errs:0};
+  const me=CAM={video,aim,st,sum,stream:null,det:null,timer:0,flashT:0,ac:null,lastCode:'',seenAt:0,pend:'',pendN:0,multi:false,errs:0,relay:relayTo||null,sent:0,busy:false};
   CAMOVL=ovl;done.onclick=stopCam;camSum(me);
   try{const AC=window.AudioContext||window.webkitAudioContext;if(AC)me.ac=new AC();}catch{}   // made inside the tap, so the beep is allowed
   let det;
@@ -3420,6 +3421,7 @@ function camRead(me,found){
   camAccept(me,val);
 }
 function camAccept(me,val){
+  if(me.relay){if(me.busy){me.lastCode='';return;}idleReset();relaySend(me,val);return;}   // scanner phone: send it to the till instead of adding it here
   idleReset();                                           // scanning counts as activity: no idle logout in the middle of a basket
   const r=resolveCode(val,{camera:true});
   if(r.err){camBeep(me,false);camStatus(me,r.err,'bad');camFlash(me,'bad');return;}
@@ -3441,6 +3443,155 @@ function stopCam(){
 document.addEventListener('visibilitychange',()=>{if(document.hidden)stopCam();});   // release the camera when the app goes to the background
 addEventListener('pagehide',stopCam);
 
+// ── PHONE SCANNER (step 36) ──────────────────────────────────────────────────
+// A second phone scans with its camera and sends every barcode through the database (depots/<depot>/scans/<till code>/<id>) to a till.
+// The receiving till polls its own node about once a second, ONLY while "Start receiving" is on. It takes a scan by deleting it first, so a
+// scan is added at most once, then adds it through resolveCode() like the scan box. Scans that arrive while the till is paying, locked or in
+// another screen are dropped after 15 s (never added to the next sale). Needs internet on both phones; no new field on any sale record.
+const SCN_RE=/^[A-HJ-KM-NP-Z2-9]{4}$/;
+let RECV=null,SCNOVL=null,SCNBTN=null;
+const scnPath=code=>'depots/'+POS.depotKey()+'/scans/'+code;
+const scnId=()=>Date.now().toString(36).padStart(9,'0')+Math.random().toString(36).slice(2,5).padEnd(3,'0');   // sorts by time
+const scnTarget=()=>'mdm_scan_to:'+(POS.depotKey()||'local');
+const recvBusy=()=>!!(LOCKOVL||PAYOVL||CAMOVL||PINOVL||RTOVL||SHOVL||SETOVL||RPOVL||ROVL||HOVL||DOVL||LOVL||MOVL||HELPOVL);
+function recvPaint(){if(SCNBTN){SCNBTN.classList.toggle('on',!!RECV);SCNBTN.setAttribute('aria-pressed',RECV?'true':'false');}}
+
+// ── the scanner phone: the camera sends instead of adding to a cart ──
+async function relaySend(me,val){
+  const r=resolveCode(val,{camera:true});                  // same check as the till; a code this phone already knows is no good is not sent
+  if(r.err){camBeep(me,false);camStatus(me,r.err,'bad');camFlash(me,'bad');return;}
+  const path=scnPath(me.relay)+'/'+scnId(),from=(NUM.peek()||{}).code||'';
+  me.busy=true;
+  try{
+    const rec={code:val,at:{'.sv':'timestamp'},by:String(USER&&USER.username||'').slice(0,80)};
+    if(from)rec.from=from;
+    await CLOUD.put(path,rec);
+  }catch(e){
+    me.busy=false;camBeep(me,false);
+    const c=e&&e.code;
+    camFail(me,c==='NETWORK'||c==='NO_AUTH'?'No connection. That scan was not sent.':c==='HTTP_401'?'The database does not allow phone scans yet: the rules have not been updated.':'Could not send ('+(c||'error')+').');
+    return;
+  }
+  me.busy=false;if(CAM!==me)return;
+  me.sent++;camBeep(me,true);camStatus(me,'\u2713 Sent: '+r.hit.name,'ok');camFlash(me,'ok');camSum(me);
+  setTimeout(async()=>{                                    // still there after 3 s: the till did not take it. Remove it so it cannot land later.
+    try{
+      if(await CLOUD.get(path)==null)return;
+      await CLOUD.put(path,null);
+      if(CAM===me){me.sent=Math.max(0,me.sent-1);camBeep(me,false);camStatus(me,'Till '+me.relay+' did not take it. On that till tap \uD83D\uDCF2 and Start receiving, and close other screens.','warn');camFlash(me,'warn');camSum(me);}
+    }catch{}
+  },3000);
+}
+
+// ── the receiving till ──
+async function startRecv(){
+  if(RECV)return;
+  const t=NUM.peek();
+  if(!(t&&t.registered)||!POS.depotKey()){say('Set this till up online first (it needs its till code).','bad',5000);return;}
+  const me=RECV={code:t.code,timer:0,errs:0,seen:new Map(),ac:null};
+  try{const AC=window.AudioContext||window.webkitAudioContext;if(AC)me.ac=new AC();}catch{}   // made inside the tap, so the beep is allowed
+  recvPaint();
+  try{await CLOUD.put(scnPath(me.code),null);}                                                  // old scans must never land in a new sale
+  catch(e){
+    if(RECV===me){stopRecv();const c=e&&e.code;say(c==='HTTP_401'?'The database does not allow phone scans yet: the rules have not been updated.':c==='NETWORK'||c==='NO_AUTH'?'No connection. Phone scanning needs internet.':'Could not start the phone scanner ('+(c||'error')+').','bad',7000);}
+    return;
+  }
+  if(RECV!==me)return;
+  say('Phone scanner on. Scans from your other phone are added here.','ok',4000);
+  recvTick(me);
+}
+function stopRecv(){
+  const me=RECV;RECV=null;
+  if(me){clearTimeout(me.timer);if(me.ac){try{me.ac.close();}catch{}}}
+  recvPaint();
+}
+async function recvTick(me){
+  if(RECV!==me||me.run)return;
+  if(!USER){stopRecv();return;}
+  me.run=true;let delay=900;
+  try{
+    if(!document.hidden&&navigator.onLine){
+      const d=await CLOUD.get(scnPath(me.code));
+      if(RECV!==me)return;
+      const now=performance.now(),ids=d&&typeof d==='object'?Object.keys(d).sort():[];
+      let dropped=0;
+      me.seen.forEach((v,k)=>{if(!ids.includes(k))me.seen.delete(k);});
+      for(const id of ids){
+        if(RECV!==me)return;
+        if(!me.seen.has(id))me.seen.set(id,now);
+        const old=now-me.seen.get(id)>15000;
+        if(!old&&recvBusy())continue;                       // paying, locked...: wait a little, not for long
+        await CLOUD.put(scnPath(me.code)+'/'+id,null);      // take it first: a scan is added at most once
+        me.seen.delete(id);
+        if(old){dropped++;continue;}
+        const s=d[id];if(s&&typeof s.code==='string')recvAdd(me,s.code);
+      }
+      if(dropped)say(dropped+(dropped===1?' scan':' scans')+' from the phone not added: the till was busy. Scan again.','warn',7000);
+      me.errs=0;
+    }
+  }catch(e){
+    const c=e&&e.code;
+    if(c==='HTTP_401'||c==='HTTP_403'){stopRecv();say('Phone scanner stopped: the database does not allow it.','bad',7000);return;}
+    if(++me.errs===3)say('Phone scanner: no connection, still trying\u2026','warn',5000);
+    delay=Math.min(10000,1500*me.errs);
+  }
+  me.run=false;
+  if(RECV===me)me.timer=setTimeout(()=>recvTick(me),delay);
+}
+function recvAdd(me,val){
+  idleReset();
+  const r=resolveCode(String(val).trim(),{camera:true});
+  if(r.err){camBeep(me,false);say('Phone: '+r.err,'bad',r.ms||5000);return;}
+  const ru=r.unit&&!r.unit.isBase?r.unit:null;
+  addItem(r.hit,1,ru);camBeep(me,true);
+  say('\u2713 Phone: '+r.hit.name+(ru?' ('+ru.name+')':''),'ok',2500);
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&RECV&&!RECV.run){clearTimeout(RECV.timer);recvTick(RECV);}});
+addEventListener('pagehide',()=>stopRecv());
+
+// ── the dialog behind the 📲 button ──
+function closeScn(){if(!SCNOVL)return;SCNOVL.remove();SCNOVL=null;if(!COARSE)focusSearch();}
+function openScn(){
+  if(SCNOVL||LOCKOVL||PAYOVL||CAMOVL||HOVL||PINOVL||SHOVL||MOVL||RPOVL||ROVL)return;
+  const own=NUM.peek()||{};
+  const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Phone scanner'});
+  const box=el('div','pay'),head=el('div','pay-h'),cx=el('button','sm','Close',{type:'button'});
+  cx.onclick=closeScn;head.append(el('h2','','Phone scanner'),cx);
+  const body=el('div','pay-body');
+  body.append(el('div','pay-note','On the till: scans from your other phone are added to the sale here'+(own.registered?' (this till is '+own.code+').':'.')));
+  const m1=el('div','methods');m1.style.gridTemplateColumns='1fr';
+  const rb=el('button',RECV?'on':'',RECV?'Stop receiving':'Start receiving',{type:'button'});
+  rb.onclick=()=>{closeScn();if(RECV){stopRecv();say('Phone scanner off.','',2500);}else startRecv();};
+  m1.append(rb);body.append(m1);
+  body.append(el('div','pay-note mu','On the scanner phone: its camera sends each barcode to the till you name. Both phones need internet and the same shop login.'));
+  const inp=el('input','','',{type:'text',maxlength:'4',placeholder:'Till code',autocapitalize:'characters',autocomplete:'off',autocorrect:'off',spellcheck:'false','aria-label':'Code of the till that receives the scans'});
+  inp.style.cssText='width:100%;padding:12px;font-size:22px;letter-spacing:5px;text-align:center;text-transform:uppercase';
+  try{inp.value=localStorage.getItem(scnTarget())||'';}catch{}
+  const note=el('div','pay-note','',{role:'status'});
+  const bad=t=>{note.textContent=t;note.style.color='var(--red)';};
+  const m2=el('div','methods');m2.style.gridTemplateColumns='1fr';
+  const go=el('button','pri','Start scanning',{type:'button'});
+  go.onclick=async()=>{
+    const code=inp.value.trim().toUpperCase();
+    if(!SCN_RE.test(code))return bad('Type the 4-character code shown at the top of the till that receives the scans, for example K7F2.');
+    if(code===own.code)return bad('That is this phone\u2019s own code. Type the code of the till that receives the scans.');
+    if(!POS.depotKey())return bad('Open the main app online once first.');
+    if(!camOk())return bad('This browser cannot use the camera for scanning.');
+    go.disabled=true;note.textContent='Checking till '+code+'\u2026';note.style.color='';
+    try{
+      if(!await CLOUD.get('depots/'+POS.depotKey()+'/tills/'+code)){go.disabled=false;return bad('No till in this shop has the code '+code+'.');}
+    }catch(e){go.disabled=false;return bad(e&&e.code==='NETWORK'?'No connection. Scanning through another phone needs internet.':'Could not check the till ('+((e&&e.code)||'error')+').');}
+    try{localStorage.setItem(scnTarget(),code);}catch{}
+    closeScn();startCam(code);
+  };
+  m2.append(go);body.append(inp,note,m2);
+  box.append(head,body);ovl.append(box);
+  ovl.addEventListener('click',e=>{if(e.target===ovl)closeScn();});
+  ovl.addEventListener('keydown',e=>{if(e.key==='Escape')closeScn();});
+  document.body.append(ovl);SCNOVL=ovl;
+}
+
+
 function buildSell(){
   const m=$('main');m.replaceChildren();m.className='on-sell';
   SELL=el('div','sell');
@@ -3451,8 +3602,9 @@ function buildSell(){
   if(COARSE)Q.setAttribute('inputmode','none');
   const kb=el('button','','\u2328',{id:'kb',type:'button','aria-label':'Show keyboard'});
   bar.append(Q);
-  if(camOk()){const cb=el('button','','\uD83D\uDCF7',{id:'cam',type:'button','aria-label':'Scan with camera'});cb.onclick=startCam;bar.append(cb);}
-  bar.append(kb);
+  if(camOk()){const cb=el('button','','\uD83D\uDCF7',{id:'cam',type:'button','aria-label':'Scan with camera'});cb.onclick=()=>startCam();bar.append(cb);}
+  SCNBTN=el('button','','\uD83D\uDCF2',{id:'scn',type:'button','aria-label':'Phone scanner','aria-pressed':'false'});SCNBTN.onclick=openScn;recvPaint();
+  bar.append(SCNBTN,kb);
   MSG=el('div','msg','',{role:'status','aria-live':'polite'});
   GRID=el('div','grid');
   HBTN=el('button','sm','Held',{id:'hb',type:'button','aria-label':'Held sales'});HBTN.hidden=true;
