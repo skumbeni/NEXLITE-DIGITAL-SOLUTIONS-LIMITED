@@ -25,7 +25,13 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.96 (2026-11-19) — Blank screen on a weak signal: a slow network no longer holds the page back, the till page gets a load guard (sw.js + pos.html + index.html; no new file, NO database RULES change)
+// Current version: v0.3.97 (2026-11-19) — Blank screen on a dead or weak signal, round 2: the start-up waits no longer add up, a script that cannot be had now fails with a message instead of hanging, index.html's guard now covers all four files (sw.js + index.html; no new file, NO database RULES change)
+//   - WHY v0.3.96 STILL FAILED (measured, headless Chromium, every request hanging as on a WiFi router with no internet): with everything cached the app took 24 s to start, not 4.5 s. The 4 s wait of v0.3.96 was paid by EACH file in turn (page, gate.js, sales.js, shifts.js, returns.js, barcode.js: a <script src> blocks the next one). And if one script was not in the cache (its precache download had failed on a weak signal) the page hung with no message at all, because with nothing cached the worker waited for the network without a limit.
+//   - FIX 1 (sw.js, netOrCache): once a wait has run out and the cache has answered, the network counts as slow for NET_SLOW_MS (60 s): cached files are then answered after NET_SLOW_WAIT_MS (0.3 s) instead of 4 s. Downloads still carry on in the background and refresh the cache. A good answer from the network ends the slow state at once. Dead network, everything cached: 24 s -> 6 s.
+//   - FIX 2 (sw.js, networkFirst): a script or the manifest with NO cached copy waits at most NET_HARD_MS (10 s; 5 s while the network is known to be slow). It then looks in the cache once more and, if still empty, fails. The download carries on in the background and fills the cache, so the page guard's automatic reload usually finds it. The page itself (a navigation) is never cut off this way: with nothing cached there is nothing else to show.
+//   - FIX 3 (index.html): the load guard now sits after returns.js and checks gate.js, sales.js, shifts.js and returns.js, like pos.html's. One automatic reload, then a message naming the missing file, with "Try again" and "Clear saved app files and try again" (service worker and caches only, never the shop's data). Retry flag is still _gate_retry. Before, a missing sales.js, shifts.js or returns.js left the page half-working.
+//   - NOT CHANGED: install and activate, pos.html (its guard from v0.3.96 is as it was), the sync, the database rules. The 4 s wait for the page itself (NET_WAIT_MS) is as in v0.3.96.
+// Previous version: v0.3.96 (2026-11-19) — Blank screen on a weak signal: a slow network no longer holds the page back, the till page gets a load guard (sw.js + pos.html + index.html; no new file, NO database RULES change)
 //   - SYMPTOM A (pos.html): if gate.js, sales.js, shifts.js or returns.js did not load, the till page stayed completely blank ("Gate is not defined", "Sales is not defined", ...). v0.3.95 guarded only index.html.
 //   - SYMPTOM B (sw.js): navigations and the shared scripts were network-first with NO time limit. On a weak signal the browser waited for the shell (or a synchronous <script src>) while a good copy sat in the cache, and the screen stayed blank until the network gave up.
 //   - FIX 1 (pos.html, right after returns.js): same guard as index.html, but for all four files the till cannot start without. One automatic reload, then a plain message that names the missing file, with "Try again" and "Clear saved app files and try again" (service worker and caches only; the shop's data is not touched). Its retry flag is _pos_retry, separate from index.html's _gate_retry.
@@ -2501,7 +2507,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.96';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.97';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
@@ -2539,6 +2545,16 @@ function cacheFirst(req) {
 
 // How long to wait for the network before answering from a cached copy (only when there is one).
 const NET_WAIT_MS = 4000;
+// How long a script may wait for the network when there is NO cached copy (v0.3.97). A <script src> blocks the page while it loads, so waiting for ever left
+// the page stuck with no message. After this long the cache is checked once more and, if still empty, the script fails; the page's load guard then reloads
+// once and shows a message naming the file. The download carries on in the background and fills the cache, so the retry usually finds it there.
+const NET_HARD_MS = 10000;
+// A page loads its files one after another (each <script src> blocks the next). If every cached file waited its own NET_WAIT_MS on a dead network, a start-up with
+// six files took about 20 s (measured). So once the network has proven slow (a wait ran out and the cache answered), for the next NET_SLOW_MS cached files are
+// answered after only NET_SLOW_WAIT_MS; the downloads still carry on in the background and refresh the cache. A good answer from the network ends this at once.
+const NET_SLOW_MS = 60000, NET_SLOW_WAIT_MS = 300;
+let netSlowUntil = 0;
+const netIsSlow = () => Date.now() < netSlowUntil;
 
 // Fetch from the network and keep a copy of every good answer. The copy is made BEFORE the response is handed on:
 // cloning later can fail with "body already used" and the cache would silently stay old.
@@ -2555,17 +2571,19 @@ function fetchAndStore(e, req, key, init) {
 // Network first, but a slow network must never leave the screen blank.
 //   answer arrives in time         -> that answer (a redirect is passed through as it is)
 //   slower than NET_WAIT_MS        -> the cached copy, if there is one (the download carries on and refreshes the cache); otherwise keep waiting
+//                                     (a script or the manifest, hardMs set: after NET_HARD_MS look in the cache once more, then fail instead of waiting for ever)
 //   a bad answer (404 / 5xx)       -> the cached copy for exactly this URL if there is one, else the bad answer
 //   network down                   -> a cached copy (anyCached may add the shell), else Response.error()
 // A script or the manifest is never answered with HTML: nothing cached means an honest failure (see v0.3.95).
-function netOrCache(e, net, exactCached, anyCached) {
+function netOrCache(e, net, exactCached, anyCached, hardMs) {
   e.waitUntil(net.catch(() => {}));                                   // keep the worker alive until the download ends, even after the cache answered
   return new Promise(resolve => {
-    let done = false, timer = null;
-    const answer = r => { if (done) return; done = true; clearTimeout(timer); resolve(r); };
-    timer = setTimeout(() => anyCached().then(c => { if (c) answer(c); }).catch(() => {}), NET_WAIT_MS);
+    let done = false, timer = null, hard = null;
+    const answer = r => { if (done) return; done = true; clearTimeout(timer); clearTimeout(hard); resolve(r); };
+    timer = setTimeout(() => anyCached().then(c => { if (c && !done) { netSlowUntil = Date.now() + NET_SLOW_MS; answer(c); } }).catch(() => {}), netIsSlow() ? NET_SLOW_WAIT_MS : NET_WAIT_MS);
+    if (hardMs) hard = setTimeout(() => exactCached().then(c => answer(c || Response.error())).catch(() => answer(Response.error())), netIsSlow() ? Math.min(hardMs, 5000) : hardMs);
     net.then(
-      r => (r && (r.ok || r.type === 'opaqueredirect')) ? answer(r) : exactCached().then(c => answer(c || r)),
+      r => { if (r && r.ok) netSlowUntil = 0; return (r && (r.ok || r.type === 'opaqueredirect')) ? answer(r) : exactCached().then(c => answer(c || r)); },
       () => anyCached().then(c => answer(c || Response.error()))
     ).catch(() => answer(Response.error()));
   });
@@ -2573,7 +2591,7 @@ function netOrCache(e, net, exactCached, anyCached) {
 
 function networkFirst(e, req) {
   const key = cacheKey(req), cached = () => caches.match(key);
-  return netOrCache(e, fetchAndStore(e, req, key), cached, cached);
+  return netOrCache(e, fetchAndStore(e, req, key), cached, cached, NET_HARD_MS);   // scripts and the manifest: never wait for ever
 }
 
 // ── INSTALL: pre-cache the app shell ────────────────────────────────────────
