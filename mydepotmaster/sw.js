@@ -25,7 +25,13 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.94 (2026-11-19) — Extra sites, step 10 (till and stock checked against pos.html, sales.js, shifts.js, returns.js, gate.js, till_verify.js): the depot switch now uploads this phone's till records first (index.html + sw.js; no new file, NO database RULES change)
+// Current version: v0.3.95 (2026-11-19) — Blank white page fix: a failed gate.js can no longer be answered with index.html (sw.js + index.html; no new file, NO database RULES change)
+//   - SYMPTOM: the page opened blank except the full-screen button. gate.js is the one file the app cannot start without. When its request failed (weak signal) and it was not in the cache, networkFirst() handed back the app shell, so the browser tried to run HTML as a script ("Unexpected token '<'", then "Gate is not defined") and the main script stopped before it drew anything. Reproduced in a headless browser.
+//   - HOW A PHONE GOT THERE: the install step cached the files one after another, so one slow download (the 2 MB shell) skipped every file after it, skipWaiting() still ran, and activate deleted the previous cache. The phone was left with no cached gate.js.
+//   - FIX 1 (sw.js networkFirst): a failed request with nothing cached now fails honestly (Response.error()); the shell is never returned for a script or the manifest. A bad answer (404 / 5xx) is replaced by a good cached copy when there is one.
+//   - FIX 2 (sw.js install): the shell and gate.js must be cached or the install FAILS, so the previous version and its cache keep running and the browser tries again on the next visit. Everything else stays best-effort, and one failed file no longer stops the files after it. Same-origin files are fetched with cache:"reload" so a deploy never caches a copy the host's HTTP cache is still holding from before.
+//   - FIX 3 (index.html, right after gate.js): if Gate is still missing, one automatic reload, then a plain message with "Try again" and "Clear saved app files and try again" (service worker and caches only; the shop's data is not touched). No more blank page.
+// Previous version: v0.3.94 (2026-11-19) — Extra sites, step 10 (till and stock checked against pos.html, sales.js, shifts.js, returns.js, gate.js, till_verify.js): the depot switch now uploads this phone's till records first (index.html + sw.js; no new file, NO database RULES change)
 //   - CHECKED, NO CHANGE NEEDED: the till keeps everything per depot, so a site's till never meets the main depot's. Till code + receipt counter: localStorage mdm_till_v2:<depot> (gate.js receiptNumbering); sales, returns and shifts: IndexedDB records and upload queues indexed by depot; held baskets, cart drafts and the scanner target: keyed by depot; the shift lock: mdm_shift_<depot>. A site claims its own till code in depots/<site>/tills/. Signing out never deletes the till stores (only the main-data database is cleared by a reset). till_verify.js reads any depot node, and an export with an empty site depot gives 0 errors.
 //   - GAP FOUND AND FIXED: the main app uploads till sales and returns only while that depot is open (salesSync), and the switch only saved the data blob. Sales made offline on this phone stayed in its queue until you came back to the depot. siteSwitchPrepare now, after the data is saved, runs salesSync() and pushes the shifts (best effort, 8 seconds at most, it never blocks or fails the switch) and counts what is left. If any are left the sign-in notice says how many and that they go up on return. Nothing is lost either way.
 //   - GUIDE: one more row in the Extra sites messages table.
@@ -2486,7 +2492,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.94';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.95';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
@@ -2526,10 +2532,12 @@ function networkFirst(req) {
   const key = cacheKey(req);
   return fetch(req)
     .then(r => {
-      if (r && r.ok) caches.open(CACHE).then(ca => ca.put(key, r.clone()));
-      return r;
+      if (r && r.ok) { caches.open(CACHE).then(ca => ca.put(key, r.clone())); return r; }
+      return caches.match(key).then(cached => cached || r);       // a bad answer (404 / 5xx): prefer a good cached copy
     })
-    .catch(() => caches.match(key).then(cached => cached || caches.match(SHELL)));
+    // Network down and nothing cached: fail honestly. This used to fall back to the app SHELL, which handed index.html to a <script src>
+    // ("Unexpected token '<'", then "Gate is not defined") and left the page blank. A script or manifest must never be answered with HTML.
+    .catch(() => caches.match(key).then(cached => cached || Response.error()));
 }
 
 // ── INSTALL: pre-cache the app shell ────────────────────────────────────────
@@ -2537,19 +2545,25 @@ function networkFirst(req) {
 // immediately — critical for Median where there may be no tab close/reopen.
 self.addEventListener('install', e => {
   e.waitUntil(
-    caches.open(CACHE)
-      .then(cache => cache.add(SHELL)                         // shell always first
-        .then(() => cache.add('manifest.json').catch(() => {})) // manifest (best-effort)
-        .then(() => cache.add('gate.js').catch(() => {}))       // shared gating rules: index.html AND pos.html need it to start offline
-        .then(() => cache.add('sales.js').catch(() => {}))      // the sales ledger: index.html AND pos.html need it to start offline
-        .then(() => cache.add('shifts.js').catch(() => {}))     // the shift ledger (step 16): pos.html needs it to start offline
-        .then(() => cache.add('returns.js').catch(() => {}))    // voids and refunds (step 19): index.html AND pos.html need it to start offline
-        .then(() => cache.add('qrcode.js').catch(() => {}))     // QR drawing for pairing two phones with no internet (v0.3.85): pos.html needs it to start offline
-        .then(() => cache.add('barcode.js').catch(() => {}))    // barcodes (v0.3.78): drawing, labels, and the camera reader for iPhone: index.html AND pos.html need it to start offline
-        .then(() => cache.add('pos.html').catch(() => {}))      // the till page (best-effort; index.html also adds it)
-        .then(() => cache.add(FONTS_CSS).catch(() => {}))       // fonts (best-effort, may fail offline)
-      )
-      .finally(() => self.skipWaiting())   // always activate immediately
+    caches.open(CACHE).then(cache => {
+      const fresh = u => new Request(u, { cache: 'reload' });        // skip the browser's HTTP cache: a deploy must not cache the copy from before it
+      const soft  = u => cache.add(fresh(u)).catch(() => {});        // best-effort: one failed download must not stop the others
+      // The shell and gate.js are the two files the app cannot start without. If either cannot be cached (weak signal), the install FAILS, so the
+      // previous version and its cache keep running and the browser tries again on the next visit. Before, a slow shell download skipped every file
+      // after it, skipWaiting() still ran, and activate deleted the old cache: the phone ended up with no gate.js and a blank page.
+      return Promise.all([cache.add(fresh(SHELL)), cache.add(fresh('gate.js'))])
+        .then(() => Promise.all([
+          soft('manifest.json'),
+          soft('sales.js'),      // the sales ledger: index.html AND pos.html need it to start offline
+          soft('shifts.js'),     // the shift ledger (step 16): pos.html needs it to start offline
+          soft('returns.js'),    // voids and refunds (step 19): index.html AND pos.html need it to start offline
+          soft('qrcode.js'),     // QR drawing for pairing two phones with no internet (v0.3.85): pos.html needs it to start offline
+          soft('barcode.js'),    // barcodes (v0.3.78): drawing, labels, and the camera reader for iPhone: index.html AND pos.html need it to start offline
+          soft('pos.html'),      // the till page (best-effort; index.html also adds it)
+          cache.add(FONTS_CSS).catch(() => {})   // fonts (best-effort, may fail offline)
+        ]))
+        .then(() => self.skipWaiting());   // activate at once, but only once the two essential files are safely cached
+    })
   );
 });
 

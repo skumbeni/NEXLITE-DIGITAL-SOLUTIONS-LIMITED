@@ -1512,6 +1512,28 @@ body.cashier-mode #gsearch-fab,body.cashier-mode #copilot-fab{display:none!impor
 <!-- Shared gating rules (tiers, feature table, licence status, read-only). Same file pos.html loads.
      Must be a plain synchronous script, placed before the main script below. Keep gate.js in the sw.js precache list. -->
 <script src="gate.js"></script>
+<!-- GATE GUARD (v0.3.95). gate.js is the one file this page cannot start without. If it did not load (weak signal, or a service worker that answered
+     with the wrong file), the page used to stay BLANK. Now: one automatic reload, then a plain message. The "clear" button removes only the saved
+     app files (service worker + caches), never the shop's data. -->
+<script>(function(){
+  if (typeof Gate !== 'undefined') { try { sessionStorage.removeItem('_gate_retry'); } catch (e) {} return; }
+  try { if (!sessionStorage.getItem('_gate_retry')) { sessionStorage.setItem('_gate_retry', '1'); location.reload(); return; } } catch (e) {}
+  var d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483647;background:#fff;color:#111;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:14px;text-align:center;box-sizing:border-box';
+  d.innerHTML = '<div style="font-size:42px">\u26A0\uFE0F</div><div style="font-size:20px;font-weight:700">The app could not finish loading</div>' +
+    '<div style="max-width:420px">One of its files did not download, usually because the signal is weak. Nothing you entered has been deleted.</div>' +
+    '<button id="gg-retry" style="font:inherit;font-weight:700;padding:14px 22px;border-radius:12px;border:0;background:#1e8449;color:#fff;min-width:260px">Try again</button>' +
+    '<button id="gg-clear" style="font:inherit;padding:12px 18px;border-radius:12px;border:1px solid #bbb;background:#fff;color:#111;min-width:260px">Clear saved app files and try again</button>' +
+    '<div style="font-size:14px;color:#666;max-width:420px">If this keeps happening, move to a place with better signal and tap the second button once.</div>';
+  (document.body || document.documentElement).appendChild(d);
+  document.getElementById('gg-retry').onclick = function () { location.reload(); };
+  document.getElementById('gg-clear').onclick = function () {
+    var go = function () { location.reload(); }, p = [];
+    try { if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) p.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); })); } catch (e) {}
+    try { if (window.caches && caches.keys) p.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); })); } catch (e) {}
+    Promise.all(p).then(go, go);
+  };
+})();</script>
 <!-- The append-only sales ledger (roadmap step 9). Same file pos.html loads. Plain synchronous script after gate.js; keep sales.js in the sw.js precache list. -->
 <script src="sales.js"></script>
 <!-- The shift ledger (till roadmap steps 16-17): open/close records and the X / Z / day report maths. Same file pos.html loads. Keep shifts.js in the sw.js precache list. -->
@@ -5615,7 +5637,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.94';
+const SW_VERSION  = 'v0.3.95';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
