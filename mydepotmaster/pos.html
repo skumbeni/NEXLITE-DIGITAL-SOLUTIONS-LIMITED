@@ -345,6 +345,35 @@ document.documentElement.setAttribute('data-theme',l?'light':'dark');var m=docum
 <script src="sales.js"></script>
 <script src="shifts.js"></script>
 <script src="returns.js"></script>
+<!-- LOAD GUARD (v0.3.96). gate.js, sales.js, shifts.js and returns.js are the files the till cannot start without. If one did not load (weak signal, or a service worker that
+     answered with the wrong file), this page used to stay BLANK ("Gate is not defined"). Now: one automatic reload, then a plain message that names the missing file.
+     The "clear" button removes only the saved app files (service worker + caches), never the shop's data. Same idea as the guard in index.html (its flag is _gate_retry; this one is _pos_retry). -->
+<script>(function(){
+  var miss = [];
+  if (typeof Gate === 'undefined') miss.push('gate.js');
+  if (typeof Sales === 'undefined') miss.push('sales.js');
+  if (typeof Shifts === 'undefined') miss.push('shifts.js');
+  if (typeof Returns === 'undefined') miss.push('returns.js');
+  if (!miss.length) { try { sessionStorage.removeItem('_pos_retry'); } catch (e) {} return; }
+  try { if (!sessionStorage.getItem('_pos_retry')) { sessionStorage.setItem('_pos_retry', '1'); location.reload(); return; } } catch (e) {}
+  var d = document.createElement('div');
+  d.style.cssText = 'position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483647;background:#fff;color:#111;font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:24px;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:14px;text-align:center;box-sizing:border-box';
+  d.innerHTML = '<div style="font-size:42px">\u26A0\uFE0F</div><div style="font-size:20px;font-weight:700">The till could not finish loading</div>' +
+    '<div style="max-width:420px">One of its files did not download, usually because the signal is weak. Nothing you entered has been deleted, and sales already saved on this phone are still here.</div>' +
+    '<div id="gg-miss" style="font-size:14px;color:#666"></div>' +
+    '<button id="gg-retry" style="font:inherit;font-weight:700;padding:14px 22px;border-radius:12px;border:0;background:#1e8449;color:#fff;min-width:260px">Try again</button>' +
+    '<button id="gg-clear" style="font:inherit;padding:12px 18px;border-radius:12px;border:1px solid #bbb;background:#fff;color:#111;min-width:260px">Clear saved app files and try again</button>' +
+    '<div style="font-size:14px;color:#666;max-width:420px">If this keeps happening, move to a place with better signal and tap the second button once.</div>';
+  (document.body || document.documentElement).appendChild(d);
+  document.getElementById('gg-miss').textContent = 'Missing: ' + miss.join(', ');
+  document.getElementById('gg-retry').onclick = function () { location.reload(); };
+  document.getElementById('gg-clear').onclick = function () {
+    var go = function () { location.reload(); }, q = [];
+    try { if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) q.push(navigator.serviceWorker.getRegistrations().then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); })); } catch (e) {}
+    try { if (window.caches && caches.keys) q.push(caches.keys().then(function (ks) { return Promise.all(ks.map(function (k) { return caches.delete(k); })); })); } catch (e) {}
+    Promise.all(q).then(go, go);
+  };
+})();</script>
 <!-- Barcodes (v0.3.78): installs a camera BarcodeDetector on browsers that have none (iPhone Safari, desktop Chrome). Same file index.html loads. Must come before the inline script. -->
 <script src="barcode.js"></script>
 <script src="qrcode.js"></script>

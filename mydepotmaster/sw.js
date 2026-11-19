@@ -25,7 +25,16 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.95 (2026-11-19) — Blank white page fix: a failed gate.js can no longer be answered with index.html (sw.js + index.html; no new file, NO database RULES change)
+// Current version: v0.3.96 (2026-11-19) — Blank screen on a weak signal: a slow network no longer holds the page back, the till page gets a load guard (sw.js + pos.html + index.html; no new file, NO database RULES change)
+//   - SYMPTOM A (pos.html): if gate.js, sales.js, shifts.js or returns.js did not load, the till page stayed completely blank ("Gate is not defined", "Sales is not defined", ...). v0.3.95 guarded only index.html.
+//   - SYMPTOM B (sw.js): navigations and the shared scripts were network-first with NO time limit. On a weak signal the browser waited for the shell (or a synchronous <script src>) while a good copy sat in the cache, and the screen stayed blank until the network gave up.
+//   - FIX 1 (pos.html, right after returns.js): same guard as index.html, but for all four files the till cannot start without. One automatic reload, then a plain message that names the missing file, with "Try again" and "Clear saved app files and try again" (service worker and caches only; the shop's data is not touched). Its retry flag is _pos_retry, separate from index.html's _gate_retry.
+//   - FIX 2 (sw.js netOrCache): the network still goes first, but if it has not answered within NET_WAIT_MS (4 s) and a cached copy exists, the cached copy is served at once. The download carries on in the background and refreshes the cache, so the next visit has the new files. With nothing cached the page still waits for the network, as before. A bad answer (404 / 5xx) is replaced by the cached copy; a redirect is passed through untouched.
+//   - FIX 3 (sw.js): barcode.js and qrcode.js were precached but never served from the cache (the fetch rule only matched gate|sales|shifts|returns), so offline they never loaded. They now use the same rule.
+//   - FIX 4 (sw.js): a copy of a good answer is now made BEFORE the answer is handed to the page. Cloning afterwards can fail with "body already used" and silently skip the cache update.
+//   - FIX 5 (index.html CSP): connect-src had no 'self', which silently blocked the page's own cache.add() calls for the shell and pos.html. 'self' added; nothing else in the policy changed. pos.html makes no same-origin requests, so its policy is unchanged.
+//   - NOT CHANGED: install and activate, gate.js and the other files, the sync, the database rules, index.html's own gate guard (it still checks gate.js only, as in v0.3.95).
+// Previous version: v0.3.95 (2026-11-19) — Blank white page fix: a failed gate.js can no longer be answered with index.html (sw.js + index.html; no new file, NO database RULES change)
 //   - SYMPTOM: the page opened blank except the full-screen button. gate.js is the one file the app cannot start without. When its request failed (weak signal) and it was not in the cache, networkFirst() handed back the app shell, so the browser tried to run HTML as a script ("Unexpected token '<'", then "Gate is not defined") and the main script stopped before it drew anything. Reproduced in a headless browser.
 //   - HOW A PHONE GOT THERE: the install step cached the files one after another, so one slow download (the 2 MB shell) skipped every file after it, skipWaiting() still ran, and activate deleted the previous cache. The phone was left with no cached gate.js.
 //   - FIX 1 (sw.js networkFirst): a failed request with nothing cached now fails honestly (Response.error()); the shell is never returned for a script or the manifest. A bad answer (404 / 5xx) is replaced by a good cached copy when there is one.
@@ -2492,7 +2501,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.95';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.96';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
@@ -2528,16 +2537,43 @@ function cacheFirst(req) {
   });
 }
 
-function networkFirst(req) {
-  const key = cacheKey(req);
-  return fetch(req)
-    .then(r => {
-      if (r && r.ok) { caches.open(CACHE).then(ca => ca.put(key, r.clone())); return r; }
-      return caches.match(key).then(cached => cached || r);       // a bad answer (404 / 5xx): prefer a good cached copy
-    })
-    // Network down and nothing cached: fail honestly. This used to fall back to the app SHELL, which handed index.html to a <script src>
-    // ("Unexpected token '<'", then "Gate is not defined") and left the page blank. A script or manifest must never be answered with HTML.
-    .catch(() => caches.match(key).then(cached => cached || Response.error()));
+// How long to wait for the network before answering from a cached copy (only when there is one).
+const NET_WAIT_MS = 4000;
+
+// Fetch from the network and keep a copy of every good answer. The copy is made BEFORE the response is handed on:
+// cloning later can fail with "body already used" and the cache would silently stay old.
+function fetchAndStore(e, req, key, init) {
+  return fetch(req, init).then(r => {
+    if (r && r.ok) {
+      const copy = r.clone();
+      e.waitUntil(caches.open(CACHE).then(ca => ca.put(key, copy)).catch(() => {}));
+    }
+    return r;
+  });
+}
+
+// Network first, but a slow network must never leave the screen blank.
+//   answer arrives in time         -> that answer (a redirect is passed through as it is)
+//   slower than NET_WAIT_MS        -> the cached copy, if there is one (the download carries on and refreshes the cache); otherwise keep waiting
+//   a bad answer (404 / 5xx)       -> the cached copy for exactly this URL if there is one, else the bad answer
+//   network down                   -> a cached copy (anyCached may add the shell), else Response.error()
+// A script or the manifest is never answered with HTML: nothing cached means an honest failure (see v0.3.95).
+function netOrCache(e, net, exactCached, anyCached) {
+  e.waitUntil(net.catch(() => {}));                                   // keep the worker alive until the download ends, even after the cache answered
+  return new Promise(resolve => {
+    let done = false, timer = null;
+    const answer = r => { if (done) return; done = true; clearTimeout(timer); resolve(r); };
+    timer = setTimeout(() => anyCached().then(c => { if (c) answer(c); }).catch(() => {}), NET_WAIT_MS);
+    net.then(
+      r => (r && (r.ok || r.type === 'opaqueredirect')) ? answer(r) : exactCached().then(c => answer(c || r)),
+      () => anyCached().then(c => answer(c || Response.error()))
+    ).catch(() => answer(Response.error()));
+  });
+}
+
+function networkFirst(e, req) {
+  const key = cacheKey(req), cached = () => caches.match(key);
+  return netOrCache(e, fetchAndStore(e, req, key), cached, cached);
 }
 
 // ── INSTALL: pre-cache the app shell ────────────────────────────────────────
@@ -2616,19 +2652,10 @@ self.addEventListener('fetch', e => {
   // sent cache-control headers for. Without this, a deploy can update the
   // server's file but returning visitors keep getting the old HTML anyway.
   if (req.mode === 'navigate') {
-    e.respondWith(
-      fetch(req, { cache: 'no-store' })
-        .then(r => {
-          if (r && r.ok) {
-            caches.open(CACHE).then(ca => ca.put(cacheKey(req), r.clone()));
-          }
-          return r;
-        })
-        .catch(() =>
-          caches.match(cacheKey(req))
-            .then(cached => cached || caches.match(SHELL))
-        )
-    );
+    const key = cacheKey(req);
+    e.respondWith(netOrCache(e, fetchAndStore(e, req, key, { cache: 'no-store' }),
+      () => caches.match(key),
+      () => caches.match(key).then(cached => cached || caches.match(SHELL))));   // e.g. /?src=play has no entry of its own: the shell
     return;
   }
 
@@ -2641,15 +2668,15 @@ self.addEventListener('fetch', e => {
   // gate.js — shared licence/tier rules, loaded as a plain <script src> by index.html and pos.html.
   // It is not a navigation, so without this rule it would pass straight to the network and both pages
   // would fail to start offline. Network-first so a deploy is picked up; cache fallback when offline.
-  // sales.js (the append-only sales ledger, step 9), shifts.js (step 16) and returns.js (step 19) are loaded the same way and need the same rule.
-  if (/\/(gate|sales|shifts|returns)\.js(\?|$)/.test(url)) {
-    e.respondWith(networkFirst(req));
+  // sales.js (the append-only sales ledger, step 9), shifts.js (step 16), returns.js (step 19), barcode.js (v0.3.78) and qrcode.js (v0.3.85) are loaded the same way and need the same rule.
+  if (/\/(gate|sales|shifts|returns|barcode|qrcode)\.js(\?|$)/.test(url)) {
+    e.respondWith(networkFirst(e, req));
     return;
   }
 
   // manifest.json — network-first with cache fallback
   if (url.includes('manifest.json')) {
-    e.respondWith(networkFirst(req));
+    e.respondWith(networkFirst(e, req));
     return;
   }
 
