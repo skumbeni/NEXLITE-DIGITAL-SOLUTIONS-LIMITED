@@ -1003,7 +1003,7 @@ body.cashier-mode #gsearch-fab,body.cashier-mode #copilot-fab{display:none!impor
 
     <div class="lp-hero"><div class="lp-in">
       <div class="lp-copy">
-        <h1 class="lp-h1">Run your depot’s stock, sales and staff from one app</h1>
+        <h1 class="lp-h1">Run your shop’s stock, sales and staff from one app</h1>
         <p class="lp-lead">Shop Inventory &amp; Sales Manager brings your till, stock records, shifts, payroll and financial reports together. It works offline and runs on any phone or PC.</p>
         <div class="lp-actions">
           <button class="lp-btn lp-btn-pri" onclick="startSignUp()">Create account</button>
@@ -1277,6 +1277,7 @@ body.cashier-mode #gsearch-fab,body.cashier-mode #copilot-fab{display:none!impor
         <div class="hsub" id="hdr-sub">Loading…</div>
       </div>
     </div>
+    <button class="spill" id="site-chip" onclick="openSiteSwitcher()" aria-label="Switch depot" style="display:none;cursor:pointer;flex-shrink:0;max-width:30vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:8px 11px;margin-right:6px">🏬 Sites ▾</button>
     <button class="spill" id="notif-bell-btn" onclick="openNotificationsInbox()" aria-label="Notifications" style="position:relative;flex-shrink:0;padding:8px 11px;margin-right:6px;font-size:19px">
       🔔<span id="notif-badge" style="display:none;position:absolute;top:1px;right:1px;background:var(--red);color:#fff;font-size:11px;font-weight:800;min-width:16px;height:16px;border-radius:8px;align-items:center;justify-content:center;padding:0 4px;line-height:16px;box-shadow:0 0 0 2px var(--card,#1a1a1a)"></span>
     </button>
@@ -3922,7 +3923,7 @@ const TIER_META = {
   starter:   { label: 'Starter',   price: 90,   currency: 'ZMW', desc: 'Higher limits — same features as Free' },
   growth:    { label: 'Growth',    price: 150,  currency: 'ZMW', desc: 'Exports, cloud sync, reports' },
   pro:       { label: 'Pro',       price: 300,  currency: 'ZMW', desc: 'Full features — current plan' },
-  multisite: { label: 'Multi-Site',price: 600,  currency: 'ZMW', desc: 'Multiple depots, enterprise' },
+  lifetime:  { label: 'Lifetime',  price: 1900, currency: 'ZMW', once: true, desc: 'Everything in Pro. Pay once, no monthly fees' },   // once: the price is a single payment, not per month
 };
 
 // ── LIVE TIER PRICES ─────────────────────────────────────────────────────────
@@ -3932,10 +3933,28 @@ const TIER_META = {
 // INTO TIER_META is the only step needed for all of them to follow. Free is always 0 and is never overridden.
 // The last prices seen are cached in localStorage so an offline device still shows (and quotes) the latest ones.
 const TIER_PRICE_CACHE_KEY = 'mdm_tier_prices_v1';
-const TIER_PRICE_TIERS     = ['starter', 'growth', 'pro', 'multisite'];
+const TIER_PRICE_TIERS     = ['starter', 'growth', 'pro', 'lifetime'];
 const TIER_PRICE_DEFAULTS  = Object.freeze(Object.fromEntries(TIER_PRICE_TIERS.map(t => [t, TIER_META[t].price])));
 
-// Puts the prices in src ({starter, growth, pro, multisite}) into TIER_META. Anything that is not a sane
+// ── EXTRA SITES: price of ONE extra site. Set in the admin app next to the plan prices (tierPrices/extraSitePct and
+// tierPrices/extraSiteLifetime); these are only the fallback. A monthly plan: a % of that plan's monthly price, rounded to
+// the nearest K5. Free has no price, so it is worked out from Starter (Free is never a way to get free sites). Lifetime has
+// its own once-off price per extra site. IDENTICAL to extraSitePrice() in mdm-admin.html (the tests compare them).
+const EXTRA_SITE = { pct: 50, lifetime: 950 };
+function extraSitePrice(plan, prices, pct, lifetimeExtra) {
+  if (plan === 'lifetime') return lifetimeExtra;
+  const base = plan === 'free' ? prices.starter : prices[plan];
+  if (!(base >= 0)) return null;
+  if (!(pct > 0)) return 0;
+  return Math.max(5, Math.round(base * pct / 100 / 5) * 5);
+}
+// What one extra site costs on a plan right now, from the live prices in TIER_META and EXTRA_SITE.
+function extraSiteQuote(plan) {
+  const prices = {}; TIER_PRICE_TIERS.forEach(t => { prices[t] = TIER_META[t].price; });
+  return extraSitePrice(plan, prices, EXTRA_SITE.pct, EXTRA_SITE.lifetime);
+}
+
+// Puts the prices in src ({starter, growth, pro, lifetime}) into TIER_META. Anything that is not a sane
 // number is ignored (that tier keeps the price it has). Returns true if any price actually changed.
 function applyTierPrices(src) {
   if (!src || typeof src !== 'object') return false;
@@ -3946,11 +3965,16 @@ function applyTierPrices(src) {
     const p = Math.round(v * 100) / 100;
     if (TIER_META[t].price !== p) { TIER_META[t].price = p; changed = true; }
   });
+  if (typeof src.extraSitePct === 'number' && isFinite(src.extraSitePct) && src.extraSitePct >= 0 && src.extraSitePct <= 100 && EXTRA_SITE.pct !== src.extraSitePct) { EXTRA_SITE.pct = src.extraSitePct; changed = true; }
+  if (typeof src.extraSiteLifetime === 'number' && isFinite(src.extraSiteLifetime) && src.extraSiteLifetime >= 0 && src.extraSiteLifetime <= 1e6 && EXTRA_SITE.lifetime !== src.extraSiteLifetime) { EXTRA_SITE.lifetime = src.extraSiteLifetime; changed = true; }
   return changed;
 }
 try { applyTierPrices(JSON.parse(localStorage.getItem(TIER_PRICE_CACHE_KEY) || 'null')); } catch (e) {}   // last prices seen, available at once and offline
 
-const _planOptLabel = t => `${TIER_META[t].label} \u2014 K${TIER_META[t].price}/month`;   // the signup plan dropdown
+// How a plan's price reads: K300/month, or for Lifetime a single payment (K1900 once-off).
+const _perMo   = t => (TIER_META[t] && TIER_META[t].once) ? ' once' : '/mo';
+const _perMon  = t => (TIER_META[t] && TIER_META[t].once) ? ' once-off' : '/month';
+const _planOptLabel = t => `${TIER_META[t].label} \u2014 K${TIER_META[t].price}${_perMon(t)}`;   // the signup plan dropdown
 
 // Re-draws whatever price is on screen right now. Screens that are built when opened (upgrade modals, the
 // subscription form) need nothing: they read TIER_META when they open.
@@ -4006,7 +4030,7 @@ const TIER_CAPS = {
   starter:   { staff: 5,    commodities: 3,    inventoryItems: 3,    contacts: 50,  historyDays: 90 },
   growth:    { staff: null, commodities: null, inventoryItems: null, contacts: null, historyDays: null },
   pro:       { staff: null, commodities: null, inventoryItems: null, contacts: null, historyDays: null },
-  multisite: { staff: null, commodities: null, inventoryItems: null, contacts: null, historyDays: null },
+  lifetime:  { staff: null, commodities: null, inventoryItems: null, contacts: null, historyDays: null },
 };
 
 // Returns the cap object for the depot's current effective tier.
@@ -4074,7 +4098,7 @@ function showCapReachedPrompt(capKey, label) {
       Your <strong>${esc(TIER_META[tier].label)} plan</strong> allows up to
       <strong style="color:var(--text)">${cap}</strong> ${esc(label.toLowerCase())}.
       Upgrade to <strong style="color:var(--green)">${esc(nextTM.label)}</strong>
-      (${nextTM.price === 0 ? 'Free' : `K${nextTM.price}/mo`}) for more room.
+      (${nextTM.price === 0 ? 'Free' : `K${planPriceOf(nextTier)}${_perMo(nextTier)}`}) for more room.
     </div>
     <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:12px">
       <div style="font-size:13px;color:var(--muted);margin-bottom:3px">Your Company Key — include when upgrading:</div>
@@ -4126,6 +4150,7 @@ function checkLicense(callback) {
         // suspended / pending_approval / expired / expired_grace — keep as last known
         LICENSE = { ...cached, checkedAt: now };
       }
+      LICENSE.tier = Gate.normTier(LICENSE.tier);
       if (DATA.tier !== LICENSE.tier) { DATA.tier = LICENSE.tier; sv(DATA); }
       saveCachedLicense(LICENSE);
       applyLicenseMode();
@@ -4140,9 +4165,9 @@ function checkLicense(callback) {
     // Resolve tier: trial → pro-equivalent; expired trial → free (degraded, not blocked)
     const fallbackTier = trialOver ? 'free' : TRIAL_TIER;
     if (trialOver) {
-      LICENSE = { status: 'trial_expired', effectiveStatus: 'trial_expired', tier: fallbackTier, suspendedMsg: '', checkedAt: now, trialStart, activeUntil: 0, trialDaysLeft: 0 };
+      LICENSE = { status: 'trial_expired', effectiveStatus: 'trial_expired', tier: fallbackTier, suspendedMsg: '', checkedAt: now, trialStart, activeUntil: 0, trialDaysLeft: 0, extraSitesOn: !!(LICENSE && LICENSE.extraSitesOn) };
     } else {
-      LICENSE = { status: 'trial', effectiveStatus: 'trial', tier: fallbackTier, suspendedMsg: '', checkedAt: now, trialStart, activeUntil: 0, trialDaysLeft: daysLeft };
+      LICENSE = { status: 'trial', effectiveStatus: 'trial', tier: fallbackTier, suspendedMsg: '', checkedAt: now, trialStart, activeUntil: 0, trialDaysLeft: daysLeft, extraSitesOn: !!(LICENSE && LICENSE.extraSitesOn) };
     }
     // Keep DATA.tier in sync with resolved tier
     if (DATA.tier !== fallbackTier) { DATA.tier = fallbackTier; sv(DATA); }
@@ -4185,9 +4210,9 @@ function checkLicense(callback) {
     const resolvedTier = (() => {
       if (eff === 'trial') return TRIAL_TIER;
       if (eff === 'trial_expired' || eff === 'trial_grace') return 'free';
-      if (eff === 'active' || eff === 'expired_grace') return lic.tier || DATA.tier || 'pro';
+      if (eff === 'active' || eff === 'expired_grace') return Gate.normTier(lic.tier || DATA.tier || 'pro');
       if (eff === 'expired') return 'free';
-      return lic.tier || DATA.tier || 'free'; // suspended, pending, unknown → safe default
+      return Gate.normTier(lic.tier || DATA.tier || 'free'); // suspended, pending, unknown → safe default
     })();
 
     LICENSE = {
@@ -4198,7 +4223,8 @@ function checkLicense(callback) {
       checkedAt: now,
       trialStart: licTrial,
       activeUntil,
-      trialDaysLeft: daysLeft || 0
+      trialDaysLeft: daysLeft || 0,
+      extraSitesOn: lic.extraSitesOn === true        // rollout switch set in the admin app (off unless true)
     };
     // Keep DATA.tier in sync so it persists across offline sessions
     if (DATA.tier !== resolvedTier) { DATA.tier = resolvedTier; sv(DATA); }
@@ -4240,10 +4266,11 @@ document.addEventListener('visibilitychange',()=>{
   const now=Date.now();
   if(now-_lastAutoLicenseCheck<5*60*1000)return; // at most once every 5 minutes
   _lastAutoLicenseCheck=now;
-  checkLicense(()=>render());
+  checkLicense(()=>{ render(); if (typeof _siteAdminOnly === 'function' && _siteAdminOnly()) refreshSiteStatuses().then(()=>{ _siteRepaint(); render(); }); });
 });
 
 function applyLicenseMode() {
+  try { updateSiteChip(); } catch (e) {}   // extra sites: LICENSE (the rollout switch) just changed
   const selfSusp = isSelfSuspended();
   const eff = selfSusp ? 'self_suspended' : (LICENSE.effectiveStatus || LICENSE.status || 'active');
   const banner   = document.getElementById('license-banner');
@@ -4329,7 +4356,7 @@ function applyLicenseMode() {
     if (daysLeft <= 10 && trialBnr) {
       document.body.classList.add('trial-mode');
       trialBnr.style.display = 'flex';
-      if (trialMsg) trialMsg.textContent = window.PLAY_MODE ? `Trial ends in ${daysLeft} day${daysLeft===1?'':'s'}.` : `Trial ends in ${daysLeft} day${daysLeft===1?'':'s'}. Upgrade to keep full access — plans from K${TIER_META.growth.price}/month.`;
+      if (trialMsg) trialMsg.textContent = window.PLAY_MODE ? `Trial ends in ${daysLeft} day${daysLeft===1?'':'s'}.` : `Trial ends in ${daysLeft} day${daysLeft===1?'':'s'}. Upgrade to keep full access — plans from K${planPriceOf('growth')}/month.`;
       if (trialTag) trialTag.textContent = `${daysLeft}D LEFT`;
     }
 
@@ -4399,6 +4426,496 @@ function hasFeature(featureName) {
   return Gate.hasFeature(featureName, LICENSE, DATA);
 }
 
+// ── EXTRA SITES: rollout switch, roles and the site list ─────────────────────────────────────────
+// ROLLOUT SWITCH: licenses/<id>/extraSitesOn, set per depot in the admin app, OFF unless it is true. Until it is on
+//   for a depot the app shows nothing about sites. A SITE depot (it has DATA.parentSite) always shows the site screens:
+//   it can only exist because its main depot had the switch on, and it needs "Back to main depot" even if the switch
+//   is turned off later.
+// DATA.sites       main depot only   [{ id, installId, username, name, date }]
+//                  id = installId, so two phones merge the rows by id (see _fbIdOf).
+// DATA.parentSite  site depot only   { installId, username, name }  the main depot this site belongs to.
+// Neither field is in DEFAULT: a depot that never uses sites carries no new data, and every helper below
+// reads them defensively.
+const MAX_SITES = 10;   // extra sites one main depot may have
+function sitesSwitchOn() { return !!(LICENSE && LICENSE.extraSitesOn === true); }
+function parentSite() {
+  const p = DATA && DATA.parentSite;
+  return (p && typeof p === 'object' && typeof p.installId === 'string' && p.installId) ? p : null;
+}
+function siteList() {
+  const l = DATA && DATA.sites;
+  return Array.isArray(l) ? l.filter(s => s && typeof s === 'object' && typeof s.installId === 'string' && s.installId) : [];
+}
+function isSiteDepot() { return !!parentSite(); }
+function siteRole() { return isSiteDepot() ? 'site' : (siteList().length ? 'main' : 'single'); }   // 'single' = a depot with no sites
+function sitesVisible() { return sitesSwitchOn() || isSiteDepot() || siteList().length > 0; }
+// Only the main depot adds sites, only its Admin, only with the switch on, and only up to the cap. The caller
+// still needs the internet (checked where the site is created).
+function canAddSite() {
+  return sitesSwitchOn() && !isSiteDepot() && !!USER && isAdmin() && siteList().length < MAX_SITES;
+}
+
+// <<SITES:CORE:BEGIN>>
+// ── EXTRA SITES, steps 4-9: add a site, name it, switch between depots, quote the extra-site price, watch each site's licence ──
+// Everything here is plain logic with no screen code, so the tests can load exactly this block. The screens are in the
+// block that follows (<<SITES:UI:BEGIN>>). Nothing below runs for a depot that does not use sites: every entry point
+// starts with sitesVisible() / canAddSite() / isSiteDepot().
+const SITE_NAME_MAX      = 40;                    // characters in a site name
+const SITE_HANDOFF_KEY   = 'mdm_site_handoff';    // localStorage: what the NEXT login on this phone should do (see siteSwitchTo / siteApplyHandoff)
+const SITE_HANDOFF_MS    = 15 * 60 * 1000;        // a hand-off older than this is ignored
+const SITE_STATUS_TTL_MS = 60 * 1000;             // a site's licence is re-read at most once a minute
+const SITE_WARN_DAYS     = 7;                     // the main depot warns when a site has this many days (or fewer) left
+const _SITE_DAY_MS       = 24 * 60 * 60 * 1000;
+const SITE_STATUS        = {};                    // installId -> { at, eff, days, tier, lifetime } | { at, missing: true }
+
+// ── names ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+function siteSlug(name) {
+  return String(name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+// The owner login of a site: the main owner's login + the site, e.g. mutale + "Mansa" -> mutale_mansa (letters, digits, underscore; 64 at most).
+function siteOwnerUsername(owner, siteName) {
+  const o = String(owner || '').toLowerCase().replace(/[^a-z0-9_]/g, '');
+  const s = siteSlug(siteName);
+  if (!o || !s) return '';
+  return (o + '_' + s).slice(0, 64).replace(/_+$/, '');
+}
+// The depot name receipts and the till show: "Main depot – Site name" (the database allows 200 characters).
+function siteDisplayName(mainName, siteName) {
+  const m = String(mainName || '').trim(), s = String(siteName || '').trim();
+  return (m ? m + ' \u2013 ' + s : s).slice(0, 200);
+}
+function siteCheckName(raw, existing) {
+  const name = String(raw || '').trim().replace(/\s+/g, ' ').toUpperCase();
+  if (name.length < 2) return { ok: false, err: 'Enter the site name (at least 2 characters).' };
+  if (name.length > SITE_NAME_MAX) return { ok: false, err: 'The site name can be at most ' + SITE_NAME_MAX + ' characters.' };
+  const slug = siteSlug(name);
+  if (!slug) return { ok: false, err: 'Use letters or numbers in the site name.' };
+  if ((existing || []).some(s => s && siteSlug(s.name) === slug)) return { ok: false, err: 'You already have a site with that name.' };
+  return { ok: true, name, slug };
+}
+function siteMainOwner() {
+  const a = ((DATA && DATA.users) || []).find(u => u && u.role === 'admin');
+  return a ? String(a.username || '').toLowerCase() : '';
+}
+
+// ── who is who: the main depot and every site, as the switcher lists them ────────────────────────────────────────────────
+// A main depot reads DATA.sites. A site reads its own copy of the list (DATA.parentSite.sites), refreshed each time you switch to it.
+function siteDirectory() {
+  const out = [];
+  const p = parentSite();
+  if (p) {
+    out.push({ installId: p.installId, username: String(p.username || ''), name: String(p.name || 'Main depot'), role: 'main', current: false });
+    (Array.isArray(p.sites) ? p.sites : []).forEach(s => {
+      if (!s || typeof s !== 'object' || typeof s.installId !== 'string' || !s.installId || s.installId === p.installId) return;
+      out.push({ installId: s.installId, username: String(s.username || ''), name: String(s.name || 'Site'), role: 'site', current: s.installId === DATA.installId });
+    });
+    if (!out.some(e => e.current)) out.push({ installId: DATA.installId, username: String((USER && USER.username) || ''), name: String(p.siteName || 'This site'), role: 'site', current: true });
+  } else {
+    out.push({ installId: DATA.installId, username: siteMainOwner(), name: String(((DATA.depotInfo || {}).name) || 'Main depot'), role: 'main', current: true });
+    siteList().forEach(s => out.push({ installId: s.installId, username: String(s.username || ''), name: String(s.name || 'Site'), role: 'site', current: false }));
+  }
+  return out;
+}
+
+// ── licence status of each depot in the list ─────────────────────────────────────────────────────────────────────────────
+function siteStatusFrom(lic) {
+  const raw = lic.status || 'trial';
+  const ts = lic.trialStart || lic.createdAt || 0;
+  const until = lic.activeUntil || 0;
+  const eff = Gate.computeEffectiveStatus(raw, ts, until);
+  let days = null;
+  if (eff === 'trial') days = Math.max(0, Math.ceil(((ts || Date.now()) + Gate.TRIAL_MS - Date.now()) / _SITE_DAY_MS));
+  else if (eff === 'active' && until) days = Math.max(0, Math.ceil((until - Date.now()) / _SITE_DAY_MS));
+  return { eff, days, tier: String(lic.tier || ''), lifetime: eff === 'active' && !until && lic.tier === 'lifetime' };
+}
+function siteStatusText(st) {
+  if (!st) return '\u2026';
+  if (st.missing) return 'Not found';
+  const e = st.eff, plural = n => n + ' day' + (n === 1 ? '' : 's') + ' left';
+  if (e === 'trial') return 'Trial \u00B7 ' + plural(st.days);
+  if (e === 'active') return st.lifetime ? 'Active \u00B7 never expires' : (st.days === null ? 'Active' : 'Active \u00B7 ' + plural(st.days));
+  if (Gate.READ_ONLY_STATUSES.includes(e)) return 'View-only';
+  return 'Free plan';                                  // trial_expired / expired: the app keeps working on the Free plan
+}
+// True when the main depot should warn about a site: about to run out, or already view-only.
+function siteStatusWarn(st) {
+  if (!st || st.missing) return false;
+  if (Gate.READ_ONLY_STATUSES.includes(st.eff)) return true;
+  return (st.eff === 'trial' || st.eff === 'active') && !st.lifetime && st.days !== null && st.days <= SITE_WARN_DAYS;
+}
+async function refreshSiteStatuses(force) {
+  if (!navigator.onLine || !isFbConfigured()) return false;
+  const now = Date.now();
+  const todo = siteDirectory().filter(e => force || !SITE_STATUS[e.installId] || now - SITE_STATUS[e.installId].at > SITE_STATUS_TTL_MS);
+  await Promise.all(todo.map(async e => {
+    try {
+      const lic = await fbGet('licenses/' + e.installId);          // licenses/<id> is public-read, like checkLicense() uses
+      SITE_STATUS[e.installId] = lic ? Object.assign({ at: now }, siteStatusFrom(lic)) : { at: now, missing: true };
+    } catch (err) { /* keep what we had */ }
+  }));
+  return true;
+}
+// Step 9: on the main depot, a banner when a site is about to run out. '' for everyone else.
+function siteWarnBanner() {
+  if (isSiteDepot() || !siteList().length || !USER || USER.role !== 'admin') return '';
+  const rows = siteList().map(s => ({ s, st: SITE_STATUS[s.installId] })).filter(x => x.st && siteStatusWarn(x.st));
+  if (!rows.length) return '';
+  const lines = rows.map(x => '<div style="margin-top:3px"><strong style="color:var(--text)">' + esc(x.s.name) + '</strong> \u2014 ' + esc(siteStatusText(x.st)) + '</div>').join('');
+  return '<div class="banner b-qu">\uD83C\uDFEC<div class="btxt"><div class="btit" style="color:var(--amber)">' +
+    (rows.length === 1 ? 'A site needs attention' : rows.length + ' sites need attention') + '</div>' +
+    '<span style="color:var(--muted);font-size:17px">Each site has its own plan. A site whose plan runs out goes view-only on its own; the other depots are not affected.</span>' +
+    lines + '</div></div>';
+}
+
+// ── step 7: what this depot is quoted for a plan ─────────────────────────────────────────────────────────────────────────
+// A site pays the extra-site price (set in the admin app, see extraSiteQuote); every other depot pays the plan price. Free is always Free.
+function planPriceOf(t) {
+  const tm = TIER_META[t];
+  if (!tm) return 0;
+  if (!isSiteDepot() || t === 'free') return tm.price;
+  const q = extraSiteQuote(t);
+  return (typeof q === 'number' && isFinite(q) && q >= 0) ? q : tm.price;
+}
+
+// ── step 4: create a site ────────────────────────────────────────────────────────────────────────────────────────────────
+function _siteFbUid() {
+  try { return (typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser) ? firebase.auth().currentUser.uid : ''; } catch (e) { return ''; }
+}
+// Reuses the sign-up steps of signupFinish, in the same order, for a depot that is created from the main depot's phone:
+//   1 claim the login name  2 licence (normal free trial)  3 contact email  4 Firebase login (isolated: this phone stays signed in as the main owner)
+//   5 authorise this phone, then the site owner  6 login copy  7 seed the new depot's data  8 add the site to the main list LAST.
+// A failure after step 5 is rolled back (the login name and the new depot are deleted: this phone is an admin of it by then).
+// A failure before step 5 cannot be rolled back (nobody is an admin of the new depot yet): the login name stays reserved, and the
+// error says so. Either way the site is NOT in the main list, so nothing half-made is ever shown.
+async function siteCreate(rawName, password, onStep) {
+  const say = t => { try { if (onStep) onStep(t); } catch (e) {} };
+  const bad = (code, msg) => { const e = new Error(msg); e.code = code; return e; };
+  if (!canAddSite()) throw bad('not_allowed', 'Adding a site is not available on this account right now.');
+  if (!navigator.onLine || !isFbConfigured()) throw bad('offline', 'An internet connection is required to add a site.');
+  const chk = siteCheckName(rawName, siteList());
+  if (!chk.ok) throw bad('name', chk.err);
+  const me = _myUserRec();
+  if (!me || !password || !(await verifyPassword(password, me.password))) throw bad('password', 'Incorrect password.');
+  const email = _myEmail().email;
+  if (!_emailOk(email)) throw bad('email', 'Add your email address first (Settings \u2192 Recovery Email). The new site needs one for its own account.');
+  const username = siteOwnerUsername(me.username, chk.name);
+  if (!username) throw bad('name', 'A login name could not be made from that site name.');
+  const myUid = _siteFbUid();
+  if (!myUid) throw bad('session', 'Your cloud sign-in has expired. Log out and log in again, then try once more.');
+
+  say('Checking the login name\u2026');
+  let existing;
+  try { existing = await fbGet('usernames/' + username); }
+  catch (e) { throw bad('network', 'Could not check the login name. Check your connection and try again.'); }
+  if (existing !== null && existing !== undefined) throw bad('username_taken', 'The login name "' + username + '" is already taken. Choose a different site name.');
+
+  const hashed = await hashPassword(password);
+  const newId = 'mdm_' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10);
+  const now = Date.now();
+  const di = DATA.depotInfo || {};
+  const fullName = siteDisplayName(di.name, chk.name);
+  const st = { stage: 'start', claimed: false, granted: false };
+  const stage = s => { st.stage = s; say(s); };
+  try {
+    stage('Reserving the login name\u2026');
+    try { await fbSetIfNotExists('usernames/' + username, { installId: newId, createdAt: now }); st.claimed = true; }
+    catch (e) {
+      if (e && (e.code === 412 || e.message === 'ALREADY_EXISTS')) throw bad('username_taken', 'The login name "' + username + '" is already taken. Choose a different site name.');
+      throw e;
+    }
+    stage('Creating the licence (free trial)\u2026');
+    await fbSet('licenses/' + newId, {
+      status: 'trial',
+      depotName: _fbStr(fullName, 200), district: _fbStr(di.district, 200), province: _fbStr(di.province, 200), country: _fbStr(di.country, 200),
+      createdAt: { '.sv': 'timestamp' },       // server clock: the rules let this phone authorise itself only within 5 minutes of it
+      trialStart: now
+    });
+    stage('Saving the contact email\u2026');
+    await fbSet('licenseContacts/' + newId, { contactEmail: _fbStr(email, 254), createdAt: { '.sv': 'timestamp' } });
+    stage('Creating the site login\u2026');
+    const created = await fbAuthSignUpIsolated(_authEmailFor(username), password);
+    stage('Giving this phone access\u2026');
+    if (!(await _grantAuthorizedUid(newId, myUid, 'admin'))) throw new Error('could not authorise this phone');
+    st.granted = true;                         // from here the whole thing can be undone
+    if (!(await _grantAuthorizedUid(newId, created.uid, 'admin'))) throw new Error('could not authorise the site owner');
+    stage('Saving the login copy\u2026');
+    await fbSet('depots/' + newId + '/auth', { [username]: { password: hashed, role: 'admin' } });
+    stage('Setting up the new depot\u2026');
+    const siteRow = { id: newId, installId: newId, username, name: chk.name, date: now };
+    const fresh = JSON.parse(JSON.stringify(DEFAULT));
+    fresh.users = [{ username, password: hashed, role: 'admin', recoveryEmail: email, emailVerified: false, uid: created.uid, authMigrated: true }];
+    fresh.depotInfo = { name: fullName, district: di.district || '', province: di.province || '', country: di.country || '', setupDone: true, recoveryEmail: email };
+    fresh.currency = DATA.currency || '';
+    fresh.commodities = [];
+    fresh.dailyCloseOuts = [];
+    fresh.installId = newId;
+    fresh.trialStart = now;
+    fresh._v = 1;
+    fresh.parentSite = { installId: DATA.installId, username: String(me.username).toLowerCase(), name: String(di.name || ''), siteName: chk.name, sites: siteList().concat([siteRow]) };
+    const payload = JSON.parse(JSON.stringify(fresh));
+    delete payload.gdrive;
+    payload._syncTs = { '.sv': 'timestamp' };
+    // PUT with an explicit method: a whole write to ANOTHER depot must not reset this depot's sync baseline (see fbSet).
+    await Promise.all([
+      fbSet('depots/' + newId + '/data', payload, 'PUT'),
+      fbSet('depots/' + newId + '/meta', { lastSync: now, depotName: _fbStr(fullName, 200), version: 1 })
+    ]);
+    stage('Adding the site to your list\u2026');
+    updateData(d => ({ ...d, sites: (Array.isArray(d.sites) ? d.sites : []).filter(s => !(s && s.installId === newId)).concat([siteRow]) }));
+    try { logAuditEvent('CREATE', 'Extra Site', 'Site: ' + chk.name + ' \u00B7 Login: ' + username); } catch (e) {}
+    return { ok: true, site: siteRow, fullName, username };
+  } catch (e) {
+    if (st.granted) {
+      try { if (st.claimed) await fbDelete('usernames/' + username); } catch (x) { /* best effort */ }   // first: its rule checks the depot we are about to delete
+      try { await fbDelete('depots/' + newId); } catch (x) { /* best effort */ }
+    }
+    if (e && e.code === 'username_taken') throw e;
+    const where = String(st.stage || '').replace(/\u2026$/, '');
+    const err = new Error('The site could not be created (stopped at: ' + where + '). Nothing was added to your list. ' +
+      (st.claimed && !st.granted ? 'The login name "' + username + '" may stay reserved: try again with a slightly different site name.' : 'You can try again.') +
+      (e && e.message ? ' [' + String(e.message).slice(0, 80) + ']' : ''));
+    err.code = 'failed'; err.stage = st.stage; err.cause = e;
+    throw err;
+  }
+}
+
+// ── step 6: switching ────────────────────────────────────────────────────────────────────────────────────────────────────
+// A phone holds ONE depot at a time. Switching = sync this depot to the cloud, sign out, and open the login screen with the other
+// depot's owner login filled in. The login that follows loads that depot from the cloud (doLogin already switches depots).
+// The hand-off tells that next login to refresh the site's copy of the list, if the target is a site.
+function siteHandoffSet(h) { try { localStorage.setItem(SITE_HANDOFF_KEY, JSON.stringify(h)); return true; } catch (e) { return false; } }
+function siteHandoffTake() {                 // read it and clear it: it is good for one login
+  let h = null;
+  try { h = JSON.parse(localStorage.getItem(SITE_HANDOFF_KEY) || 'null'); localStorage.removeItem(SITE_HANDOFF_KEY); } catch (e) {}
+  if (!h || typeof h !== 'object' || !h.to || Date.now() - (Number(h.ts) || 0) > SITE_HANDOFF_MS) return null;
+  return h;
+}
+// Called after a login. True when it refreshed this site's copy of the list. Only a site copies (the main depot owns the list),
+// and only when the hand-off was meant for exactly this depot and came from its own main depot.
+function siteApplyHandoff() {
+  const h = siteHandoffTake();
+  if (!h || h.to !== DATA.installId) return false;
+  const p = parentSite();
+  if (!p || p.installId !== h.mainId || !Array.isArray(h.list)) return false;
+  const list = h.list.filter(s => s && typeof s === 'object' && typeof s.installId === 'string' && s.installId)
+    .map(s => ({ id: s.installId, installId: s.installId, username: String(s.username || '').slice(0, 64), name: String(s.name || '').slice(0, SITE_NAME_MAX), date: Number(s.date) || 0 }));
+  updateData(d => ({ ...d, parentSite: { ...d.parentSite, name: String(h.mainName || d.parentSite.name || '').slice(0, 200), username: String(h.mainUser || d.parentSite.username || '').slice(0, 64), sites: list } }));
+  return true;
+}
+// The hand-off for switching from this depot to `target` (a siteDirectory() entry). The list a site receives is the main depot's master list.
+function siteBuildHandoff(target) {
+  const p = parentSite();
+  const mainId = p ? p.installId : DATA.installId;
+  return {
+    to: target.installId, from: DATA.installId, username: target.username,
+    mainId, mainName: p ? p.name : String((DATA.depotInfo || {}).name || ''), mainUser: p ? p.username : siteMainOwner(),
+    list: p ? (Array.isArray(p.sites) ? p.sites : []) : siteList(),
+    ts: Date.now()
+  };
+}
+let _siteSwitching = false;
+// Returns { ok:true, target } once the depot is saved, the hand-off is stored and nothing else is left to do but sign out; or { ok:false, why }.
+// Till records made on THIS phone (sales, returns, shifts) are kept per depot in IndexedDB and are uploaded by whichever depot is open. Leaving a depot,
+// push what can go now (best effort, 8 seconds at most, never blocks the switch) and count what is left. Nothing is lost either way: what is left
+// stays on this phone under this depot and goes up when you come back to it (the nightly check only warns about records that are not up yet).
+function _siteWithin(ms, p) { let h; return Promise.race([Promise.resolve(p), new Promise(r => { h = setTimeout(r, ms); })]).finally(() => clearTimeout(h)); }
+async function siteFlushTill() {
+  let left = 0;
+  try { if (typeof salesSync === 'function') await _siteWithin(8000, salesSync()); } catch (e) { console.warn('site switch: sales upload failed', e); }
+  try { if (typeof _shifts === 'function' && typeof _salesCloud === 'function') await _siteWithin(8000, _shifts().push(_salesCloud())); } catch (e) { console.warn('site switch: shift upload failed', e); }
+  try {
+    if (typeof _sales === 'function') left += Number(await _sales().pending()) || 0;
+    if (typeof _returns === 'function') left += Number(await _returns().pending()) || 0;
+    if (typeof _shifts === 'function') left += Number(await _shifts().pending()) || 0;
+  } catch (e) { /* the count is only a notice */ }
+  return left;
+}
+async function siteSwitchPrepare(targetId) {
+  if (_siteSwitching) return { ok: false, why: 'busy' };
+  const target = siteDirectory().find(e => e.installId === targetId);
+  if (!target || target.current) return { ok: false, why: 'unknown' };
+  if (!navigator.onLine || !isFbConfigured()) return { ok: false, why: 'offline' };
+  _siteSwitching = true;
+  try {
+    let saved = false;
+    try { saved = await doFbSync(); } catch (e) {}
+    if (!saved) return { ok: false, why: 'sync' };               // never sign out of a depot whose latest changes are not in the cloud
+    const unsent = await siteFlushTill();
+    if (!siteHandoffSet(siteBuildHandoff(target))) return { ok: false, why: 'storage' };
+    return { ok: true, target, unsent };
+  } finally { _siteSwitching = false; }
+}
+// <<SITES:CORE:END>>
+
+// <<SITES:UI:BEGIN>>
+// ── EXTRA SITES: the screens (Settings > My Sites, Add a site, the switcher, the header chip) ──────────────────────────────
+// All text is built with esc() or textContent. Buttons carry an install id in data-id (never inside an inline handler string).
+function _siteAdminOnly() { return !!USER && USER.role === 'admin' && sitesVisible(); }
+
+function _mySitesInner() {
+  const dir = siteDirectory();
+  const site = isSiteDepot();
+  const p = parentSite();
+  const row = e => {
+    const st = SITE_STATUS[e.installId];
+    const txt = st ? siteStatusText(st) : (navigator.onLine ? 'Checking\u2026' : 'Offline');
+    const warn = st && siteStatusWarn(st);
+    return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)">' +
+      '<div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--white);overflow:hidden;text-overflow:ellipsis">' + (e.role === 'main' ? '\uD83C\uDFE2 ' : '\uD83C\uDFEC ') + esc(e.name) + '</div>' +
+      '<div style="font-size:15px;color:' + (warn ? 'var(--amber)' : 'var(--muted)') + '">' + esc(txt) + (e.role === 'main' ? ' \u00B7 main depot' : '') + (e.current ? ' \u00B7 you are here' : '') +
+      (e.role === 'site' && e.username ? ' \u00B7 login: ' + esc(e.username) : '') + '</div></div>' +
+      (e.current ? '' : '<button class="btn bo bsm" style="width:auto" data-id="' + esc(e.installId) + '" onclick="siteSwitchTo(this.dataset.id)">Open</button>') + '</div>';
+  };
+  let h = '';
+  if (site) {
+    h += '<div style="font-size:17px;color:var(--muted);line-height:1.7;margin-bottom:10px">This depot is a <strong style="color:var(--text)">site</strong> of <strong style="color:var(--text)">' + esc((p && p.name) || 'your main depot') +
+      '</strong>. It has its own stock, till, staff and plan. Its plan and prices are the extra-site prices.</div>';
+    h += dir.map(row).join('');
+    h += '<button class="btn bg" style="width:100%;margin-top:12px" data-id="' + esc(p ? p.installId : '') + '" onclick="siteSwitchTo(this.dataset.id)">\u2B05 Back to main depot</button>';
+  } else {
+    h += '<div style="font-size:17px;color:var(--muted);line-height:1.7;margin-bottom:10px">Add another shop or branch as a <strong style="color:var(--text)">site</strong>. Each site is its own depot: its own stock, till, staff and plan, starting on a free 30-day trial. You switch between them from here.</div>';
+    h += siteList().length ? dir.map(row).join('') : '<div style="text-align:center;padding:14px 0;color:var(--muted);font-size:17px">No sites yet</div>';
+    if (canAddSite()) h += '<button class="btn bg" style="width:100%;margin-top:12px" onclick="openAddSite()">\u2795 Add a site</button>';
+    else if (siteList().length >= MAX_SITES) h += '<div class="warn" style="margin-top:12px">You have reached the limit of ' + MAX_SITES + ' sites.</div>';
+  }
+  return h;
+}
+function _renderMySitesCard() {
+  if (!_siteAdminOnly()) return '';
+  if (navigator.onLine && isFbConfigured() && siteDirectory().some(e => !SITE_STATUS[e.installId])) {
+    refreshSiteStatuses().then(() => { _siteRepaint(); });          // fills the status lines in a moment, without redrawing the whole page
+  }
+  return '<div class="sh">My Sites</div><div class="card" id="my-sites-card">' + _mySitesInner() + '</div>';
+}
+function _siteRepaint() {
+  const c = document.getElementById('my-sites-card');
+  if (c && _siteAdminOnly()) c.innerHTML = _mySitesInner();
+  const s = document.getElementById('site-switcher-body');
+  if (s && _siteAdminOnly()) s.innerHTML = _siteSwitcherInner();
+  try { updateSiteChip(); } catch (e) {}
+}
+
+// ── header chip ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+function updateSiteChip() {
+  const b = document.getElementById('site-chip');
+  if (!b) return;
+  const show = _siteAdminOnly() && siteDirectory().length > 1;
+  b.style.display = show ? '' : 'none';
+  if (!show) return;
+  const cur = siteDirectory().find(e => e.current);
+  b.textContent = '\uD83C\uDFEC ' + (cur ? (cur.role === 'main' ? 'Main' : cur.name) : 'Sites') + ' \u25BE';
+}
+
+// ── switcher ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+function _siteSwitcherInner() {
+  const p = parentSite();
+  const rows = siteDirectory().map(e => {
+    const st = SITE_STATUS[e.installId];
+    const txt = st ? siteStatusText(st) : (navigator.onLine ? 'Checking\u2026' : '\u2014');
+    const warn = st && siteStatusWarn(st);
+    return '<div class="card" style="padding:12px 14px;margin-bottom:8px;display:flex;align-items:center;gap:10px' + (e.current ? ';border-color:var(--green)' : '') + '">' +
+      '<div style="flex:1;min-width:0"><div style="font-weight:700;color:var(--white);font-size:18px;overflow:hidden;text-overflow:ellipsis">' + (e.role === 'main' ? '\uD83C\uDFE2 ' : '\uD83C\uDFEC ') + esc(e.name) + '</div>' +
+      '<div style="font-size:15px;color:' + (warn ? 'var(--amber)' : 'var(--muted)') + '">' + esc(txt) + (e.role === 'main' ? ' \u00B7 main depot' : '') + (e.current ? ' \u00B7 you are here' : '') + '</div></div>' +
+      (e.current ? '' : '<button class="btn bg bsm" style="width:auto" data-id="' + esc(e.installId) + '" onclick="siteSwitchTo(this.dataset.id)">Open</button>') + '</div>';
+  }).join('');
+  return rows + (p ? '<button class="btn bo" style="width:100%;margin-top:4px" data-id="' + esc(p.installId) + '" onclick="siteSwitchTo(this.dataset.id)">\u2B05 Back to main depot</button>' : '');
+}
+function openSiteSwitcher() {
+  if (!_siteAdminOnly()) return;
+  openModal('<div class="mtitle">\uD83C\uDFEC Switch depot</div>' +
+    '<div style="font-size:16px;color:var(--muted);line-height:1.7;margin-bottom:12px">This depot is saved to the cloud first, then you sign in to the one you pick. Each depot has its own owner login.</div>' +
+    '<div id="site-switcher-body">' + _siteSwitcherInner() + '</div>' +
+    '<div class="mact"><button class="btn bo" onclick="closeModal()">Close</button></div>');
+  refreshSiteStatuses(true).then(() => { _siteRepaint(); });
+}
+async function siteSwitchTo(targetId) {
+  if (!_siteAdminOnly()) return;
+  const target = siteDirectory().find(e => e.installId === targetId);
+  if (!target || target.current) { closeModal(); return; }
+  showToast('\u2601 Saving this depot before switching\u2026', 8000);
+  const r = await siteSwitchPrepare(targetId);
+  if (!r.ok) {
+    const msg = r.why === 'offline' ? '\u26A0\uFE0F Switching needs an internet connection.'
+      : r.why === 'sync' ? '\u26A0\uFE0F Could not save this depot to the cloud, so you were not signed out. Check your connection and try again.'
+      : r.why === 'busy' ? '\u23F3 Already switching\u2026'
+      : '\u26A0\uFE0F Could not switch depots right now.';
+    showToast(msg, 6000);
+    return;
+  }
+  closeModal();
+  _doLogoutNow();
+  showLoginScreen();
+  if (r.target.username) _switchToUser(r.target.username);        // fills the login name, ticks the terms if already accepted, focuses the password
+  showToast('Sign in to ' + r.target.name + (r.unsent > 0 ? ' \u00B7 ' + r.unsent + ' till record' + (r.unsent === 1 ? ' is' : 's are') + ' not uploaded yet. They go up when you come back to this depot.' : ''), r.unsent > 0 ? 10000 : 6000);
+}
+// Runs after every login (inside doLogin's licence check). Refreshes a site's copy of the list, then the chip and the statuses.
+function _siteAfterLogin() {
+  try { siteApplyHandoff(); } catch (e) { console.warn('site hand-off failed:', e); }
+  try { updateSiteChip(); } catch (e) {}
+  if (_siteAdminOnly()) refreshSiteStatuses(true).then(() => { _siteRepaint(); if (typeof render === 'function') render(); });
+}
+
+// ── Add a site ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+let _siteCreating = false;
+function _asPreview() {
+  const n = document.getElementById('as-name'), p = document.getElementById('as-preview');
+  if (!n || !p) return;
+  const chk = siteCheckName(n.value, siteList());
+  const u = siteOwnerUsername((USER || {}).username, n.value);
+  p.textContent = n.value.trim() ? (u ? 'Site login: ' + u + ' \u00B7 Depot name: ' + siteDisplayName(((DATA.depotInfo || {}).name) || '', chk.name || n.value.trim().toUpperCase()) : '') : '';
+}
+function openAddSite() {
+  if (!canAddSite()) { showToast('Adding a site is not available right now.'); return; }
+  if (!navigator.onLine) { showToast('\u26A0\uFE0F Adding a site needs an internet connection.'); return; }
+  openModal('<div class="mtitle">\uD83C\uDFEC Add a site</div>' +
+    '<div style="font-size:16px;color:var(--muted);line-height:1.7;margin-bottom:12px">The site is a separate depot with its own stock, till, staff and plan, on a free 30-day trial. Its owner login is your login plus the site name, with <strong style="color:var(--text)">your password</strong>.</div>' +
+    '<div class="err-box" id="as-err" style="display:none"></div>' +
+    '<div class="fw"><div class="fl">Site name <span style="color:var(--red)">*</span></div>' +
+    '<input class="fi" id="as-name" maxlength="' + SITE_NAME_MAX + '" placeholder="E.G. MANSA" autocomplete="off" oninput="this.value=this.value.toUpperCase();_asPreview()"/>' +
+    '<div id="as-preview" style="font-size:15px;color:var(--muted);margin-top:5px;min-height:18px;word-break:break-word"></div></div>' +
+    '<div class="fw"><div class="fl">Your password <span style="color:var(--red)">*</span></div>' +
+    '<input class="fi" type="password" id="as-pass" placeholder="Your admin password" autocomplete="current-password" autocapitalize="none" spellcheck="false"/></div>' +
+    '<div id="as-progress" style="font-size:16px;color:var(--muted);min-height:20px;margin-bottom:6px"></div>' +
+    '<div class="mact"><button class="btn bo" id="as-cancel" onclick="closeModal()">Cancel</button>' +
+    '<button class="btn bg" id="as-btn" onclick="_asSubmit()">\u2795 Create site</button></div>');
+  const n = document.getElementById('as-name'); if (n) n.focus();
+}
+async function _asSubmit() {
+  if (_siteCreating) return;
+  const err = document.getElementById('as-err'), btn = document.getElementById('as-btn'), prog = document.getElementById('as-progress');
+  const name = (document.getElementById('as-name') || {}).value || '';
+  const passEl = document.getElementById('as-pass');
+  const pass = (passEl || {}).value || '';
+  if (err) err.style.display = 'none';
+  if (!name.trim()) { if (err) { err.style.display = 'block'; err.textContent = 'Enter the site name.'; } return; }
+  if (!pass) { if (err) { err.style.display = 'block'; err.textContent = 'Enter your password.'; } return; }
+  _siteCreating = true;
+  if (btn) { btn.disabled = true; btn.textContent = '\u23F3 Creating\u2026'; }
+  const cancel = document.getElementById('as-cancel'); if (cancel) cancel.disabled = true;
+  try {
+    const res = await siteCreate(name, pass, t => { if (prog) prog.textContent = t; });
+    if (passEl) passEl.value = '';
+    closeModal();
+    _siteCreating = false;
+    showToast('\uD83C\uDFEC Site "' + res.site.name + '" created');
+    _siteRepaint();
+    openModal('<div class="mtitle">\u2705 Site created</div>' +
+      '<div style="font-size:17px;color:var(--muted);line-height:1.8;margin-bottom:12px"><strong style="color:var(--text)">' + esc(res.fullName) + '</strong> is ready, on a free 30-day trial.<br>' +
+      'Sign in to it with the login <strong style="color:var(--text)">' + esc(res.username) + '</strong> and your password.</div>' +
+      '<div class="mact"><button class="btn bo" onclick="closeModal()">Later</button>' +
+      '<button class="btn bg" data-id="' + esc(res.site.installId) + '" onclick="siteSwitchTo(this.dataset.id)">Open it now</button></div>');
+  } catch (e) {
+    _siteCreating = false;
+    if (passEl) passEl.value = '';
+    if (btn) { btn.disabled = false; btn.textContent = '\u2795 Create site'; }
+    if (cancel) cancel.disabled = false;
+    if (prog) prog.textContent = '';
+    if (err) { err.style.display = 'block'; err.textContent = (e && e.message) || 'Could not create the site.'; }
+  }
+}
+// <<SITES:UI:END>>
+
 // ── UPGRADE PROMPT ───────────────────────────────────────────────────────────
 // Called by every feature gate when hasFeature() returns false.
 // Step 6 will expand this into a full tier-ladder modal with pricing.
@@ -4436,7 +4953,7 @@ const _FEATURE_LABEL = {
 // showUpgradePrompt(featureName) — called by every hasFeature() gate.
 // Renders a full-screen modal with:
 //   • The locked feature highlighted at the top
-//   • A tier ladder (Free → Growth → Pro → Multi-Site) with feature bullets
+//   • A tier ladder (Free → Starter → Growth → Pro → Lifetime) with feature bullets
 //   • Current plan indicated; required plan highlighted
 //   • WhatsApp CTA pre-filled with depot key
 // _upgradeGateCard(featureName) — inline card for render-function gates (P&L etc.)
@@ -4487,11 +5004,11 @@ const _TIER_BULLETS = {
     ['🧮','Payroll Run (lock, pay out, CSV)'],
     ['📦','Stock check & "paid for" badges'],
   ],
-  multisite: [
-    ['🏢','Multiple depot accounts'],
-    ['📊','Consolidated reports'],
-    ['🔐','Per-branch access control'],
-    ['🔜','Coming soon'],
+  lifetime: [
+    ['♾️','Everything in Pro'],
+    ['💳','Pay once, no monthly fees'],
+    ['🛡️','Never expires'],
+    ['🔓','Every future Pro feature included'],
   ],
 };
 
@@ -4680,9 +5197,9 @@ function openSubscriptionForm(planTier) {
     <div style="background:color-mix(in srgb,${acc} 12%,var(--surface2));border:1px solid ${acc};border-radius:10px;padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center">
       <div>
         <div style="font-family:var(--fh);font-size:17px;font-weight:800;color:var(--white)">${esc(tm.label)} Plan</div>
-        <div style="font-size:15px;color:var(--muted)">${esc(tm.desc)}</div>
+        <div style="font-size:15px;color:var(--muted)">${esc(tm.desc)}${isSiteDepot() ? ' · Extra-site price' : ''}</div>
       </div>
-      <div style="font-family:var(--fh);font-size:22px;font-weight:800;color:${acc}">K${tm.price}<span style="font-size:13px;font-weight:500;color:var(--muted)">/mo</span></div>
+      <div style="font-family:var(--fh);font-size:22px;font-weight:800;color:${acc}">K${planPriceOf(planTier)}<span style="font-size:13px;font-weight:500;color:var(--muted)">${_perMo(planTier)}</span></div>
     </div>
 
     <div class="fw">
@@ -4760,8 +5277,9 @@ async function submitSubscriptionRequest(planTier) {
     province:    _fbStr(di.province, 200),
     country:     _fbStr(di.country, 200),
     requestedPlan: _fbStr(planTier, 40),
-    planLabel:   _fbStr((TIER_META[planTier] || {}).label || planTier, 80),
-    planPrice:   Number((TIER_META[planTier] || {}).price) || 0,     // what this screen quoted (K/month): prices can change before the operator approves
+    planLabel:   _fbStr(((TIER_META[planTier] || {}).label || planTier) + (isSiteDepot() ? ' (extra site)' : ''), 80),
+    siteOf:      isSiteDepot() ? _fbStr(parentSite().installId, 64) : undefined,   // extra sites: the main depot this site belongs to (undefined is not sent)
+    planPrice:   Number(planPriceOf(planTier)) || 0,     // what this screen quoted (K/month, or the once-off price for Lifetime): prices can change before the operator approves
     email:       _fbStr(email, 254),
     emailVerified: !!(_myEmail().verified && _myEmail().email === email),
     paymentMethod: _fbStr(method, 40),
@@ -4893,7 +5411,7 @@ function showUpgradePrompt(featureName) {
           ${esc(tm.label)} ${badge}
         </div>
         <div style="font-family:var(--fh);font-size:20px;font-weight:800;color:${accent}">
-          ${tm.price === 0 ? 'Free' : `K${tm.price}`}<span style="font-size:13px;font-weight:500;color:var(--muted)">/mo</span>
+          ${tm.price === 0 ? 'Free' : `K${planPriceOf(t)}`}<span style="font-size:13px;font-weight:500;color:var(--muted)">${_perMo(t)}</span>
         </div>
       </div>
       <div style="font-size:14px;color:var(--muted);margin-bottom:8px">${esc(tm.desc)}</div>
@@ -4938,7 +5456,7 @@ function _upgradeGateCard(featureName) {
       <button class="btn bo" style="padding:11px 28px" onclick="showUpgradePrompt('${featureName}')">ℹ️ Details</button></div>`; }
   const meta   = _FEATURE_LABEL[featureName] || { name: featureName, tier: 'growth' };
   const tier   = TIER_META[meta.tier] || TIER_META.growth;
-  const price  = tier.price === 0 ? 'Free' : `K${tier.price}`;
+  const price  = tier.price === 0 ? 'Free' : `K${planPriceOf(meta.tier)}`;
   const accent = meta.tier === 'starter' ? 'var(--amber)' : meta.tier === 'growth' ? 'var(--blue)' : meta.tier === 'pro' ? 'var(--green)' : '#a78bfa';
   return `<div class="card" style="text-align:center;padding:44px 28px;max-width:440px;margin:24px auto">
     <div style="font-size:44px;margin-bottom:14px">🔒</div>
@@ -4947,7 +5465,7 @@ function _upgradeGateCard(featureName) {
       Available on the
       <strong style="color:${accent}">${esc(tier.label)} plan</strong>
     </div>
-    <div style="font-family:var(--fh);font-size:26px;font-weight:800;color:${accent};margin-bottom:20px">${price}<span style="font-size:15px;font-weight:500;color:var(--muted)">/month</span></div>
+    <div style="font-family:var(--fh);font-size:26px;font-weight:800;color:${accent};margin-bottom:20px">${price}<span style="font-size:15px;font-weight:500;color:var(--muted)">${_perMon(meta.tier)}</span></div>
     <button class="btn bg" style="font-size:18px;padding:13px 32px;border-radius:10px" onclick="showUpgradePrompt('${featureName}')">
       🔓 See Upgrade Options
     </button>
@@ -5097,7 +5615,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.88';
+const SW_VERSION  = 'v0.3.94';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -5415,7 +5933,7 @@ const DEFAULT={
   transportLog:[],      // {id,date,time,vehicleReg,driverName,commodity,batchName,qty,unit,origin,destination,notes,status}
   installId:'',
   trialStart:0,
-  tier:'trial',   // 'trial' | 'free' | 'growth' | 'pro' | 'multisite'
+  tier:'trial',   // 'trial' | 'free' | 'starter' | 'growth' | 'pro' | 'lifetime'
   _v:0
 };
 
@@ -6611,11 +7129,11 @@ function renderLandingPricing() {
   const wrap = document.getElementById('land-plans');
   if (!wrap) return;
   if (window.PLAY_MODE) { wrap.innerHTML = ''; return; }
-  const visibleTiers = TIER_ORDER.filter(t => t !== 'multisite'); // Multi-Site not publicly sold yet
+  const visibleTiers = TIER_ORDER;
   wrap.innerHTML = visibleTiers.map(t => {
     const tm  = TIER_META[t];
     const pop = t === 'pro';
-    const price = tm.price === 0 ? 'Free' : `K${tm.price}<small>/month</small>`;
+    const price = tm.price === 0 ? 'Free' : `K${tm.price}<small>${_perMon(t)}</small>`;
     const items = (_TIER_BULLETS[t] || []).slice(0, 4).map(b => `<li>${esc(b[1])}</li>`).join('');
     return `<div class="lp-plan${pop ? ' pop' : ''}"><div class="lp-plan-top"><h3>${esc(tm.label)}</h3>${pop ? '<span class="lp-tag">Most popular</span>' : ''}</div><div class="lp-price">${price}</div><ul>${items}</ul></div>`;
   }).join('');
@@ -6628,14 +7146,14 @@ function renderLandingPricing() {
 function renderPricingScreen() {
   const wrap = document.getElementById('pricing-screen-cards');
   if (!wrap) return;
-  const visibleTiers = TIER_ORDER.filter(t => t !== 'multisite'); // Multi-Site not publicly sold yet
+  const visibleTiers = TIER_ORDER;
   wrap.innerHTML = visibleTiers.map(t => {
     const tm    = TIER_META[t];
     const acc   = t === 'starter' ? 'var(--amber)' : t === 'growth' ? 'var(--blue)' : t === 'pro' ? 'var(--green)' : 'var(--muted)';
     const isPro = t === 'pro';
     const priceHtml = tm.price === 0
       ? `<span style="color:${acc}">Free</span>`
-      : `<span style="color:${acc}">K${tm.price}</span><span style="font-size:14px;font-weight:500;color:var(--muted)">/mo</span>`;
+      : `<span style="color:${acc}">K${tm.price}</span><span style="font-size:14px;font-weight:500;color:var(--muted)">${_perMo(t)}</span>`;
     const bullets = _TIER_BULLETS[t] || [];
     return `
     <div class="pr-card" style="border:1.5px solid ${isPro ? acc : 'rgba(255,255,255,.08)'};${isPro ? 'background:color-mix(in srgb,'+acc+' 6%,var(--surface));' : ''}">
@@ -7073,6 +7591,7 @@ function renderSignupStep() {
           <option value="starter" ${_signupData.requestedPlan==='starter'?'selected':''}>${_planOptLabel('starter')}</option>
           <option value="growth"  ${_signupData.requestedPlan==='growth' ?'selected':''}>${_planOptLabel('growth')}</option>
           <option value="pro"     ${_signupData.requestedPlan==='pro'    ?'selected':''}>${_planOptLabel('pro')}</option>
+<option value="lifetime" ${_signupData.requestedPlan==='lifetime'?'selected':''}>${_planOptLabel('lifetime')}</option>
         </select>
         <div style="font-size:16px;color:var(--muted);margin-top:5px;line-height:1.6">You'll start with a free 30-day trial regardless of plan chosen.</div>
       </div>
@@ -7865,6 +8384,7 @@ async function doLogin(){
         showTab('dashboard');
         maybeShowFirstRun(); // Fix 27: show checklist on first logins
       }
+      _siteAfterLogin();   // extra sites: a site refreshes its copy of the site list after a switch
       scheduleFbSync();
     });
   } catch(e) {
@@ -8246,6 +8766,7 @@ function applyDepotInfo(){
   // Update header subtitle
   const hsub=document.getElementById('hdr-sub');
   if(hsub&&USER)hsub.textContent=`${sub} · ${USER.username}`;
+  try { updateSiteChip(); } catch (e) {}
 }
 
 function showDepotSetupModal(){
@@ -8596,6 +9117,9 @@ async function _doSendChatReply(username){
 
 // ── STATUS BANNER ─────────────────────────────────────────────────────────────
 function statusBanner(){
+  return siteWarnBanner() + _statusBannerBase();
+}
+function _statusBannerBase(){
   const eff = LICENSE.effectiveStatus || 'active';
   const lastSync = DATA._lastFbSync || 0;
   const syncAgeMs = lastSync ? Date.now() - lastSync : Infinity;
@@ -22298,11 +22822,11 @@ function renderPaymentSection() {
   const eff     = LICENSE.effectiveStatus || LICENSE.status || 'active';
   const curTier = (eff === 'active' || eff === 'expired_grace') ? currentTier() : null;
 
-  // Tier option cards — Starter, Growth and Pro (Multisite is future)
-  const tierOpts = ['starter','growth','pro'].map(t => {
+  // Tier option cards — Starter, Growth and Pro
+  const tierOpts = ['starter','growth','pro','lifetime'].map(t => {
     const tm    = TIER_META[t];
     const isCur = t === curTier;
-    const acc   = t === 'starter' ? 'var(--amber)' : t === 'growth' ? 'var(--blue)' : 'var(--green)';
+    const acc   = t === 'starter' ? 'var(--amber)' : t === 'growth' ? 'var(--blue)' : t === 'lifetime' ? '#a78bfa' : 'var(--green)';
     const bullets = _TIER_BULLETS[t] || [];
     return `
     <div style="border:${isCur?`2px solid ${acc}`:`1px solid var(--border)`};border-radius:10px;padding:12px 14px;margin-bottom:10px;background:${isCur?`color-mix(in srgb,${acc} 10%,var(--surface2))`:'var(--surface2)'}">
@@ -22310,7 +22834,7 @@ function renderPaymentSection() {
         <div style="font-family:var(--fh);font-size:18px;font-weight:800;color:var(--white)">
           ${esc(tm.label)}${isCur?' <span style="font-size:13px;background:'+acc+';color:#111;border-radius:20px;padding:1px 8px;margin-left:4px">CURRENT</span>':''}
         </div>
-        <div style="font-family:var(--fh);font-size:20px;font-weight:800;color:${acc}">K${tm.price}<span style="font-size:13px;font-weight:500;color:var(--muted)">/mo</span></div>
+        <div style="font-family:var(--fh);font-size:20px;font-weight:800;color:${acc}">K${planPriceOf(t)}<span style="font-size:13px;font-weight:500;color:var(--muted)">${_perMo(t)}</span></div>
       </div>
       <div style="font-size:14px;color:var(--muted);margin-bottom:8px">${esc(tm.desc)}</div>
       <div style="display:flex;flex-wrap:wrap;gap:3px 8px;margin-bottom:${isCur?'0':'10px'}">
@@ -22368,7 +22892,9 @@ function renderLicenseCard(){
   let statusColor, statusLabel, statusDetail = '';
   if (eff === 'active') {
     statusColor = 'var(--green)'; statusLabel = '✅ ACTIVE';
-    if (LICENSE.activeUntil) {
+    if (currentTier() === 'lifetime') {
+      statusDetail = `<div style="font-size:17px;color:var(--muted);margin-top:6px;line-height:1.6">Lifetime plan · <strong style="color:var(--text)">never expires</strong></div>`;
+    } else if (LICENSE.activeUntil) {
       const d = activeDaysRemaining(LICENSE.activeUntil);
       const exp = new Date(LICENSE.activeUntil).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
       statusDetail = `<div style="font-size:17px;color:var(--muted);margin-top:6px;line-height:1.6">Expires: <strong style="color:var(--text)">${exp}</strong>${d!==null&&d<=30?' · <span style="color:var(--amber)">⚠️ '+d+' days left</span>':''}</div>`;
@@ -22402,16 +22928,16 @@ function renderLicenseCard(){
   const fmt = ts => ts ? new Date(ts).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '—';
 
   // Tier-aware plan display
-  const activeTier  = currentTier();                       // 'free','starter','growth','pro','multisite'
+  const activeTier  = currentTier();                       // 'free','starter','growth','pro'
   const activeTM    = TIER_META[activeTier] || TIER_META.free;
   const tierAccent  = activeTier === 'starter' ? 'var(--amber)'
                     : activeTier === 'growth' ? 'var(--blue)'
                     : activeTier === 'pro'    ? 'var(--green)'
-                    : activeTier === 'multisite' ? '#a78bfa'
+                    : activeTier === 'lifetime' ? '#a78bfa'
                     : 'var(--muted)';
   const tierPrice   = window.PLAY_MODE ? '' : activeTM.price === 0 ? 'Free'
                     : eff === 'trial'       ? 'Free Trial'
-                    : `K${activeTM.price}/mo`;
+                    : activeTM.once ? `K${planPriceOf(activeTier)} once` : `K${planPriceOf(activeTier)}/mo`;
   const planName    = eff === 'active'                           ? activeTM.label + ' Plan'
                     : eff === 'trial' || eff === 'trial_grace'   ? '1-Month Free Trial'
                     : eff === 'trial_expired'                    ? 'Free Plan (Trial Ended)'
@@ -22420,7 +22946,7 @@ function renderLicenseCard(){
                     : 'Free Plan';
 
   // Tier ladder mini-display (for the plan header)
-  const tierLadderHtml = window.PLAY_MODE ? '' : TIER_ORDER.filter(t => t !== 'multisite').map(t => {
+  const tierLadderHtml = window.PLAY_MODE ? '' : TIER_ORDER.map(t => {
     const tm   = TIER_META[t];
     const isCur = t === activeTier || (eff === 'trial' && t === 'pro');
     const acc  = t === 'starter' ? 'var(--amber)' : t === 'growth' ? 'var(--blue)' : t === 'pro' ? 'var(--green)' : 'var(--muted)';
@@ -22428,7 +22954,7 @@ function renderLicenseCard(){
       <div style="font-family:var(--fh);font-size:14px;font-weight:800;color:${isCur?acc:'var(--muted)'}">
         ${esc(tm.label)}${isCur?' ✓':''}
       </div>
-      <div style="font-size:13px;color:var(--muted)">${tm.price===0?'Free':`K${tm.price}`}</div>
+      <div style="font-size:13px;color:var(--muted)">${tm.price===0?'Free':`K${planPriceOf(t)}`}${tm.once?' once':''}</div>
     </div>`;
   }).join('');
 
@@ -22437,7 +22963,7 @@ function renderLicenseCard(){
   const trialEndFmt    = (DATA.trialStart || LICENSE.trialStart)
                          ? fmt((DATA.trialStart || LICENSE.trialStart) + TRIAL_MS) : '—';
   const activeSinceFmt = LICENSE.activeSince ? fmt(LICENSE.activeSince) : '—';
-  const renewalFmt     = LICENSE.activeUntil  ? fmt(LICENSE.activeUntil)  : '—';
+  const renewalFmt     = currentTier() === 'lifetime' ? 'Never' : LICENSE.activeUntil  ? fmt(LICENSE.activeUntil)  : '—';
 
   // Payment history — stored as LICENSE.payments = [{date, amount, method, ref}]
   const payments = Array.isArray(LICENSE.payments) ? LICENSE.payments : [];
@@ -22464,7 +22990,7 @@ function renderLicenseCard(){
         </div>
         <div style="text-align:right">
           <div style="font-family:var(--fh);font-size:24px;font-weight:900;color:${tierAccent}">${tierPrice}</div>
-          ${!window.PLAY_MODE && activeTM.price > 0 && eff !== 'trial' ? '<div style="font-size:14px;color:var(--muted)">per month</div>' : ''}
+          ${!window.PLAY_MODE && activeTM.price > 0 && eff !== 'trial' ? '<div style="font-size:14px;color:var(--muted)">'+(activeTM.once?'paid once · never expires':'per month')+(isSiteDepot()?' · extra site':'')+'</div>' : ''}
         </div>
       </div>
       <!-- Status badge -->
@@ -23108,6 +23634,8 @@ const SETTINGS_CATS = {
       match:['Change Password','Manager PIN','Till discounts','Wholesale prices','Login History','Recovery PIN','Recovery Email','User Accounts','Role Permissions','Fingerprint Login','Stay Signed In']},
     {id:'company-billing', icon:'🏢', label:'Company & Billing', desc:'Plan, license, company info, branding & policies',
       match:['My Plan','License & Connection','Company Information','Branding','Staff & Records Policy']},
+    {id:'my-sites', icon:'🏬', label:'My Sites', desc:'Add a site, switch between your depots, see each one\'s plan',
+      match:['My Sites']},
     {id:'promotions', icon:'🏷️', label:'Promotions', desc:'Offers the till gives by itself: % off, special price, 3 for K20, buy 2 get 1 free',
       match:['Promotions']},
     {id:'appearance', icon:'🎨', label:'Appearance', desc:'Theme, text size, currency & dashboard widgets',
@@ -23136,7 +23664,7 @@ function renderSettings(){
 }
 
 function _renderSettingsMenu(role){
-  const cats = SETTINGS_CATS[role]||[];
+  const cats = (SETTINGS_CATS[role]||[]).filter(c => c.id !== 'my-sites' || (role === 'admin' && sitesVisible()));   // My Sites exists only where sites are on
   return `
     ${statusBanner()}
     ${!DATA.currency&&USER.role==='admin'?`<div class="warn" style="margin-bottom:12px">⚠️ No currency set. Open <strong>${role==='admin'?'Appearance':'Display Preferences'}</strong> below to set your currency (e.g. ZMW, USD, KES).</div>`:''}
@@ -23273,6 +23801,7 @@ function _renderAdminSettings(){
     ${!DATA.currency&&USER.role==='admin'?`<div class="warn" style="margin-bottom:12px">⚠️ No currency set. Go to <strong>Display Preferences → Currency</strong> below to set your currency (e.g. ZMW, USD, KES).</div>`:''}
     ${statusBanner()}
     <div id="license-card-wrap">${renderLicenseCard()}</div>
+    ${_renderMySitesCard()}
     ${_renderCompanyEditCard()}
     <div class="sh">Branding ${hasFeature('custom_branding')?'':'🔒'}</div>
     <div class="card">
@@ -28955,6 +29484,9 @@ const TIPS=new Map(Object.entries({
   scan_busy:{t:'Why the till refuses a scan',b:'To protect the sale, the till does not take a scan while it is taking payment, is locked or has another screen open. Over the WiFi link the scanner phone is told at once. Through the internet a waiting scan is thrown away after 15 seconds and is never added to the next sale. Scan it again when the till is ready.'},
   phone_browser:{t:'Which phones work best',b:'Chrome or Samsung Internet on Android reads barcodes and the pairing QR code best. iPhone and some computers use a built-in reader that is slower, reads fewer barcode types and cannot read QR codes. That includes Chrome on Windows and Linux. Keep the browser and the app updated.'},
   till_qr:{t:'Show till QR for a phone',b:'The till shows a code that holds only its own 4-character till code. The scanner phone reads it so you do not have to type. It is not a password and it starts nothing by itself: the scanner phone still checks the till, and you check the code and tap Start scanning. It needs no camera on the till, so a PC can show it.'},
+  extra_site:{t:'What an extra site is',b:'An extra site is another shop or branch of yours. It is its own depot, with its own stock, till, staff and plan, and it starts on its own free 30-day trial. Your main depot keeps the list of your sites, and you add sites from the main depot only.'},
+  site_login:{t:'The login of a site',b:'Each site has its own owner login: your login with the site name added, for example mutale_mansa. It uses the same password you typed when you added the site. Treat it like your own login: tell it to nobody, and give every person who works at the site their own login.'},
+  site_switch:{t:'Switching depots',b:'Switching saves the depot you are in to the cloud first, then signs you out and opens the login screen of the other depot with its login already filled in. You type the password. It needs internet. If the save fails you are not signed out, so nothing is lost.'},
 }));
 
 // ── "GO TO" BUTTONS: a key → a screen. Roles decide who sees the button; the screen checks again. ──
@@ -28979,6 +29511,7 @@ const ACTIONS={
   set_printer:{l:'Open Printer settings',r:'ams',f:goSettings('printer','printer')},
   set_data:{l:'Open Data & Backup',r:'a',f:goSettings('data-backup','account-help')},
   set_help:{l:'Open Help & About',r:'a',f:goSettings('help-about','account-help')},
+  set_sites:{l:'Open My Sites',r:'a',f:goSettings('my-sites','my-sites')},
   set_me:{l:'Open my Account settings',r:'ms',f:goSettings('account-security','account-help')},
   till:{l:'Open the Till',r:'am',f:()=>openTill()},
   prices:{l:'Open the Price List',r:'a',f:()=>openPriceList()},
@@ -29414,6 +29947,50 @@ const CHAPTERS=[
      'See your plan and make a change request in **Settings → Company & Billing → My Plan**.'),
   GO('set_company')
 ]},
+{id:'extrasites',part:3,icon:'🏬',title:'Extra sites: more than one shop',sum:'Add a site, switch depots, plans',r:'a',np:true,gate:'sites',blocks:[
+  P('An **extra site** is another shop or branch of yours. It is a separate depot with its **own stock, till, staff and plan**, and it starts on its own free 30-day trial. You add and manage sites from your **main depot**, and only its Admin can. [[i:extra_site]]'),
+  H('Before you start'),
+  UL('You are signed in to the **main depot** as its **Admin**. A site cannot add more sites.',
+     '**Internet** is needed to add a site and to switch depots.',
+     'You see **Settings > My Sites** only where extra sites are switched on for your company. If you do not see it, ask NEXLITE to switch it on.',
+     'One main depot can have up to **10 sites**.'),
+  H('Add a site'),
+  STEPS([
+    ST('1. Open My Sites',['Tap **Settings**, then **My Sites**, then **Add a site**.']),
+    ST('2. Type the site name and your password',[
+      'Type the **site name**, for example **MANSA**. Under the box the app shows the site\'s login, for example **mutale_mansa**, and the depot name, for example **Main depot \u2013 Mansa**. That name is what receipts and the till show.',
+      'Type **your own admin password**. The site uses the same password. [[i:site_login]]'
+    ]),
+    ST('3. Tap Create site',[
+      'Keep the app open and stay online while it works.',
+      'When it says **Site created**, the site is ready on a free 30-day trial.'
+    ]),
+    ST('4. Open the site',['Tap **Open it now**, or **Later** and open it from the list when you are ready. [[i:site_switch]]'])
+  ]),
+  H('Switch between depots'),
+  UL('Tap the **chip at the top of the screen** (it shows the depot you are in, for example **Main**) or open **Settings > My Sites**. Each depot shows its status: **Trial**, **Active**, the days left, or **View-only**.',
+     'Tap **Open** next to the depot you want. The app saves this depot to the cloud, signs you out, and shows the login screen with the other depot\'s login filled in. Type the password. [[i:site_switch]]',
+     'If saving fails you are **not** signed out. Check your connection and try again.',
+     'In a site, tap **Back to main depot** to return.'),
+  H('Plans and prices for a site'),
+  UL('Each site has its **own plan and its own trial**. Inside a site, the plan, upgrade and subscription screens show the **extra-site price** instead of the full plan price. Lifetime is a once-off price. [[i:plan_limits]]',
+     'Ask for a plan inside the site, the same way as for any depot. NEXLITE checks that the site really belongs to your main depot, then approves it.',
+     'A site that is not paid for goes **read-only on its own**. Your main depot and your other sites keep working. [[i:readonly]]',
+     'Your main depot shows a **warning banner** when a site has 7 days or fewer left, or is already read-only.'),
+  H('Stock, till and staff'),
+  UL('Nothing is shared between depots. A site\'s stock, till, sales, staff and logins belong to that site only. Sign in to the site to work in it.',
+     'Give every person their own login, in the depot where they work. [[i:own_login]]'),
+  H('If something goes wrong'),
+  TB(['You see','What to do'],[
+    ['Adding a site is not available right now.','Extra sites are not switched on for your company, you are not the main depot\'s Admin, or you already have 10 sites.'],
+    ['Adding a site needs an internet connection.','Get a signal and tap Add a site again.'],
+    ['Switching needs an internet connection.','Get a signal and tap Open again.'],
+    ['Could not save this depot to the cloud, so you were not signed out.','Nothing is lost. Check your connection and try Open again.'],
+    ['Sign in to ... \u00B7 N till records are not uploaded yet','Sales, refunds or shifts made on this phone could not go up in time. They are safe on this phone and upload when you come back to that depot.'],
+    ['An error while the site is being created','Read the message. A site is added to your list only when every step worked, so none is left half-made. If the login name stays reserved, try a slightly different site name.']
+  ]),
+  GO('set_sites')
+]},
 {id:'security',part:3,icon:'🛡️',title:'Keeping the shop\'s money and data safe',sum:'Habits that stop losses',r:'amsc',blocks:[
   H('For everyone'),
   UL('Use your own login and never share it. [[i:own_login]]',
@@ -29491,7 +30068,8 @@ let screen=null,bodyEl=null,titleEl=null,backEl=null,sheetEl=null,prevFocus=null
 const PLAY=()=>!!window.PLAY_MODE;
 const role=()=>{ const u=(typeof USER!=='undefined')&&USER; if(!u) return ''; const r=u.role; return r==='admin'?'a':r==='cashier'?'c':(r==='manager'||r==='data_entry')?'m':'s'; };
 const roleName=()=>({a:'Admin',m:'Manager',s:'Staff',c:'Cashier'}[role()]||'');
-const visible=c=>!(PLAY()&&c.np)&&(S.all||!role()||c.r.indexOf(role())>=0);
+const gateOk=c=>!c.gate||(c.gate==='sites'&&typeof sitesVisible==='function'&&sitesVisible());   // extra sites: the chapter shows only where sites are on (or exist)
+const visible=c=>!(PLAY()&&c.np)&&gateOk(c)&&(S.all||!role()||c.r.indexOf(role())>=0);
 const list=()=>CHAPTERS.filter(visible);
 const byId=id=>CHAPTERS.find(c=>c.id===id);
 const el=(tag,cls,text)=>{ const e=document.createElement(tag); if(cls) e.className=cls; if(text!=null) e.textContent=text; return e; };
