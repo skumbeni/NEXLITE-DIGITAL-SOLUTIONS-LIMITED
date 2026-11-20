@@ -213,6 +213,10 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 .fld input,.fld select{width:100%;font:inherit;font-size:17px;padding:11px 12px;border-radius:10px;border:2px solid var(--border);background:var(--bg);color:var(--text)}
 .fld input:focus,.fld select:focus{outline:none;border-color:var(--green)}
 .pay-hint{min-height:18px;margin:-4px 0 8px;font-size:13px;color:var(--muted)}
+.rcv-r{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid var(--border)}
+.rcv-r .nm{flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere}.rcv-r .nm small{display:block;font-weight:400;color:var(--muted);font-size:12px}
+.rcv-r input{width:64px;font:inherit;font-size:16px;text-align:center;padding:7px 4px;border-radius:8px;border:2px solid var(--border);background:var(--bg);color:var(--text)}
+.rcv-r input:focus{outline:none;border-color:var(--green)}
 .quick{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
 .quick button{padding:8px 14px;font-size:14px;border-radius:8px}
 .pay-err{min-height:18px;margin-bottom:4px;font-size:13px;color:var(--red)}
@@ -335,7 +339,7 @@ document.documentElement.setAttribute('data-theme',l?'light':'dark');var m=docum
   <div><b>🧾 Till <span id="tillcode"></span></b><small id="depot"></small></div>
   <div class="hr">
     <div class="pills"><span class="pill" id="p-shift"></span><span class="pill" id="p-net"></span><span class="pill" id="p-cloud"></span><span class="pill" id="p-till"></span><span class="pill" id="p-sales"></span><span class="pill" id="p-user"></span></div>
-    <div class="hb"><button class="sm" id="b-help" type="button" aria-label="How to use the Till" title="How to use the Till">?</button><button class="sm" id="b-print" type="button">Printer</button><button class="sm" id="b-ret" type="button">Returns</button><button class="sm" id="b-shift" type="button">Shift</button><button class="sm" id="b-lock" type="button" hidden>🔒 Lock</button><button class="sm" id="b-set" type="button">Settings</button><button class="sm" id="b-mine" type="button" hidden>My sales</button><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
+    <div class="hb"><button class="sm" id="b-help" type="button" aria-label="How to use the Till" title="How to use the Till">?</button><button class="sm" id="b-print" type="button">Printer</button><button class="sm" id="b-ret" type="button">Returns</button><button class="sm" id="b-shift" type="button">Shift</button><button class="sm" id="b-lock" type="button" hidden>🔒 Lock</button><button class="sm" id="b-set" type="button">Settings</button><button class="sm" id="b-mine" type="button" hidden>My sales</button><button class="sm" id="b-recv" type="button" hidden>Receive</button><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
   </div>
 </header>
 <main id="main"></main>
@@ -961,6 +965,120 @@ function renderPinForm(c){
 }
 // The password is kept in DATA.users and synced by index.html, so it is changed there. index.html sees mdm_till_cp, asks for the current and
 // the new password, saves it the way Settings > Change Password does, and sends the person back here.
+// ── RECEIVE STOCK ON THE TILL (v0.3.100, scanning here since v0.3.101) ──────────────────────────────────────────────────────────
+// Received stock lives in DATA.generalInventory, which only index.html writes and syncs (see the note above), so the till cannot save a delivery.
+// What it CAN do is the scanning: this screen takes scans from the scan box / hardware scanner, the camera and a linked scanner phone (the same three
+// ways the till sells), keeps the delivery as the SAME unsaved draft the main app's Scan Receive keeps (localStorage mdm_srdraft_<install>_<user>, same
+// shape), and "Continue in main app" opens Scan Receive with that draft loaded to set cost, damaged, expiry, supplier and Save. It then brings the person back here.
+// Exact barcode / SKU / pack barcode only, one scan = one more, the same rule as the main app's _srScan. Admin and Manager only (a cashier never sees the button;
+// the main app checks the rule again). Commodities are received in the main app (they are not in the item master).
+const canReceive=()=>!!USER&&['admin','manager','data_entry'].indexOf(String(USER.role))>=0;
+let RCVOVL=null,RCV=null,RCVMSG=null,RCVLIST=null,RCVIN=null,RCVSUM=null;
+const rcvKey=()=>'mdm_srdraft_'+(DATA&&DATA.installId||'')+'_'+String(USER&&USER.username||'').toLowerCase();
+function rcvLoad(){        // the unsaved delivery on this phone, from here or from the main app; every field is re-typed
+  const none={lines:[],sup:'',date:'',pay:'paid'};
+  try{
+    const d=JSON.parse(localStorage.getItem(rcvKey())||'null');if(!d||!Array.isArray(d.lines))return none;
+    return {lines:d.lines.filter(l=>l&&l.name&&Number(l.factor)>0).map(l=>({id:String(l.id||''),name:String(l.name),unit:String(l.unit||''),factor:Number(l.factor),baseUnit:String(l.baseUnit||''),qty:Number(l.qty)||0,cost:Number(l.cost)||0,dmg:Number(l.dmg)||0,exp:String(l.exp||''),batch:String(l.batch||'')})),sup:String(d.sup||''),date:String(d.date||''),pay:String(d.pay||'paid')};
+  }catch{return none;}
+}
+function rcvSave(){
+  if(!RCV)return;
+  try{
+    if(!RCV.lines.length){localStorage.removeItem(rcvKey());return;}
+    localStorage.setItem(rcvKey(),JSON.stringify({at:Date.now(),lines:RCV.lines,sup:RCV.sup,date:RCV.date,pay:RCV.pay}));
+  }catch{}
+}
+function rcvHits(code){    // like the main app's _srHits: the item master (not the priced tiles), so an item with no price yet can still be received
+  const c=String(code||'').trim().toLowerCase(),out=[];if(!c)return out;
+  (DATA.inventoryItems||[]).map(x=>typeof x==='string'?{name:x}:x).filter(x=>x&&x.name).forEach(x=>{
+    const it={id:x.id||legacyId(x.name),name:String(x.name),unit:String(x.unit||'')};
+    if((x.barcode&&String(x.barcode).toLowerCase()===c)||(x.sku&&String(x.sku).toLowerCase()===c)){out.push({it,u:null});return;}
+    (Array.isArray(x.units)?x.units:[]).forEach(u=>{if(u&&u.barcode&&String(u.barcode).toLowerCase()===c&&Number(u.factor)>0)out.push({it,u});});
+  });
+  return out;
+}
+function rcvAddCode(raw,cam){   // -> {err} or {label}; adds 1 to the matching line (or makes it)
+  const v=String(raw||'').trim();if(!v||!RCV)return {err:''};
+  let h=rcvHits(v);
+  if(!h.length&&cam){const a=/^0\d{12}$/.test(v)?v.slice(1):(/^\d{12}$/.test(v)?'0'+v:'');if(a)h=rcvHits(a);}
+  if(h.length>1)return {err:'Two items have the code \u201c'+v+'\u201d: '+h.slice(0,3).map(x=>x.it.name).join(', ')+'. Nothing was added. Fix the barcode in the main app.'};
+  if(!h.length)return {err:'No item has the code \u201c'+v.slice(0,40)+'\u201d.'};
+  const it=h[0].it,u=h[0].u,un=u?String(u.name||'').toUpperCase():'',f=u?Number(u.factor):1;
+  let l=RCV.lines.find(x=>x.id===it.id&&x.unit===un);
+  if(l)l.qty+=1;
+  else{
+    const pp=Number(((DATA.inventoryPrices||{})[it.name]||{}).purchasePrice)||0;
+    l={id:it.id,name:it.name,unit:un,factor:f,baseUnit:it.unit,qty:1,cost:pp>0?Math.round(pp*f*100)/100:0,dmg:0,exp:'',batch:''};
+    RCV.lines.unshift(l);
+  }
+  rcvSave();
+  return {label:it.name+(un?' ('+un+')':'')+' \u00D7'+fq(l.qty)};
+}
+function rcvMsg(t,bad){if(!RCVMSG)return;RCVMSG.textContent=t||'';RCVMSG.className=bad?'pay-err':'pay-hint';RCVMSG.style.color=(!bad&&t)?'var(--green)':'';}
+function rcvEnter(v){      // the scan box here (or a keyboard scanner whose focus slipped to the sell box): Enter
+  const r=rcvAddCode(v,false);
+  if(r.err){rcvMsg(r.err,true);return false;}
+  if(r.label){rcvMsg('\u2713 '+r.label);rcvPaint();}
+  return true;
+}
+function rcvPaint(){
+  if(!RCVLIST||!RCV)return;
+  RCVLIST.replaceChildren();
+  if(!RCV.lines.length)RCVLIST.append(el('div','note','Nothing scanned yet.'));
+  RCV.lines.forEach((l,i)=>{
+    const row=el('div','rcv-r'),nm=el('div','nm',l.name);
+    nm.append(el('small','',(l.unit?l.unit+' = '+fq(l.factor)+' '+(l.baseUnit||'units')+' \u00B7 ':'')+'stock +'+fq(l.qty*l.factor)+(l.baseUnit?' '+l.baseUnit.toLowerCase():'')));
+    const dn=el('button','sm','\u2212',{type:'button','aria-label':'One less'}),up=el('button','sm','+',{type:'button','aria-label':'One more'});
+    const q=el('input','',null,{type:'number',inputmode:'decimal',min:'0',step:'any','aria-label':'Quantity'});q.value=String(l.qty);
+    const rm=el('button','sm','\u2715',{type:'button','aria-label':'Remove'});
+    const set=v=>{const n=Number(v);if(!(n>0))return false;l.qty=Math.round(n*1e6)/1e6;rcvSave();rcvPaint();return true;};
+    dn.onclick=()=>{if(l.qty>1)set(l.qty-1);};
+    up.onclick=()=>set(l.qty+1);
+    q.onchange=()=>{if(!set(q.value))q.value=String(l.qty);};
+    rm.onclick=()=>{RCV.lines.splice(i,1);rcvSave();rcvPaint();};
+    row.append(nm,dn,q,up,rm);RCVLIST.append(row);
+  });
+  if(RCVSUM)RCVSUM.textContent=RCV.lines.length?RCV.lines.length+' item(s) \u00B7 '+fq(RCV.lines.reduce((a,l)=>a+(Number(l.qty)||0),0))+' scanned':'';
+}
+function openReceive(){
+  if(RCVOVL||anyOverlay()||!canReceive())return;
+  const d=rcvLoad();RCV={lines:d.lines,sup:d.sup,date:d.date,pay:d.pay};
+  const ovl=el('div','povl','',{role:'dialog','aria-modal':'true','aria-label':'Receive stock'});
+  const box=el('div','pay'),head=el('div','pay-h');
+  const cx=el('button','sm','Close',{type:'button'});cx.onclick=closeReceive;
+  head.append(el('h2','','Receive stock'),cx);
+  const body=el('div','pay-body'),f=el('label','fld');
+  RCVIN=el('input','',null,{type:'text',autocomplete:'off',autocapitalize:'off',autocorrect:'off',spellcheck:'false',enterkeyhint:'done','aria-label':'Scan a barcode, then Enter',placeholder:'Scan a barcode, then Enter'});
+  if(COARSE)RCVIN.setAttribute('inputmode','none');
+  f.append(el('span','','Scanner, camera or a linked scanner phone. One scan = one more.'),RCVIN);
+  const tools=el('div','row'),cam=el('button','sm','\uD83D\uDCF7 Camera',{type:'button'});
+  cam.onclick=()=>{if(typeof startCam==='function')startCam();};
+  tools.append(cam);
+  if(COARSE){const kb=el('button','sm','\u2328 Type a code',{type:'button'});kb.onclick=()=>{RCVIN.setAttribute('inputmode','search');RCVIN.blur();RCVIN.focus();};tools.append(kb);}
+  RCVMSG=el('div','pay-hint','');RCVLIST=el('div','');RCVSUM=el('div','pay-hint','');RCVSUM.style.fontWeight='700';
+  const foot=el('div','row'),dis=el('button','','Discard',{type:'button'}),go=el('button','pri','Continue in main app',{type:'button'});
+  dis.onclick=()=>{if(RCV&&RCV.lines.length&&!confirm('Discard the '+RCV.lines.length+' scanned item(s)?'))return;if(RCV){RCV.lines=[];rcvSave();}rcvPaint();rcvMsg('');};
+  go.onclick=()=>{rcvSave();exitGuard(goReceiveApp);};
+  foot.append(dis,go);foot.style.marginTop='12px';
+  body.append(f,tools,RCVMSG,RCVLIST,RCVSUM,foot);
+  box.append(head,body);ovl.append(box);document.body.append(ovl);RCVOVL=ovl;
+  RCVIN.addEventListener('keydown',e=>{if(e.key!=='Enter')return;e.preventDefault();const v=RCVIN.value.trim();if(!v)return;if(rcvEnter(v))RCVIN.value='';else RCVIN.select();});
+  ovl.addEventListener('click',e=>{if(e.target===ovl)closeReceive();});
+  rcvPaint();setTimeout(()=>{try{RCVIN.focus({preventScroll:true});}catch{}},50);
+}
+function closeReceive(){
+  if(!RCVOVL)return;
+  rcvSave();RCVOVL.remove();RCVOVL=null;RCV=null;RCVMSG=RCVLIST=RCVIN=RCVSUM=null;   // the delivery stays saved as a draft; Discard is the way to throw it away
+  if(!COARSE)focusSearch();
+}
+// Leave for the main app's Scan Receive, which carries on with the saved draft. An open sale is parked first, exactly as for Main app.
+function goReceiveApp(){
+  closeReceive();parkOnExit();
+  try{sessionStorage.setItem('mdm_till_sr','draft');sessionStorage.setItem(SESSION_KEY,JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now()}));}catch{}
+  touchActive(true);
+  toApp();
+}
 function goChangePassword(){
   closeSettings();parkOnExit();
   try{sessionStorage.setItem('mdm_till_cp','1');sessionStorage.setItem(SESSION_KEY,JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now()}));}catch{}
@@ -1143,7 +1261,7 @@ function say(text,cls,ms){
   MSG.textContent=text||'';MSG.className='msg'+(cls?' '+cls:'');
   clearTimeout(msgT);if(text)msgT=setTimeout(()=>{MSG.textContent='';MSG.className='msg';},ms||2600);
 }
-function focusSearch(){try{Q.focus({preventScroll:true});}catch{Q.focus();}}
+function focusSearch(){if(RCVIN){try{RCVIN.focus({preventScroll:true});}catch{}return;}try{Q.focus({preventScroll:true});}catch{Q.focus();}}   // v0.3.101: the receive screen has its own scan box
 
 // One code -> one item, or the reason it cannot be added. Used by the scan box (Enter) and by the camera, so both follow the
 // same rule: exact barcode or SKU, never a guess. {camera:true}: the value always came from a barcode, so the typing search is
@@ -2799,7 +2917,7 @@ let RTOVL=null,RTBODY=null,RTTTL=null,RT=null,RTBUSY=false;
 const cashOutNow=id=>Returns.cashOutOf(id,RETS_ALL);
 const retNum=s=>String((s&&(s.receiptNo||s.id))||'');
 function parseQty(v){const t=String(v==null?'':v).trim().replace(',','.');if(!/^\d*\.?\d{0,3}$/.test(t)||t===''||t==='.')return 0;return Number(t);}
-function anyOverlay(){return !!(RTOVL||PAYOVL||HOVL||PINOVL||SHOVL||MOVL||CAMOVL||DOVL||LOVL||ROVL||RPOVL||PRNOVL||SETOVL||LOCKOVL||HELPOVL);}
+function anyOverlay(){return !!(RCVOVL||RTOVL||PAYOVL||HOVL||PINOVL||SHOVL||MOVL||CAMOVL||DOVL||LOVL||ROVL||RPOVL||PRNOVL||SETOVL||LOCKOVL||HELPOVL);}
 function openReturns(){
   if(anyOverlay()||RTBUSY)return;
   if(isReadOnly()){say('The till is read-only right now.','bad',4000);return;}
@@ -3473,6 +3591,11 @@ function camAccept(me,val){
   if(me.pick){const c=qrTillCode(val);if(!c){camBeep(me,false);camStatus(me,'That is not a till code from this app. On the till tap \uD83D\uDCF2, then Show till QR for a phone.','warn');return;}camBeep(me,true);try{localStorage.setItem(scnTarget(),c);}catch{}stopCam();openScn();return;}
   if(me.relay){if(val.indexOf(QR_TAG)===0){qrAnswered(me,val);return;}if(me.busy){me.lastCode='';return;}idleReset();relaySend(me,val);return;}
   if(me.qr){qrOffered(me,val);return;}   // scanner phone: send it to the till instead of adding it here
+  if(RCV){                                               // v0.3.101: Receive stock is open: the camera adds to the delivery, never to a sale
+    idleReset();const g=rcvAddCode(val,true);
+    if(g.err){camBeep(me,false);camStatus(me,g.err,'bad');camFlash(me,'bad');return;}
+    camBeep(me,true);camStatus(me,'\u2713 '+g.label,'ok');camFlash(me,'ok');rcvMsg('\u2713 '+g.label);rcvPaint();return;
+  }
   idleReset();                                           // scanning counts as activity: no idle logout in the middle of a basket
   const r=resolveCode(val,{camera:true});
   if(r.err){camBeep(me,false);camStatus(me,r.err,'bad');camFlash(me,'bad');return;}
@@ -3726,6 +3849,11 @@ async function recvTick(me){
 }
 function recvAdd(me,val){                                                                 // returns what the scanner phone is told
   idleReset();
+  if(RCV){                                                                                // v0.3.101: Receive stock is open: the phone's scan joins the delivery
+    const g=rcvAddCode(String(val).trim(),true);
+    if(g.err){camBeep(me,false);rcvMsg('Phone: '+g.err,true);return{ok:false,err:g.err};}
+    camBeep(me,true);rcvMsg('\u2713 Phone: '+g.label);rcvPaint();return{ok:true,name:g.label};
+  }
   const r=resolveCode(String(val).trim(),{camera:true});
   if(r.err){camBeep(me,false);say('Phone: '+r.err,'bad',r.ms||5000);return{ok:false,err:r.err};}
   const ru=r.unit&&!r.unit.isBase?r.unit:null,name=r.hit.name+(ru?' ('+ru.name+')':'');
@@ -3929,6 +4057,7 @@ function buildSell(){
     if(e.key!=='Enter')return;
     e.preventDefault();
     const v=Q.value.trim();if(!v)return;
+    if(RCV){if(rcvEnter(v))Q.value='';return;}            // v0.3.101: a scanner whose focus slipped here while Receive stock is open: it is a delivery scan, never a sale
     const r=resolveCode(v);                              // scanner: exact barcode or SKU, then Enter
     if(r.err){say(r.err,'bad',r.ms);Q.select();return;}
     addItem(r.hit,1,r.unit);Q.value='';renderGrid();focusSearch();
@@ -3958,6 +4087,7 @@ function buildSell(){
     if(LOVL){if(e.key==='Escape')closeLevel();return;}
     if(SHOVL){if(e.key==='Escape')closeShiftSheet();return;}
     if(MOVL){if(e.key==='Escape')closeMine();return;}
+    if(RCVOVL&&!PINOVL){if(e.key==='Escape')closeReceive();}
     if(e.key==='Escape'&&ROVL){hideReceipt();return;}
     if(e.key==='Escape'&&SELL.classList.contains('open')){closeCart();return;}
     const t=e.target,tag=t&&t.tagName;
@@ -4031,7 +4161,7 @@ async function boot(){
   idleReset();
   try{new BroadcastChannel('mdm_session').onmessage=e=>{if(e.data&&e.data.type==='logout'){parkOnExit();try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}};}catch{}
   addEventListener('storage',e=>{if(e.key==='mdm_session_event'&&e.newValue&&e.newValue.startsWith('logout:')){parkOnExit();try{sessionStorage.removeItem(SESSION_KEY);}catch{}toApp();}});
-  $('b-app').onclick=()=>exitGuard(toApp);$('b-out').onclick=()=>exitGuard(logout);   // the two exits the cashier chooses; idle logout calls logout() directly
+  $('b-app').onclick=()=>exitGuard(toApp);$('b-out').onclick=()=>exitGuard(logout);$('b-recv').onclick=openReceive;if(canReceive())$('b-recv').hidden=false;   // the two exits the cashier chooses; idle logout calls logout() directly
   if(isCashier()){$('b-app').hidden=true;$('b-mine').hidden=false;$('b-mine').onclick=openMine;}   // no main app for a cashier; its own report instead
   await loadSold();                                    // stock = received - issued - sold: the ledger must be read BEFORE the catalog is built
   await loadShift();

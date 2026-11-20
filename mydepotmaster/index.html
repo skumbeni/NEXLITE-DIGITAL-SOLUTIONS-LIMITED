@@ -5708,7 +5708,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.98';
+const SW_VERSION  = 'v0.3.101';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -8572,11 +8572,46 @@ function _tillBack(){
 }
 function _tillHandoffOnce(){
   if(window._tillCpDone||!USER) return;
-  let f=null; try{ f=sessionStorage.getItem('mdm_till_cp'); }catch{}
-  if(!f) return;
+  let f=null, r=null; try{ f=sessionStorage.getItem('mdm_till_cp'); r=sessionStorage.getItem('mdm_till_sr'); }catch{}
+  if(!f&&!r) return;
   window._tillCpDone=true; window._tillCpActive=true;
-  try{ sessionStorage.removeItem('mdm_till_cp'); }catch{}
-  setTimeout(_openTillPwBox,300);
+  try{ sessionStorage.removeItem('mdm_till_cp'); sessionStorage.removeItem('mdm_till_sr'); }catch{}
+  window._srAutoDraft=(r==='draft');   // v0.3.101: the till scanned a delivery and saved it as the draft: carry on with it, do not ask
+  if(f) setTimeout(_openTillPwBox,300); else setTimeout(_tillSrStart,300);
+}
+// ── RECEIVE STOCK FROM THE TILL (v0.3.100) ─────────────────────────────────────────────────────────────────────
+// pos.html > Receive sets sessionStorage mdm_till_sr and comes here: received stock lives in DATA.generalInventory and the till never writes DATA
+// (one blob, last write wins, its cloud sync belongs to this page). So the till's own Scan Receive is THIS page's Scan Receive, opened straight away.
+// Save: the delivery is saved exactly as Scan Receive always saves it, pushed to the cloud now (at most 8 s, the till cannot sync DATA), then back to the
+// till, which reads the new stock on load. Cancel: straight back. Refused (read-only, no permission): the usual message, then back.
+// v0.3.101: the till now scans the delivery itself (its own scanner, camera and linked phone) and saves it as the SAME draft Scan Receive keeps; this page
+// carries on with that draft without asking. After Save, an Admin is offered the barcode stickers (Print stickers / Back to till) and the till comes back
+// when the label printer is closed.
+function _tillSrStart(){
+  if(!USER) return;
+  window._tillSrActive=true;
+  try{ openScanReceive(); }catch(e){}
+  if(!_sr){ window._tillSrActive=false; _tillBack(); }
+}
+window._tillSrPre=[];
+function _tillSrLabels(){ window._tillSrLabels=true; openLabelPrinter(window._tillSrPre,'receive'); if(!_lbl) window._tillSrLabels=false; }   // refused (not admin): stay on the Received box
+async function _tillSrFinish(n,L){
+  const pre=_srLabelPre(L||[]); window._tillSrPre=pre;
+  const box=(msg,act)=>openModal(`<div class="mtitle">📦 Received</div><div class="ok-msg">${msg}</div>${act?'<div class="mact">'+act+'</div>':''}`, 'uncloseable');
+  box('✅ '+n+' line(s) received. Saving to the cloud…');
+  let synced=false;
+  if(navigator.onLine&&isFbConfigured()){
+    try{ await Promise.race([doFbSync(), new Promise((_,rej)=>setTimeout(()=>rej(new Error('slow')),8000))]); synced=true; }catch{}
+  }
+  // The sync can repaint the page and close the box above (found in testing), so the final box is opened again here instead of edited in place.
+  const note=(synced?'':' It is saved on this phone and goes to the cloud the next time the main app syncs.');
+  if(pre.length){   // v0.3.101: stickers for items with an in-store barcode, as after a normal Scan Receive; the till comes back when the label printer is closed
+    box('✅ '+n+' line(s) received.'+note+'<br><br>'+pre.length+' received item(s) use an in-store barcode. Print stickers? The number starts at the quantity received.',
+        '<button class="btn bo" onclick="_tillBack()">Back to till</button><button class="btn bg" onclick="_tillSrLabels()">🏷️ Print stickers</button>');
+    return;
+  }
+  box('✅ '+n+' line(s) received.'+note+' Back to the till…');
+  setTimeout(_tillBack, synced?900:2200);
 }
 function _openTillPwBox(){
   if(!USER) return;
@@ -13726,7 +13761,8 @@ function openScanReceive(){
   if(!hasFeature('pos_till')){showUpgradePrompt('pos_till');return;}
   if(!requireAddPermission('receive stock'))return;
   const dr=_srDraftLoad();let use=null;
-  if(dr){const t=new Date(dr.at);use=confirm('You have an unsaved scanned delivery ('+dr.lines.length+' item(s)'+(dr.at?', '+t.toLocaleString():'')+').\n\nOK = continue it\nCancel = delete it and start a new delivery')?dr:null;if(!use)_srDraftClear();}
+  if(dr){const t=new Date(dr.at);use=(window._srAutoDraft||confirm('You have an unsaved scanned delivery ('+dr.lines.length+' item(s)'+(dr.at?', '+t.toLocaleString():'')+').\n\nOK = continue it\nCancel = delete it and start a new delivery'))?dr:null;if(!use)_srDraftClear();}
+  window._srAutoDraft=false;
   _sr={lines:use?use.lines:[],cam:null};
   const sups=(DATA.contacts||[]).filter(c=>c.type==='supplier');
   openModal(`<div class="mtitle">📷 Scan Receive</div>
@@ -13765,6 +13801,7 @@ function _srDel(i){if(_sr){_sr.lines.splice(i,1);_srRender();}}
 function _srClose(done){
   if(_sr&&!done&&_sr.lines.length&&!confirm('Discard the '+_sr.lines.length+' scanned item(s)?'))return;
   _srDraftClear();_srCamStop();_sr=null;closeModal();
+  if(window._tillSrActive&&!done){ window._tillSrActive=false; _tillBack(); }   // v0.3.100: Cancel from the till goes straight back to it
 }
 function _srSave(){
   if(!_sr||isReadOnly())return;if(!requireAddPermission('receive stock'))return;
@@ -13781,7 +13818,9 @@ function _srSave(){
     return{...d,generalInventory:[...d.generalInventory,...B.recs.map(r=>stampEntry({id:uid(),...r,notes:uc(r.notes)}))],inventoryPrices:prices};
   });
   logAuditEvent('CREATE','Scan Receive',B.recs.length+' line(s) · '+B.recs.map(r=>r.itemName+':'+r.received).join(', '));
-  _srClose(true);showToast('✅ '+B.recs.length+' line(s) received');
+  _srClose(true);
+  if(window._tillSrActive){ window._tillSrActive=false; _tillSrFinish(B.recs.length,L); return; }   // v0.3.100: opened from the till
+  showToast('✅ '+B.recs.length+' line(s) received');
   _srOfferLabels(L);
 }
 function _srCamStop(){
@@ -15302,7 +15341,7 @@ function _lblCopies(i,v){
 }
 function _lblAll(on){if(!_lbl)return;_lbl.rows.forEach((r,i)=>{r.sel=!!on&&!!r.code;const b=document.getElementById('lbl-c'+i);if(b)b.checked=r.sel;});_lblSum();}
 function _lblFilter(q){const k=String(q||'').toLowerCase().trim();document.querySelectorAll('#lbl-list .lbl-r').forEach(e=>{e.style.display=(!k||e.dataset.k.includes(k))?'':'none';});}
-function _lblClose(){const f=_lbl&&_lbl.from;_lbl=null;if(f==='manage')renderManageInventoryModal();else closeModal();}
+function _lblClose(){const f=_lbl&&_lbl.from;_lbl=null;if(window._tillSrLabels){window._tillSrLabels=false;_tillBack();return;}if(f==='manage')renderManageInventoryModal();else closeModal();}   // v0.3.101: stickers printed for a delivery received from the till: back to the till
 function _lblGen(){                            // an in-store barcode for every item that has none, saved on the item
   if(!_lbl||!requireAdmin('make barcodes'))return;
   const miss=_lbl.rows.filter(r=>!r.code);if(!miss.length)return;
@@ -15353,15 +15392,21 @@ function printItemLabelFromForm(){
   openLabelPrinter([{id:it.id,copies:1}],'details');
 }
 // After Scan Receive: items with an in-store barcode (the ones MDM makes, starting with 2) need a sticker on every unit that came in.
-function _srOfferLabels(L){
+function _srLabelPre(L){            // v0.3.101: the received items that use an in-store barcode, with how many stickers each ([] = nothing to offer)
   try{
-    if(!isAdmin()||!hasFeature('pos_till')||!window.MDMBarcode)return;
+    if(!isAdmin()||!hasFeature('pos_till')||!window.MDMBarcode)return [];
     const items=(DATA.inventoryItems||[]).map(_invItemObj),pre=[];
     L.forEach(l=>{
       const it=items.find(x=>x.id===l.id);if(!it||!/^2\d{12}$/.test(String(it.barcode||'')))return;
       const q=Math.max(1,Math.min(500,Math.round((Number(l.qty)||0)*(Number(l.factor)||1)))),e=pre.find(p=>p.id===it.id);
       if(e)e.copies=Math.min(500,e.copies+q);else pre.push({id:it.id,copies:q});
     });
+    return pre;
+  }catch(e){return [];}
+}
+function _srOfferLabels(L){
+  try{
+    const pre=_srLabelPre(L);
     if(!pre.length)return;
     setTimeout(()=>{if(confirm('Print barcode stickers for '+pre.length+' received item(s) that use an in-store barcode?\n\nThe number of stickers starts at the quantity received.'))openLabelPrinter(pre,'receive');},400);
   }catch(e){}

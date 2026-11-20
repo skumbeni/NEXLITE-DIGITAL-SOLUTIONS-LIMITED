@@ -25,7 +25,19 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.98 (2026-11-20) — Landing page blank with no explanation: a loading screen now shows at once, then names the missing file or the exact start-up error, with retry buttons (index.html + sw.js; no new file, NO database RULES change)
+// Current version: v0.3.101 (2026-11-20) — Receive stock: scan on the till itself (also with a linked scanner phone) and print the stickers (pos.html + index.html + sw.js; no new file, NO database RULES change)
+//   - LIMIT 1 FIXED: v0.3.100 opened the main app's Scan Receive, so a WiFi-linked scanner phone (which feeds the till, not the main app) could not be used. Now the till's "Receive" button opens a Receive stock screen on the till: its scan box / hardware scanner, its camera and a linked scanner phone all add to the delivery (exact barcode, SKU or pack barcode, one scan = one more, the same rule as the main app's _srScan; items with no price can be received; commodities are received in the main app).
+//   - The delivery is kept as the SAME unsaved draft the main app keeps (localStorage mdm_srdraft_<install>_<user>, same shape), saved after every scan. "Continue in main app" (manager PIN while a shift is open, like Main app; the open sale is parked) opens Scan Receive with that draft already loaded, without the "continue it?" question, for cost, damaged, expiry, supplier and Save. Close keeps the draft; Discard throws it away.
+//   - While Receive stock is open no scan can reach the sale: the sell box, the camera and the linked phone all go to the delivery.
+//   - LIMIT 2 FIXED: after Save from the till an Admin gets the same sticker offer as in the main app (items with an in-store barcode, copies = quantity received): "Print stickers" opens the label printer, closing it brings the till back; "Back to till" skips. No offer (not an Admin, nothing to print): back to the till on its own, as in v0.3.100.
+//   - NOT CHANGED: a normal Scan Receive in the main app, sales ledger, shifts, sync, database rules, gate.js, sales.js, shifts.js, returns.js.
+// Previous version: v0.3.100 (2026-11-20) — Receive stock from the till, first form: the button opened the main app's Scan Receive (v0.3.99 was never released). Its notes: — Receive stock from the till (pos.html + index.html + sw.js; no new file, NO database RULES change). v0.3.99 was never released.
+//   - NEW: a "Receive" button in the till's header (Admin and Manager only, hidden for a Cashier). It uses the same manager-PIN rule as "Main app" while a shift is open, parks an open sale, then opens the MAIN APP's Scan Receive straight away.
+//   - WHY NOT INSIDE THE TILL: received stock is DATA.generalInventory. The till never writes DATA (one blob, last write wins; its cloud sync and audit belong to index.html), so a second Scan Receive in pos.html would fight the main app. This is the same hand-off Change password uses (sessionStorage mdm_till_sr, like mdm_till_cp).
+//   - Save: the delivery is saved exactly as Scan Receive always saves it (stamped, audit line, cost prices), pushed to the cloud now (8 s at most), then back to the till, which reads the new stock on load. Cancel: straight back. Refused (read-only, no permission): the usual message, then back.
+//   - CHANGED in a normal Scan Receive: nothing. Only when opened from the till is the barcode-sticker question skipped (stickers stay in the main app).
+//   - NOT CHANGED: sales ledger, shifts, sync, database rules, gate.js, sales.js, shifts.js, returns.js.
+// Previous version: v0.3.98 (2026-11-20) — Landing page blank with no explanation: a loading screen now shows at once, then names the missing file or the exact start-up error, with retry buttons (index.html + sw.js; no new file, NO database RULES change)
 //   - SYMPTOM: the page stayed dark with only the full-screen button. The landing page is hidden until index.html's main script runs, and that script sits behind five plain <script src> downloads (gate, sales, shifts, returns, barcode) that block one after another. On a weak signal, or when the main script threw an error before showLanding(), nothing was drawn and nothing was said.
 //   - FIX 1 (index.html): boot splash right after <body>. Shows the app name and a spinner immediately. After 6 s it says which of gate.js / sales.js / shifts.js / returns.js is still missing and shows "Try again" and "Clear saved app files and try again" (service worker + caches only, never the shop's data). If the main script throws before the landing page is up, the splash shows the error text and file:line instead (take a screenshot). The main script removes it with __bootOk() right after showLanding().
 //   - FIX 2 (index.html): <link rel="preload"> for the five shared scripts, so they download together instead of one after another.
@@ -2513,7 +2525,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.98';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.101';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
