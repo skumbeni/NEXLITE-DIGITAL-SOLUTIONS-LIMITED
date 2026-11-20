@@ -29,7 +29,9 @@ const Gate = (function () {
   //               separately, not via TIER_FEATURES). No new unlocks here.
   //   growth    — small depot / single operator; unlocks exports + cloud sync
   //   pro       — full-featured; unlocks reports, payslips, staff management
-  //   multisite — multiple depots under one account (future / enterprise)
+//   lifetime  — exactly Pro's features, paid ONCE (no end date, never expires). Ranks above Pro, adds no features of its own.
+  //   (There is NO 'multisite' plan. Extra sites are an add-on to ANY plan, priced as a % of that plan. A licence still
+//    carrying the old tier 'multisite' is treated as 'pro': see LEGACY_TIERS / normTier below.)
   //
   // trial is treated as pro-equivalent access (all features on) for 30 days.
   // suspended / pending_approval are handled separately by applyLicenseMode().
@@ -103,25 +105,26 @@ const Gate = (function () {
       'payroll_run',               // Payroll Run — Prepare Payroll, lock, pay out, mobile money CSV, run payslips, NAPSA/NHIMA/PAYE
       'stock_check',               // Stock check — stock vs logged bags per task, and the "paid for" badge on stock rows
     ],
-
-    // ── MULTISITE ────────────────────────────────────────────────────────────
-    // Future: multiple depots / branches under one subscription.
-    // Kept here as a placeholder — no gates wired yet (Step 5e).
-    multisite: [
-      'multi_depot',               // Switch between depot accounts
-      'depot_consolidation',       // Consolidated reports across depots
-      'branch_user_isolation',     // Per-branch user access control
-    ],
   };
 
   // Tiers ordered low → high. Used for "upgrade to at least X" prompts.
-  const TIER_ORDER = ['free', 'starter', 'growth', 'pro', 'multisite'];
+  const TIER_ORDER = ['free', 'starter', 'growth', 'pro', 'lifetime'];   // lifetime has no TIER_FEATURES entry: it inherits everything up to and including pro
+
+  // Old plan names that no longer exist, and the plan they now mean. 'multisite' (a flat K600 plan that was never
+  // sold) becomes 'pro'. Everything that reads a stored tier goes through normTier(), so an old licence or cache
+  // keeps full features instead of silently dropping to Free.
+  const LEGACY_TIERS = { multisite: 'pro' };
+  function normTier(t) {
+    t = typeof t === 'string' ? t.toLowerCase() : t;
+    return Object.prototype.hasOwnProperty.call(LEGACY_TIERS, t) ? LEGACY_TIERS[t] : t;
+  }
 
   // Trial gets full pro-equivalent access.
   const TRIAL_TIER = 'pro';
 
   // ── Compute the flat feature set for a given tier (includes all lower tiers)
   function _tierFeatureSet(tier) {
+    tier = normTier(tier);
     const idx = TIER_ORDER.indexOf(tier);
     if (idx === -1) return new Set(TIER_FEATURES.free);
     const features = new Set();
@@ -180,7 +183,7 @@ const Gate = (function () {
   function tierOf(lic, data) {
     const eff = statusOf(lic);
     if (eff === 'trial') return TRIAL_TIER;
-    if (eff === 'active' || eff === 'expired_grace') return lic.tier || data.tier || 'pro';
+    if (eff === 'active' || eff === 'expired_grace') return normTier(lic.tier || data.tier || 'pro');
     return 'free';
   }
 
@@ -577,7 +580,7 @@ const Gate = (function () {
   return {
     clockNote, clockDue, clockProblem, CLOCK_KEY, CLOCK_BLOCK_MS, CLOCK_FRESH_MS, CLOCK_EVERY_MS, CLOCK_FLOOR,
     TRIAL_MS, SUB_GRACE_MS, TIER_ORDER, TIER_FEATURES, TRIAL_TIER, READ_ONLY_STATUSES, KEYS, POS_SESSION_MS,
-    computeEffectiveStatus, tierFeatureSet: _tierFeatureSet,
+    computeEffectiveStatus, tierFeatureSet: _tierFeatureSet, normTier, LEGACY_TIERS,
     statusOf, isSelfSuspended, tierOf, hasFeature, isReadOnly, reconcile,
     receiptNumbering, restCloud, newTillCode, newTillId, RC_ALPHABET,
     PIN_ROLES, pinValid, pinRecord, pinCheck, pinHolders, pinFindApprover, pinRequired, pinLockState, pinFailed, pinClear,
