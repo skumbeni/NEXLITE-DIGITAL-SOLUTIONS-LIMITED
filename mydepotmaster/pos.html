@@ -217,6 +217,15 @@ main.on-sell{max-width:none;margin:0;padding:0;flex:1;min-height:0}
 .rcv-r .nm{flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere}.rcv-r .nm small{display:block;font-weight:400;color:var(--muted);font-size:12px}
 .rcv-r input{width:64px;font:inherit;font-size:16px;text-align:center;padding:7px 4px;border-radius:8px;border:2px solid var(--border);background:var(--bg);color:var(--text)}
 .rcv-r input:focus{outline:none;border-color:var(--green)}
+.rcv-c{border:1px solid var(--border);border-radius:12px;padding:10px;margin-bottom:8px}
+.rcv-c .top{display:flex;align-items:flex-start;gap:8px}
+.rcv-c .nm{flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere}.rcv-c .nm small{display:block;font-weight:400;color:var(--muted);font-size:12px}
+.rcv-g{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
+.rcv-g label{display:flex;flex-direction:column;gap:3px;font-size:12px;color:var(--muted);min-width:0}
+.rcv-g input{width:100%;min-width:0;font:inherit;font-size:16px;padding:8px;border-radius:8px;border:2px solid var(--border);background:var(--bg);color:var(--text)}
+.rcv-g input:focus{outline:none;border-color:var(--green)}
+.rcv-q{display:flex;align-items:center;gap:4px}.rcv-q input{flex:1;text-align:center}.rcv-q button{flex:none}
+.rcv-c details{margin-top:8px}.rcv-c summary{font-size:13px;color:var(--muted);cursor:pointer}
 .quick{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
 .quick button{padding:8px 14px;font-size:14px;border-radius:8px}
 .pay-err{min-height:18px;margin-bottom:4px;font-size:13px;color:var(--red)}
@@ -816,7 +825,8 @@ const HELP_TXT=[
   ['11. Lock, PIN and password','Settings at the top holds Appearance (Auto, Light or Dark), Stay logged in, your Till PIN and Change password. Set a Till PIN, switch on Stay logged in, and use the Lock button whenever you step away. Your Till PIN is not the manager PIN.'],
   ['12. No signal','The Till keeps working without signal. Sales are saved on the phone and sent to the cloud when you are online again. A brand-new till needs signal once to get its code.'],
   ['13. Phone as scanner','A second phone can scan for this till. On this till tap the phone button next to the camera button, then Start receiving. On the other phone sign in with your own login, tap the same button, then either type this till\u2019s 4-character code or tap Scan till QR and scan the code this till shows under Show till QR for a phone, then tap Start scanning. Each scan adds one item to the cart: check the cart before you charge. Link only your own phones, on the shop\u2019s private WiFi, never guest WiFi. Tap Stop receiving when you leave the till. A locked or busy till refuses scans.'],
-  ['14. Stay safe','Never share your password or PIN. Never type a manager PIN yourself. Log out or lock the till when you leave it. If you forget your Till PIN, tap Log out on the lock screen and sign in with your password.']
+  ['14. Receive stock','Admin and Manager only. Tap Receive, then scan each unit that arrives: one scan adds one. Check the quantity, type the cost, and open Damaged, expiry, batch if the delivery has any. Choose the supplier, the date and how it was paid, then tap Save delivery. The main app opens for a moment to store it and brings you back here with the new stock. A code the app does not know is not added: tap Open in main app to add the item first.'],
+  ['15. Stay safe','Never share your password or PIN. Never type a manager PIN yourself. Log out or lock the till when you leave it. If you forget your Till PIN, tap Log out on the lock screen and sign in with your password.']
 ];
 function closeHelp(){if(!HELPOVL)return;HELPOVL.remove();HELPOVL=null;}
 function openHelp(){
@@ -965,6 +975,7 @@ function renderPinForm(c){
 }
 // The password is kept in DATA.users and synced by index.html, so it is changed there. index.html sees mdm_till_cp, asks for the current and
 // the new password, saves it the way Settings > Change Password does, and sends the person back here.
+// v0.3.102: the whole Scan Receive form is here (cost, damaged, expiry, batch, another batch, supplier, date, payment) and Save delivery finishes it from this screen.
 // ── RECEIVE STOCK ON THE TILL (v0.3.100, scanning here since v0.3.101) ──────────────────────────────────────────────────────────
 // Received stock lives in DATA.generalInventory, which only index.html writes and syncs (see the note above), so the till cannot save a delivery.
 // What it CAN do is the scanning: this screen takes scans from the scan box / hardware scanner, the camera and a linked scanner phone (the same three
@@ -979,7 +990,7 @@ function rcvLoad(){        // the unsaved delivery on this phone, from here or f
   const none={lines:[],sup:'',date:'',pay:'paid'};
   try{
     const d=JSON.parse(localStorage.getItem(rcvKey())||'null');if(!d||!Array.isArray(d.lines))return none;
-    return {lines:d.lines.filter(l=>l&&l.name&&Number(l.factor)>0).map(l=>({id:String(l.id||''),name:String(l.name),unit:String(l.unit||''),factor:Number(l.factor),baseUnit:String(l.baseUnit||''),qty:Number(l.qty)||0,cost:Number(l.cost)||0,dmg:Number(l.dmg)||0,exp:String(l.exp||''),batch:String(l.batch||'')})),sup:String(d.sup||''),date:String(d.date||''),pay:String(d.pay||'paid')};
+    return {lines:d.lines.filter(l=>l&&l.name&&Number(l.factor)>0).map(l=>({id:String(l.id||''),name:String(l.name),unit:String(l.unit||''),factor:Number(l.factor),baseUnit:String(l.baseUnit||''),qty:Number(l.qty)||0,cost:Number(l.cost)||0,dmg:Number(l.dmg)||0,exp:String(l.exp||''),batch:String(l.batch||''),more:!!l.more})),sup:String(d.sup||''),date:String(d.date||''),pay:String(d.pay||'paid')};
   }catch{return none;}
 }
 function rcvSave(){
@@ -1022,24 +1033,64 @@ function rcvEnter(v){      // the scan box here (or a keyboard scanner whose foc
   if(r.label){rcvMsg('\u2713 '+r.label);rcvPaint();}
   return true;
 }
+function rcvNum(v){const n=Number(v);return n>0?Math.round(n*1e6)/1e6:0;}
+function rcvSum(){
+  if(!RCVSUM||!RCV)return;
+  const L=RCV.lines;
+  RCVSUM.textContent=L.length?L.length+' item(s) \u00B7 '+fq(L.reduce((a,l)=>a+(Number(l.qty)||0),0))+' scanned \u00B7 cost '+money(L.reduce((a,l)=>a+(Number(l.qty)||0)*(Number(l.cost)||0),0)):'';
+}
+function rcvField(label,type,val,on,attrs){      // one labelled box of a delivery line
+  const w=el('label','',label),i=el('input','',null,Object.assign({type,'aria-label':label},attrs||{}));
+  i.value=val;i.onchange=()=>on(i);w.append(i);return w;
+}
+// Each scanned item is one card with the same fields as the main app's Scan Receive: quantity, cost, damaged, expiry, batch / lot, and "Another batch of this item".
 function rcvPaint(){
   if(!RCVLIST||!RCV)return;
   RCVLIST.replaceChildren();
   if(!RCV.lines.length)RCVLIST.append(el('div','note','Nothing scanned yet.'));
+  const numA={inputmode:'decimal',min:'0',step:'any'};
   RCV.lines.forEach((l,i)=>{
-    const row=el('div','rcv-r'),nm=el('div','nm',l.name);
-    nm.append(el('small','',(l.unit?l.unit+' = '+fq(l.factor)+' '+(l.baseUnit||'units')+' \u00B7 ':'')+'stock +'+fq(l.qty*l.factor)+(l.baseUnit?' '+l.baseUnit.toLowerCase():'')));
-    const dn=el('button','sm','\u2212',{type:'button','aria-label':'One less'}),up=el('button','sm','+',{type:'button','aria-label':'One more'});
-    const q=el('input','',null,{type:'number',inputmode:'decimal',min:'0',step:'any','aria-label':'Quantity'});q.value=String(l.qty);
-    const rm=el('button','sm','\u2715',{type:'button','aria-label':'Remove'});
-    const set=v=>{const n=Number(v);if(!(n>0))return false;l.qty=Math.round(n*1e6)/1e6;rcvSave();rcvPaint();return true;};
-    dn.onclick=()=>{if(l.qty>1)set(l.qty-1);};
-    up.onclick=()=>set(l.qty+1);
-    q.onchange=()=>{if(!set(q.value))q.value=String(l.qty);};
+    const card=el('div','rcv-c'),top=el('div','top'),nm=el('div','nm',l.name);
+    nm.append(el('small','',(l.unit?l.unit+' contains '+fq(l.factor)+' '+(l.baseUnit||'units')+' \u00B7 ':'')+'stock +'+fq(l.qty*l.factor)+(l.baseUnit?' '+l.baseUnit.toLowerCase():'')));
+    const rm=el('button','sm','\u2715',{type:'button','aria-label':'Remove '+l.name});
     rm.onclick=()=>{RCV.lines.splice(i,1);rcvSave();rcvPaint();};
-    row.append(nm,dn,q,up,rm);RCVLIST.append(row);
+    top.append(nm,rm);
+    const qw=el('label','','Quantity'+(l.unit?' ('+l.unit+')':'')),qr=el('div','rcv-q'),
+      dn=el('button','sm','\u2212',{type:'button','aria-label':'One less'}),up=el('button','sm','+',{type:'button','aria-label':'One more'}),
+      qi=el('input','',null,Object.assign({type:'number','aria-label':'Quantity'},numA));qi.value=String(l.qty);
+    const set=v=>{const n=Number(v);if(!(n>0))return false;l.qty=Math.round(n*1e6)/1e6;rcvSave();rcvPaint();return true;};
+    dn.onclick=()=>{if(l.qty>1)set(l.qty-1);};up.onclick=()=>set(l.qty+1);
+    qi.onchange=()=>{if(!set(qi.value))qi.value=String(l.qty);};
+    qr.append(dn,qi,up);qw.append(qr);
+    const g=el('div','rcv-g');
+    g.append(qw,rcvField('Cost'+(l.unit?' per '+l.unit:' each'),'number',l.cost||'',x=>{l.cost=rcvNum(x.value);x.value=l.cost||'';rcvSave();rcvSum();},Object.assign({placeholder:'0.00'},numA)));
+    const dt=el('details'),sm=el('summary',''),tick=()=>{sm.textContent='Damaged, expiry, batch'+((l.dmg||l.exp||l.batch)?' \u2713':'');};tick();
+    dt.open=!!l.more;dt.addEventListener('toggle',()=>{if(!!l.more!==dt.open){l.more=dt.open;rcvSave();}});
+    const g2=el('div','rcv-g'),bw=rcvField('Batch / lot no.','text',l.batch||'',x=>{l.batch=x.value.trim().toUpperCase();x.value=l.batch;rcvSave();tick();},{placeholder:'OPTIONAL',autocomplete:'off'});
+    bw.style.gridColumn='1 / -1';bw.querySelector('input').addEventListener('input',e=>{e.target.value=e.target.value.toUpperCase();});
+    g2.append(
+      rcvField('Damaged'+(l.unit?' ('+l.unit+')':''),'number',l.dmg||'',x=>{l.dmg=rcvNum(x.value);x.value=l.dmg||'';rcvSave();tick();},Object.assign({placeholder:'0'},numA)),
+      rcvField('Expiry','date',l.exp||'',x=>{l.exp=x.value;rcvSave();tick();}),
+      bw);
+    const sp=el('button','sm','\uFF0B Another batch of this item',{type:'button'});sp.style.marginTop='8px';
+    sp.onclick=()=>{RCV.lines.unshift(Object.assign({},l,{qty:1,dmg:0,exp:'',batch:'',more:true}));rcvSave();rcvPaint();rcvMsg('New batch line for '+l.name+'. Scans of this item now go to it.');};
+    dt.append(sm,g2,sp);
+    card.append(top,g,dt);RCVLIST.append(card);
   });
-  if(RCVSUM)RCVSUM.textContent=RCV.lines.length?RCV.lines.length+' item(s) \u00B7 '+fq(RCV.lines.reduce((a,l)=>a+(Number(l.qty)||0),0))+' scanned':'';
+  rcvSum();
+}
+// Save: the same checks as the main app's Scan Receive, then the till hands the finished delivery to the main app, which stores it and syncs it (the till never writes stock).
+function rcvDo(){
+  if(!RCV)return;
+  const L=RCV.lines;
+  if(!L.length){rcvMsg('Scan at least one item.',true);return;}
+  if(L.some(l=>!(Number(l.qty)>0))){rcvMsg('Every line needs a quantity above 0.',true);return;}
+  const bd=L.find(l=>(Number(l.dmg)||0)>Number(l.qty));
+  if(bd){rcvMsg('Damaged is more than the quantity for '+bd.name+'.',true);return;}
+  const R=x=>Math.round(x*1e6)/1e6;
+  const txt=L.slice(0,12).map(l=>'\u2022 '+l.name+' \u00B7 '+fq(R(l.qty*l.factor))+(l.unit?' ('+fq(l.qty)+' '+l.unit+')':'')+(Number(l.dmg)>0?' \u00B7 '+fq(l.dmg)+' damaged':'')).join('\n')+(L.length>12?'\n\u2022 \u2026 and '+(L.length-12)+' more':'');
+  if(!confirm('Save this delivery \u2014 '+L.length+' line(s)?\n\n'+txt+'\n\nThe main app opens for a moment to store it, then brings you back here.'))return;
+  rcvSave();exitGuard(()=>goReceiveApp('save'));
 }
 function openReceive(){
   if(RCVOVL||anyOverlay()||!canReceive())return;
@@ -1057,11 +1108,26 @@ function openReceive(){
   tools.append(cam);
   if(COARSE){const kb=el('button','sm','\u2328 Type a code',{type:'button'});kb.onclick=()=>{RCVIN.setAttribute('inputmode','search');RCVIN.blur();RCVIN.focus();};tools.append(kb);}
   RCVMSG=el('div','pay-hint','');RCVLIST=el('div','');RCVSUM=el('div','pay-hint','');RCVSUM.style.fontWeight='700';
-  const foot=el('div','row'),dis=el('button','','Discard',{type:'button'}),go=el('button','pri','Continue in main app',{type:'button'});
+  // The same three boxes as the main app's Scan Receive: supplier, date received, payment. They are kept in the draft with the lines.
+  const sups=(DATA.contacts||[]).filter(c=>c&&c.type==='supplier'&&c.id);
+  const sw=el('label','fld','Supplier (optional)'),ss=el('select','',null,{'aria-label':'Supplier'}),o0=el('option','','\u2014 None / Unknown \u2014');
+  o0.value='';ss.append(o0);
+  sups.forEach(s=>{const o=el('option','',String(s.name||''));o.value=String(s.id);ss.append(o);});
+  ss.value=RCV.sup;if(ss.value!==RCV.sup){ss.value='';RCV.sup='';}
+  ss.onchange=()=>{RCV.sup=ss.value;rcvSave();};sw.append(ss);
+  const dw=el('label','fld','Date received'),di=el('input','',null,{type:'date','aria-label':'Date received'});
+  di.value=RCV.date||new Date().toISOString().slice(0,10);di.onchange=()=>{RCV.date=di.value;rcvSave();};dw.append(di);   // untouched = today when it is saved
+  const pw=el('label','fld','Payment'),ps=el('select','',null,{'aria-label':'Payment'});
+  [['paid','\u2705 PAID'],['partial','\uD83D\uDD36 PARTIAL'],['credit','\uD83D\uDD34 CREDIT']].forEach(x=>{const o=el('option','',x[1]);o.value=x[0];ps.append(o);});
+  ps.value=RCV.pay;if(ps.value!==RCV.pay){ps.value='paid';RCV.pay='paid';}
+  ps.onchange=()=>{RCV.pay=ps.value;rcvSave();};pw.append(ps);
+  const hint=el('div','pay-hint','New product or unknown code? Tap Open in main app to add the item first.');
+  const foot=el('div','row'),dis=el('button','','Discard',{type:'button'}),mb=el('button','','Open in main app',{type:'button'}),go=el('button','pri','Save delivery',{type:'button'});
   dis.onclick=()=>{if(RCV&&RCV.lines.length&&!confirm('Discard the '+RCV.lines.length+' scanned item(s)?'))return;if(RCV){RCV.lines=[];rcvSave();}rcvPaint();rcvMsg('');};
-  go.onclick=()=>{rcvSave();exitGuard(goReceiveApp);};
-  foot.append(dis,go);foot.style.marginTop='12px';
-  body.append(f,tools,RCVMSG,RCVLIST,RCVSUM,foot);
+  mb.onclick=()=>{rcvSave();exitGuard(()=>goReceiveApp('draft'));};
+  go.onclick=rcvDo;
+  foot.append(dis,mb,go);foot.style.marginTop='12px';
+  body.append(f,tools,RCVMSG,RCVLIST,RCVSUM,sw,dw,pw,hint,foot);
   box.append(head,body);ovl.append(box);document.body.append(ovl);RCVOVL=ovl;
   RCVIN.addEventListener('keydown',e=>{if(e.key!=='Enter')return;e.preventDefault();const v=RCVIN.value.trim();if(!v)return;if(rcvEnter(v))RCVIN.value='';else RCVIN.select();});
   ovl.addEventListener('click',e=>{if(e.target===ovl)closeReceive();});
@@ -1072,10 +1138,11 @@ function closeReceive(){
   rcvSave();RCVOVL.remove();RCVOVL=null;RCV=null;RCVMSG=RCVLIST=RCVIN=RCVSUM=null;   // the delivery stays saved as a draft; Discard is the way to throw it away
   if(!COARSE)focusSearch();
 }
-// Leave for the main app's Scan Receive, which carries on with the saved draft. An open sale is parked first, exactly as for Main app.
-function goReceiveApp(){
+// Leave for the main app, which carries on with the saved draft. An open sale is parked first, exactly as for Main app.
+// v0.3.102: mode 'save' (the Save delivery button) = the delivery is complete and confirmed here, so the main app stores it at once, with no second form; 'draft' (Open in main app) opens its Scan Receive to carry on by hand.
+function goReceiveApp(mode){
   closeReceive();parkOnExit();
-  try{sessionStorage.setItem('mdm_till_sr','draft');sessionStorage.setItem(SESSION_KEY,JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now()}));}catch{}
+  try{sessionStorage.setItem('mdm_till_sr',mode==='save'?'save':'draft');sessionStorage.setItem(SESSION_KEY,JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now()}));}catch{}
   touchActive(true);
   toApp();
 }

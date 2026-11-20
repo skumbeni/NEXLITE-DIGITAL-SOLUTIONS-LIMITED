@@ -5708,7 +5708,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.101';
+const SW_VERSION  = 'v0.3.102';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -8576,7 +8576,8 @@ function _tillHandoffOnce(){
   if(!f&&!r) return;
   window._tillCpDone=true; window._tillCpActive=true;
   try{ sessionStorage.removeItem('mdm_till_cp'); sessionStorage.removeItem('mdm_till_sr'); }catch{}
-  window._srAutoDraft=(r==='draft');   // v0.3.101: the till scanned a delivery and saved it as the draft: carry on with it, do not ask
+  window._srAutoDraft=(r==='draft'||r==='save');window._srAutoSave=(r==='save');   // v0.3.102: 'save' = the till already filled in and confirmed the delivery: store it now, no second form
+    // v0.3.101: the till scanned a delivery and saved it as the draft: carry on with it, do not ask
   if(f) setTimeout(_openTillPwBox,300); else setTimeout(_tillSrStart,300);
 }
 // ── RECEIVE STOCK FROM THE TILL (v0.3.100) ─────────────────────────────────────────────────────────────────────
@@ -8591,7 +8592,9 @@ function _tillSrStart(){
   if(!USER) return;
   window._tillSrActive=true;
   try{ openScanReceive(); }catch(e){}
-  if(!_sr){ window._tillSrActive=false; _tillBack(); }
+  const auto=!!window._srAutoSave; window._srAutoSave=false;
+  if(!_sr){ window._tillSrActive=false; _tillBack(); return; }
+  if(auto) setTimeout(()=>{ if(_sr) _srSave(true); },80);   // v0.3.102: any problem (a missing quantity, read-only) shows its usual message and leaves the form open
 }
 window._tillSrPre=[];
 function _tillSrLabels(){ window._tillSrLabels=true; openLabelPrinter(window._tillSrPre,'receive'); if(!_lbl) window._tillSrLabels=false; }   // refused (not admin): stay on the Received box
@@ -13803,7 +13806,7 @@ function _srClose(done){
   _srDraftClear();_srCamStop();_sr=null;closeModal();
   if(window._tillSrActive&&!done){ window._tillSrActive=false; _tillBack(); }   // v0.3.100: Cancel from the till goes straight back to it
 }
-function _srSave(){
+function _srSave(auto){
   if(!_sr||isReadOnly())return;if(!requireAddPermission('receive stock'))return;
   const L=_sr.lines;
   if(!L.length){alert('Scan at least one item.');return;}
@@ -13811,7 +13814,7 @@ function _srSave(){
   const bd=L.find(l=>(Number(l.dmg)||0)>Number(l.qty));if(bd){alert('Damaged is more than the quantity for '+bd.name+'.');return;}
   const supId=document.getElementById('sr-sup')?.value||'',c=(DATA.contacts||[]).find(x=>x.id===supId);
   const B=_srBuild(L,{date:document.getElementById('sr-date').value||today(),time:nowTime(),supplierId:supId,supplierName:c?c.name:'',creditStatus:document.getElementById('sr-pay').value});
-  if(!confirm('Confirm Scan Receive — '+B.recs.length+' line(s):\n\n'+B.recs.map((r,i)=>'• '+r.itemName+' · '+r.received+(L[i].unit?' ('+L[i].qty+' '+L[i].unit+')':'')+(r.damaged?' · '+r.damaged+' damaged':'')).join('\n')+'\n\nProceed?'))return;
+  if(auto!==true&&!confirm('Confirm Scan Receive — '+B.recs.length+' line(s):\n\n'+B.recs.map((r,i)=>'• '+r.itemName+' · '+r.received+(L[i].unit?' ('+L[i].qty+' '+L[i].unit+')':'')+(r.damaged?' · '+r.damaged+' damaged':'')).join('\n')+'\n\nProceed?'))return;
   updateData(d=>{
     const prices={...(d.inventoryPrices||{})};
     Object.keys(B.prices).forEach(n=>{prices[n]={...(prices[n]||{}),purchasePrice:B.prices[n]};});

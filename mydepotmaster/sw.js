@@ -25,7 +25,12 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.101 (2026-11-20) — Receive stock: scan on the till itself (also with a linked scanner phone) and print the stickers (pos.html + index.html + sw.js; no new file, NO database RULES change)
+// Current version: v0.3.102 (2026-11-20) — Receive stock on the till: the whole Scan Receive form and Save, from the till screen (pos.html + index.html + sw.js; no new file, NO database RULES change)
+//   - NEW: each scanned item on the till's Receive stock screen is a card with the same fields as the main app's Scan Receive: quantity, cost, damaged, expiry, batch / lot and "Another batch of this item". Below the list: supplier, date received and payment, and the total cost.
+//   - NEW: "Save delivery" runs the same checks as the main app (a quantity on every line, damaged not above the quantity), asks once, then the main app opens for a moment, stores the delivery exactly as Scan Receive always does (stock, cost price, Audit line, cloud sync) and brings the till back. No second form, no second question. "Open in main app" is still there for a new product or an unknown code.
+//   - WHY THE MAIN APP STILL DOES THE WRITE: received stock lives in DATA.generalInventory, one blob, last write wins, and only index.html writes and syncs it. A till-side write would need a new append-only ledger plus an import in the main app: not done here.
+//   - NOT CHANGED: a normal Scan Receive in the main app (its Save still asks "Proceed?"), sales ledger, shifts, sync, database rules, gate.js, sales.js, shifts.js, returns.js.
+// Previous version: v0.3.101 (2026-11-20) — Receive stock: scan on the till itself (also with a linked scanner phone) and print the stickers (pos.html + index.html + sw.js; no new file, NO database RULES change)
 //   - LIMIT 1 FIXED: v0.3.100 opened the main app's Scan Receive, so a WiFi-linked scanner phone (which feeds the till, not the main app) could not be used. Now the till's "Receive" button opens a Receive stock screen on the till: its scan box / hardware scanner, its camera and a linked scanner phone all add to the delivery (exact barcode, SKU or pack barcode, one scan = one more, the same rule as the main app's _srScan; items with no price can be received; commodities are received in the main app).
 //   - The delivery is kept as the SAME unsaved draft the main app keeps (localStorage mdm_srdraft_<install>_<user>, same shape), saved after every scan. "Continue in main app" (manager PIN while a shift is open, like Main app; the open sale is parked) opens Scan Receive with that draft already loaded, without the "continue it?" question, for cost, damaged, expiry, supplier and Save. Close keeps the draft; Discard throws it away.
 //   - While Receive stock is open no scan can reach the sale: the sell box, the camera and the linked phone all go to the delivery.
@@ -2525,7 +2530,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.101';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.102';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
