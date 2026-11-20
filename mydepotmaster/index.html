@@ -959,8 +959,72 @@ body.light .ug-ghost{color:var(--text);}
   });
 </script>
 <script>document.addEventListener('DOMContentLoaded',function(){var y=new Date().getFullYear();document.querySelectorAll('.cy-year').forEach(function(e){e.textContent=y;});});</script>
+<!-- v0.3.98: start all five shared scripts downloading at once. Each plain script tag below blocks the next one, so on a weak signal their waits used to add up. -->
+<link rel="preload" href="gate.js" as="script"><link rel="preload" href="sales.js" as="script"><link rel="preload" href="shifts.js" as="script"><link rel="preload" href="returns.js" as="script"><link rel="preload" href="barcode.js" as="script">
 </head>
 <body>
+<!-- BOOT SPLASH (v0.3.98). The landing page is hidden until the main script runs, and that script sits behind five blocking downloads (gate, sales, shifts, returns, barcode).
+     On a weak signal or after a start-up error the screen used to stay BLANK with no clue why. Now a loading screen shows at once; after 6 s it names the file still missing,
+     or the exact error, and offers Try again / Clear saved app files (service worker + caches only, never the shop's data). The main script removes it with __bootOk(). -->
+<div id="boot-splash" style="position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483646;background:#1A1A2E;color:#E8EAF2;font:16px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:14px;padding:24px;text-align:center;box-sizing:border-box">
+  <div style="font-size:20px;font-weight:700">Shop Inventory &amp; Sales Manager</div>
+  <div id="bs-spin" style="width:34px;height:34px;border:4px solid rgba(255,255,255,.2);border-top-color:#2ECC71;border-radius:50%;animation:bs-rot 1s linear infinite"></div>
+  <div id="bs-msg" style="max-width:420px;color:#9AA3B8;white-space:pre-line">Loading…</div>
+  <div id="bs-btns" style="display:none;flex-direction:column;gap:10px;align-items:center">
+    <button id="bs-retry" style="font:inherit;font-weight:700;padding:14px 22px;border-radius:12px;border:0;background:#1e8449;color:#fff;min-width:260px">Try again</button>
+    <button id="bs-clear" style="font:inherit;padding:12px 18px;border-radius:12px;border:1px solid #4a5068;background:transparent;color:#E8EAF2;min-width:260px">Clear saved app files and try again</button>
+  </div>
+</div>
+<style>@keyframes bs-rot{to{transform:rotate(360deg)}}</style>
+<script>(function(){
+  var t0 = Date.now(), done = false, err = '', iv = 0;
+  function $(id){ return document.getElementById(id); }
+  function missing(){
+    var m = [];
+    if (typeof Gate === 'undefined') m.push('gate.js');
+    if (typeof Sales === 'undefined') m.push('sales.js');
+    if (typeof Shifts === 'undefined') m.push('shifts.js');
+    if (typeof Returns === 'undefined') m.push('returns.js');
+    return m;
+  }
+  function gone(){
+    done = true; clearInterval(iv);
+    var e = $('boot-splash'); if (e && e.parentNode) e.parentNode.removeChild(e);
+  }
+  window.__bootOk = gone;
+  function trouble(text){
+    var m = $('bs-msg'), b = $('bs-btns'), s = $('bs-spin');
+    if (!m) return;
+    m.textContent = text; if (b) b.style.display = 'flex'; if (s) s.style.display = 'none';
+  }
+  window.addEventListener('error', function(e){
+    if (done || (e.target && e.target !== window)) return;           // resource failures are handled by the load guard / watchdog
+    if (!e.message || e.message === 'Script error.') return;
+    err = e.message + ' (' + String(e.filename || '').split('/').pop().split('?')[0] + ':' + (e.lineno || '?') + ')';
+    trouble('The app hit an error while starting:\n' + err + '\nNothing you entered has been deleted. Take a screenshot of this screen.');
+  });
+  iv = setInterval(function(){
+    if (done) return;
+    var l = $('landing-screen');
+    if (l && l.style.display && l.style.display !== 'none') { gone(); return; }   // fallback: the page is showing
+    if (err) return;
+    if (Date.now() - t0 >= 6000) {
+      var m = missing();
+      trouble('Still loading. The signal looks weak.' + (m.length ? '\nWaiting for: ' + m.join(', ') : '') + '\nNothing you entered has been deleted.');
+    }
+  }, 500);
+  function clearAll(){
+    var go = function(){ location.reload(); }, p = [];
+    try { if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) p.push(navigator.serviceWorker.getRegistrations().then(function(rs){ return Promise.all(rs.map(function(r){ return r.unregister(); })); })); } catch (e) {}
+    try { if (window.caches && caches.keys) p.push(caches.keys().then(function(ks){ return Promise.all(ks.map(function(k){ return caches.delete(k); })); })); } catch (e) {}
+    Promise.all(p).then(go, go);
+  }
+  document.addEventListener('click', function(ev){
+    var id = ev.target && ev.target.id;
+    if (id === 'bs-retry') location.reload();
+    else if (id === 'bs-clear') clearAll();
+  });
+})();</script>
 <button id="global-fullscreen-btn" onclick="toggleAppFullscreen()" title="Full screen" aria-label="Toggle full screen" style="position:fixed;top:max(10px,env(safe-area-inset-top,10px));right:10px;z-index:5000;background:var(--surface,#16213E);border:1px solid var(--border,#2C3E50);border-radius:50%;width:34px;height:34px;display:flex;align-items:center;justify-content:center;color:var(--muted,#8a93a6);cursor:pointer;touch-action:manipulation;-webkit-tap-highlight-color:transparent;opacity:.85;box-shadow:0 2px 8px rgba(0,0,0,.3);">
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3M21 8V5a2 2 0 00-2-2h-3M3 16v3a2 2 0 002 2h3M16 21h3a2 2 0 002-2v-3"/></svg>
 </button>
@@ -5644,7 +5708,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.97';
+const SW_VERSION  = 'v0.3.98';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -26574,8 +26638,10 @@ if (location.hash === '#recover') {
   // otherwise touch this device's local data on its own. It only acts when
   // you explicitly click a button. Safe to open while offline.
   showRecoveryTool();
+  if (window.__bootOk) window.__bootOk();
 } else {
 showLanding();
+if (window.__bootOk) window.__bootOk();   // v0.3.98: remove the boot splash
 setTimeout(async ()=>{
   try{
     applyFontSize(getFontSize());

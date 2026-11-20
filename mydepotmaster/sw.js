@@ -25,7 +25,13 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.97 (2026-11-19) — Blank screen on a dead or weak signal, round 2: the start-up waits no longer add up, a script that cannot be had now fails with a message instead of hanging, index.html's guard now covers all four files (sw.js + index.html; no new file, NO database RULES change)
+// Current version: v0.3.98 (2026-11-20) — Landing page blank with no explanation: a loading screen now shows at once, then names the missing file or the exact start-up error, with retry buttons (index.html + sw.js; no new file, NO database RULES change)
+//   - SYMPTOM: the page stayed dark with only the full-screen button. The landing page is hidden until index.html's main script runs, and that script sits behind five plain <script src> downloads (gate, sales, shifts, returns, barcode) that block one after another. On a weak signal, or when the main script threw an error before showLanding(), nothing was drawn and nothing was said.
+//   - FIX 1 (index.html): boot splash right after <body>. Shows the app name and a spinner immediately. After 6 s it says which of gate.js / sales.js / shifts.js / returns.js is still missing and shows "Try again" and "Clear saved app files and try again" (service worker + caches only, never the shop's data). If the main script throws before the landing page is up, the splash shows the error text and file:line instead (take a screenshot). The main script removes it with __bootOk() right after showLanding().
+//   - FIX 2 (index.html): <link rel="preload"> for the five shared scripts, so they download together instead of one after another.
+//   - FIX 3 (sw.js install): the best-effort precache step (manifest, sales, shifts, returns, qrcode, barcode, pos.html, fonts) now has a 20 s limit. A download that hangs on a weak signal used to hold the install, and skipWaiting(), back with no limit. The shell and gate.js are still required first, as before.
+//   - NOT CHANGED: fetch rules, the load guard, pos.html, sync, database rules.
+// Previous version: v0.3.97 (2026-11-19) — Blank screen on a dead or weak signal, round 2: the start-up waits no longer add up, a script that cannot be had now fails with a message instead of hanging, index.html's guard now covers all four files (sw.js + index.html; no new file, NO database RULES change)
 //   - WHY v0.3.96 STILL FAILED (measured, headless Chromium, every request hanging as on a WiFi router with no internet): with everything cached the app took 24 s to start, not 4.5 s. The 4 s wait of v0.3.96 was paid by EACH file in turn (page, gate.js, sales.js, shifts.js, returns.js, barcode.js: a <script src> blocks the next one). And if one script was not in the cache (its precache download had failed on a weak signal) the page hung with no message at all, because with nothing cached the worker waited for the network without a limit.
 //   - FIX 1 (sw.js, netOrCache): once a wait has run out and the cache has answered, the network counts as slow for NET_SLOW_MS (60 s): cached files are then answered after NET_SLOW_WAIT_MS (0.3 s) instead of 4 s. Downloads still carry on in the background and refresh the cache. A good answer from the network ends the slow state at once. Dead network, everything cached: 24 s -> 6 s.
 //   - FIX 2 (sw.js, networkFirst): a script or the manifest with NO cached copy waits at most NET_HARD_MS (10 s; 5 s while the network is known to be slow). It then looks in the cache once more and, if still empty, fails. The download carries on in the background and fills the cache, so the page guard's automatic reload usually finds it. The page itself (a navigation) is never cut off this way: with nothing cached there is nothing else to show.
@@ -2507,7 +2513,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.97';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.98';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
@@ -2606,7 +2612,7 @@ self.addEventListener('install', e => {
       // previous version and its cache keep running and the browser tries again on the next visit. Before, a slow shell download skipped every file
       // after it, skipWaiting() still ran, and activate deleted the old cache: the phone ended up with no gate.js and a blank page.
       return Promise.all([cache.add(fresh(SHELL)), cache.add(fresh('gate.js'))])
-        .then(() => Promise.all([
+        .then(() => Promise.race([new Promise(r => setTimeout(r, 20000)), Promise.all([   // v0.3.98: best-effort files get 20 s at most; a hanging download must not stop skipWaiting()
           soft('manifest.json'),
           soft('sales.js'),      // the sales ledger: index.html AND pos.html need it to start offline
           soft('shifts.js'),     // the shift ledger (step 16): pos.html needs it to start offline
@@ -2615,7 +2621,7 @@ self.addEventListener('install', e => {
           soft('barcode.js'),    // barcodes (v0.3.78): drawing, labels, and the camera reader for iPhone: index.html AND pos.html need it to start offline
           soft('pos.html'),      // the till page (best-effort; index.html also adds it)
           cache.add(FONTS_CSS).catch(() => {})   // fonts (best-effort, may fail offline)
-        ]))
+        ])]))
         .then(() => self.skipWaiting());   // activate at once, but only once the two essential files are safely cached
     })
   );
