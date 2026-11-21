@@ -18,6 +18,7 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
 @media(max-width:760px){.hero{grid-template-columns:1fr}.hero-note{max-width:none}.restaurants{grid-template-columns:1fr 1fr}.layout{grid-template-columns:1fr}.cart-sticky{position:static}.head{align-items:flex-start}.area{font-size:11px}}
 @media(max-width:440px){.restaurants{grid-template-columns:1fr}.shell{padding-left:13px;padding-right:13px}.head{padding-left:13px;padding-right:13px}.brand h1{font-size:18px}.area{white-space:normal;text-align:center;max-width:112px}.two{grid-template-columns:1fr}}
 .geo{display:flex;gap:10px;align-items:center;justify-content:space-between;background:#e7f3eb;color:#176b45;border:1px solid #cfe3d5;border-radius:12px;padding:10px 12px;margin:10px 0;font-size:13px;line-height:1.45}.geo b{font-weight:700}.geo-x{background:none;border:0;color:inherit;cursor:pointer;font-size:15px;padding:0 4px}.geo .pill{margin-left:6px;cursor:pointer;color:var(--ink)}
+@keyframes flashbg{0%,60%{background:#fff3cd}100%{background:transparent}}.towns-box.flash{animation:flashbg 1.4s ease;border-radius:12px}
 </style>
 </head>
 <body>
@@ -159,7 +160,7 @@ function renderBrand(){
   document.title=b+" | Order local food";
   document.querySelectorAll("[data-brand]").forEach(e=>e.textContent=b);
   const btn=document.getElementById("areaBtn");
-  btn.textContent="📍 "+(town?town.name:"Choose your town")+(town&&many?" ▾":"");
+  btn.textContent="📍 "+(town?town.name:(!dataReady?"Loading…":(many?"Choose your town":"No towns yet")))+(town&&many?" ▾":"");
   btn.classList.toggle("pick",many);
   document.getElementById("menuTag").textContent=town?town.name:"Your town";
 }
@@ -177,10 +178,21 @@ function pickTown(id,src){
   const t=townList().find(x=>x.id===id); if(!t) return;
   town=t; saveTown(t.id,src||"manual"); applyTown();
 }
+// The header town button always does something visible.
 function changeTown(){
-  if(townList().length<2) return;
-  if(Object.keys(cart).length&&!confirm("Changing town will clear your basket. Continue?")) return;
-  town=null; saveTown(null); applyTown();
+  const list=townList(), box=document.getElementById("restaurants");
+  if(town){
+    if(list.length<2){showGeo("📍 We only serve <b>"+escapeHtml(town.name)+"</b> at the moment.");return;}
+    if(Object.keys(cart).length&&!confirm("Changing town will clear your basket. Continue?")) return;
+    town=null; saveTown(null); applyTown();
+  } else if(!dataReady){
+    showGeo("📍 Still loading restaurants, one moment…"); return;
+  } else if(!list.length){
+    showGeo("📍 No towns are open yet. Please check back soon."); return;
+  }
+  const pk=box.querySelector(".towns-box");
+  box.scrollIntoView({behavior:"smooth",block:"center"});
+  if(pk){pk.classList.remove("flash");void pk.offsetWidth;pk.classList.add("flash");}
 }
 function km(a,b,c,d){
   const r=x=>x*Math.PI/180,h=Math.sin(r(c-a)/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(r(d-b)/2)**2;
