@@ -20,16 +20,23 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
 .geo{display:flex;gap:10px;align-items:center;justify-content:space-between;background:#e7f3eb;color:#176b45;border:1px solid #cfe3d5;border-radius:12px;padding:10px 12px;margin:10px 0;font-size:13px;line-height:1.45}.geo b{font-weight:700}.geo-x{background:none;border:0;color:inherit;cursor:pointer;font-size:15px;padding:0 4px}.geo .pill{margin-left:6px;cursor:pointer;color:var(--ink)}
 @keyframes flashbg{0%,60%{background:#fff3cd}100%{background:transparent}}.towns-box.flash{animation:flashbg 1.4s ease;border-radius:12px}
 .status.ok{background:#e7f3eb;border:1px solid #cfe3d5;color:#18251f}.status.bad{background:#fff7e9;border:1px solid #f3dfb9;color:#72501d}
+@media(max-width:560px){.head{flex-wrap:wrap}}
+:root[data-theme=dark]{color-scheme:dark;--bg:#0f1713;--card:#18241e;--ink:#eef3ee;--muted:#9fb0a6;--line:#2b3b32;--brand:#27905f;--brand2:#1f3a2d;--shadow:none}
+[data-theme=dark] .pill,[data-theme=dark] input,[data-theme=dark] select,[data-theme=dark] textarea{background:var(--card);color:var(--ink);border-color:var(--line)}
+[data-theme=dark] .status.ok{background:#1f3a2d;border-color:#2b5a43;color:var(--ink)}[data-theme=dark] .status.bad{background:#3a2f18;border-color:#5a4720;color:#f3dfb9}
+.hbox{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-top:18px;box-shadow:var(--shadow)}.hrow{border-top:1px solid var(--line);padding:12px 0}.hsp{display:flex;justify-content:space-between;gap:8px}.hon{background:var(--brand2)!important;color:var(--brand)!important}
 </style>
+<script>try{var t=localStorage.getItem("fcTheme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
 <body>
 <header>
   <div class="head">
     <div class="brand"><div class="logo">FC</div><div><h1 id="brandName">Food Connect</h1><p>Your favourite food. We buy. We deliver.</p></div></div>
-    <button type="button" class="area" id="areaBtn" onclick="changeTown()">📍 Choose your town</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="area" id="areaBtn" onclick="changeTown()">📍 Choose your town</button><button type="button" class="area hidden" id="historyBtn" onclick="openHistory()">🧾 My orders</button><button type="button" class="area" id="themeBtn" onclick="toggleTheme()" aria-label="Switch between light and dark theme">🌓</button></div>
   </div>
 </header>
 <main class="shell">
+  <section id="historyBox" class="hbox hidden" aria-live="polite"></section>
   <section class="hero">
     <div><h2>Good food from local restaurants, delivered to your door.</h2><p>Choose a restaurant, place your order and pay <span data-brand>Food Connect</span> before we purchase your food. We handle the collection and delivery.</p></div>
     <div class="hero-note"><strong>How it works</strong>1. Choose one restaurant<br>2. Confirm your order and delivery area<br>3. Pay us via mobile money<br>4. We purchase and deliver your food</div>
@@ -58,7 +65,7 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
       <div id="cartLines" class="cart-empty">Your basket is empty. Add items from a restaurant menu.</div>
       <div class="totals">
         <div class="total-row"><span>Food subtotal</span><strong id="foodTotal">K0.00</strong></div>
-        <div class="total-row"><span>Service fee (10%, min K10)</span><strong id="serviceFee">K0.00</strong></div>
+        <div class="total-row"><span id="serviceLabel">Service fee (10%, min K10)</span><strong id="serviceFee">K0.00</strong></div>
         <div class="total-row"><span>Delivery fee</span><strong id="deliveryFee">K0.00</strong></div>
         <div class="total-row grand"><span>Total to pay</span><span id="grandTotal">K0.00</span></div>
       </div>
@@ -91,6 +98,19 @@ const BUSINESS = {
   minimumServiceFee: 10,
   zones: [{label:"0–3 km",fee:20},{label:"3–6 km",fee:30},{label:"6–10 km",fee:45}]
 };
+// Prices set in the admin (Prices tab) arrive from the database and replace the defaults above.
+function applyPricing(p){
+  if(!p) return;
+  const n=x=>(x===null||x===undefined||x===""||!isFinite(Number(x))||Number(x)<0)?null:Number(x);
+  const pct=n(p.servicePct),sm=n(p.serviceMin),mf=n(p.minFood),d=[n(p.d1),n(p.d2),n(p.d3)];
+  if(pct!==null) BUSINESS.servicePercent=pct;
+  if(sm!==null) BUSINESS.minimumServiceFee=sm;
+  if(mf!==null) BUSINESS.minimumFoodOrder=mf;
+  d.forEach((f,i)=>{if(f!==null) BUSINESS.zones[i].fee=f;});
+  const lab=document.getElementById("serviceLabel"); if(lab) lab.textContent="Service fee ("+BUSINESS.servicePercent+"%, min K"+BUSINESS.minimumServiceFee+")";
+  const z=document.getElementById("zone"); if(z) Array.from(z.options).forEach((o,i)=>{if(BUSINESS.zones[i]) o.textContent=BUSINESS.zones[i].label+" · K"+BUSINESS.zones[i].fee;});
+  if(typeof calculate==="function") calculate();
+}
 
 // SAMPLE CATALOGUE ONLY. Confirm each restaurant's permission, menu and current prices before publishing.
 // Keep one restaurant per order in this pilot to simplify purchasing and rider dispatch.
@@ -292,6 +312,7 @@ function startLive(){
   try{
     firebase.initializeApp(FIREBASE_CONFIG); db=firebase.database(); auth=firebase.auth(); auth.onAuthStateChanged(loadProfile);
     allRestaurants=[]; RESTAURANTS=[]; renderBrand(); renderRestaurants(); calculate();
+    db.ref("settings/pricing").on("value",snap=>applyPricing(snap.val()),err=>console.warn("Could not load prices",err));
     db.ref("towns").on("value",snap=>{
       const v=snap.val()||{};
       TOWNS=Object.entries(v).filter(([,t])=>t&&t.name&&t.active!==false).map(([id,t])=>({
@@ -458,6 +479,38 @@ function openWhatsApp(url){
   try{w.opener=null;}catch(e){}
   w.location.href=url; return true;
 }
+function toggleTheme(){const t=document.documentElement.dataset.theme==="dark"?"light":"dark";document.documentElement.dataset.theme=t;try{localStorage.setItem("fcTheme",t)}catch(e){}}
+// ---- My orders and payments (reads only this customer's own orders) ----
+let historyOrders=[],historyTab="orders";
+const PAID_SET=["paid","purchased","delivering","delivered"];
+const STATUS_TEXT={new:"Received. Waiting for us to confirm on WhatsApp",confirmed:"Confirmed. Waiting for your payment",paid:"Payment received",purchased:"We have bought your food",delivering:"On its way to you",delivered:"Delivered",cancelled:"Cancelled"};
+function closeHistory(){const b=document.getElementById("historyBox");if(b){b.classList.add("hidden");b.innerHTML="";}}
+function setHistoryTab(t){historyTab=t;renderHistory();}
+async function openHistory(){
+  const box=document.getElementById("historyBox");
+  if(!(db&&auth&&auth.currentUser)){alert("Sign in first to see your orders.");return;}
+  box.classList.remove("hidden");box.innerHTML="Loading your orders…";box.scrollIntoView({behavior:"smooth"});
+  try{
+    const v=(await db.ref("orders").orderByChild("uid").equalTo(auth.currentUser.uid).limitToLast(50).get()).val()||{};
+    historyOrders=Object.keys(v).map(k=>v[k]).sort((a,b)=>b.createdAt-a.createdAt);renderHistory();
+  }catch(e){box.innerHTML="We could not load your orders ("+escapeHtml((e&&e.code)||"error")+"). Message us on WhatsApp if this keeps happening. <button type=\"button\" class=\"pill\" onclick=\"closeHistory()\">Close</button>";}
+}
+function renderHistory(){
+  const box=document.getElementById("historyBox"),list=historyOrders;
+  const d=t=>t?new Date(t).toLocaleDateString(undefined,{day:"numeric",month:"short",year:"numeric"}):"";
+  const tabBtn=(k,l)=>'<button type="button" class="pill'+(historyTab===k?" hon":"")+'" onclick="setHistoryTab(\''+k+'\')">'+l+'</button>';
+  let body;
+  if(historyTab==="orders"){
+    body=list.length?list.map(o=>'<div class="hrow"><div class="hsp"><strong>'+escapeHtml(o.restaurant)+'</strong><strong>'+money(o.total)+'</strong></div><div style="color:var(--muted);font-size:13px">'+escapeHtml(o.ref)+' · '+d(o.createdAt)+'</div><div style="font-size:13px;white-space:pre-wrap;margin:6px 0">'+escapeHtml((o.items||[]).join("\n"))+'</div><span class="pill">'+escapeHtml(STATUS_TEXT[o.status]||o.status)+'</span></div>').join(""):'<div class="empty"><b>No orders yet</b>Orders you place will appear here.</div>';
+  }else{
+    const paid=list.filter(o=>PAID_SET.includes(o.status)),due=list.filter(o=>o.status==="new"||o.status==="confirmed"),sum=paid.reduce((a,o)=>a+Number(o.total||0),0);
+    body='<div style="margin:10px 0">Total paid: <strong>'+money(sum)+'</strong> on '+paid.length+' order'+(paid.length===1?"":"s")+'</div>'
+     +due.map(o=>'<div class="hrow"><div class="hsp"><strong>Waiting for payment · '+escapeHtml(o.ref)+'</strong><strong>'+money(o.total)+'</strong></div><div style="color:var(--muted);font-size:13px">'+escapeHtml(o.payment)+' · we send payment instructions on WhatsApp once your order is confirmed</div></div>').join("")
+     +paid.map(o=>'<div class="hrow"><div class="hsp"><strong>'+escapeHtml(o.ref)+' · '+escapeHtml(o.restaurant)+'</strong><strong>'+money(o.total)+'</strong></div><div style="color:var(--muted);font-size:13px">'+escapeHtml(o.payment)+' · '+d(o.paidAt||o.createdAt)+(o.txn?' · Transaction '+escapeHtml(o.txn):'')+'</div></div>').join("")
+     +(!paid.length&&!due.length?'<div class="empty"><b>No payments yet</b>Your payments will appear here once we confirm them.</div>':'');
+  }
+  box.innerHTML='<div class="hsp" style="align-items:center"><strong>My orders</strong><button type="button" class="pill" onclick="closeHistory()">Close</button></div><div style="display:flex;gap:8px;margin-top:10px">'+tabBtn("orders","Orders")+tabBtn("payments","Payments")+'</div>'+body;
+}
 function orderSig(){return JSON.stringify([cart,document.getElementById("zone").value]);}
 function failText(r){
   return r==="timeout"?"Your connection looks slow, so we could not confirm it was saved."
@@ -495,6 +548,7 @@ function fillPhone(){const ph=document.getElementById("phone"); if(userPhone&&ph
 function renderAuth(){
   const box=document.getElementById("authBox"); if(!box||!auth) return;
   const u=auth.currentUser; box.classList.remove("hidden");
+  const hb=document.getElementById("historyBtn"); if(hb)hb.classList.toggle("hidden",!u); if(!u)closeHistory();
   const fld=(id,label,type,ac)=>`<div class="field"><label for="${id}">${label}</label><input id="${id}" type="${type}" autocomplete="${ac}"></div>`;
   const out=`<button class="pill" type="button" onclick="auth.signOut()">Sign out</button>`;
   if(u&&userPhone){box.innerHTML=`Signed in as <strong>${escapeHtml(u.email)}</strong> · ${escapeHtml(userPhone)} ${out}`;}
