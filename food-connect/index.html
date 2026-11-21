@@ -36,6 +36,8 @@ h1{font-size:clamp(2rem,5vw,3.2rem);max-width:18ch}
 .btn{display:inline-block;padding:13px 22px;border-radius:999px;font-weight:600;text-decoration:none}
 .btn-amber{background:var(--amber);color:var(--ink)}
 .btn-line{border:1px solid var(--line);color:var(--bone);margin-left:8px}
+.detect{background:none;border:1px solid var(--line);color:var(--bone);border-radius:999px;padding:8px 16px;font:inherit;font-size:.9rem;cursor:pointer}
+.detect:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
 section{padding:48px 0;border-top:1px solid var(--line)}
 h2{font-size:clamp(1.5rem,3.4vw,2.1rem);margin-bottom:10px}
 .sub{color:var(--bone-dim);max-width:62ch;margin-bottom:28px}
@@ -59,10 +61,11 @@ footer{border-top:1px solid var(--line);padding:28px 0;color:var(--bone-dim);fon
   <span class="eyebrow">Food Connect</span>
   <h1>Local food, bought and delivered for you.</h1>
   <p class="lede">Choose your town and a restaurant, send your order, and pay us by mobile money. Once your payment is confirmed, we buy your food and bring it to your door.</p>
-  <a class="btn btn-amber" href="https://wa.me/260977638790?text=Hi%2C%20I%20want%20to%20order%20food%20from%20Food%20Connect.%20My%20town%20is%3A%20">Order on WhatsApp</a>
+  <a id="waBtn" class="btn btn-amber" href="https://wa.me/260977638790?text=Hi%2C%20I%20want%20to%20order%20food%20from%20Food%20Connect.%20My%20town%20is%3A%20">Order on WhatsApp</a>
   <a class="btn btn-line" href="shop.html">Open the shop</a>
   <a class="btn btn-line" href="#fees">See fees</a>
   <p id="townsNow" style="color:var(--amber);margin-top:18px;font-size:.95rem"></p>
+  <p style="margin-top:14px"><button id="detectBtn" type="button" class="detect">&#128205; Detect my town</button> <span id="townMsg" role="status" style="color:var(--bone-dim);font-size:.9rem;margin-left:6px"></span></p>
 </div></header>
 
 <section id="features"><div class="wrap">
@@ -102,10 +105,31 @@ footer{border-top:1px solid var(--line);padding:28px 0;color:var(--bone-dim);fon
 <footer><div class="wrap">&copy; 2026 Nexlite Digital Solutions Limited, registered in Zambia (Reg. No. 120261050528) &middot; <a href="../privacy.html">Privacy</a> &middot; <a href="../terms.html">Terms</a></div></footer>
 <script>
 // Shows the towns that are live, straight from the shop's database (public read).
+var WA="https://wa.me/260977638790?text=",MSG="Hi, I want to order food from Food Connect. My town is: ",liveTowns=[];
+function setTown(name){document.getElementById("waBtn").href=WA+encodeURIComponent(MSG+(name||""))}
+function km(a,b,c,d){var r=Math.PI/180,x=(c-a)*r,y=(d-b)*r,h=Math.sin(x/2)*Math.sin(x/2)+Math.cos(a*r)*Math.cos(c*r)*Math.sin(y/2)*Math.sin(y/2);return 12742*Math.asin(Math.sqrt(h))}
 fetch("https://food-connect-7625e-default-rtdb.firebaseio.com/towns.json").then(function(r){return r.json()}).then(function(v){
-  var n=Object.keys(v||{}).map(function(k){return v[k]}).filter(function(t){return t&&t.name&&t.active!==false}).map(function(t){return t.name});
+  liveTowns=Object.keys(v||{}).map(function(k){return v[k]}).filter(function(t){return t&&t.name&&t.active!==false});
+  var n=liveTowns.map(function(t){return t.name});
   if(n.length)document.getElementById("townsNow").textContent="Now serving: "+n.join(", ");
 }).catch(function(){});
+document.getElementById("detectBtn").onclick=function(){
+  var m=document.getElementById("townMsg");
+  if(!navigator.geolocation){m.textContent="Location is not available on this device. Type your town in WhatsApp.";return}
+  if(!liveTowns.length){m.textContent="Towns are still loading. Try again in a moment.";return}
+  m.textContent="Finding your town...";
+  navigator.geolocation.getCurrentPosition(function(p){
+    var best=null,bd=1e9;
+    liveTowns.forEach(function(t){
+      var la=parseFloat(t.lat),ln=parseFloat(t.lng);
+      if(!isFinite(la)||!isFinite(ln))return;
+      var d=km(p.coords.latitude,p.coords.longitude,la,ln),r=parseFloat(t.radius)||40;
+      if(d<=r&&d<bd){best=t;bd=d}
+    });
+    if(best){setTown(best.name);m.textContent="Your town: "+best.name+". Your WhatsApp message now includes it."}
+    else{setTown("");m.textContent="We could not match your location to a town we serve yet. You can type your town in WhatsApp."}
+  },function(){m.textContent="Could not get your location. Allow location access, or type your town in WhatsApp."},{timeout:10000});
+};
 </script>
 </body>
 </html>
