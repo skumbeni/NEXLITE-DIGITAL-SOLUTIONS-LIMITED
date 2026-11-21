@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Food Connect · Admin</title>
+<style>
+:root{--bg:#f5f6f2;--ink:#18251f;--muted:#68746d;--line:#e1e7df;--brand:#176b45;--brand2:#e7f3eb;--danger:#b9382c}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{background:var(--ink);color:#fff;padding:14px 18px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+header h1{font-size:17px;margin:0}main{max-width:900px;margin:auto;padding:16px 18px 48px}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+input,select,button{font:inherit}input,select{padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fbfcfa;min-width:0;color:var(--ink)}
+button{cursor:pointer;border:1px solid var(--line);background:#fff;border-radius:9px;padding:8px 12px;color:var(--ink)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.pri{background:var(--brand);color:#fff;border-color:var(--brand);font-weight:700}.del{color:var(--danger)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.sp{justify-content:space-between}.muted{color:var(--muted);font-size:12px}
+.tabs{margin-bottom:14px}.tabs button{border-radius:999px}.tabs .on{background:var(--brand2);color:var(--brand);border-color:#cfe3d5;font-weight:700}
+.item{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:8px 0;border-top:1px solid var(--line)}
+.off{opacity:.55}.hidden{display:none!important}#login{max-width:340px;margin:60px auto}#login input{width:100%;margin-bottom:10px}
+.err{color:var(--danger);font-size:13px;margin:8px 0 0}pre{white-space:pre-wrap;margin:6px 0;font:inherit}
+.chip{border-radius:999px}.chip.on{background:var(--brand2);color:var(--brand);border-color:#cfe3d5;font-weight:700}
+.badge{display:inline-block;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:700;background:#fff3cd;color:#72501d;margin:4px 4px 0 0}.badge.ok{background:var(--brand2);color:var(--brand)}
+.warnbox{background:#fff7e9;border:1px solid #f3dfb9;color:#72501d;border-radius:9px;padding:8px 10px;font-size:12px;margin-top:8px}
+</style>
+</head>
+<body>
+<header><h1>Food Connect · Admin</h1><button id="out" class="hidden">Sign out</button></header>
+<main>
+  <div id="login" class="card">
+    <strong>Admin sign in</strong>
+    <div style="margin-top:12px"><input id="email" type="email" autocomplete="username" placeholder="Email"><input id="pass" type="password" autocomplete="current-password" placeholder="Password"></div>
+    <button id="loginBtn" class="pri" style="width:100%">Sign in</button>
+    <p id="err" class="err"></p>
+  </div>
+  <div id="app" class="hidden">
+    <div class="tabs row"><button id="t-orders" class="on" onclick="setTab('orders')">Orders</button><button id="t-suppliers" onclick="setTab('suppliers')">Suppliers and menus</button><button id="t-towns" onclick="setTab('towns')">Towns</button><button id="t-pay" onclick="setTab('pay')">Payments</button><button id="t-customers" onclick="setTab('customers')">Customers</button><button id="t-prices" onclick="setTab('prices')">Prices</button><button id="t-manual" onclick="setTab('manual')">Add order</button></div>
+    <div id="body"></div>
+  </div>
+</main>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script>
+// Firebase web app config (public identifiers; access is controlled by the database rules)
+const FIREBASE_CONFIG={apiKey:"AIzaSyCwCTU875jLcFYba0-fVO5aVQPMsYFClzY",authDomain:"food-connect-7625e.firebaseapp.com",databaseURL:"https://food-connect-7625e-default-rtdb.firebaseio.com",projectId:"food-connect-7625e",appId:"1:328514573103:web:6dfda1f65c6bb390e487da"};
+firebase.initializeApp(FIREBASE_CONFIG);
+const auth=firebase.auth(),db=firebase.database(),$=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const K=n=>"K"+(Number(n)||0).toFixed(2);
+const STATUSES=["new","confirmed","paid","purchased","delivering","delivered","cancelled"];
+let users={},blocked={},cfilter="all",suppliers={},orders={},towns={},tab="orders",open=null,subs=[],ofilter="all",formKeep={};
+
+const show=on=>{$("login").classList.toggle("hidden",on);$("app").classList.toggle("hidden",!on);$("out").classList.toggle("hidden",!on)};
+$("loginBtn").onclick=()=>{$("err").textContent="";auth.signInWithEmailAndPassword($("email").value.trim(),$("pass").value).catch(e=>$("err").textContent="Sign-in failed ("+e.code+"). Check your email and password.")};
+$("pass").onkeydown=e=>{if(e.key==="Enter")$("loginBtn").click()};
+$("out").onclick=()=>auth.signOut();
+
+auth.onAuthStateChanged(async u=>{
+  subs.forEach(r=>r.off());subs=[];
+  if(!u){show(false);return}
+  let ok=false;
+  try{ok=(await db.ref("admins/"+u.uid).get()).val()===true}catch(e){}
+  if(!ok){$("err").textContent="This account is not an admin yet. Add this UID under admins in the database: "+u.uid;await auth.signOut();return}
+  show(true);
+  const s=db.ref("suppliers"),o=db.ref("orders").orderByChild("createdAt").limitToLast(100),t=db.ref("towns"),pr=db.ref("settings/pricing"),us=db.ref("users"),bl=db.ref("blocked");
+  s.on("value",x=>{suppliers=x.val()||{};if(tab==="suppliers"||tab==="towns"||tab==="manual")render()},fail);
+  pr.on("value",x=>{const p=x.val();if(p){const n=(v,d)=>isFinite(Number(v))&&v!==null&&v!==""?Number(v):d;FEE.pct=n(p.servicePct,FEE.pct);FEE.min=n(p.serviceMin,FEE.min);FEE.minFood=n(p.minFood,FEE.minFood);FEE.zones=[n(p.d1,FEE.zones[0]),n(p.d2,FEE.zones[1]),n(p.d3,FEE.zones[2])];FEE.updatedAt=Number(p.updatedAt)||0}if(tab==="prices"||tab==="manual")render()},fail);
+  us.on("value",x=>{users=x.val()||{};if(tab==="customers")render()},fail);
+  bl.on("value",x=>{blocked=x.val()||{};if(tab==="customers")render()},fail);
+  t.on("value",x=>{towns=x.val()||{};if(tab==="suppliers"||tab==="towns"||tab==="manual")render()},fail);
+  o.on("value",x=>{orders=x.val()||{};if(tab==="orders"||tab==="pay")render()},fail);
+  subs=[s,o,t,pr,us,bl];render();
+});
+
+function setTab(t){tab=t;["orders","suppliers","towns","pay","customers","prices","manual"].forEach(x=>$("t-"+x).classList.toggle("on",x===t));render()}
+// Redraws the tab but keeps anything being typed, so a live update never wipes a half-filled form.
+function render(){
+  const b=$("body"),ae=document.activeElement;
+  formKeep={};b.querySelectorAll("input[id],select[id],textarea[id]").forEach(e=>{formKeep[e.id]=e.value});
+  const fid=ae&&ae.id&&b.contains(ae)?ae.id:"",pos=fid&&ae.selectionStart!=null?ae.selectionStart:null;
+  b.innerHTML=tab==="orders"?renderOrders():tab==="suppliers"?renderSuppliers():tab==="towns"?renderTowns():tab==="pay"?renderPayments():tab==="prices"?renderPrices():tab==="customers"?renderCustomers():renderManual();
+  Object.keys(formKeep).forEach(id=>{const e=$(id);if(!e)return;if(e.tagName==="SELECT"){if(Array.from(e.options).some(o=>o.value===formKeep[id]))e.value=formKeep[id]}else e.value=formKeep[id]});
+  if(fid&&$(fid)){$(fid).focus();try{if(pos!=null)$(fid).setSelectionRange(pos,pos)}catch(e){}}
+  if(tab==="manual")mCalc();
+}
+const clr=ids=>ids.forEach(i=>{const e=$(i);if(e)e.value=""});
+const fail=e=>alert("Not saved: "+e.message);
+const upd=(p,v)=>db.ref(p).update(v).catch(fail);
+const rm=(p,m)=>confirm(m)&&db.ref(p).remove().catch(fail);
+const delOrder=k=>rm('orders/'+k,'Delete order '+k+'?');
+const ask=(m,v)=>{const r=prompt(m,v==null?"":v);return r===null?(v==null?"":String(v)):r.trim()};
+const waDigits=v=>String(v||"").replace(/\D/g,"").replace(/^0/,"260");
+// A supplier belongs to a town by townId; older suppliers are matched by their saved area name.
+const townOf=s=>s.townId&&towns[s.townId]?s.townId:(Object.keys(towns).find(k=>String(towns[k].name).toLowerCase()===String(s.area||"").trim().toLowerCase())||"");
+
+const FEE={pct:10,min:10,minFood:50,zones:[20,30,45],updatedAt:0};
+const GROUPS={new:["new"],active:["confirmed","paid","purchased","delivering"],done:["delivered","cancelled"]};
+const ago=t=>{const m=Math.max(0,Math.round((Date.now()-(Number(t)||0))/60000));return m<1?"just now":m<60?m+" min ago":m<1440?Math.round(m/60)+" h ago":Math.round(m/1440)+" d ago"};
+function setFilter(f){ofilter=f;render()}
+// Re-prices an order from its saved lines against the live menu and fee rules. null = older order with no saved lines.
+function checkOrder(o){
+  if(!Array.isArray(o.lines)||!o.lines.length)return null;
+  const msgs=[],sup=suppliers[o.restaurantId];let sum=0;
+  o.lines.forEach(l=>{
+    const q=Number(l.qty)||0,p=Number(l.price)||0;sum+=q*p;
+    if(sup&&sup.items){
+      const cur=sup.items[l.id];
+      if(!cur)msgs.push(esc(l.name)+" is no longer on the menu");
+      else if(Number(cur.price)!==p)msgs.push(esc(l.name)+": ordered at "+K(p)+", menu now "+K(cur.price));
+    }
+  });
+  const food=Number(o.food),service=Number(o.service),delivery=Number(o.delivery),total=Number(o.total);
+  if(Math.abs(sum-food)>0.01)msgs.push("Items add up to "+K(sum)+" but the food total says "+K(food));
+  if(Number(o.createdAt)>=FEE.updatedAt){
+    const fee=Math.max(FEE.min,sum*FEE.pct/100);
+    if(Math.abs(service-fee)>0.01)msgs.push("Service fee is "+K(service)+", it should be "+K(fee));
+    if(FEE.zones.indexOf(delivery)<0)msgs.push("Delivery fee "+K(delivery)+" is not one of the standard fees");
+  }
+  if(Math.abs(total-(food+service+delivery))>0.01)msgs.push("Total "+K(total)+" does not equal food + service + delivery");
+  return msgs;
+}
+function orderCard(o){
+  const p=waDigits(o.phone);
+  const hi="Hi "+(o.customer||"")+", this is Food Connect about your order "+o.ref+" ("+(o.restaurant||"")+", "+K(o.total)+")."+(o.status==="new"?" Please confirm you would like to go ahead.":"");
+  const chk=checkOrder(o);
+  const badges=(o.status==="new"?`<span class="badge">⏳ New · ${esc(ago(o.createdAt))} · look for ${esc(o.ref)} in WhatsApp</span>`:"")+(o.source==="manual"?'<span class="badge ok">Added manually</span>':"");
+  const verdict=chk===null?"":chk.length?`<div class="warnbox">⚠ Check before taking payment or buying:<br>${chk.map(m=>"• "+m).join("<br>")}</div>`:'<div><span class="badge ok">✓ Totals match items and current menu</span></div>';
+  return `<div class="card"><div class="row sp"><strong>${esc(o.ref)} · ${esc(o.restaurant)}</strong><strong>${K(o.total)}</strong></div>
+<div class="muted">${new Date(o.createdAt).toLocaleString()} · ${o.town?esc(o.town)+" · ":""}${esc(o.payment)} · food ${K(o.food)}, service ${K(o.service)}, delivery ${K(o.delivery)}</div>
+<div>${badges}</div>
+${o.paidAt?`<div class="muted">Paid ${esc(new Date(o.paidAt).toLocaleString())}${o.txn?" · Txn "+esc(o.txn):""}</div>`:""}
+<pre>${esc((o.items||[]).join("\n"))}</pre>
+<div>${esc(o.customer)} · ${esc(o.phone)}<br>${esc(o.address)}${o.notes?"<br><em>"+esc(o.notes)+"</em>":""}</div>
+${verdict}
+<div class="row" style="margin-top:10px"><select aria-label="Order status" data-k="${esc(o.key)}" onchange="setStatus(this.dataset.k,this.value)">${STATUSES.map(s=>`<option ${s===o.status?"selected":""}>${s}</option>`).join("")}</select>
+<a href="${esc("https://wa.me/"+p+"?text="+encodeURIComponent(hi))}" target="_blank" rel="noopener"><button>Message customer</button></a>
+<button class="del" data-k="${esc(o.key)}" onclick="delOrder(this.dataset.k)">Delete</button></div></div>`;
+}
+function renderOrders(){
+  const all=Object.entries(orders).map(([k,o])=>({...o,key:k})).sort((a,b)=>b.createdAt-a.createdAt);
+  if(!all.length)return'<div class="card muted">No orders yet. Orders appear here when a customer taps Continue on WhatsApp, or when you add one in the Add order tab.</div>';
+  const inG=(o,g)=>g==="all"||GROUPS[g].includes(o.status);
+  const chip=(g,l)=>`<button class="chip ${ofilter===g?"on":""}" onclick="setFilter('${g}')">${l} (${all.filter(o=>inG(o,g)).length})</button>`;
+  const list=all.filter(o=>inG(o,ofilter));
+  return `<div class="row" style="margin-bottom:12px">${chip("all","All")}${chip("new","New, not yet handled")}${chip("active","In progress")}${chip("done","Finished")}</div>`
+    +(list.map(orderCard).join("")||'<div class="card muted">No orders in this view.</div>');
+}
+
+const PAID_SET=["paid","purchased","delivering","delivered"];let pfilter="all";
+function setPFilter(f){pfilter=f;render()}
+// Marking an order paid records when, and (optionally) the mobile money transaction ID.
+function setStatus(k,s){
+  const v={status:s};
+  if(s==="paid"){
+    const t=prompt("Mobile money transaction ID (optional, leave blank to skip):");
+    if(t===null){render();return}
+    const id=t.trim().slice(0,40);
+    if(id&&Object.entries(orders).some(([ok,o])=>ok!==k&&o.txn===id)&&!confirm("This transaction ID is already on another order. Save it anyway?")){render();return}
+    v.paidAt=firebase.database.ServerValue.TIMESTAMP;if(id)v.txn=id;
+  }
+  upd("orders/"+k,v);
+}
+function renderPayments(){
+  const now=Date.now(),when=o=>Number(o.paidAt||o.createdAt)||0;
+  const inR=o=>pfilter==="all"||(pfilter==="today"?new Date(when(o)).toDateString()===new Date().toDateString():now-when(o)<=7*864e5);
+  const list=Object.entries(orders).map(([k,o])=>({...o,key:k})).filter(o=>PAID_SET.includes(o.status)&&inR(o)).sort((a,b)=>when(b)-when(a));
+  const sum=f=>list.reduce((a,o)=>a+Number(o[f]||0),0),byM={};list.forEach(o=>{byM[o.payment]=(byM[o.payment]||0)+Number(o.total||0)});
+  const chip=(g,l)=>`<button class="chip ${pfilter===g?"on":""}" onclick="setPFilter('${g}')">${l}</button>`;
+  return `<div class="row" style="margin-bottom:12px">${chip("today","Today")}${chip("week","Last 7 days")}${chip("all","All")}</div>
+<div class="card"><div class="row sp"><strong>Collected (${list.length} orders)</strong><strong>${K(sum("total"))}</strong></div>
+<div class="row sp muted"><span>Your fees (service + delivery)</span><span>${K(sum("service")+sum("delivery"))}</span></div>
+<div class="row sp muted"><span>Food to pay restaurants</span><span>${K(sum("food"))}</span></div>
+${Object.keys(byM).map(m=>`<div class="row sp muted"><span>${esc(m)}</span><span>${K(byM[m])}</span></div>`).join("")}</div>`
+  +(list.map(o=>`<div class="card"><div class="row sp"><strong>${esc(o.ref)} · ${esc(o.restaurant)}</strong><strong>${K(o.total)}</strong></div><div class="muted">${esc(new Date(when(o)).toLocaleString())} · ${esc(o.payment)}${o.txn?" · Txn "+esc(o.txn):""} · ${esc(o.customer)}</div></div>`).join("")||'<div class="card muted">No payments in this period.</div>');
+}
+
+/* ---------- Customers (find, block and clean up accounts) ---------- */
+const PHONE_DOMAIN="phone.nexlitedigitalsolutionslimited.digital",AUTH_URL="https://console.firebase.google.com/project/food-connect-7625e/authentication/users";
+function setCFilter(f){cfilter=f;render()}
+function custList(){
+  const phoneCount={},ordN={};
+  Object.values(users).forEach(u=>{const d=waDigits(u&&u.phone);if(d)phoneCount[d]=(phoneCount[d]||0)+1});
+  Object.values(orders).forEach(o=>{if(o.uid)ordN[o.uid]=(ordN[o.uid]||0)+1});
+  return Object.entries(users).map(([uid,u])=>{u=u||{};const d=waDigits(u.phone),issues=[];
+    if(!u.phone)issues.push("No phone saved");else if(phoneCount[d]>1)issues.push("Same phone as another account");
+    if(!u.email)issues.push("No sign-in email recorded");
+    return {uid,...u,orders:ordN[uid]||0,isBlocked:!!blocked[uid],issues};
+  }).sort((a,b)=>(Number(b.createdAt)||0)-(Number(a.createdAt)||0));
+}
+function renderCustomers(){
+  const all=custList(),q=($("cq")?$("cq").value:(formKeep.cq||"")).trim().toLowerCase();
+  const inF=c=>cfilter==="all"||(cfilter==="blocked"?c.isBlocked:c.issues.length>0);
+  const hit=c=>!q||[c.name,c.phone,c.email,c.uid].some(x=>String(x||"").toLowerCase().includes(q));
+  const chip=(g,l,n)=>`<button class="chip ${cfilter===g?"on":""}" onclick="setCFilter('${g}')">${l} (${n})</button>`;
+  const list=all.filter(c=>inF(c)&&hit(c));
+  const rows=list.map(c=>`<div class="card"><div class="row sp"><strong>${esc(c.name||"No name")} · ${esc(c.phone||"no phone")}</strong><span class="muted">${c.orders} recent order${c.orders===1?"":"s"}</span></div>
+<div class="muted">${c.createdAt?"Joined "+esc(new Date(c.createdAt).toLocaleDateString())+" · ":""}Sign-in: ${esc(c.email||"unknown")}</div>
+<div>${c.isBlocked?'<span class="badge">⛔ Blocked, cannot place orders</span>':""}${c.issues.map(i=>`<span class="badge">⚠ ${esc(i)}</span>`).join("")}</div>
+<div class="row" style="margin-top:10px"><button data-u="${esc(c.uid)}" onclick="blockUser(this.dataset.u,${c.isBlocked?"false":"true"})">${c.isBlocked?"Unblock":"Block"}</button>
+<button data-e="${esc(c.email||"")}" onclick="copyText(this.dataset.e)">Copy sign-in email</button>
+<a href="${AUTH_URL}" target="_blank" rel="noopener"><button>Open Firebase users</button></a>
+<button class="del" data-u="${esc(c.uid)}" onclick="removeProfile(this.dataset.u)">Remove profile</button></div></div>`).join("");
+  return `<div class="card muted" style="margin-bottom:10px">Block stops a customer ordering straight away. Remove profile deletes their saved details. To free up a phone number completely, copy the sign-in email, open Firebase users, search for it and delete that sign-in. The customer can then register again.</div>
+<div class="row" style="margin-bottom:10px"><input id="cq" placeholder="Search name, phone or email" oninput="render()" style="flex:1;min-width:200px"></div>
+<div class="row" style="margin-bottom:12px">${chip("all","All",all.length)}${chip("issues","With issues",all.filter(c=>c.issues.length).length)}${chip("blocked","Blocked",all.filter(c=>c.isBlocked).length)}</div>`+(rows||'<div class="card muted">No accounts match.</div>');
+}
+function blockUser(uid,on){
+  if(on&&!confirm("Block this customer from placing orders?"))return;
+  (on?db.ref("blocked/"+uid).set(true):db.ref("blocked/"+uid).remove()).catch(fail);
+}
+function removeProfile(uid){
+  if(!confirm("Remove this customer's saved profile (name and phone)? Their orders are kept. Their sign-in stays until you delete it in Firebase users."))return;
+  db.ref("users/"+uid).remove().catch(fail);
+}
+function copyText(t){
+  if(!t)return alert("No sign-in email recorded for this account.");
+  (navigator.clipboard&&navigator.clipboard.writeText?navigator.clipboard.writeText(t):Promise.reject()).then(()=>alert("Copied: "+t)).catch(()=>prompt("Copy this:",t));
+}
+
+/* ---------- Prices (fees and minimum order; menu item prices are edited per item under Suppliers and menus) ---------- */
+function renderPrices(){
+  const f=(id,l,v,st)=>`<div><label class="muted" for="${id}" style="display:block;font-size:12px">${l}</label><input id="${id}" type="number" min="0" step="${st||1}" inputmode="decimal" value="${v}" style="width:130px"></div>`;
+  return `<div class="card"><strong>Fees and minimum order</strong>
+<div class="muted" style="margin:4px 0 12px">These show in the shop, on the landing page and in the order checks here. They apply to new orders straight away; past orders keep the prices they were placed at. Menu item prices are set per item under Suppliers and menus and also update everywhere live.</div>
+<div class="row">${f("pp","Service fee (%)",FEE.pct,"0.1")}${f("pm","Minimum service fee (K)",FEE.min)}${f("pf","Minimum food order (K)",FEE.minFood)}</div>
+<div class="row" style="margin-top:10px">${f("pd1","Delivery 0–3 km (K)",FEE.zones[0])}${f("pd2","Delivery 3–6 km (K)",FEE.zones[1])}${f("pd3","Delivery 6–10 km (K)",FEE.zones[2])}</div>
+<button class="pri" style="margin-top:14px" onclick="savePrices()">Save prices</button></div>`;
+}
+function savePrices(){
+  const g=id=>Number($(id).value),v={servicePct:g("pp"),serviceMin:g("pm"),minFood:g("pf"),d1:g("pd1"),d2:g("pd2"),d3:g("pd3")};
+  if(Object.values(v).some(x=>!isFinite(x)||x<0))return alert("Enter a number (0 or more) in every box.");
+  if(v.servicePct>50)return alert("Service fee percentage cannot be more than 50.");
+  if(!(v.d1>0&&v.d2>0&&v.d3>0))return alert("Delivery fees must be more than 0.");
+  db.ref("settings/pricing").set({...v,updatedAt:firebase.database.ServerValue.TIMESTAMP}).then(()=>alert("Prices saved. They now apply everywhere.")).catch(fail);
+}
+
+/* ---------- Towns ---------- */
+function renderTowns(){
+  const add=`<div class="card"><strong>Add town</strong><div class="muted" style="margin:4px 0 8px">Customers only see suppliers for their own town. Tap "Use my location" while you are in the town, or type the coordinates. Coordinates let the shop's "Detect my town" button find the town.</div>
+<div class="row"><input id="tn" placeholder="Town name, e.g. Kitwe"><input id="tw" type="tel" placeholder="Order WhatsApp (optional)"></div>
+<div class="row" style="margin-top:8px"><input id="tla" inputmode="decimal" placeholder="Latitude" style="width:130px"><input id="tln" inputmode="decimal" placeholder="Longitude" style="width:130px"><input id="trd" inputmode="numeric" placeholder="Radius km" style="width:110px"><button onclick="useHere()">📍 Use my location</button></div>
+<div class="row" style="margin-top:8px"><button class="pri" onclick="addTown()">Add town</button></div>
+<div class="muted" style="margin-top:6px">WhatsApp left blank means orders go to the default number. Radius left blank means 40 km.</div></div>`;
+  const list=Object.entries(towns).map(([id,t])=>{
+    const hid=t.active===false,n=Object.values(suppliers).filter(s=>townOf(s)===id).length;
+    const where=(isFinite(parseFloat(t.lat))&&isFinite(parseFloat(t.lng)))?`${esc(t.lat)}, ${esc(t.lng)} · ${esc(t.radius||40)} km`:"⚠ no coordinates, so customers cannot be auto-detected in this town";
+    return `<div class="card ${hid?"off":""}"><div class="row sp"><strong>📍 ${esc(t.name)}</strong><div class="row">
+<button onclick="editTown('${id}')">Edit</button><button onclick="upd('towns/${id}',{active:${hid}})">${hid?"Show to customers":"Hide"}</button><button class="del" onclick="delTown('${id}')">Delete</button></div></div>
+<div class="muted">${n} supplier${n===1?"":"s"} · ${where}${t.whatsapp?" · WhatsApp "+esc(t.whatsapp):""}${hid?" · hidden from customers":""}</div></div>`;
+  }).join("");
+  return add+(list||'<div class="card muted">No towns yet. Until you add one, the shop uses the area text saved on each supplier.</div>');
+}
+function useHere(){
+  if(!navigator.geolocation)return alert("Location is not available on this device. Type the coordinates instead.");
+  navigator.geolocation.getCurrentPosition(p=>{$("tla").value=p.coords.latitude.toFixed(4);$("tln").value=p.coords.longitude.toFixed(4)},()=>alert("Could not get your location. Allow location access, or type the coordinates."),{timeout:10000});
+}
+function parseCoords(lat,lng,rad){
+  if(lat===""&&lng==="")return {lat:null,lng:null,radius:Number(rad)>0?Number(rad):40};
+  const a=parseFloat(lat),b=parseFloat(lng);
+  if(!(a>=-90&&a<=90)||!(b>=-180&&b<=180)){alert("Enter both a valid latitude (-90 to 90) and longitude (-180 to 180), or leave both blank.");return null}
+  return {lat:a,lng:b,radius:Number(rad)>0?Number(rad):40};
+}
+function addTown(){
+  const name=$("tn").value.trim();if(!name)return alert("Enter a town name.");
+  if(Object.values(towns).some(t=>String(t.name).toLowerCase()===name.toLowerCase()))return alert("That town already exists.");
+  const c=parseCoords($("tla").value.trim(),$("tln").value.trim(),$("trd").value.trim());if(!c)return;
+  const t={name,whatsapp:waDigits($("tw").value),radius:c.radius,active:true};
+  if(c.lat!==null){t.lat=c.lat;t.lng=c.lng}
+  db.ref("towns").push(t).then(()=>clr(["tn","tw","tla","tln","trd"])).catch(fail);
+}
+function editTown(id){
+  const t=towns[id],name=ask("Town name:",t.name);
+  if(!name)return alert("Name cannot be blank.");
+  const wa=waDigits(ask("Order WhatsApp (blank = default number):",t.whatsapp||""));
+  const lat=ask("Latitude (blank = none):",t.lat),lng=ask("Longitude (blank = none):",t.lng),rad=ask("Radius in km:",t.radius||40);
+  const c=parseCoords(lat,lng,rad);if(!c)return;
+  const u={};
+  u["towns/"+id+"/name"]=name;u["towns/"+id+"/whatsapp"]=wa;u["towns/"+id+"/radius"]=c.radius;u["towns/"+id+"/lat"]=c.lat;u["towns/"+id+"/lng"]=c.lng;
+  Object.entries(suppliers).forEach(([sid,s])=>{if(townOf(s)===id){u["suppliers/"+sid+"/area"]=name;u["suppliers/"+sid+"/townId"]=id}});
+  db.ref().update(u).catch(fail);
+}
+function delTown(id){
+  const n=Object.values(suppliers).filter(s=>townOf(s)===id).length;
+  rm("towns/"+id,"Delete "+towns[id].name+"?"+(n?" Its "+n+" supplier(s) stay saved but customers will not see them until you move them to another town.":""));
+}
+
+/* ---------- Suppliers ---------- */
+function renderSuppliers(){
+  const opts=Object.entries(towns).filter(([,t])=>t.active!==false).map(([id,t])=>`<option value="${esc(id)}">${esc(t.name)}</option>`).join("");
+  const add=opts?`<div class="card"><strong>Add supplier</strong><div class="row" style="margin-top:8px"><select id="sa" aria-label="Town">${opts}</select><input id="sn" placeholder="Name"><input id="sc" placeholder="Category, e.g. Pizza"><input id="si" placeholder="Icon" size="4"><input id="se" placeholder="Delivery estimate, e.g. 40–60 min"><button class="pri" onclick="addSup()">Add supplier</button></div></div>`
+    :`<div class="card muted">Add a town in the Towns tab first, then you can add suppliers to it.</div>`;
+  const list=Object.entries(suppliers).map(([id,s])=>{
+    const items=Object.entries(s.items||{}),hid=s.active===false,tid=townOf(s),tname=tid?towns[tid].name:(s.area||"No town");
+    return `<div class="card ${hid?"off":""}"><div class="row sp"><strong>${esc(s.icon||"🏪")} ${esc(s.name)}</strong><div class="row">
+<button onclick="toggleOpen('${id}')">${open===id?"Close menu":"Menu ("+items.length+")"}</button><button onclick="editSup('${id}')">Edit</button><button onclick="moveSup('${id}')">Town</button>
+<button onclick="upd('suppliers/${id}',{active:${hid}})">${hid?"Show to customers":"Hide"}</button><button class="del" onclick="delSup('${id}')">Delete</button></div></div>
+<div class="muted">📍 ${esc(tname)} · ${esc(s.category)} · ${esc(s.eta)}${hid?" · hidden from customers":""}</div>${open===id?menu(id,items):""}</div>`;
+  }).join("");
+  return add+(list||'<div class="card muted">No suppliers yet. Add your first supplier above, then open its menu to add items.</div>');
+}
+function menu(id,items){
+  return items.map(([k,i])=>`<div class="item ${i.available===false?"off":""}"><span>${esc(i.name)}<br><span class="muted">${esc(i.description)}</span></span><span class="row"><strong>${K(i.price)}</strong>
+<button onclick="editItem('${id}','${k}')">Edit</button><button onclick="upd('suppliers/${id}/items/${k}',{available:${i.available===false}})">${i.available===false?"Back in stock":"Sold out"}</button>
+<button class="del" onclick="rm('suppliers/${id}/items/${k}','Delete this item?')">Delete</button></span></div>`).join("")
+  +`<div class="row" style="margin-top:10px"><input id="in_${id}" placeholder="Item name"><input id="id_${id}" placeholder="Description"><input id="ip_${id}" type="number" min="0" step="0.5" placeholder="Price (K)" style="width:110px"><button class="pri" onclick="addItem('${id}')">Add item</button></div>`;
+}
+function toggleOpen(id){open=open===id?null:id;render()}
+function addSup(){
+  const name=$("sn").value.trim();if(!name)return alert("Enter a supplier name.");
+  const tid=$("sa").value,t=towns[tid];if(!t)return alert("Choose a town.");
+  db.ref("suppliers").push({name,category:$("sc").value.trim(),icon:$("si").value.trim()||"🏪",townId:tid,area:t.name,eta:$("se").value.trim()||"To be confirmed",active:true}).then(()=>clr(["sn","sc","si","se"])).catch(fail);
+}
+function editSup(id){
+  const s=suppliers[id],name=ask("Supplier name:",s.name);
+  if(!name)return alert("Name cannot be blank.");
+  upd("suppliers/"+id,{name,category:ask("Category:",s.category),eta:ask("Delivery estimate:",s.eta),icon:ask("Icon:",s.icon)||"🏪"});
+}
+function moveSup(id){
+  const ids=Object.keys(towns);if(!ids.length)return alert("Add a town in the Towns tab first.");
+  const n=parseInt(prompt("Move "+suppliers[id].name+" to which town? Type its number:\n"+ids.map((k,i)=>(i+1)+"  "+towns[k].name).join("\n")),10);
+  if(!(n>=1&&n<=ids.length))return;
+  upd("suppliers/"+id,{townId:ids[n-1],area:towns[ids[n-1]].name});
+}
+function delSup(id){rm("suppliers/"+id,"Delete "+suppliers[id].name+" and its whole menu?")}
+function addItem(sid){
+  const name=$("in_"+sid).value.trim(),price=parseFloat($("ip_"+sid).value);
+  if(!name||!(price>=0))return alert("Enter an item name and a price.");
+  db.ref(`suppliers/${sid}/items`).push({name,description:$("id_"+sid).value.trim(),price,available:true}).then(()=>clr(["in_"+sid,"id_"+sid,"ip_"+sid])).catch(fail);
+}
+function editItem(sid,k){
+  const i=suppliers[sid].items[k],name=ask("Item name:",i.name),price=parseFloat(ask("Price (K):",i.price));
+  if(!name||!(price>=0))return alert("Enter an item name and a valid price.");
+  upd(`suppliers/${sid}/items/${k}`,{name,description:ask("Description:",i.description),price});
+}
+
+/* ---------- Add order (for orders that reached you only on WhatsApp) ---------- */
+function mSel(get){
+  const act=Object.entries(towns).filter(([,t])=>t.active!==false);
+  const tid=(get("mt")&&towns[get("mt")])?get("mt"):(act[0]?act[0][0]:"");
+  const rs=Object.entries(suppliers).filter(([,s])=>s.active!==false&&townOf(s)===tid);
+  const rid=rs.some(([id])=>id===get("mr"))?get("mr"):(rs[0]?rs[0][0]:"");
+  return {act,tid,rs,rid};
+}
+function renderManual(){
+  const {act,tid,rs,rid}=mSel(id=>formKeep[id]);
+  if(!act.length)return'<div class="card muted">Add a town and a supplier first, then you can record orders here.</div>';
+  const tOpts=act.map(([id,t])=>`<option value="${esc(id)}" ${id===tid?"selected":""}>${esc(t.name)}</option>`).join("");
+  const rOpts=rs.map(([id,s])=>`<option value="${esc(id)}" ${id===rid?"selected":""}>${esc((s.icon||"🏪")+" "+s.name)}</option>`).join("");
+  const s=suppliers[rid],items=s?Object.entries(s.items||{}).filter(([,i])=>i.available!==false):[];
+  const rows=items.length?items.map(([k,i])=>`<div class="item"><span>${esc(i.name)} <span class="muted">${K(i.price)}</span></span><input id="mq_${esc(k)}" type="number" min="0" step="1" inputmode="numeric" placeholder="0" style="width:80px" oninput="mCalc()" aria-label="Quantity of ${esc(i.name)}"></div>`).join("")
+    :'<div class="muted" style="padding:8px 0">'+(rid?"This restaurant has no available menu items.":"No active restaurants in this town yet.")+'</div>';
+  const zl=["0–3 km","3–6 km","6–10 km"];
+  return `<div class="card"><strong>Add an order that came in on WhatsApp</strong>
+<div class="muted" style="margin:4px 0 10px">Use this for landing-page or direct WhatsApp orders, so they are recorded, priced and checked like shop orders. Saved as Confirmed.</div>
+<div class="row"><select id="mt" aria-label="Town" onchange="render()">${tOpts}</select><select id="mr" aria-label="Restaurant" onchange="render()">${rOpts}</select></div>
+<div style="margin-top:8px">${rows}</div>
+<div class="row" style="margin-top:8px"><select id="mz" aria-label="Delivery zone" onchange="mCalc()">${FEE.zones.map((f,i)=>`<option value="${i}">${zl[i]} · K${f}</option>`).join("")}</select></div>
+<div class="row" style="margin-top:8px"><input id="mc" placeholder="Customer name" maxlength="80"><input id="mp" type="tel" placeholder="Phone / WhatsApp" maxlength="20"></div>
+<div class="row" style="margin-top:8px"><input id="ma" placeholder="Delivery address and landmark" maxlength="250" style="flex:1;min-width:220px"></div>
+<div class="row" style="margin-top:8px"><select id="mpay" aria-label="Payment method"><option>MTN Mobile Money</option><option>Airtel Money</option><option>Cash deposit / transfer (confirm)</option></select><input id="mn" placeholder="Notes (optional)" maxlength="400" style="flex:1;min-width:160px"></div>
+<div id="mtot" class="muted" style="margin:10px 0"></div>
+<button class="pri" onclick="saveManual()">Save order</button></div>`;
+}
+function mCalc(){
+  const {rid}=mSel(id=>$(id)?$(id).value:""),s=suppliers[rid],lines=[];
+  if(s)Object.entries(s.items||{}).forEach(([k,i])=>{const e=$("mq_"+k),q=e?Math.floor(Number(e.value)):0;if(q>0&&i.available!==false)lines.push({id:k,name:String(i.name||"Item"),qty:q,price:Number(i.price)||0})});
+  const food=lines.reduce((a,l)=>a+l.qty*l.price,0),service=food?Math.max(FEE.min,food*FEE.pct/100):0;
+  const delivery=food?FEE.zones[Number($("mz")?$("mz").value:0)||0]:0,total=food+service+delivery;
+  const box=$("mtot");
+  if(box)box.textContent=food?`Food ${K(food)} · service ${K(service)} · delivery ${K(delivery)} · total ${K(total)}`+(food<FEE.minFood?` · minimum food order is ${K(FEE.minFood)}`:""):"Enter quantities to see the total.";
+  return {lines,food,service,delivery,total,rid};
+}
+function saveManual(){
+  const c=mCalc(),g=id=>$(id)?$(id).value.trim():"";
+  const tid=g("mt"),t=towns[tid],s=suppliers[c.rid];
+  if(!t||!s)return alert("Choose a town and a restaurant.");
+  if(!c.lines.length)return alert("Enter a quantity for at least one item.");
+  if(c.food<FEE.minFood)return alert("The food total must be at least "+K(FEE.minFood)+".");
+  const customer=g("mc"),phone=g("mp"),address=g("ma");
+  if(!customer||!phone||!address)return alert("Enter the customer's name, phone number and delivery address.");
+  if(!/^[0-9+\s()-]{7,20}$/.test(phone))return alert("Enter a valid phone number.");
+  const ref="MFC-"+Date.now().toString().slice(-8)+Math.random().toString(36).slice(2,4).toUpperCase();
+  const rec={ref,uid:auth.currentUser.uid,email:"manual entry",source:"manual",restaurantId:c.rid,town:t.name,townId:tid,restaurant:s.name,
+    items:c.lines.map(l=>`${l.qty} x ${l.name} @ ${K(l.price)} = ${K(l.qty*l.price)}`),lines:c.lines,
+    food:c.food,service:c.service,delivery:c.delivery,total:c.total,customer,phone,address,payment:g("mpay"),notes:g("mn"),status:"confirmed",createdAt:firebase.database.ServerValue.TIMESTAMP};
+  db.ref("orders/"+ref).set(rec).then(()=>{
+    clr(["mc","mp","ma","mn"]);document.querySelectorAll('[id^="mq_"]').forEach(e=>{e.value=""});
+    ofilter="all";setTab("orders");
+  }).catch(fail);
+}
+</script>
+</body>
+</html>

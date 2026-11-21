@@ -423,6 +423,7 @@ async function sendOrder(){
   if(!name||!phone||!address){alert("Please enter your name, phone number and delivery address.");return;}
   if(!/^[0-9+\s()-]{7,20}$/.test(phone)){alert("Please enter a valid phone number.");return;}
   if(auth&&!auth.currentUser){alert("Please sign in or create an account to place your order.");const f=document.getElementById("authEmail");if(f)f.focus();return;}
+  if(auth&&userBlocked){alert("Your account is on hold, so orders are paused. Please message us on WhatsApp.");return;}
   if(auth&&!userPhone){alert("Please save your phone number in the sign-in box before ordering.");return;}
   const zone=BUSINESS.zones[Number(document.getElementById("zone").value)]||BUSINESS.zones[0];
   const orderRef="MFC-"+Date.now().toString().slice(-8)+Math.random().toString(36).slice(2,4).toUpperCase();
@@ -545,35 +546,55 @@ function newOrder(){cart={};placed=null;hideOrderStatus();document.getElementByI
 
 
 const PHONE_RE=/^[0-9+\s()-]{7,20}$/;
-let userPhone="", signingUp=false;
+let userPhone="", userName="", userBlocked=false, signingUp=false, authMode="in";
+const PHONE_DOMAIN="phone.nexlitedigitalsolutionslimited.digital";
+// 0977 638 790, +260 977 638 790 and 260977638790 all become 260977638790 (or null if not a valid Zambian number).
+function normPhone(v){let d=String(v||"").replace(/\D/g,"");if(d.startsWith("0"))d="260"+d.slice(1);return /^260[0-9]{9}$/.test(d)?d:null;}
+function phoneEmail(d){return d+"@"+PHONE_DOMAIN;}
+function isPhoneAccount(u){return !!(u&&u.email&&u.email.endsWith("@"+PHONE_DOMAIN));}
 async function loadProfile(u){
   if(signingUp) return;
-  userPhone="";
-  if(u){try{userPhone=(await db.ref("users/"+u.uid+"/phone").get()).val()||"";}catch(e){}}
+  userPhone=""; userName=""; userBlocked=false;
+  if(u){
+    try{const p=(await db.ref("users/"+u.uid).get()).val()||{};userPhone=p.phone||"";userName=p.name||"";}catch(e){}
+    try{userBlocked=(await db.ref("blocked/"+u.uid).get()).exists();}catch(e){}
+  }
   renderAuth(); fillPhone();
 }
-function fillPhone(){const ph=document.getElementById("phone"); if(userPhone&&ph&&!ph.value) ph.value=userPhone;}
+function fillPhone(){const ph=document.getElementById("phone"); if(userPhone&&ph&&!ph.value) ph.value=userPhone; const nm=document.getElementById("customer"); if(userName&&nm&&!nm.value) nm.value=userName;}
 function renderAuth(){
   const box=document.getElementById("authBox"); if(!box||!auth) return;
   const u=auth.currentUser; box.classList.remove("hidden");
   const hb=document.getElementById("historyBtn"); if(hb)hb.classList.toggle("hidden",!u); if(!u)closeHistory();
   const fld=(id,label,type,ac)=>`<div class="field"><label for="${id}">${label}</label><input id="${id}" type="${type}" autocomplete="${ac}"></div>`;
   const out=`<button class="pill" type="button" onclick="auth.signOut()">Sign out</button>`;
-  if(u&&userPhone){box.innerHTML=`Signed in as <strong>${escapeHtml(u.email)}</strong> · ${escapeHtml(userPhone)} ${out}`;}
-  else if(u){box.innerHTML=`Signed in as <strong>${escapeHtml(u.email)}</strong> ${out}${fld("authPhone","Add your phone / WhatsApp number to order","tel","tel")}<button class="btn secondary" type="button" onclick="savePhone()">Save phone number</button><p class="notice" id="authMsg"></p>`;}
-  else{box.innerHTML=`<strong>Sign in to place your order</strong><div class="two">${fld("authEmail","Email","email","username")}${fld("authPass","Password (6+ characters)","password","current-password")}</div>${fld("authPhone","Phone / WhatsApp (required to create an account)","tel","tel")}<div class="two"><button class="btn secondary" type="button" onclick="authGo('in')">Sign in</button><button class="btn secondary" type="button" onclick="authGo('up')">Create account</button></div><p class="notice"><a href="#" onclick="authReset();return false">Forgot password?</a></p><p class="notice" id="authMsg"></p>`;}
+  const who=isPhoneAccount(u)?(userName?userName+" · ":"")+userPhone:u&&u.email;
+  if(u&&userPhone){box.innerHTML=`Signed in as <strong>${escapeHtml(who)}</strong>${isPhoneAccount(u)?"":" · "+escapeHtml(userPhone)} ${out}`+(userBlocked?`<p class="notice" style="color:var(--danger)">Your account is on hold, so orders are paused. Message us on WhatsApp and we will sort it out.</p>`:"");}
+  else if(u){box.innerHTML=`Signed in as <strong>${escapeHtml(who)}</strong> ${out}${fld("authPhone","Add your phone / WhatsApp number to order","tel","tel")}<button class="btn secondary" type="button" onclick="savePhone()">Save phone number</button><p class="notice" id="authMsg"></p>`;}
+  else{
+    const up=authMode==="up";
+    box.innerHTML=`<strong>${up?"Create your account":"Sign in to place your order"}</strong>${up?fld("authName","Your name","text","name"):""}${fld("authPhone",up?"Phone / WhatsApp number":"Phone number (or email)","text","username")}${fld("authPass","Password (6+ characters)","password",up?"new-password":"current-password")}<button class="btn" type="button" onclick="authGo()">${up?"Create account":"Sign in"}</button><p class="notice"><a href="#" onclick="authToggle();return false">${up?"Already have an account? Sign in":"New here? Create an account"}</a>${up?"":' · <a href="#" onclick="authReset();return false">Forgot password?</a>'}</p><p class="notice" id="authMsg"></p>`;
+  }
 }
-function authError(c){return {"auth/invalid-email":"That email address isn’t valid.","auth/weak-password":"Use a password with at least 6 characters.","auth/email-already-in-use":"That email already has an account. Tap Sign in.","auth/invalid-credential":"Email or password is incorrect.","auth/wrong-password":"Email or password is incorrect.","auth/user-not-found":"No account for that email. Tap Create account."}[c]||"Could not sign in ("+c+").";}
-function authGo(mode){
-  const e=document.getElementById("authEmail").value.trim(),p=document.getElementById("authPass").value,ph=document.getElementById("authPhone").value.trim(),m=document.getElementById("authMsg");
-  if(!e||!p){m.textContent="Enter your email and password.";return;}
-  if(mode!=="up"){auth.signInWithEmailAndPassword(e,p).catch(x=>{m.textContent=authError(x.code);});return;}
-  if(!PHONE_RE.test(ph)){m.textContent="Enter a valid phone number to create an account.";return;}
+function authError(c){return {"auth/invalid-email":"That email address isn’t valid.","auth/weak-password":"Use a password with at least 6 characters.","auth/email-already-in-use":"This number already has an account. Tap Sign in, or Forgot password if you cannot remember it.","auth/invalid-credential":"Phone number or password is incorrect.","auth/wrong-password":"Phone number or password is incorrect.","auth/user-not-found":"No account for that number. Tap Create an account."}[c]||"Could not sign in ("+c+").";}
+function authToggle(){authMode=authMode==="up"?"in":"up";renderAuth();}
+function authGo(){
+  const id=document.getElementById("authPhone").value.trim(),p=document.getElementById("authPass").value,m=document.getElementById("authMsg");
+  if(!id||!p){m.textContent="Enter your phone number and password.";return;}
+  if(authMode!=="up"){
+    let em=id;
+    if(!id.includes("@")){const d=normPhone(id);if(!d){m.textContent="Enter your number like 0977 638 790.";return;}em=phoneEmail(d);}
+    auth.signInWithEmailAndPassword(em,p).catch(x=>{m.textContent=authError(x.code);});return;
+  }
+  const d=normPhone(id),name=(document.getElementById("authName").value||"").trim().slice(0,80);
+  if(!d){m.textContent="Enter your number like 0977 638 790.";return;}
+  if(!name){m.textContent="Enter your name.";return;}
+  const local="0"+d.slice(3),em=phoneEmail(d);
   signingUp=true;
-  auth.createUserWithEmailAndPassword(e,p)
-    .then(c=>db.ref("users/"+c.user.uid).set({phone:ph,email:e,createdAt:firebase.database.ServerValue.TIMESTAMP}))
-    .then(()=>{userPhone=ph;})
-    .catch(x=>{m.textContent=x.code?authError(x.code):"Account created, but your phone number was not saved. Add it below.";})
+  auth.createUserWithEmailAndPassword(em,p)
+    .then(c=>db.ref("users/"+c.user.uid).set({phone:local,name:name,email:em,createdAt:firebase.database.ServerValue.TIMESTAMP}))
+    .then(()=>{userPhone=local;userName=name;})
+    .catch(x=>{m.textContent=x.code?authError(x.code):"Account created, but your details were not saved. Add your number below.";})
     .finally(()=>{signingUp=false; if(auth.currentUser){renderAuth();fillPhone();}});
 }
 async function savePhone(){
@@ -583,9 +604,10 @@ async function savePhone(){
   catch(e){m.textContent="Could not save your number. Check your connection and try again.";}
 }
 function authReset(){
-  const e=document.getElementById("authEmail").value.trim(),m=document.getElementById("authMsg");
-  if(!e){m.textContent="Enter your email first, then tap Forgot password.";return;}
-  auth.sendPasswordResetEmail(e).then(()=>{m.textContent="Password reset email sent.";}).catch(x=>{m.textContent=authError(x.code);});
+  const id=document.getElementById("authPhone").value.trim(),m=document.getElementById("authMsg");
+  if(id.includes("@")){auth.sendPasswordResetEmail(id).then(()=>{m.textContent="Password reset email sent.";}).catch(x=>{m.textContent=authError(x.code);});return;}
+  const d=normPhone(id),wa="https://wa.me/"+String(BUSINESS.whatsapp).replace(/\D/g,"")+"?text="+encodeURIComponent("Hi, I forgot my Food Connect password. My number is: "+(d?"0"+d.slice(3):id));
+  m.innerHTML='We reset phone accounts by hand. <a href="'+escapeHtml(wa)+'" target="_blank" rel="noopener">Message us on WhatsApp</a> and you will be able to register again.';
 }
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
