@@ -1906,6 +1906,48 @@ function _prnPrintHtml(html,isReceipt,fullDoc){
   return true;
 }
 
+// ── SLIP STYLE (v0.3.104) ───────────────────────────────────────────────────────────────────────────────────────────
+// One look for the receipts and slips printed from the main app, the same as the till's paper and the receipt template: a big bold title between double
+// dashed lines, "2x Name" with the symbol in its own column and the figure on the right, TOTAL AMOUNT, CASH / CHANGE in bold capitals, a big THANK YOU and
+// a barcode of the receipt number. Every size is a multiple of --u (1% of the paper's width), so the text fills the paper whatever its size: a 58 mm roll,
+// an 80 mm roll, a phone screen or an A4 page. Rows are plain tables, so the thermal text style (_prnBuildHtml) turns them into "label ..... amount" lines.
+const _SLIP_SYM={ZMW:'K',USD:'$',ZAR:'R',KES:'KSh',TZS:'TSh',UGX:'USh',MWK:'MK',BWP:'P',NAD:'N$',MZN:'MT',AOA:'Kz'};
+const _slipNum=n=>(Number(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const _slipSym=()=>{const c=String(cur()||'').toUpperCase();return _SLIP_SYM[c]||c;};
+const _slipK=n=>_slipSym()+' '+_slipNum(n);
+const _slipAmt=n=>`<div class="amt"><span>${esc(_slipSym())}</span> <span>${_slipNum(n)}</span></div>`;
+function _bcSvg(t){try{return window.MDMBarcode?MDMBarcode.svg(String(t),{mm:false,text:false,bar:12}):'';}catch(e){return '';}}
+const _SLIP_CSS=`body{font-family:Arial,Helvetica,"Liberation Sans",sans-serif;color:#222;margin:0}
+.slip{--u:max(1cqw,2.4px);container-type:inline-size;max-width:720px;margin:0 auto;padding:12px 6%;background:#fff}
+.slip>*{font-size:calc(var(--u)*4.4)}
+.center{text-align:center}.muted{color:#555;font-size:calc(var(--u)*3.4)}.bold{font-weight:700}.name{font-size:calc(var(--u)*5.6)}
+hr{border:0;border-top:calc(var(--u)*.5) dashed #333;margin:calc(var(--u)*3) 0}hr.dd{border-bottom:calc(var(--u)*.5) dashed #333;height:calc(var(--u)*1.2)}
+.ttl,.thx{font-size:calc(var(--u)*9.5);line-height:1.1;text-transform:uppercase;margin:calc(var(--u)*2) 0}.thx{margin:calc(var(--u)*7) 0 calc(var(--u)*3)}
+table{width:100%;border-collapse:collapse}td{padding:calc(var(--u)*1.3) 0;vertical-align:top}
+.right{text-align:right;white-space:nowrap}
+.amt{display:flex;justify-content:space-between;gap:calc(var(--u)*2);width:calc(var(--u)*26);margin-left:auto}
+tr.total td{font-weight:700;text-transform:uppercase;font-size:calc(var(--u)*4);padding:calc(var(--u)*2) 0}
+tr.pm td{font-weight:700;text-transform:uppercase}
+.bc{text-align:center;margin:calc(var(--u)*2) 0 calc(var(--u)*1)}.bc svg{display:block;margin:0 auto;width:62%;height:auto}
+.sigrow td{border-top:1px solid #999;font-size:calc(var(--u)*3.2);color:#555}
+.footer{text-align:center;font-size:calc(var(--u)*3.4);color:#555;margin-top:calc(var(--u)*3)}
+@media print{.slip{max-width:none;padding:6mm 6%}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}`;
+function _slipPage(title,body){return `<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${esc(title)}</title><style>${_SLIP_CSS}</style></head><body><div class="slip">${body}</div></body></html>`;}
+// title and lines are HTML that the caller has already escaped
+function _slipHead(depot,title,lines){
+  const logo=depot.logoDataUrl?`<img src="${depot.logoDataUrl}" style="height:calc(var(--u)*14);max-width:60%;object-fit:contain;display:block;margin:0 auto calc(var(--u)*2)" alt="${esc(depot.name||'')} logo">`:'';
+  return logo+`<div class="center bold name">${esc(depot.name||'SHOP INVENTORY & SALES MANAGER')}</div>`
+    +(depot.district?`<div class="center muted">${esc(depot.district)}</div>`:'')
+    +(depot.contactPhone?`<div class="center muted">Tel: ${esc(depot.contactPhone)}</div>`:'')
+    +`<hr class="dd"><div class="ttl center bold">${String(title).toUpperCase()}</div><hr class="dd">`
+    +(lines||[]).filter(Boolean).map(t=>`<div class="center muted">${t}</div>`).join('');
+}
+const _slipLbl=(qty,unit,name)=>`${Number(qty).toLocaleString()}${unit?' '+esc(String(unit).toLowerCase())+' x ':'x '}${esc(name)}`;
+const _slipItem=(label,n)=>`<tr><td>${label}</td><td class="right">${_slipAmt(n)}</td></tr>`;   // label is HTML the caller has escaped
+const _slipBar=no=>no?`<div class="bc">${_bcSvg(no)}</div>`:'';
+const _slipUnit=(qty,price)=>Number(price)>0?`<tr><td class="muted" colspan="2">${Number(qty).toLocaleString()} \u00D7 ${_slipNum(price)}</td></tr>`:'';   // v0.3.105: the unit price under an item ("2 × 185.00"), as before
+const _slipPowered=depot=>`<div class="footer">${esc((depot&&depot.name)||'Shop Inventory & Sales Manager')} · Powered by Shop Inventory & Sales Manager</div>`;   // v0.3.105: the "Powered by" line is back
+
 // ══════════════════════════════════════════════════════════
 // ██  PDF PRINT ENGINE  ████████████████████████████████████
 // Universal PDF download: opens a styled print window.
@@ -5708,7 +5750,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.102';
+const SW_VERSION  = 'v0.3.108';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -10434,56 +10476,16 @@ function printSaleReceipt(id){
   if(item._sale){_printSaleBasket(item.saleId);return;}   // a till sale prints as the whole basket
   const rno=String(item.receiptNo||item.id.slice(-6).toUpperCase());   // K7F2-000123; older records keep their old #XXXXXX
   const depot=(DATA.depotInfo||{});
-  const sp=Number(item.sellingPrice||0);
-  const total=sp*Number(item.issued||0);
+  const sp=Number(item.sellingPrice||0),qty=Number(item.issued||0),total=sp*qty;
   const cs=item.creditStatus||'paid';
-  const payLabel=cs==='paid'?'PAID — SETTLED IN FULL':cs==='partial'?`PARTIAL — ${zm(Number(item.partialPaid||0))} PAID`:'CREDIT — ON ACCOUNT';
-  const accent=depot.brandColor||'#1E8449';
-  // Logo block: real image or coloured initials box (same logic as _getBrandedHeader)
-  const initials=(depot.name||'MDM').split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,3)||'MDM';
-  const logoHtml=depot.logoDataUrl
-    ?`<img src="${depot.logoDataUrl}" style="height:56px;max-width:140px;object-fit:contain;display:block;margin:0 auto 6px" alt="${esc(depot.name||'')} logo">`
-    :`<div style="width:56px;height:56px;border-radius:10px;background:${esc(accent)};color:#fff;font-size:17px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto 6px">${esc(initials)}</div>`;
-  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8">
-  <title>Receipt #${esc(rno)}</title>
-  <style>
-    body{font-family:Arial,sans-serif;max-width:320px;margin:20px auto;padding:0 16px;color:#111;font-size:14px}
-    .center{text-align:center}.muted{color:#888;font-size:12px}
-    hr{border:none;border-top:1px dashed #ccc;margin:10px 0}
-    .brand-hr{border:none;border-top:2.5px solid ${esc(accent)};margin:10px 0}
-    table{width:100%;border-collapse:collapse}td{padding:5px 0}
-    .right{text-align:right}.bold{font-weight:700}.total{font-size:18px;font-weight:800}
-    .pay{text-align:center;margin:10px 0;padding:8px;border:1.5px solid ${esc(accent)};border-radius:8px;font-weight:700;font-size:13px;color:${esc(accent)}}
-    .footer{text-align:center;font-size:11px;color:#aaa;margin-top:14px}
-    @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-  </style></head><body>
-  ${logoHtml}
-  <div class="center bold" style="font-size:18px;margin-bottom:2px">${esc(depot.name||'SHOP INVENTORY & SALES MANAGER')}</div>
-  ${depot.district?`<div class="center muted">${esc(depot.district)}</div>`:''}
-  ${depot.contactPhone?`<div class="center muted">Tel: ${esc(depot.contactPhone)}</div>`:''}
-  <div class="brand-hr"></div>
-  <div class="center muted">SALES RECEIPT</div>
-  <div class="center bold" style="font-size:16px">#${esc(rno)}</div>
-  <div class="center muted">${fmtDate(item.date)}${item.time?' · '+item.time:''}</div>
-  ${item.customerName?`<div class="center muted" style="margin-top:4px">Customer: <strong>${esc(item.customerName)}</strong></div>`:''}
-  <hr>
-  <table>
-    <tr><td colspan="3" class="bold">${esc(item.itemName)}</td></tr>
-    <tr>
-      <td class="muted">${Number(item.issued||0).toLocaleString()} units</td>
-      <td class="right muted">× ${sp>0?zm(sp):'—'}</td>
-      <td class="right bold">${total>0?zm(total):'—'}</td>
-    </tr>
-  </table>
-  <hr>
-  <table>
-    <tr><td class="bold total">TOTAL</td><td class="right bold total" style="color:${esc(accent)}">${total>0?zm(total):'—'}</td></tr>
-  </table>
-  <div class="pay">${payLabel}</div>
-  ${item.notes?`<div class="muted center">${esc(item.notes)}</div>`:''}
-  <div class="brand-hr"></div>
-  <div class="footer">Thank you for your business!<br>${esc(depot.name||'Shop Inventory & Sales Manager')} · Powered by Shop Inventory & Sales Manager</div>
-  </body></html>`;
+  const payLabel=cs==='paid'?'Paid in full':cs==='partial'?`Part paid, ${_slipK(Number(item.partialPaid||0))} paid`:'On credit';
+  const html=_slipPage(`Receipt ${rno}`,
+    _slipHead(depot,'Receipt',[`No. ${esc(rno)}`,`${fmtDate(item.date)}${item.time?' \u00B7 '+esc(item.time):''}`,item.customerName?`Customer: ${esc(item.customerName)}`:''])
+    +`<table style="margin-top:calc(var(--u)*3)">${_slipItem(_slipLbl(qty,'',item.itemName),total)}${_slipUnit(qty,sp)}</table><hr>`
+    +`<table><tr class="total"><td>TOTAL AMOUNT</td><td class="right">${total>0?_slipK(total):'—'}</td></tr></table><hr>`
+    +`<div class="center muted">${payLabel}</div>`
+    +(item.notes?`<div class="center muted">${esc(item.notes)}</div>`:'')
+    +`<hr><div class="thx center bold">Thank you for your business!</div><hr>`+_slipBar(rno)+_slipPowered(depot));
   _pdfPrint(html, `Receipt #${rno}`, '', true);
 }
 
@@ -11436,70 +11438,40 @@ async function _printSaleBasket(sid,rec){
   let s=rec||_SALE_LIST.find(x=>x.id===sid&&!x._digest);
   if(!s){try{s=await _sales().get(sid);}catch(e){}}                // step 33: a sale of an older day is read from this phone's ledger when asked for
   if(!s){showToast('Receipt not found on this device yet. Try again in a minute.');return;}
-  const depot=(DATA.depotInfo||{}),accent=depot.brandColor||'#1E8449';
-  const initials=(depot.name||'MDM').split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,3)||'MDM';
-  const logoHtml=depot.logoDataUrl
-    ?`<img src="${depot.logoDataUrl}" style="height:56px;max-width:140px;object-fit:contain;display:block;margin:0 auto 6px" alt="${esc(depot.name||'')} logo">`
-    :`<div style="width:56px;height:56px;border-radius:10px;background:${esc(accent)};color:#fff;font-size:17px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto 6px">${esc(initials)}</div>`;
-  const payLabel=s.creditStatus==='paid'?'PAID - SETTLED IN FULL':s.creditStatus==='partial'?`PARTIAL - ${zm(s.amountPaid)} PAID, ${zm(s.balance)} DUE`:'CREDIT - ON ACCOUNT';
-  const lines=s.lines.map(l=>`<tr><td colspan="3" class="bold">${esc(l.name)}</td></tr><tr><td class="muted">${Number(l.qty).toLocaleString()} ${esc(l.unit||'')}</td><td class="right muted">x ${zm(l.price)}</td><td class="right bold">${zm(Math.round(l.price*l.qty*100)/100)}</td></tr>${l.promoDiscount>0?`<tr><td colspan="2" class="muted">Offer: ${esc(l.promoName||'')}</td><td class="right muted">\u2212${zm(l.promoDiscount)}</td></tr>`:''}${l.level==='wholesale'?`<tr><td colspan="3" class="muted">Wholesale price (retail ${zm(l.listPrice)})</td></tr>`:''}`).join('');
+  const depot=(DATA.depotInfo||{});
+  const payLabel=s.creditStatus==='paid'?'Paid in full':s.creditStatus==='partial'?`Part paid, ${_slipK(s.amountPaid)} paid, ${_slipK(s.balance)} due`:'On credit';
+  const rows=s.lines.map(l=>_slipItem(_slipLbl(l.qty,l.unit,l.name),Math.round(l.price*l.qty*100)/100)+_slipUnit(l.qty,l.price)
+    +(l.promoDiscount>0?`<tr><td class="muted">Offer: ${esc(l.promoName||'')}</td><td class="right muted">\u2212${_slipNum(l.promoDiscount)}</td></tr>`:'')
+    +(l.level==='wholesale'?`<tr><td class="muted" colspan="2">Wholesale price (retail ${_slipNum(l.listPrice)})</td></tr>`:'')).join('');
   const gross=s.lines.reduce((a,l)=>a+Math.round(l.price*l.qty*100),0)/100, dp=Sales.discountParts(s);   // step 25: offers and a person's discount are shown apart
-  const pays=(s.payments||[]).map(p=>`<tr><td class="muted">${esc(p.label||p.method)}${p.ref?' ('+esc(p.ref)+')':''}</td><td class="right muted">${zm(p.amount)}</td></tr>`).join('')
-    +(s.change>0?`<tr><td class="muted">Change</td><td class="right muted">${zm(s.change)}</td></tr>`:'');
-  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Receipt #${esc(s.receiptNo)}</title><style>
-    body{font-family:Arial,sans-serif;max-width:320px;margin:20px auto;padding:0 16px;color:#111;font-size:14px}
-    .center{text-align:center}.muted{color:#888;font-size:12px}hr{border:none;border-top:1px dashed #ccc;margin:10px 0}
-    .brand-hr{border:none;border-top:2.5px solid ${esc(accent)};margin:10px 0}table{width:100%;border-collapse:collapse}td{padding:4px 0}
-    .right{text-align:right}.bold{font-weight:700}.total{font-size:18px;font-weight:800}
-    .pay{text-align:center;margin:10px 0;padding:8px;border:1.5px solid ${esc(accent)};border-radius:8px;font-weight:700;font-size:13px;color:${esc(accent)}}
-    .footer{text-align:center;font-size:11px;color:#aaa;margin-top:14px}
-    @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-  </style></head><body>${logoHtml}
-  <div class="center bold" style="font-size:18px;margin-bottom:2px">${esc(depot.name||'SHOP INVENTORY & SALES MANAGER')}</div>
-  ${depot.district?`<div class="center muted">${esc(depot.district)}</div>`:''}${depot.contactPhone?`<div class="center muted">Tel: ${esc(depot.contactPhone)}</div>`:''}
-  <div class="brand-hr"></div><div class="center muted">SALES RECEIPT</div><div class="center bold" style="font-size:16px">#${esc(s.receiptNo)}</div>
-  <div class="center muted">${fmtDate(s.date)} ${esc(s.time||'')}${s.cashier?' - '+esc(s.cashier):''}</div>
-  ${s.customerName?`<div class="center muted" style="margin-top:4px">Customer: <strong>${esc(s.customerName)}</strong></div>`:''}
-  <hr><table>${lines}</table><hr>
-  <table>${s.discount>0?`<tr><td class="muted">Subtotal</td><td class="right muted">${zm(gross)}</td></tr>${dp.promoC>0?`<tr><td>Offers</td><td class="right">\u2212${zm(dp.promoC/100)}</td></tr>`:''}${dp.manualC>0?`<tr><td>Discount</td><td class="right">\u2212${zm(dp.manualC/100)}</td></tr>`:''}`:''}<tr><td class="bold total">TOTAL</td><td class="right bold total" style="color:${esc(accent)}">${zm(s.total)}</td></tr>${pays}</table>
-  <div class="pay">${payLabel}</div><div class="brand-hr"></div>
-  <div class="footer">Thank you for your business!<br>${esc(depot.name||'Shop Inventory & Sales Manager')} - Powered by Shop Inventory & Sales Manager</div></body></html>`;
+  const sub=s.discount>0?_slipItem('Subtotal',gross)+(dp.promoC>0?_slipItem('Offers',-dp.promoC/100):'')+(dp.manualC>0?_slipItem('Discount',-dp.manualC/100):''):'';
+  const pays=(s.payments||[]).map(p=>`<tr class="pm bold"><td>${esc(String(p.label||p.method).toUpperCase())}${p.ref?' ('+esc(p.ref)+')':''}</td><td class="right">${_slipAmt(p.method==='cash'&&Number(p.tendered)>0?p.tendered:p.amount)}</td></tr>`).join('')
+    +(s.change>0?`<tr class="pm bold"><td>CHANGE</td><td class="right">${_slipAmt(s.change)}</td></tr>`:'');
+  const html=_slipPage(`Receipt ${s.receiptNo}`,
+    _slipHead(depot,'Receipt',[`No. ${esc(s.receiptNo)}`,`${fmtDate(s.date)}${s.time?' \u00B7 '+esc(s.time):''}`,s.cashier?`Served by ${esc(s.cashier)}`:'',s.customerName?`Customer: ${esc(s.customerName)}`:''])
+    +`<table style="margin-top:calc(var(--u)*3)">${rows}</table><hr>`
+    +`<table>${sub}<tr class="total bold"><td>TOTAL AMOUNT</td><td class="right">${_slipK(s.total)}</td></tr></table><hr>`
+    +`<table>${pays}</table><div class="center muted" style="margin-top:calc(var(--u)*2)">${payLabel}</div>`
+    +`<hr><div class="thx center bold">Thank you for your business!</div><hr>`+_slipBar(s.receiptNo)+_slipPowered(depot));
   _pdfPrint(html,`Receipt #${s.receiptNo}`,'',true);
 }
 // The slip of a void or refund (roadmap step 19), same look as the sale receipt above.
 function _printReturn(rid){
   const r=(_RET_LIST||[]).find(x=>x.id===rid);
   if(!r){showToast('Slip not found on this device yet. Try again in a minute.');return;}
-  const depot=(DATA.depotInfo||{}),accent=depot.brandColor||'#1E8449',isVoid=r.kind==='void';
-  const initials=(depot.name||'MDM').split(/\s+/).map(w=>w[0]||'').join('').toUpperCase().slice(0,3)||'MDM';
-  const logoHtml=depot.logoDataUrl
-    ?`<img src="${depot.logoDataUrl}" style="height:56px;max-width:140px;object-fit:contain;display:block;margin:0 auto 6px" alt="${esc(depot.name||'')} logo">`
-    :`<div style="width:56px;height:56px;border-radius:10px;background:${esc(accent)};color:#fff;font-size:17px;font-weight:900;display:flex;align-items:center;justify-content:center;margin:0 auto 6px">${esc(initials)}</div>`;
-  const lines=r.lines.map(l=>`<tr><td colspan="3" class="bold">${esc(l.name)}</td></tr><tr><td class="muted">${Number(l.qty).toLocaleString()} ${esc(l.unit||'')}</td><td class="right muted">x ${zm(l.price)}</td><td class="right bold">${zm(l.total)}</td></tr>`).join('');
-  const back=(r.refunds||[]).map(p=>`<tr><td class="muted">Handed back - ${esc(p.label||p.method)}${p.ref?' ('+esc(p.ref)+')':''}</td><td class="right muted">${zm(p.amount)}</td></tr>`).join('')
-    +(r.creditApplied>0?`<tr><td class="muted">Taken off the balance owed</td><td class="right muted">${zm(r.creditApplied)}</td></tr>`:'');
-  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${isVoid?'Void':'Refund'} #${esc(r.id)}</title><style>
-    body{font-family:Arial,sans-serif;max-width:320px;margin:20px auto;padding:0 16px;color:#111;font-size:14px}
-    .center{text-align:center}.muted{color:#888;font-size:12px}hr{border:none;border-top:1px dashed #ccc;margin:10px 0}
-    .brand-hr{border:none;border-top:2.5px solid ${esc(accent)};margin:10px 0}table{width:100%;border-collapse:collapse}td{padding:4px 0}
-    .right{text-align:right}.bold{font-weight:700}.total{font-size:18px;font-weight:800}
-    .pay{text-align:center;margin:10px 0;padding:8px;border:1.5px solid #c0392b;border-radius:8px;font-weight:700;font-size:13px;color:#c0392b}
-    .sig{display:flex;gap:16px;margin-top:26px;font-size:11px;color:#777}.sig span{flex:1;border-top:1px solid #999;padding-top:3px}
-    .footer{text-align:center;font-size:11px;color:#aaa;margin-top:14px}
-    @media print{body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-  </style></head><body>${logoHtml}
-  <div class="center bold" style="font-size:18px;margin-bottom:2px">${esc(depot.name||'SHOP INVENTORY & SALES MANAGER')}</div>
-  ${depot.district?`<div class="center muted">${esc(depot.district)}</div>`:''}${depot.contactPhone?`<div class="center muted">Tel: ${esc(depot.contactPhone)}</div>`:''}
-  <div class="brand-hr"></div><div class="center muted">${isVoid?'VOID \u2014 SALE CANCELLED':'REFUND RECEIPT'}</div><div class="center bold" style="font-size:16px">#${esc(r.id)}</div>
-  <div class="center muted">For sale #${esc(r.saleId)}</div>
-  <div class="center muted">${fmtDate(r.date)} ${esc(r.time||'')} - ${esc(r.cashier||'')} - allowed by ${esc(r.approvedBy||'')}</div>
-  ${r.customerName?`<div class="center muted" style="margin-top:4px">Customer: <strong>${esc(r.customerName)}</strong></div>`:''}
-  <hr><table>${lines}</table><hr>
-  <table><tr><td class="bold total">TAKEN BACK</td><td class="right bold total" style="color:${esc(accent)}">${zm(r.total)}</td></tr>${back}</table>
-  <div class="muted" style="margin-top:6px">Reason: ${esc(r.reason||'')}${r.note?' \u2014 '+esc(r.note):''}</div>
-  <div class="pay">${isVoid?'VOID':'REFUND'}</div><div class="sig"><span>Customer</span><span>Cashier</span></div><div class="brand-hr"></div>
-  <div class="footer">Keep this slip as proof.<br>${esc(depot.name||'Shop Inventory & Sales Manager')} - Powered by Shop Inventory & Sales Manager</div></body></html>`;
-  _pdfPrint(html,`${isVoid?'Void':'Refund'} #${r.id}`,'',true);
+  const depot=(DATA.depotInfo||{}),isVoid=r.kind==='void',word=isVoid?'Void':'Refund';
+  const rows=r.lines.map(l=>_slipItem(_slipLbl(l.qty,l.unit,l.name),l.total)+_slipUnit(l.qty,l.price)).join('');
+  const back=(r.refunds||[]).map(p=>`<tr class="pm bold"><td>BACK: ${esc(String(p.label||p.method).toUpperCase())}${p.ref?' ('+esc(p.ref)+')':''}</td><td class="right">${_slipAmt(p.amount)}</td></tr>`).join('')
+    +(r.creditApplied>0?`<tr class="pm bold"><td>OFF BALANCE OWED</td><td class="right">${_slipAmt(r.creditApplied)}</td></tr>`:'');
+  const html=_slipPage(`${word} ${r.id}`,
+    _slipHead(depot,word,[`No. ${esc(r.id)}`,`For sale ${esc(r.saleId)}`,`${fmtDate(r.date)}${r.time?' \u00B7 '+esc(r.time):''}`,`Served by ${esc(r.cashier||'')}`,`Allowed by ${esc(r.approvedBy||'')}`,r.customerName?`Customer: ${esc(r.customerName)}`:''])
+    +`<table style="margin-top:calc(var(--u)*3)">${rows}</table><hr>`
+    +`<table><tr class="total bold"><td>TAKEN BACK</td><td class="right">${_slipK(r.total)}</td></tr></table>`
+    +`<div class="muted">Reason: ${esc(r.reason||'')}${r.note?' \u2014 '+esc(r.note):''}</div><hr>`
+    +(back?`<table>${back}</table><hr>`:'')
+    +`<table style="margin-top:calc(var(--u)*8)"><tr class="sigrow"><td style="width:48%">Customer</td><td style="width:4%;border-top:0"></td><td style="width:48%">Cashier</td></tr></table>`
+    +`<div class="thx center bold">KEEP THIS SLIP</div><div class="footer">It is the proof of the ${isVoid?'void':'refund'}.</div>`+_slipPowered(depot));
+  _pdfPrint(html,`${word} #${r.id}`,'',true);
 }
 async function _takeReceiptNo(){
   try{
