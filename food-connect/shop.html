@@ -19,6 +19,7 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
 @media(max-width:440px){.restaurants{grid-template-columns:1fr}.shell{padding-left:13px;padding-right:13px}.head{padding-left:13px;padding-right:13px}.brand h1{font-size:18px}.area{white-space:normal;text-align:center;max-width:112px}.two{grid-template-columns:1fr}}
 .geo{display:flex;gap:10px;align-items:center;justify-content:space-between;background:#e7f3eb;color:#176b45;border:1px solid #cfe3d5;border-radius:12px;padding:10px 12px;margin:10px 0;font-size:13px;line-height:1.45}.geo b{font-weight:700}.geo-x{background:none;border:0;color:inherit;cursor:pointer;font-size:15px;padding:0 4px}.geo .pill{margin-left:6px;cursor:pointer;color:var(--ink)}
 @keyframes flashbg{0%,60%{background:#fff3cd}100%{background:transparent}}.towns-box.flash{animation:flashbg 1.4s ease;border-radius:12px}
+.status.ok{background:#e7f3eb;border:1px solid #cfe3d5;color:#18251f}.status.bad{background:#fff7e9;border:1px solid #f3dfb9;color:#72501d}
 </style>
 </head>
 <body>
@@ -63,13 +64,14 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
       </div>
       <div class="field"><label for="zone">Delivery area from selected restaurant</label><select id="zone" onchange="calculate()"><option value="0">0–3 km · K20</option><option value="1">3–6 km · K30</option><option value="2">6–10 km · K45</option></select></div>
       <div id="authBox" class="status hidden"></div>
-      <div class="field"><label for="customer">Your full name</label><input id="customer" autocomplete="name" placeholder="Name"></div>
+      <div class="field"><label for="customer">Your full name</label><input id="customer" autocomplete="name" placeholder="Name" maxlength="80"></div>
       <div class="two">
-        <div class="field"><label for="phone">Phone / WhatsApp</label><input id="phone" type="tel" autocomplete="tel" placeholder="097..."></div>
+        <div class="field"><label for="phone">Phone / WhatsApp</label><input id="phone" type="tel" autocomplete="tel" placeholder="097..." maxlength="20"></div>
         <div class="field"><label for="payment">Payment method</label><select id="payment"><option>MTN Mobile Money</option><option>Airtel Money</option><option>Cash deposit / transfer (confirm)</option></select></div>
       </div>
-      <div class="field"><label for="address">Delivery address and landmark</label><textarea id="address" rows="2" placeholder="Township / area, street, house or business name, landmark"></textarea></div>
-      <div class="field"><label for="instructions">Order notes (optional)</label><textarea id="instructions" rows="2" placeholder="Special instructions or substitutions to avoid"></textarea></div>
+      <div class="field"><label for="address">Delivery address and landmark</label><textarea id="address" rows="2" maxlength="250" placeholder="Township / area, street, house or business name, landmark"></textarea></div>
+      <div class="field"><label for="instructions">Order notes (optional)</label><textarea id="instructions" rows="2" maxlength="400" placeholder="Special instructions or substitutions to avoid"></textarea></div>
+      <div id="orderStatus" class="status hidden" role="status" aria-live="polite"></div>
       <button class="btn" id="sendOrder" onclick="sendOrder()" disabled>Continue on WhatsApp</button>
       <p class="notice">Your WhatsApp message is an order request, not payment confirmation. We will reply with the payment details. We only purchase after your payment is received and confirmed.</p>
       <div class="status"><strong>Payment-first process</strong><br>We confirm the final restaurant price and availability with you. If anything changes, we ask for your approval before you pay or before we purchase.</div>
@@ -83,7 +85,7 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
 <script>
 // ===== BUSINESS SETTINGS: update these before launch =====
 const BUSINESS = {
-  whatsapp: "260953687178", // Default order line. A town can have its own number in the admin Towns tab.
+  whatsapp: "260977638790", // Default order line. A town can have its own number in the admin Towns tab.
   minimumFoodOrder: 50,
   servicePercent: 10,
   minimumServiceFee: 10,
@@ -310,6 +312,7 @@ function startLive(){
 
 let selectedRestaurant = null;
 let cart = {}; // itemId -> quantity; cart is restricted to one restaurant.
+let sending = false, placed = null; // placed = {ref,sig} once an order was saved, until the basket changes
 let currentTotals = {food:0,service:0,delivery:0,total:0};
 
 const money = n => "K" + (Number(n)||0).toFixed(2);
@@ -374,11 +377,13 @@ function calculate(){
     lines.className="";
     lines.innerHTML=selectedRestaurant.items.filter(i=>cart[i.id]).map(i=>`<div class="cart-line"><span>${cart[i.id]} × ${escapeHtml(i.name)}<small>${money(i.price)} each</small></span><strong>${money(cart[i.id]*i.price)}</strong></div>`).join("");
   }
+  if(placed&&placed.sig!==orderSig()){placed=null;hideOrderStatus();}
   const button=document.getElementById("sendOrder");
-  button.disabled=food<BUSINESS.minimumFoodOrder || !selectedRestaurant;
-  button.textContent=food && food<BUSINESS.minimumFoodOrder ? "Minimum food order is "+money(BUSINESS.minimumFoodOrder) : "Continue on WhatsApp";
+  button.disabled=food<BUSINESS.minimumFoodOrder || !selectedRestaurant || sending || !!placed;
+  button.textContent=sending?"Saving your order…":placed?"Order placed":food && food<BUSINESS.minimumFoodOrder ? "Minimum food order is "+money(BUSINESS.minimumFoodOrder) : "Continue on WhatsApp";
 }
-function sendOrder(){
+async function sendOrder(){
+  if(sending||placed) return;
   const name=document.getElementById("customer").value.trim();
   const phone=document.getElementById("phone").value.trim();
   const address=document.getElementById("address").value.trim();
@@ -415,16 +420,67 @@ function sendOrder(){
     "Please confirm item availability and final price, then send payment instructions. Customer will pay "+brandName()+" before purchasing. Do not purchase until payment is verified."
   ].filter(Boolean).join("\n");
   const waNumber=String((town&&town.whatsapp)||BUSINESS.whatsapp).replace(/\D/g,"");
-  const url="https://wa.me/"+waNumber+"?text="+encodeURIComponent(message);
+  const waUrl=m=>"https://wa.me/"+waNumber+"?text="+encodeURIComponent(m);
   if(waNumber==="260970000000"){
     alert("Prototype setup required: replace the placeholder WhatsApp number in the BUSINESS settings before accepting live orders. Your order message is ready to test after updating it.");
     return;
   }
-  if(db&&auth&&auth.currentUser){
-    db.ref("orders/"+orderRef).set({ref:orderRef,uid:auth.currentUser.uid,email:auth.currentUser.email,restaurantId:selectedRestaurant.id,town:town.name,townId:town.id,restaurant:selectedRestaurant.name,items:orderLines,food:currentTotals.food,service:currentTotals.service,delivery:currentTotals.delivery,total:currentTotals.total,customer:name,phone,address,payment,notes,status:"new",createdAt:firebase.database.ServerValue.TIMESTAMP}).catch(e=>console.warn("Order not logged",e));
+  // Without the live database (sample catalogue) there is nothing to save, so go straight to WhatsApp.
+  if(!(db&&auth&&auth.currentUser)){openWhatsApp(waUrl(message));return;}
+  const rec={ref:orderRef,uid:auth.currentUser.uid,email:auth.currentUser.email,source:"shop",restaurantId:selectedRestaurant.id,town:town.name,townId:town.id,restaurant:selectedRestaurant.name,items:orderLines,
+    lines:selectedRestaurant.items.filter(i=>cart[i.id]).map(i=>({id:i.id,name:i.name,qty:cart[i.id],price:i.price})),
+    food:currentTotals.food,service:currentTotals.service,delivery:currentTotals.delivery,total:currentTotals.total,customer:name,phone,address,payment,notes,status:"new",createdAt:firebase.database.ServerValue.TIMESTAMP};
+  const sig=orderSig();
+  sending=true; showOrderStatus("saving"); calculate();
+  const res=await saveOrder(rec);
+  sending=false;
+  if(res.ok){
+    placed={ref:orderRef,sig:sig};
+    showOrderStatus("saved",{ref:orderRef,url:waUrl(message)});
+    openWhatsApp(waUrl(message));
+  }else{
+    showOrderStatus("failed",{reason:res.reason,url:waUrl(message+"\n\nNOTE: This order could not be saved online. Please record it manually.")});
   }
-  window.open(url,"_blank","noopener");
+  calculate();
 }
+// Saves the order and always answers: {ok:true} or {ok:false,reason}. Gives up waiting after 10 seconds.
+function saveOrder(rec){
+  return new Promise(resolve=>{
+    let done=false;
+    const finish=r=>{if(!done){done=true;clearTimeout(timer);resolve(r);}};
+    const timer=setTimeout(()=>finish({ok:false,reason:"timeout"}),10000);
+    db.ref("orders/"+rec.ref).set(rec).then(()=>finish({ok:true}),e=>{console.warn("Order not saved",e);finish({ok:false,reason:(e&&e.code)||"error"});});
+  });
+}
+// Opens WhatsApp in a new tab. Returns false if the browser blocked it (the status box then has a tap-to-open link).
+function openWhatsApp(url){
+  const w=window.open("","_blank"); if(!w) return false;
+  try{w.opener=null;}catch(e){}
+  w.location.href=url; return true;
+}
+function orderSig(){return JSON.stringify([cart,document.getElementById("zone").value]);}
+function failText(r){
+  return r==="timeout"?"Your connection looks slow, so we could not confirm it was saved."
+    :r==="PERMISSION_DENIED"?"The order was not accepted. Check that you are signed in and that your name, address and notes are not too long."
+    :"Something went wrong ("+r+").";
+}
+function showOrderStatus(kind,d){
+  const b=document.getElementById("orderStatus"); d=d||{};
+  const link=label=>'<a class="btn" style="text-align:center;text-decoration:none" href="'+escapeHtml(d.url||"#")+'" target="_blank" rel="noopener">'+label+'</a>';
+  b.className="status";
+  if(kind==="saving"){b.innerHTML="Saving your order…";}
+  else if(kind==="saved"){
+    b.className="status ok";
+    b.innerHTML="<strong>✅ Order "+escapeHtml(d.ref)+" saved</strong><br>It is not complete until you <b>send the WhatsApp message</b>. If WhatsApp did not open, tap below. To change anything, reply in that chat and quote the reference."
+      +link("Open WhatsApp to send")+'<button type="button" class="btn secondary" onclick="newOrder()">Start a new order</button>';
+  }else{
+    b.className="status bad";
+    b.innerHTML="<strong>⚠ We could not save your order on our system</strong><br>"+escapeHtml(failText(d.reason))+" You can try again, or send the message on WhatsApp and we will record it by hand."
+      +'<button type="button" class="btn secondary" onclick="hideOrderStatus()">Try again</button>'+link("Send on WhatsApp anyway");
+  }
+}
+function hideOrderStatus(){const b=document.getElementById("orderStatus");b.className="status hidden";b.innerHTML="";}
+function newOrder(){cart={};placed=null;hideOrderStatus();document.getElementById("instructions").value="";renderMenu();calculate();}
 
 
 const PHONE_RE=/^[0-9+\s()-]{7,20}$/;
