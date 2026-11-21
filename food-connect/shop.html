@@ -17,6 +17,7 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
 .empty{padding:26px 10px;text-align:center;color:var(--muted)}.empty b{display:block;color:var(--ink);margin-bottom:4px}.cart-sticky{position:sticky;top:12px}.cart-empty{padding:14px 0;color:var(--muted);font-size:13px}.cart-line{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px}.cart-line small{display:block;color:var(--muted)}.totals{margin-top:12px}.total-row{display:flex;justify-content:space-between;padding:5px 0;font-size:13px}.total-row.grand{font-size:18px;font-weight:800;border-top:1px solid var(--line);margin-top:7px;padding-top:12px}.field{margin-top:12px}.field label{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}.field input,.field select,.field textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px;background:#fbfcfa;color:var(--ink)}.field textarea{resize:vertical}.two{display:grid;grid-template-columns:1fr 1fr;gap:9px}.btn{display:block;width:100%;border:0;border-radius:12px;padding:13px 15px;background:var(--brand);color:#fff;font-weight:750;margin-top:14px}.btn:disabled{opacity:.4;cursor:not-allowed}.btn.secondary{background:#edf3ee;color:var(--brand);border:1px solid #d9e7dc}.notice{font-size:11px;color:var(--muted);line-height:1.5;margin:10px 0 0}.tag{display:inline-block;background:var(--brand2);color:var(--brand);border-radius:999px;padding:4px 8px;font-size:11px;font-weight:700}.warning{background:#fff7e9;border:1px solid #f3dfb9;color:#72501d;border-radius:11px;padding:10px 12px;font-size:12px;margin-top:12px}.status{background:#f2f6f2;border-radius:12px;padding:12px;font-size:12px;margin-top:12px}.footer{padding:24px 0 0;color:var(--muted);font-size:11px;text-align:center}.hidden{display:none!important}
 @media(max-width:760px){.hero{grid-template-columns:1fr}.hero-note{max-width:none}.restaurants{grid-template-columns:1fr 1fr}.layout{grid-template-columns:1fr}.cart-sticky{position:static}.head{align-items:flex-start}.area{font-size:11px}}
 @media(max-width:440px){.restaurants{grid-template-columns:1fr}.shell{padding-left:13px;padding-right:13px}.head{padding-left:13px;padding-right:13px}.brand h1{font-size:18px}.area{white-space:normal;text-align:center;max-width:112px}.two{grid-template-columns:1fr}}
+.geo{display:flex;gap:10px;align-items:center;justify-content:space-between;background:#e7f3eb;color:#176b45;border:1px solid #cfe3d5;border-radius:12px;padding:10px 12px;margin:10px 0;font-size:13px;line-height:1.45}.geo b{font-weight:700}.geo-x{background:none;border:0;color:inherit;cursor:pointer;font-size:15px;padding:0 4px}.geo .pill{margin-left:6px;cursor:pointer;color:var(--ink)}
 </style>
 </head>
 <body>
@@ -31,6 +32,8 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
     <div><h2>Good food from local restaurants, delivered to your door.</h2><p>Choose a restaurant, place your order and pay <span data-brand>Food Connect</span> before we purchase your food. We handle the collection and delivery.</p></div>
     <div class="hero-note"><strong>How it works</strong>1. Choose one restaurant<br>2. Confirm your order and delivery area<br>3. Pay us via mobile money<br>4. We purchase and deliver your food</div>
   </section>
+
+  <div id="geoBar" class="geo hidden" role="status" aria-live="polite"></div>
 
   <div class="toolbar">
     <div class="search"><input id="search" type="search" placeholder="Search restaurants or food..." oninput="renderRestaurants()"></div>
@@ -71,7 +74,7 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
       <div class="status"><strong>Payment-first process</strong><br>We confirm the final restaurant price and availability with you. If anything changes, we ask for your approval before you pay or before we purchase.</div>
     </aside>
   </div>
-  <div class="footer"><span data-brand>Food Connect</span> is an independent ordering, purchasing and delivery service. It is not affiliated with or endorsed by the restaurants listed.</div>
+  <div class="footer"><span data-brand>Food Connect</span> is an independent ordering, purchasing and delivery service. It is not affiliated with or endorsed by the restaurants listed.<br><a href="../privacy.html" style="color:inherit">Privacy Policy</a> · <a href="../terms.html" style="color:inherit">Terms of Service</a></div>
 </main>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
@@ -126,16 +129,14 @@ function townList(){
   return Object.values(seen);
 }
 const inTown=r=>!!town&&(r.townId?r.townId===town.id:String(r.area||"").trim().toLowerCase()===town.name.toLowerCase());
-function savedTown(){try{return localStorage.getItem("mfcTown")}catch(e){return null}}
-function saveTown(id){try{if(id)localStorage.setItem("mfcTown",id);else localStorage.removeItem("mfcTown")}catch(e){}}
+// The saved town remembers HOW it was chosen: "manual" (customer picked it, never auto-switched) or "auto" (detected from location).
+function savedTown(){try{const v=localStorage.getItem("mfcTown");if(!v)return{id:null,src:"auto"};if(v.charAt(0)==="{"){const o=JSON.parse(v);return{id:o.id||null,src:o.src||"manual"}}return{id:v,src:"manual"}}catch(e){return{id:null,src:"auto"}}}
+function saveTown(id,src){try{if(id)localStorage.setItem("mfcTown",JSON.stringify({id:id,src:src||"manual"}));else localStorage.removeItem("mfcTown")}catch(e){}}
 function resolveTown(){
-  const list=townList();
-  town=list.find(t=>t.id===savedTown())||(list.length===1?list[0]:null);
+  const list=townList(), id=savedTown().id;
+  town=list.find(t=>t.id===id)||(list.length===1?list[0]:null);
   applyTown();
-  if(!town&&dataReady&&!autoTried&&navigator.permissions&&navigator.permissions.query){
-    autoTried=true;
-    navigator.permissions.query({name:"geolocation"}).then(p=>{if(p.state==="granted")detectTown(true)}).catch(()=>{});
-  }
+  autoDetect();
 }
 function applyTown(){
   RESTAURANTS=allRestaurants.filter(inTown);
@@ -169,12 +170,12 @@ function townPicker(){
   const canDetect=!!navigator.geolocation&&list.some(t=>isFinite(t.lat)&&isFinite(t.lng));
   return '<div class="empty towns-box"><b>Where should we deliver?</b>Choose your town to see its restaurants.<div class="tbtns">'
     +list.map(t=>'<button type="button" class="pill" data-id="'+escapeHtml(t.id)+'" onclick="pickTown(this.dataset.id)">📍 '+escapeHtml(t.name)+'</button>').join("")+'</div>'
-    +(canDetect?'<button type="button" class="pill" onclick="detectTown()">🎯 Detect my town</button><p class="notice" id="townMsg">Your location is only used on your phone to find the nearest town. We do not store it.</p>':'<p class="notice" id="townMsg"></p>')
+    +(canDetect?'<button type="button" class="pill" onclick="detectNow()">🎯 Detect my town</button><p class="notice">Your location is only used on your phone to find the nearest town. We do not store it.</p>':'')
     +'</div>';
 }
-function pickTown(id){
+function pickTown(id,src){
   const t=townList().find(x=>x.id===id); if(!t) return;
-  town=t; saveTown(t.id); applyTown();
+  town=t; saveTown(t.id,src||"manual"); applyTown();
 }
 function changeTown(){
   if(townList().length<2) return;
@@ -185,18 +186,92 @@ function km(a,b,c,d){
   const r=x=>x*Math.PI/180,h=Math.sin(r(c-a)/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(r(d-b)/2)**2;
   return 12742*Math.asin(Math.sqrt(h));
 }
-function detectTown(silent){
-  const say=t=>{const m=document.getElementById("townMsg");if(m&&!silent)m.textContent=t;};
-  if(!navigator.geolocation){say("Location is not available on this device. Please choose your town from the list.");return;}
-  say("Finding your town…");
-  navigator.geolocation.getCurrentPosition(p=>{
-    let best=null,bd=1e9;
-    townList().forEach(t=>{if(!isFinite(t.lat)||!isFinite(t.lng))return;const d=km(p.coords.latitude,p.coords.longitude,t.lat,t.lng);if(d<bd){bd=d;best=t;}});
-    if(best&&bd<=(best.radius||40)) pickTown(best.id);
-    else say("We do not deliver in your area yet. Please choose one of the towns above.");
-  },()=>say("We could not get your location. Please choose your town from the list."),{timeout:10000,maximumAge:600000});
+// ===== AUTOMATIC TOWN DETECTION =====
+// Location is read on the phone only. Nothing about it is sent to or stored on our servers.
+let geoBusy=false, lastGeoAt=0;
+const hasCoords=t=>isFinite(t.lat)&&isFinite(t.lng);
+function showGeo(html){
+  const b=document.getElementById("geoBar");
+  b.innerHTML='<span>'+html+'</span><button type="button" class="geo-x" onclick="hideGeo()" aria-label="Dismiss">✕</button>';
+  b.classList.remove("hidden");
 }
-
+function hideGeo(){document.getElementById("geoBar").classList.add("hidden");}
+// Quick network fix first; if that fails (but was not refused), a slower high-accuracy GPS fix.
+function locate(ok,fail){
+  const g=navigator.geolocation;
+  if(!g){fail({code:0});return;}
+  g.getCurrentPosition(ok,e=>{
+    if(e&&e.code===1){fail(e);return;}
+    g.getCurrentPosition(ok,fail,{enableHighAccuracy:true,timeout:15000,maximumAge:0});
+  },{enableHighAccuracy:false,timeout:8000,maximumAge:600000});
+}
+function nearestTown(lat,lng){
+  let best=null,bd=1e9;
+  townList().forEach(t=>{if(!hasCoords(t))return;const d=km(lat,lng,t.lat,t.lng);if(d<bd){bd=d;best=t;}});
+  return best?{t:best,d:bd}:null;
+}
+function onFix(p,loud){
+  geoBusy=false;
+  const quiet=!loud&&!!town;
+  const n=nearestTown(p.coords.latitude,p.coords.longitude);
+  if(!n){if(!quiet)showGeo("We could not match your location to a town. Please choose your town below.");return;}
+  const t=n.t,d=n.d;
+  if(d<=(t.radius||40)){
+    if(town&&town.id===t.id){if(loud)showGeo("📍 You are in <b>"+escapeHtml(t.name)+"</b>.");else hideGeo();return;}
+    if(!town||!Object.keys(cart).length){
+      pickTown(t.id,"auto");
+      showGeo("📍 You appear to be in <b>"+escapeHtml(t.name)+"</b>, so we are showing its restaurants. Wrong town? Tap the town name at the top to change it.");
+      return;
+    }
+    showGeo("📍 You appear to be in <b>"+escapeHtml(t.name)+"</b>. <button type=\"button\" class=\"pill\" data-id=\""+escapeHtml(t.id)+"\" onclick=\"switchTown(this.dataset.id)\">Switch (clears basket)</button>");
+    return;
+  }
+  if(!quiet)showGeo("📍 You are about "+Math.round(d)+" km from <b>"+escapeHtml(t.name)+"</b>, the nearest town we serve. We do not deliver to your area yet, but you can still choose a town below.");
+}
+function onGeoFail(e,loud){
+  geoBusy=false;
+  if(!loud&&town) return;
+  const c=e&&e.code;
+  showGeo(c===1?"📍 Location is turned off for this site, so we cannot detect your town. Turn it on in your browser settings, or choose your town below."
+    :c===3?"📍 Finding your location took too long. Tap <b>Detect my town</b> to try again, or choose your town below."
+    :c===2?"📍 Your phone could not work out its location. Check that location or GPS is on, or choose your town below."
+    :"📍 Location is not available on this device. Please choose your town below.");
+}
+function switchTown(id){
+  if(!confirm("Switching town will clear your basket. Continue?")) return;
+  cart={}; pickTown(id,"auto"); hideGeo();
+}
+function detectNow(){
+  if(geoBusy) return;
+  geoBusy=true; lastGeoAt=Date.now();
+  showGeo("📍 Finding your town…");
+  locate(p=>onFix(p,true),e=>onGeoFail(e,true));
+}
+// Runs by itself: on the first visit it asks for location right away; on later visits it re-checks quietly
+// (only if location is already allowed) and moves the customer to the town they are now in.
+// A town the customer picked by hand is never switched automatically.
+function autoDetect(force){
+  if(!dataReady||geoBusy||!navigator.geolocation||(autoTried&&!force)) return;
+  const list=townList();
+  if(list.length<2||!list.some(hasCoords)) return;
+  if(town&&savedTown().src==="manual") return;
+  autoTried=true;
+  const run=()=>{
+    geoBusy=true; lastGeoAt=Date.now();
+    if(!town) showGeo("📍 Finding your town…");
+    locate(p=>onFix(p,false),e=>onGeoFail(e,false));
+  };
+  if(navigator.permissions&&navigator.permissions.query){
+    navigator.permissions.query({name:"geolocation"}).then(st=>{
+      if(st.state==="denied"){if(!town)onGeoFail({code:1},false);return;}
+      if(st.state==="prompt"&&town) return;
+      run();
+    }).catch(()=>{if(!town)run();});
+  } else if(!town) run();
+}
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState==="visible"&&dataReady&&Date.now()-lastGeoAt>600000) autoDetect(true);
+});
 function startLive(){
   const sample=()=>{dataReady=true;allRestaurants=SAMPLE.slice();resolveTown();};
   if(FIREBASE_CONFIG.apiKey.indexOf("PASTE_")===0||typeof firebase==="undefined"){sample();return;}
