@@ -25,7 +25,14 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.112 (2026-11-22) — no emoji on the sign-in, sign-up and recovery screens (index.html + sw.js; no new file, NO database RULES change)
+// Current version: v0.3.114 (2026-11-22) — main dashboard: no emoji, sentence case instead of ALL CAPS (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED: on the admin/manager dashboard the emoji (alerts, quick actions, card titles, till card, recent activity, books) are now small flat line icons, and the forced capitals are gone: alert titles, the "N alerts need attention" heading, section headings, tile labels, the date line, the user name and role tag, IN/OUT/BAL/RSRV/AVAIL (now In / Out / Balance / Reserved / Available) and "UNITS IN STOCK AS AT TODAY" (now "In stock today (unit)"). Commodity and item names show as they were typed. Title-case labels on the dashboard are now sentence case.
+//   - FIXED: "1 ALERT REQUIRE ATTENTION" and "2 ENTRYIES AWAITING APPROVAL" now read "1 alert needs attention" and "2 entries awaiting approval".
+//   - NOT CHANGED: the status banner at the top (online / trial / offline: shared by other screens), the staff and cashier home screens, every other screen, the Display Preferences list, stored data (a commodity's chosen icon is kept, it is just no longer shown on the dashboard), database rules.
+// Previous version: v0.3.113 (2026-11-22) — sign-in screen: removed the "general-purpose tool" sentence under the Terms checkbox (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED: the line "I understand this is a general-purpose tool and all data I enter is my responsibility." no longer shows under the Terms of Service / Privacy Policy checkbox. The unused .au-check-sub style was removed with it.
+//   - NOT CHANGED: the checkbox itself and how it is checked, the Terms of Service and Privacy Policy pop-ups (their wording is the same), every other screen, database rules.
+// Previous version: v0.3.112 (2026-11-22) — no emoji on the sign-in, sign-up and recovery screens (index.html + sw.js; no new file, NO database RULES change)
 //   - CHANGED: the messages and buttons on Sign in, Create account (including the "Before you continue" notice) and Account recovery no longer start with an emoji: terms not accepted, wrong username or password, too many attempts, no account data, cannot reach the server, account on a different shop, "Verifying…", "Restoring data…", fingerprint messages, the free-trial welcome and the password-reset pop-up. The wording is the same.
 //   - NOT CHANGED: every screen after sign-in (a few pop-ups there still carry an emoji), the license and trial banners, the blocked-account screen, IDs, function names, database rules.
 // Previous version: v0.3.111 (2026-11-22) — sign-in screens say "shop", not "depot" (index.html + sw.js; no new file, NO database RULES change)
@@ -2578,7 +2585,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.112';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.114';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
