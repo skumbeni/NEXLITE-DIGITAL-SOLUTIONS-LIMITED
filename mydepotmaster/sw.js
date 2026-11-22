@@ -25,7 +25,21 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.108 (2026-11-21) — the cash drawer opens by itself when cash changes hands (pos.html + index.html + sw.js; no new file, NO database RULES change)
+// Current version: v0.3.112 (2026-11-22) — no emoji on the sign-in, sign-up and recovery screens (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED: the messages and buttons on Sign in, Create account (including the "Before you continue" notice) and Account recovery no longer start with an emoji: terms not accepted, wrong username or password, too many attempts, no account data, cannot reach the server, account on a different shop, "Verifying…", "Restoring data…", fingerprint messages, the free-trial welcome and the password-reset pop-up. The wording is the same.
+//   - NOT CHANGED: every screen after sign-in (a few pop-ups there still carry an emoji), the license and trial banners, the blocked-account screen, IDs, function names, database rules.
+// Previous version: v0.3.111 (2026-11-22) — sign-in screens say "shop", not "depot" (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED: the words on the Sign in, Create account and Account recovery screens: the two lines in the PC side panel ("Set up your shop in minutes", "Smart shop management") and the sign-in message for an account that belongs to a different shop ("different shop", "that shop", "shop admin").
+//   - NOT CHANGED: every other screen, the Terms and Privacy text, stored data (including a company's saved name), IDs, function names and code comments, database rules.
+// Previous version: v0.3.110 (2026-11-22) — Account recovery screen: same look as Sign in (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED: the recovery screen now uses the sign-in look: a plain "Account recovery" heading with one short line, one card, normal-case labels, 48px fields and buttons, one error box, no emoji and no coloured option boxes. When a Recovery PIN and a recovery email are both set, the two ways sit under their own headings with an "or" between them.
+//   - CHANGED: the messages on that screen lost their emoji; the "Code sent" message is shown in green and a later error is shown as an error again (before, the box stayed green).
+//   - NOT CHANGED: how recovery works (PIN check, email code, lockout after wrong tries, the new password rules), every ID and function name, database rules.
+// Previous version: v0.3.109 (2026-11-22) — sign-in screens: the PC side panel uses the landing page's line icons (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED: on a PC or wide tablet, the left panel of Sign in, Create account and Account recovery now shows the landing page's three points (Works offline, Till on every plan, Any phone or PC) with flat line icons instead of the coloured emoji tiles. The panel is flat (no gradient). Each screen keeps its own title and short line.
+//   - CHANGED: the line-icon set moved out of the landing screen so the sign-in screens can use it while the landing page is hidden.
+//   - NOT CHANGED: phone layout, every ID and function (sign in, sign up, username check, fingerprint, recovery), database rules.
+// Previous version: v0.3.108 (2026-11-21) — the cash drawer opens by itself when cash changes hands (pos.html + index.html + sw.js; no new file, NO database RULES change)
 //   - NEW: Printer > "Cash drawer (plugged into the printer)": Off (default), standard connection, or the other pin. It sends the ESC p drawer pulse through the printer, so it needs a drawer in the printer's drawer socket and RawBT or Bluetooth printing (the browser print dialog cannot send it). Per device, like the rest of Printer.
 //   - NEW: the drawer opens (1) when a sale has cash in it (any cash tendered, also in a split payment), (2) when a void or refund hands cash back, (3) when a shift is opened (the float goes in) and (4) when a shift is closed (the cash comes out). On a sale or a return that prints by itself, the pulse is the first thing in the receipt's / slip's own print job, so RawBT gets one hand-off; otherwise the pulse goes alone.
 //   - NOT OPENED: MTN, Airtel, card or credit-only sales, practice sales, reprints, X and Z reports, the receipt preview. An Admin or Manager's Test print also opens the drawer so they can check it; a cashier's Test print does not.
@@ -2564,7 +2578,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.108';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.112';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
