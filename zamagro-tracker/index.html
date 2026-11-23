@@ -724,6 +724,10 @@
                         <div id="signup-email-wrap">
                             <div class="form-group"><label>Email for updates and receipts</label><input type="email" id="signup-notify-email" placeholder="you@example.com" autocomplete="email" inputmode="email" maxlength="120"/></div>
                         </div>
+                        <div id="signup-ref-wrap">
+                            <div class="form-group"><label>Referral code <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label><input type="text" id="signup-ref-code" placeholder="Got a code from a friend?" maxlength="60" autocomplete="off" autocapitalize="characters" spellcheck="false" style="text-transform:uppercase;" oninput="scheduleReferralCheck()"/></div>
+                            <div id="signup-ref-status" style="display:none;font-size:.8rem;margin:-6px 0 10px;padding:4px 8px;border-radius:4px;"></div>
+                        </div>
                         <div id="signup-error" style="display:none;color:var(--danger);font-size:.85rem;margin-bottom:.75rem;padding:.5rem;background:#ffebee;border-radius:4px;"></div>
                         <div id="signup-cloud-status" style="display:none;font-size:.82rem;margin-bottom:.75rem;padding:.5rem;border-radius:4px;"></div>
                         <div style="display:flex;align-items:flex-start;gap:.5rem;margin-bottom:1rem;font-size:.82rem;color:var(--text-muted);">
@@ -4506,6 +4510,7 @@
             tabSignup.style.color      = isSignin ? 'var(--text-muted)' : 'white';
             // Show warning if account already exists when switching to signup
             if (!isSignin) {
+                try { prefillSignupReferral(); } catch (e) {}
             }
         }
 
@@ -4586,6 +4591,9 @@
             // offline fallback, no "connect later" — a signup that can't reach the cloud is
             // not allowed to leave behind a local-only account, since that account would never
             // be retrievable on any other device and would have nothing to sync to.
+            // Referral code (optional): never blocks sign-up. Step 6 saves it once the account exists.
+            _pendingReferral = await resolveSignupReferral();
+
             const cloudEmail = deriveCloudEmail(companyName, adminUser);
             try {
                 await connectCloudSync(cloudEmail, adminPw, 'create');
@@ -4750,6 +4758,204 @@
         };
 
         function fmtK(n) { return 'K' + n.toLocaleString('en-US'); }
+
+        // ── REFERRAL PROGRAMME ────────────────────────────────────────────
+        // A customer who is not on Lifetime earns REFERRER_REWARD_DAYS free days on the Main plan for every
+        // REFERRALS_NEEDED referred accounts whose FIRST payment the admin has approved. Each referred account
+        // gets REFEREE_BONUS_DAYS extra days on that first paid plan. The admin applies both by hand.
+        // Keep these three numbers the same in zamagro-admin.html.
+        const REFERRALS_NEEDED = 2;
+        const REFERRER_REWARD_DAYS = 30;
+        const REFEREE_BONUS_DAYS = 7;
+
+        // Referral codes are 6 characters from a 32-character alphabet with no I, O, 0 or 1, so they are easy to
+        // read out over WhatsApp or a phone call. The pattern below is the same one the database rules enforce.
+        const REFERRAL_CODE_RE = /^[A-HJ-NP-Z2-9]{6,8}$/;
+        const REFERRAL_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        const REFERRAL_CODE_LEN = 6;
+        const REFERRAL_STORE_KEY = 'za_ref';     // { code, at }: a code from a ?ref= link, kept until the person signs up
+        const REFERRAL_STORE_DAYS = 30;
+        let _refCodePromise = null;              // makes sure only one code creation runs at a time
+        let _refCheckTimer = null;
+        let _signupRef = { code: '', state: '', uid: '' };   // result of the last check of the code typed on the sign-up form
+        let _pendingReferral = null;             // { code, referrerUid }: set by handleSignup, saved once the account exists (step 6)
+
+        // ── Step 4: capture a ?ref=CODE link ──────────────────────────────
+        // The installed app does not keep the query string, so the code is stored the first time the link is opened.
+        (function captureReferralFromLink() {
+            try {
+                const code = String(new URLSearchParams(location.search).get('ref') || '').trim().toUpperCase();
+                if (REFERRAL_CODE_RE.test(code)) localStorage.setItem(REFERRAL_STORE_KEY, JSON.stringify({ code: code, at: Date.now() }));
+            } catch (e) {}
+        })();
+        function getStoredReferral() {
+            try {
+                const s = JSON.parse(localStorage.getItem(REFERRAL_STORE_KEY));
+                if (s && REFERRAL_CODE_RE.test(String(s.code)) && Date.now() - Number(s.at) < REFERRAL_STORE_DAYS * 86400000) return s.code;
+            } catch (e) {}
+            return '';
+        }
+        function clearStoredReferral() { try { localStorage.removeItem(REFERRAL_STORE_KEY); } catch (e) {} }
+        // The link an owner shares. getShareUrl() drops the query string, so this adds ?ref= to the clean address.
+        function getReferralLink(code) {
+            const base = getShareUrl();
+            if (!base || !REFERRAL_CODE_RE.test(String(code || ''))) return null;
+            const u = new URL(base);
+            u.searchParams.set('ref', code);
+            return u.toString();
+        }
+
+        // ── Step 3: each business owner gets one referral code ────────────
+        function genReferralCode() {
+            const bytes = new Uint8Array(REFERRAL_CODE_LEN);
+            if (window.crypto && window.crypto.getRandomValues) window.crypto.getRandomValues(bytes);
+            else for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+            let out = '';
+            for (let i = 0; i < bytes.length; i++) out += REFERRAL_ALPHABET.charAt(bytes[i] & 31);   // 32 letters, so no bias
+            return out;
+        }
+        // The owner's code as saved in settings (works offline). Empty if there is none yet.
+        function getReferralCode() {
+            try {
+                const c = String((db.settings || {}).referralCode || '').toUpperCase();
+                return REFERRAL_CODE_RE.test(c) ? c : '';
+            } catch (e) { return ''; }
+        }
+        function saveReferralCode(code) {
+            if (getReferralCode() === code) return;
+            const st = db.settings || {};
+            st.referralCode = code;
+            writeSettings(st);
+        }
+        // Only the business owner can create the code. Co-admins and staff just see it, because it syncs in settings.
+        function referralIsOwner() {
+            return !!(cloudAuth && !cloudAuth.staff && cloudAuth.uid && cloudAuth.uid === currentLicenseUid());
+        }
+        // Returns the owner's code, creating it on the first call. Returns '' when it cannot be made right now
+        // (offline, not the owner, rules not published yet); the caller just tries again later.
+        async function ensureReferralCode() {
+            const have = getReferralCode();
+            if (have) return have;
+            if (!referralIsOwner() || navigator.onLine === false) return '';
+            if (!_refCodePromise) {
+                _refCodePromise = (async () => {
+                    try { return await _createReferralCode(); }
+                    catch (e) { console.warn('ZamAgro: referral code setup failed', e); return ''; }
+                    finally { _refCodePromise = null; }
+                })();
+            }
+            return _refCodePromise;
+        }
+        async function _createReferralCode() {
+            const uid = cloudAuth.uid;
+            const tok = await getFreshIdToken();
+            if (!tok) return '';
+            const base = FIREBASE_CONFIG.databaseURL;
+            const get = async (path, withAuth) => {
+                const r = await fetch(base + '/' + path + '.json' + (withAuth ? '?auth=' + tok : ''));
+                if (!r.ok) throw new Error('GET ' + path + ' failed: ' + r.status);
+                return r.json();
+            };
+            const put = (path, body) => fetch(base + '/' + path + '.json?auth=' + tok, {
+                method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+            });
+            // 1) This owner may already have a code (made on another device, or an earlier attempt that stopped half way).
+            const mine = await get('referralOwners/' + encodeURIComponent(uid), true);
+            if (typeof mine === 'string' && REFERRAL_CODE_RE.test(mine)) {
+                const rec = await get('referralCodes/' + mine, false);
+                if (rec && rec.uid === uid) { saveReferralCode(mine); return mine; }
+                if (rec) { console.warn('ZamAgro: referral code is held by another account'); return ''; }
+                const r = await put('referralCodes/' + mine, { uid: uid, ts: Date.now() });   // finish the half-made code
+                if (r.ok) { saveReferralCode(mine); return mine; }
+                return '';
+            }
+            // 2) New code: pick one nobody has, claim it for this owner, then publish the lookup entry.
+            for (let i = 0; i < 5; i++) {
+                const code = genReferralCode();
+                if (await get('referralCodes/' + code, false)) continue;   // taken: pick another
+                const r1 = await put('referralOwners/' + encodeURIComponent(uid), code);
+                if (!r1.ok) return '';
+                const r2 = await put('referralCodes/' + code, { uid: uid, ts: Date.now() });
+                if (r2.ok) { saveReferralCode(code); return code; }
+                return '';
+            }
+            return '';
+        }
+
+        // ── Step 5: the optional referral code on the sign-up form ────────
+        function normalizeReferralCode(v) {
+            let s = String(v || '');
+            const m = /[?&]ref=([A-Za-z0-9]+)/.exec(s);          // someone pasted the whole link
+            if (m) s = m[1];
+            return s.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+        }
+        function setRefStatus(kind, text) {
+            const el = document.getElementById('signup-ref-status');
+            if (!el) return;
+            if (!text) { el.style.display = 'none'; return; }
+            const c = { wait: ['#f3f4f6', '#555'], ok: ['#e8f5e9', '#2e7d32'], bad: ['#ffebee', '#c62828'], info: ['#fff8e1', '#8a6d00'] }[kind] || ['#f3f4f6', '#555'];
+            el.style.display = 'block'; el.style.background = c[0]; el.style.color = c[1]; el.textContent = text;
+        }
+        // Looks the code up in the public referralCodes node (no sign-in needed). Never throws.
+        async function lookupReferralCode(code) {
+            if (!isCloudConfigured() || !REFERRAL_CODE_RE.test(String(code || ''))) return { status: 'invalid' };
+            const ac = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+            const timer = setTimeout(() => { if (ac) ac.abort(); }, 4000);
+            try {
+                const r = await fetch(FIREBASE_CONFIG.databaseURL + '/referralCodes/' + encodeURIComponent(code) + '.json', ac ? { signal: ac.signal } : undefined);
+                if (!r.ok) return { status: 'error' };
+                const d = await r.json();
+                if (d && typeof d.uid === 'string' && d.uid) return { status: 'found', uid: d.uid };
+                return { status: 'notfound' };
+            } catch (e) { return { status: 'error' }; }
+            finally { clearTimeout(timer); }
+        }
+        function scheduleReferralCheck() {
+            clearTimeout(_refCheckTimer);
+            const inp = document.getElementById('signup-ref-code');
+            if (!inp) return;
+            const code = normalizeReferralCode(inp.value);
+            if (inp.value !== code) inp.value = code;
+            _signupRef = { code: code, state: '', uid: '' };
+            if (code.length < 6) { setRefStatus('', ''); return; }     // still typing
+            if (!REFERRAL_CODE_RE.test(code)) {
+                _signupRef.state = 'bad';
+                setRefStatus('bad', '✘ That is not a valid code. Codes use letters and numbers, without I, O, 0 or 1.');
+                return;
+            }
+            setRefStatus('wait', '⏳ Checking code...');
+            _refCheckTimer = setTimeout(() => checkReferralCode(code), 500);
+        }
+        async function checkReferralCode(code) {
+            const r = await lookupReferralCode(code);
+            const inp = document.getElementById('signup-ref-code');
+            if (!inp || normalizeReferralCode(inp.value) !== code) return;   // the box changed while we were checking
+            if (r.status === 'found') { _signupRef = { code: code, state: 'found', uid: r.uid }; setRefStatus('ok', '✔ Referral code accepted.'); }
+            else if (r.status === 'notfound') { _signupRef = { code: code, state: 'bad', uid: '' }; setRefStatus('bad', '✘ We could not find that code. You can still create your account without it.'); }
+            else { _signupRef = { code: code, state: 'unknown', uid: '' }; setRefStatus('info', 'Could not check the code right now. We will try again when you tap Create.'); }
+        }
+        // Fills the box from a stored ?ref= link when the Sign up tab opens.
+        function prefillSignupReferral() {
+            const inp = document.getElementById('signup-ref-code');
+            if (!inp || inp.value) return;
+            const c = getStoredReferral();
+            if (c) { inp.value = c; scheduleReferralCheck(); }
+        }
+        // Called by handleSignup before the account is created. Returns { code, referrerUid } or null.
+        // It never blocks sign-up: a missing, wrong or unreachable code simply means no referral is recorded.
+        async function resolveSignupReferral() {
+            try {
+                const j = document.getElementById('signup-join-mode');
+                if (j && j.checked) return null;                      // joining an existing business, not a new customer
+                const inp = document.getElementById('signup-ref-code');
+                const code = normalizeReferralCode(inp ? inp.value : '');
+                if (!code || !REFERRAL_CODE_RE.test(code)) return null;
+                if (_signupRef.code === code && _signupRef.state === 'found') return { code: code, referrerUid: _signupRef.uid };
+                const r = await lookupReferralCode(code);
+                if (r.status === 'found') return { code: code, referrerUid: r.uid };
+            } catch (e) {}
+            return null;
+        }
 
         // ── EXTRA SHOP PRICING ────────────────────────────────────────────
         // A plan covers the first shop (the Main shop). Every extra ACTIVE shop costs a percentage of
@@ -6130,6 +6336,10 @@ async function notifyApi(body) {
 function toggleSignupEmailFields() {
     const w = document.getElementById('signup-email-wrap'), j = document.getElementById('signup-join-mode');
     if (w && j) w.style.display = j.checked ? 'none' : '';
+    // The referral code is only for new businesses, so it is hidden when joining an existing one.
+    const rw = document.getElementById('signup-ref-wrap'), rc = document.getElementById('signup-ref-code'), rs = document.getElementById('signup-ref-status');
+    if (rw && j) rw.style.display = j.checked ? 'none' : '';
+    if (rs && rc && !rc.value) rs.style.display = 'none';   // the form was reset
 }
 
 // --- required prompt: runs after every owner login and cannot be closed ---
