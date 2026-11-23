@@ -89,6 +89,8 @@ const Sales = (function () {
   const BATCH_NAME = 'TILL SALES';                       // pseudo batch the main app shows for commodity sold at the till
 
   const isNum = x => typeof x === 'number' && isFinite(x);
+  // The app's date rule: the DEVICE's own calendar date (index.html's today() and pos.html's localYMD give the same). It used to be the UTC date.
+  const localDay = t => { const d = t instanceof Date ? t : new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
   const r2 = n => Math.round(n * 100) / 100;
   const r3 = n => Math.round(n * 1000) / 1000;
   const toC = n => Math.round((Number(n) || 0) * 100);
@@ -146,12 +148,12 @@ const Sales = (function () {
   //   payments:[{method, label, amount, tendered, ref}],                          absent for a pure credit sale
   //   amountPaid, change, balance, creditStatus:'paid'|'partial'|'credit', customerId, customerName
   // }
-  // opts.dateOf(at) must give the date the way the main app's today() does (it uses the UTC date), so the till's
+  // opts.dateOf(at) must give the date the way the main app's today() does (the device's own date), so the till's
   // sales land on the same day as everything else in Sales History and the daily close-out.
   function toRecord(b, opts) {
     opts = opts || {};
     const at = Math.round(Number(b.at));
-    const dateOf = opts.dateOf || (t => new Date(t).toISOString().slice(0, 10));
+    const dateOf = opts.dateOf || localDay;
     const timeOf = opts.timeOf || (t => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); });
     const rec = {
       v: V, id: String(b.receiptNo), receiptNo: String(b.receiptNo), tillId: String(b.tillId), till: String(b.till), seq: Number(b.seq),
@@ -434,7 +436,7 @@ const Sales = (function () {
     return out;
   }
   // The shop's calendar day and weekday for a moment. Local time of the phone, on purpose: "until Friday" means the shop's Friday, whereas a sale's own
-  // `date` field is the UTC day (the main app's today()).
+  // `date` field is the device's own day too (the main app's today()).
   function promoDay(ms) {
     const d = new Date(ms), pad = n => String(n).padStart(2, '0');
     return { date: d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()), dow: d.getDay() };
@@ -1070,7 +1072,7 @@ const Sales = (function () {
   // Money is the item's CURRENT cost per base unit (items[].cost), an estimate: value = round(order x cost x 100) / 100 per row, and the total adds the rows.
   // src:   items     [{ id, name, minStock, reserved?, category?, unit?, cost? }]   the item master (an item with no id is skipped)
   //        received  generalInventory rows (only to find when an item first appeared)      issued  generalIssued rows      sales  ledger records      returns  return RECORDS (returns.js)
-  // opts:  today 'YYYY-MM-DD' (default: the UTC date);  lead / cover / look  the policy in whole days (see reorderPolicy: anything missing or out of range takes the default);
+  // opts:  today 'YYYY-MM-DD' (default: the device's own date);  lead / cover / look  the policy in whole days (see reorderPolicy: anything missing or out of range takes the default);
   //        onHand(key) REQUIRED;  unsellable(key) optional;  idOfName / keyOf / isApproved as in stockBook
   // Returns { rows, totals, policy }
   //   row:    { key, name, category, unit, onHand, reserved, expired, available, min, demand (net units over `days`), days (complete days averaged), rate (per day), thin, cover (days), reorderPoint, orderUpTo,
@@ -1095,7 +1097,7 @@ const Sales = (function () {
     const ok = o.isApproved || (r => !r.approvalStatus || r.approvalStatus === 'approved');
     const keyOf = o.keyOf || (r => r.itemId || idOf(r.itemName));
     const pol = reorderPolicy({ reorderLeadDays: o.lead, reorderCoverDays: o.cover, reorderLookDays: o.look });
-    const tn = dayNo(o.today || new Date().toISOString().slice(0, 10));
+    const tn = dayNo(o.today || localDay(Date.now()));
     if (tn == null) throw err('INVALID', 'today must be YYYY-MM-DD');
     const lo = tn - pol.look, hi = tn - 1;                              // the complete days that are averaged
 
@@ -1443,7 +1445,7 @@ const Sales = (function () {
     const sumDays = c => Object.keys(c.days).reduce((a, k) => a + c.days[k], 0);
     // A record that arrives dated BEFORE the cache's boundary (a late upload, a restore) marks its day to be worked again. A sale of today never costs more than this check of the date.
     async function touch(d, dates) {
-      const floor = dayAdd(new Date().toISOString().slice(0, 10), -HOT_DAYS.min);
+      const floor = dayAdd(localDay(Date.now()), -HOT_DAYS.min);
       const old = Array.from(new Set(dates.filter(x => x && x < floor)));
       if (!old.length) return;                                       // today's sales end here, without waiting for anything
       return exclusive(async () => {
@@ -1464,7 +1466,7 @@ const Sales = (function () {
     async function loadNow(d, o) {
       o = o || {};
       const hotDays = ledgerPolicy({ ledgerHotDays: o.hotDays }).hotDays;
-      const today = o.today || new Date().toISOString().slice(0, 10), cut = dayAdd(today, -hotDays);
+      const today = o.today || localDay(Date.now()), cut = dayAdd(today, -hotDays);
       let c = await readCache(d), changed = false;
       if (c.upTo > cut) { c = freshCache(); changed = true; }                                             // the window was made longer: those days must come back
       if (c.upTo && verifiedD !== d) {                                                                   // once per start: the cache must agree with the records

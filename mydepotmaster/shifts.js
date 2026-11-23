@@ -76,6 +76,8 @@ const Shifts = (function () {
   const isNum = x => typeof x === 'number' && isFinite(x);
   const r2 = n => Math.round(n * 100) / 100;
   const toC = n => Math.round((Number(n) || 0) * 100);
+  // The app's date rule: the DEVICE's own calendar date (index.html's today(), pos.html's localYMD and sales.js give the same). It used to be the UTC date.
+  const localDay = t => { const d = t instanceof Date ? t : new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
   const str = (x, n) => (x == null ? '' : String(x)).slice(0, n);
   function err(code, msg, extra) { const e = new Error(msg || code); e.code = code; if (extra) Object.assign(e, extra); return e; }
   const arr = x => Array.isArray(x) ? x : (x && typeof x === 'object' ? Object.keys(x).sort((a, b) => a - b).map(k => x[k]) : []);
@@ -94,7 +96,7 @@ const Shifts = (function () {
   function openRecord(b, opts) {
     opts = opts || {};
     const at = Math.round(Number(b.at));
-    const dateOf = opts.dateOf || (t => new Date(t).toISOString().slice(0, 10));
+    const dateOf = opts.dateOf || localDay;
     const timeOf = opts.timeOf || (t => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); });
     const id = idOf(String(b.till), Number(b.seq));
     return JSON.parse(JSON.stringify({
@@ -121,7 +123,7 @@ const Shifts = (function () {
   function closeRecord(b, opts) {
     opts = opts || {};
     const at = Math.round(Number(b.at));
-    const dateOf = opts.dateOf || (t => new Date(t).toISOString().slice(0, 10));
+    const dateOf = opts.dateOf || localDay;
     const timeOf = opts.timeOf || (t => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); });
     const by = {}; METHODS.forEach(m => { by[m] = r2(Number((b.byMethod || {})[m]) || 0); });
     return JSON.parse(JSON.stringify({
@@ -168,7 +170,7 @@ const Shifts = (function () {
   function auditRecord(b, opts) {
     opts = opts || {};
     const at = Math.round(Number(b.at));
-    const dateOf = opts.dateOf || (t => new Date(t).toISOString().slice(0, 10));
+    const dateOf = opts.dateOf || localDay;
     const timeOf = opts.timeOf || (t => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); });
     const rnd = String(b.rnd == null ? '' : b.rnd).toLowerCase().replace(/[^0-9a-z]/g, '').slice(0, 4);
     const o = {
@@ -347,8 +349,8 @@ const Shifts = (function () {
   // Everything of one date (YYYY-MM-DD, the ledger's own day), across all tills the phone knows about.
   //   events  shift opens and closes (create(env).all())    sales  the ledger's records
   // Returns the day's sales by method, the shifts counted on the day, and which shifts are still open.
-  // ONE SHIFT, ONE DAY. A sale belongs to the date it was taken (its own `date`), so a shift that runs across UTC midnight (02:00
-  // Zambia time) sells on two dates. The shift itself is listed on exactly one: the date it was CLOSED, because that is when its drawer
+  // ONE SHIFT, ONE DAY. A sale belongs to the date it was taken (its own `date`), so a shift that runs across midnight
+  // sells on two dates. The shift itself is listed on exactly one: the date it was CLOSED, because that is when its drawer
   // was counted and its variance became final; a shift still open is listed on the date it was OPENED. So a variance and a count are
   // never added into two days, and the close-out made after the count is the one that carries it. A closed shift's count covers ALL of
   // its sales, including cash taken on the earlier date; row.openedDate !== row.closedDate tells the caller that this is such a shift.

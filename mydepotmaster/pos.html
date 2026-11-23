@@ -1117,7 +1117,7 @@ function openReceive(){
   ss.value=RCV.sup;if(ss.value!==RCV.sup){ss.value='';RCV.sup='';}
   ss.onchange=()=>{RCV.sup=ss.value;rcvSave();};sw.append(ss);
   const dw=el('label','fld','Date received'),di=el('input','',null,{type:'date','aria-label':'Date received'});
-  di.value=RCV.date||new Date().toISOString().slice(0,10);di.onchange=()=>{RCV.date=di.value;rcvSave();};dw.append(di);   // untouched = today when it is saved
+  di.value=RCV.date||localYMD(Date.now());di.onchange=()=>{RCV.date=di.value;rcvSave();};dw.append(di);   // untouched = today when it is saved
   const pw=el('label','fld','Payment'),ps=el('select','',null,{'aria-label':'Payment'});
   [['paid','\u2705 PAID'],['partial','\uD83D\uDD36 PARTIAL'],['credit','\uD83D\uDD34 CREDIT']].forEach(x=>{const o=el('option','',x[1]);o.value=x[0];ps.append(o);});
   ps.value=RCV.pay;if(ps.value!==RCV.pay){ps.value='paid';RCV.pay='paid';}
@@ -1162,16 +1162,19 @@ function goChangePassword(){
 // downloads the other tills' sales. Stock on this screen = received - issued - sold + returns, worked out by Sales.stockBook
 // (sales.js), the same function the main app uses, so both always show the same number.
 // The sale is NOT written into DATA, so two tills selling at the same moment cannot overwrite each other.
+// The app's date rule (the same as index.html's today()): the DEVICE's own calendar date, so on a phone set to Zambia time the day turns over at midnight there.
+// It used to be the UTC date, which kept "today" on the previous day from 00:00 to 02:00.
+function localYMD(t){const d=t instanceof Date?t:new Date(t),p=n=>(n<10?'0':'')+n;return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());}
 const LEDGER=Sales.create({
   depotKey:()=>DATA&&DATA.installId,
-  opts:{dateOf:t=>new Date(t).toISOString().slice(0,10)},   // the date rule index.html's today() uses, so Sales History agrees
+  opts:{dateOf:t=>localYMD(t)},   // the date rule index.html's today() uses, so Sales History agrees
   adapter:Sales.idbAdapter()
 });
 let SALES_ALL=[],SALES_PENDING=0,SALES_ERR='',SALES_AUTH=false,salesBusy=false;   // SALES_ALL: every sale record on this phone (own + downloaded)
 // Step 33: the last Sales.ledgerPolicy().hotDays days are held as the real sales, older days as day totals (Sales.foldCold: one pseudo sale per day, till, shift and
 // cashier, standing for n sales). Nothing is deleted. Credit and customer sales, discounts a person allowed, wholesale baskets and any sale a void / refund points at stay real.
 // A sale of an older day is read from the phone by its receipt number when the refund screen asks for it (LEDGER.get).
-const ledgerArgs=rets=>({today:new Date().toISOString().slice(0,10),hotDays:Sales.ledgerPolicy(DATA&&DATA.depotInfo).hotDays,returns:rets});
+const ledgerArgs=rets=>({today:localYMD(Date.now()),hotDays:Sales.ledgerPolicy(DATA&&DATA.depotInfo).hotDays,returns:rets});
 async function loadSold(){
   await loadRets();                                      // step 19: voids and refunds are read with the sales: stock and the drawer need both. Read FIRST: a sale a return points at must stay a real record
   try{SALES_ALL=(await LEDGER.load(ledgerArgs(RETS_ALL))).list;SALES_PENDING=await LEDGER.pending();}
@@ -1181,7 +1184,7 @@ async function loadSold(){
 // saved on this phone first, uploaded when there is signal, the other tills' downloaded. See VOIDS AND REFUNDS further down.
 const RETLG=Returns.create({
   depotKey:()=>DATA&&DATA.installId,
-  opts:{dateOf:t=>new Date(t).toISOString().slice(0,10)},   // the same date rule as the sales ledger
+  opts:{dateOf:t=>localYMD(t)},   // the same date rule as the sales ledger
   adapter:Returns.idbAdapter()
 });
 let RETS_ALL=[],RETS_PENDING=0;
@@ -1320,7 +1323,7 @@ function loadCatalog(){
   const book=Sales.stockBook({received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:SALES_ALL,returns:Returns.forStock(RETS_ALL)},{idOfName:n=>idByName.get(n)||legacyId(n)});
   // Step 30: expiry and batches. Sales.expiryBook (sales.js) replays the same records into batches, first-expired-first-out, and only items that have a batch number or an expiry date on a received
   // row are worked out. o.xp = { total, expired, soon, next, nextDays, batches } (see sales.js) or null. o.ok = what can be SOLD: stock minus what is past its date (an item with no expiry data: all of it).
-  const exb=Sales.expiryBook({received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:SALES_ALL,returns:RETS_ALL},{idOfName:n=>idByName.get(n)||legacyId(n)}),tday=new Date().toISOString().slice(0,10);   // the app's date rule (UTC), like the dates on the sales
+  const exb=Sales.expiryBook({received:DATA.generalInventory||[],issued:DATA.generalIssued||[],sales:SALES_ALL,returns:RETS_ALL},{idOfName:n=>idByName.get(n)||legacyId(n)}),tday=localYMD(Date.now());   // the app's date rule (the device's own date), like the dates on the sales
   const prices=DATA.inventoryPrices||{};
   const general=items.map(x=>{
     const o={
@@ -2447,11 +2450,11 @@ function askManagerPin(go,msg,label,why){        // go(who) runs after a PIN hol
 
 // ── MY SALES (till roadmap step 14): a cashier's own report ─────────────────────
 // A Cashier login has no main app, so this is the only report it gets: its own sales for the day, from the ledger on this phone
-// (own sales plus the same cashier's sales downloaded from other tills). Day = the ledger's day (UTC, as index.html's today()), so
+// (own sales plus the same cashier's sales downloaded from other tills). Day = the ledger's day (the device's own date, as index.html's today()), so
 // the figures agree with Sales History. Read-only; shown to the 'cashier' role only (the button is hidden for everyone else).
 let MOVL=null,MBODY=null;
 function mineToday(){
-  const me=String((USER&&USER.username)||'').toLowerCase(),today=new Date().toISOString().slice(0,10);
+  const me=String((USER&&USER.username)||'').toLowerCase(),today=localYMD(Date.now());
   return SALES_ALL.filter(s=>s&&s.date===today&&String(s.cashier||'').toLowerCase()===me).sort((a,b)=>(b.at||0)-(a.at||0));
 }
 function openMine(){
@@ -2479,7 +2482,7 @@ function renderMine(){
     total+=Number(s.total)||0;credit+=Number(s.balance)||0;
     (s.payments||[]).forEach(p=>{const k=p.label||p.method||'Payment';by.set(k,(by.get(k)||0)+(Number(p.amount)||0));});
   });
-  const day=new Date().toISOString().slice(0,10);
+  const day=localYMD(Date.now());
   fr.append(el('div','h-sub',new Date(day+'T00:00:00Z').toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',timeZone:'UTC'})+(USER?' \u00B7 '+USER.username:'')));
   const sum=el('div','pay-sum');
   const row=(l,v)=>sum.append(el('span','',l),el('span','r',v));
@@ -2518,7 +2521,7 @@ function renderMine(){
 // Step 19: cash handed back on voids and refunds (VOIDS AND REFUNDS, further down) is that `out`: Returns.cashOutOf(shiftId).
 const SHIFTLG=Shifts.create({
   depotKey:()=>DATA&&DATA.installId,
-  opts:{dateOf:t=>new Date(t).toISOString().slice(0,10)},   // the same date rule as the sales ledger
+  opts:{dateOf:t=>localYMD(t)},   // the same date rule as the sales ledger
   adapter:Shifts.idbAdapter()
 });
 // ── AUDIT TRAIL (till roadmap step 20) ────────────────────────────────────────────────────────────────────────
@@ -3071,7 +3074,7 @@ function renderRet(){
 }
 // ── 1. find the sale: today's sales on this phone, or search by receipt number (or customer)
 function retFindList(q){
-  const t=String(q||'').trim().toUpperCase(),today=new Date().toISOString().slice(0,10);
+  const t=String(q||'').trim().toUpperCase(),today=localYMD(Date.now());
   let list=SALES_ALL.filter(x=>x&&x.id&&!x._digest).concat((RT&&RT.extra)||[]);   // step 33: day totals are not sales; older sales fetched by number are
   list=t?list.filter(x=>String(x.id).includes(t)||String(x.customerName||'').toUpperCase().includes(t)):list.filter(x=>x.date===today);
   return list.sort((a,b)=>(b.at||0)-(a.at||0)).slice(0,40);
