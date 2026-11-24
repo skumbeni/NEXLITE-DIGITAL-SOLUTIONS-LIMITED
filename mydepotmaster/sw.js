@@ -25,7 +25,36 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.133 (2026-11-24) — Inventory and Commodity: search, period and export in one toolbar (index.html + sw.js; no new file, NO database RULES change)
+// Current version: v0.3.138 (2026-11-24) — Staff tab: Roster merged into the Staff list, and no emoji (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED (step 3): the Roster view is gone. The Staff list is now one view: a toolbar (search by name, role or phone; a Role dropdown when two or more roles have staff), one line of counts (people, active, suspended, inactive) and one row per person with the name, a status chip (Active, Suspended, Resigned, Terminated), role, phone and the unpaid amount. Tap a row to open the profile. A person with two roles is one row (before, they were listed under each role), and staff with no role now appear.
+//   - CHANGED (step 3): Admin gets a menu button on each row with the status actions Roster had: Suspend, Mark as resigned, Terminate (active), Reinstate and Terminate (suspended), Reinstate (resigned or terminated). Each still opens the same date / reason pop-up. A Manager sees the rows and the profile, as before.
+//   - NOT CHANGED (step 3): the figures. Unpaid is the Staff list's own sum (net earned over all logs, minus payments and the loan pool); step 13 checks it against Work Logs and Payments. Export as PDF still prints the staff list. A saved Roster view opens the Staff list.
+//   - CHANGED (step 4): the emoji are out of the Staff tab's views: delete and edit buttons, Clock Out, the active-shift banner and chip, note and reference icons, the search box, Tag Stock, Wage Disclaimer, Generate Payslip, card titles, the leave notice, the Contract and Roles & Rates notices, the Range button and the Gang split line, plus the Contracts view (View / Download, Replace, Upload, Delete, the On file / Missing chip, History), the Roles & Rates editor and the Payments selection bar. The sync chip at the top of every tab is shared by all tabs and keeps its symbols. Each is now one of the dashboard's line icons or nothing, and icon-only buttons have a label. Pending and Rejected chips and the Edit selected / Delete selected bar use the icon form.
+//   - CHANGED (wording): five pop-up messages that said "check the roster" now say "Check the Staff list".
+//   - NOT CHANGED: capitals and the other wording (step 5), the pop-ups (steps 17 to 27), the check mark in Paid chips and the arrows between dates.
+//   - Ships on top of v0.3.137 (pos.html, sales.js and shifts.js as in v0.3.118).
+// Previous version: v0.3.137 (2026-11-24) — Staff tab: the sub-tabs are behind a views bar (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED: the Staff tab used to show 10 pill buttons in four labelled groups (Work, Pay, People, Reports). It now shows the same slim bar as Inventory and Commodity: the name of the view you are in and a menu button that opens a sheet with the views in the same groups, the current one ticked. From 560 px wide the bar also shows a row of the main views (Work logs, Leave, Earnings, Payments, Staff list), plus the current view if it is another one.
+//   - CHANGED: Role history (Admin) and Productivity (Admin and Manager) open pop-ups, not views, so they are action rows under Reports in the sheet, with no tick. Their old buttons are gone from the page.
+//   - CHANGED: the bar's text sizes and corner radii now come from the dashboard's tokens on the bar itself (.vbar, .abar-m), because the Staff tab is not wrapped in the Inventory page class. This also gives the v0.3.136 More button its intended text size.
+//   - NOT CHANGED: what any view shows; who sees it (a staff login still sees My logs, My leave, My earnings, My payments and My contract only, and never lands on Roster, Staff list or Roles & rates); the tab ids stab-* and the STAB value; Roster and Staff list are still two views (step 3 merges them).
+//   - Ships on top of v0.3.136 (pos.html, sales.js and shifts.js as in v0.3.118).
+// Previous version: v0.3.136 (2026-11-24) — Staff tab: the action buttons are behind a More menu (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED: the Staff tab used to open with up to 12 buttons (Admin), 7 (Manager) or 2 (staff login). It now shows Clock in, Pay (not for a staff login) and a More button that opens a sheet: Record work (Bulk clock in, Bulk clock out, Log work manually, Bulk log, Gang split), Pay (Bulk pay, Payroll, Advances), People (Add staff) and Export as PDF.
+//   - NOT CHANGED: what any action does; who sees it (Bulk clock out, Bulk pay, Payroll, Advances and Add staff stay Admin only; a staff login sees Clock in and Export only); the Payroll plan lock (shown in the menu); the sub-tabs, which are the next step.
+//   - Ships on top of v0.3.135 (pos.html, sales.js and shifts.js as in v0.3.118).
+// Previous version: v0.3.135 (2026-11-24) — Inventory and Commodity: empty states and an accessibility pass (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED (empty states): a Received or Issued view with nothing in the period shows one plain sentence and one button (Receive stock / Issue stock) in the dashboard's empty-state card, instead of a bare table row. The button presses the real + Receive / + Issue button. Commodity with no commodity defined shows "No commodities added yet." and an Add a commodity button (Admin) or a note to ask an Admin, in place of the large icon and heading.
+//   - FIXED: the old "No commodities defined" block sat outside the Inventory / Commodity wrapper, so the v0.3.134 classes did not reach it; the new one is inside it.
+//   - CHANGED (accessibility): the dashboard's contrast colours now apply to the whole tab (every text colour reaches 4.5:1 on a card in both themes); + Receive, + Issue and the empty-state button show a keyboard outline; the row menu button is 44 px; tick boxes are larger. The menu buttons already had labels, aria-expanded, a 44 px area and Escape to close (v0.3.122 / v0.3.123).
+//   - NOT CHANGED: other empty rows (stock counts, transport, batches), what any button does, and the database rules.
+//   - Ships on top of v0.3.134 (pos.html, sales.js and shifts.js as in v0.3.118).
+// Previous version: v0.3.134 (2026-11-24) — Inventory and Commodity: the dashboard's text sizes and corner radii, styles in named classes (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED (sizes): both tabs now use the dashboard's five text sizes (15 / 17 / 19 / 23 / 31 px) and two radii (card 12, control 10) through the same --db-* tokens. The 11 to 40 px mix inside the views is snapped onto that scale; bars and pill shapes keep their own radius, and the large empty-state icon is left for the next step.
+//   - CHANGED (code): repeated inline styles in the views of both tabs are named .iv-* classes under .invx; a style that holds a computed value stays inline. Nothing outside the two tabs uses these classes.
+//   - NOT CHANGED: what any button, figure or filter does, and the database rules.
+//   - Ships on top of v0.3.133 (pos.html, sales.js and shifts.js as in v0.3.118).
+// Previous version: v0.3.133 (2026-11-24) — Inventory and Commodity: search, period and export in one toolbar (index.html + sw.js; no new file, NO database RULES change)
 //   - CHANGED (toolbar): under the views bar there is now one toolbar instead of three separate blocks. It holds the search box (only in the four views that list entries: Inventory Received and Issued, Commodity Received and Issued), the Select button (Admin, same four views), a Period dropdown (Daily, Weekly, Monthly, Yearly, All, Range) and Export. On a phone the search has its own row and the other controls sit on the next row. All controls are 44 px tall and have labels; the Range dates show under the toolbar as before.
 //   - CHANGED (where things went): the period buttons are the Period dropdown; the search box left each view and is in the toolbar; Export left the More menu and is the Export button. The Stock count, Summary, Sales and finance views get the toolbar without a search box.
 //   - NOT CHANGED: what each control does (the same search, the same period filter, the same PDF export and its plan check), the + Receive, + Issue and More buttons, and the period buttons on the Staff and other tabs.
@@ -2697,7 +2726,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.133';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.138';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
