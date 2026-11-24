@@ -13,7 +13,7 @@
  *
  * To ship an update to cached files, bump VERSION below.
  */
-const VERSION = "v2";
+const VERSION = "v3";
 const CACHE = "fc-" + VERSION;
 
 const FIREBASE_SDK = [
@@ -83,6 +83,9 @@ self.addEventListener("fetch", (event) => {
 
   // Everything else on another origin (Firebase RTDB/Auth, WhatsApp, ...): hands off.
   if (url.origin !== self.location.origin) return;
+
+  // App downloads (app.apk): always straight from the network, never cached or swapped for offline.html.
+  if (/\.(apk|aab)$/i.test(url.pathname)) return;
 
   // Admin console: always live, never cached.
   if (url.pathname.endsWith("/mfc-admin.html")) return;
