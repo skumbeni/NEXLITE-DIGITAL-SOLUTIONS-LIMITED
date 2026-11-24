@@ -25,7 +25,22 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.138 (2026-11-24) — Staff tab: Roster merged into the Staff list, and no emoji (index.html + sw.js; no new file, NO database RULES change)
+// Current version: v0.3.141 (2026-11-24) — Staff tab: the wide tables become rows on a phone (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED (step 8): under 560 px, Work Logs, Earnings, Payments (each person's table) and Leave (balances and recent log) show one row per entry instead of a sideways-scrolling table. Work Logs: person and quantity on the first line, task and a status chip (Active, or Paid / Partial / Unpaid) on the second, then the date and time. Tap a row, or its chevron button, for role, gross, deductions, net, hours, and Qty to date / Net to date. Absence rows have the same shape (person, absence type, date). Payments rows show details and the amount, then the date and a type chip; the running Earned to date, Paid to date and Unpaid are in the tap-open part. Earnings: name and net, role and an absence chip; Total bags, Gross, Deductions and Absence notes open on tap. Leave: name and days left; entitlement, used, sick days, absences and the Log button open on tap. The Work Logs subtotal rows become a label with Qty, Gross, Deductions and Net beside it. Admin keeps the tick boxes (with a Select all above the rows) and the edit and delete buttons, which sit in the opened row.
+//   - NOT CHANGED: from 560 px wide the tables are exactly as before, with every column. The tick boxes and the edit / delete buttons are still always there (step 9 moves them into a menu), the row tints stay (step 10), and the filter, the sums and the subtotals are the same.
+//   - Small wording: the Payments chips "WORK" and "PAYMENT" are now Work and Payment.
+//   - Ships on top of v0.3.140 (pos.html, sales.js and shifts.js as in v0.3.118).
+// Previous version: v0.3.140 (2026-11-24) — Staff tab: fewer summary boxes, no explanation note (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED (step 7): Work Logs no longer shows the grey note that explained the "Cum." columns; the columns are now called Qty to date and Net to date. Its two tiles (Total qty and Net for the period) stay: they are the headline figures, and nothing else was shown there to fold.
+//   - CHANGED (step 7): Payments shows one tile per person, the unpaid balance (or Fully paid). Total earned and Total paid moved into a collapsed "More figures" fold under it. Same figures, same sums.
+//   - NOT CHANGED: the totals themselves (step 13), the tile look and sizes (step 14), and the Payment summary by role table.
+//   - Ships on top of v0.3.139 (pos.html, sales.js and shifts.js as in v0.3.118).
+// Previous version: v0.3.139 (2026-11-24) — Staff tab: sentence case, and one slim header (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED (step 5): the Staff tab's views show sentence case. Column headings, section headings and field labels are no longer forced to capitals or letter-spaced inside the tab, and the search boxes keep what you type. Status and type words are now Active, Salary, Absent, On leave, Sick day, Tax, Loan, Paid, Partial, Unpaid, Total earned, Total paid, Unpaid balance, Fully paid, Instalment withheld and Run #. Columns: Cum.Qty is Qty to date, Cum.Net is Net to date, Deduct is Deductions, and in Payments Cum.Earned and Cum.Paid are Earned to date and Paid to date. The note under Work Logs uses the new names.
+//   - CHANGED (step 6): the tab has a slim header: "Staff" (or "My staff record") on the left and the number on shift on the right. It reads the same open-shift list as the Active shifts banner (_staffOpenShifts), so they cannot disagree. A staff login counts only their own shift.
+//   - NOT CHANGED: the pop-ups and the printed pages (steps 17 to 27), the check marks in the Paid chips, the other capitals on the profile pop-up (its session rows share the Absent / On leave / Sick day words), and the Work Logs note and summary boxes (step 7).
+//   - Ships on top of v0.3.138 (pos.html, sales.js and shifts.js as in v0.3.118).
+// Previous version: v0.3.138 (2026-11-24) — Staff tab: Roster merged into the Staff list, and no emoji (index.html + sw.js; no new file, NO database RULES change)
 //   - CHANGED (step 3): the Roster view is gone. The Staff list is now one view: a toolbar (search by name, role or phone; a Role dropdown when two or more roles have staff), one line of counts (people, active, suspended, inactive) and one row per person with the name, a status chip (Active, Suspended, Resigned, Terminated), role, phone and the unpaid amount. Tap a row to open the profile. A person with two roles is one row (before, they were listed under each role), and staff with no role now appear.
 //   - CHANGED (step 3): Admin gets a menu button on each row with the status actions Roster had: Suspend, Mark as resigned, Terminate (active), Reinstate and Terminate (suspended), Reinstate (resigned or terminated). Each still opens the same date / reason pop-up. A Manager sees the rows and the profile, as before.
 //   - NOT CHANGED (step 3): the figures. Unpaid is the Staff list's own sum (net earned over all logs, minus payments and the loan pool); step 13 checks it against Work Logs and Payments. Export as PDF still prints the staff list. A saved Roster view opens the Staff list.
@@ -2726,7 +2741,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.138';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.141';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
