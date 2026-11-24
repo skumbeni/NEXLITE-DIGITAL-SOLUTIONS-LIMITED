@@ -25,7 +25,30 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.129 (2026-11-24) — Dashboard: the commodity figure is the one stock figure (index.html + sw.js; no new file, NO database RULES change)
+// Current version: v0.3.133 (2026-11-24) — Inventory and Commodity: search, period and export in one toolbar (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED (toolbar): under the views bar there is now one toolbar instead of three separate blocks. It holds the search box (only in the four views that list entries: Inventory Received and Issued, Commodity Received and Issued), the Select button (Admin, same four views), a Period dropdown (Daily, Weekly, Monthly, Yearly, All, Range) and Export. On a phone the search has its own row and the other controls sit on the next row. All controls are 44 px tall and have labels; the Range dates show under the toolbar as before.
+//   - CHANGED (where things went): the period buttons are the Period dropdown; the search box left each view and is in the toolbar; Export left the More menu and is the Export button. The Stock count, Summary, Sales and finance views get the toolbar without a search box.
+//   - NOT CHANGED: what each control does (the same search, the same period filter, the same PDF export and its plan check), the + Receive, + Issue and More buttons, and the period buttons on the Staff and other tabs.
+//   - Ships on top of v0.3.132 (pos.html, sales.js and shifts.js as in v0.3.118).
+// Previous version: v0.3.132 (2026-11-24) — Inventory and Commodity: statuses as quiet chips with words (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED (chips): condition (Good, Damaged, Rejected), credit (Paid, Partial, Credit), Void and Refund, and the type of an internal issue are small outlined chips with the word always shown, instead of filled capital-letter pills. The colours are the dashboard's, with the same light-theme contrast fixes.
+//   - CHANGED (expiry): the date is plain text, with Expired, Expires today or Expires soon beside it when it matters. Same day rule and warning days as the dashboard and the Expiry screen. A rejection reason now shows in the note under the item.
+//   - NOT CHANGED: the customer history pop-up and the other screens, and anything in the database rules.
+//   - Ships on top of v0.3.131 (pos.html, sales.js and shifts.js as in v0.3.118).
+// Previous version: v0.3.131 (2026-11-24) — Inventory and Commodity, Received and Issued views: one menu button per entry, tick boxes only while selecting (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED (entry buttons): the edit and delete buttons of each entry are one ⋯ button. It opens the same sheet as the action menu, titled with the item or batch: Edit, Select and Delete (Admin), plus Print receipt on an Inventory issue and Trace batch or lot origin on a Commodity issue. Edit shows as unavailable, with the reason, once the edit window has closed. Where a user has one action on an entry (staff: print receipt, trace), it stays a plain icon button as before.
+//   - CHANGED (tick boxes): they are hidden until you choose Select (a button beside the search box; Admin only) or Select in an entry's menu. While selecting, the boxes and Select all show, and the button reads Done. Done, Cancel on the selection bar, and any finished bulk edit or delete leave selecting and clear the ticks. The tick boxes of other screens are unchanged.
+//   - CHANGED (small): the empty heading over the actions column now says Actions for screen readers. On a phone the ⋯ button sits with the other details, under the arrow of an entry.
+//   - NOT CHANGED: what edit, delete, print receipt, trace and the bulk actions do, who can use them, the 24-hour edit window, the Summary, Sales and other views, and anything in the database rules.
+//   - Ships on top of v0.3.130 (pos.html, sales.js and shifts.js as in v0.3.118).
+// Previous version: v0.3.130 (2026-11-24) — Inventory and Commodity, Issued view: the same layout as the Received view (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED (entries): each issue is one row like a received entry. On a phone (under 560 px): item or batch, quantity, date and time, status; tap the row (or its arrow button) for the sale value and price each, the running total and the buttons. From 560 px the table is shorter: Inventory 8 columns (Admin) or 7, down from 11 or 10; Commodity 9 (Admin) or 6, down from 13 or 12.
+//   - CHANGED (customer, notes, transporter): the customer (or who an internal issue went to) and the notes sit under the item name, the way the supplier does on Received; on Commodity the transporter sits under the batch. Price and sale value share one column, as cost and stock value do on Received.
+//   - CHANGED (boxes): the boxes before the table are now two tiles (Issued this period with its entry count; Sales this period, only where prices exist, and for Admin on Commodity) and a "More figures" fold with the all-time issued and sales figures. The Commodity "Balance remaining" box and the formula strip are gone: the stock figure is the header's. The outstanding-credit card on Inventory is now a fold with the amount owed in its title; its table is unchanged.
+//   - FIXED: the Payment heading on the Commodity Issued table sat over the wrong column, and a non-Admin user's Inventory Issued table had one more column of data than headings. Both tables now have one heading per column.
+//   - NOT CHANGED: how an issue is saved, edited, deleted or traced, the Received, Summary and Sales views, the edit and delete buttons per row (the row menu is a later step), and anything in the database rules.
+//   - Ships on top of v0.3.129 (pos.html, sales.js and shifts.js as in v0.3.118).
+// Previous version: v0.3.129 (2026-11-24) — Dashboard: the commodity figure is the one stock figure (index.html + sw.js; no new file, NO database RULES change)
 //   - CHANGED (dashboard, Commodities overview card): "In stock today", the bar, "Received" and "Issued" now come from the same calculation as the Commodity tab header and the till: received - issued - sold + returns, approved entries only (comBatchBook via _comTotals). Before, the card added every entry, pending ones included, and ignored returns, so it could differ from the tab. "Issued" is what has gone out for good (issued + sold - returned to stock), so Received - Issued = In stock on the card, and the 90% / Out of stock flags follow it.
 //   - CHANGED (dashboard, alerts): the "Negative balance" alert for a commodity uses the same figures, so it appears exactly when the tab and the card show a negative stock.
 //   - CHANGED (dashboard): it now runs the legacy maize migration (as the Commodity tab already did on open), because the one calculation reads the commodity lists only; an account that still held old maize rows in the legacy lists would otherwise show nothing until the tab was opened.
@@ -2674,7 +2697,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.129';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.133';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
