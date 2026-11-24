@@ -648,6 +648,10 @@
                     <div class="form-group"><label>Admin Password</label><input type="password" id="setup-admin-pw" placeholder="Min 6 characters" required/></div>
                     <div class="form-group"><label>Confirm Password</label><input type="password" id="setup-admin-pw2" placeholder="Repeat password" required/></div>
                     <div class="form-group"><label>Email for updates and receipts</label><input type="email" id="setup-notify-email" placeholder="you@example.com" required autocomplete="email" inputmode="email" maxlength="120"/></div>
+                    <div id="setup-ref-wrap">
+                        <div class="form-group"><label>Referral code <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label><input type="text" id="setup-ref-code" placeholder="Got a code from a friend?" maxlength="60" autocomplete="off" autocapitalize="characters" spellcheck="false" style="text-transform:uppercase;" oninput="scheduleReferralCheck('setup')"/></div>
+                        <div id="setup-ref-status" style="display:none;font-size:.8rem;margin:-6px 0 10px;padding:4px 8px;border-radius:4px;"></div>
+                    </div>
                     <div id="setup-error" style="display:none;color:var(--danger);font-size:.85rem;margin-bottom:.75rem;padding:.5rem;background:#ffebee;border-radius:4px;"></div>
                     <div id="setup-cloud-status" style="display:none;font-size:.82rem;margin-bottom:.75rem;padding:.5rem;border-radius:4px;"></div>
                     <button type="submit" class="btn btn-primary" style="width:100%" id="setup-btn">Create Account &amp; Connect Cloud →</button>
@@ -841,6 +845,13 @@
             <button type="button" class="btn btn-primary" style="width:100%;margin-top:1rem;justify-content:center;" onclick="closeModal('modal-info')">Got it</button>
         </div>
     </div>
+    <div id="modal-announce" class="modal-overlay hidden" style="z-index:1001;" role="dialog" aria-modal="true" aria-labelledby="ann-title">
+        <div class="modal" style="max-width:420px;width:90%;max-height:88vh;max-height:88dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;background:#fff;border-radius:var(--radius-lg);padding:1.5rem;box-shadow:var(--shadow-lg);">
+            <h3 id="ann-title" style="margin-bottom:.6rem;color:var(--primary-dark);"></h3>
+            <div id="ann-body" style="font-size:.9rem;line-height:1.6;color:#333;"></div>
+            <div id="ann-actions"></div>
+        </div>
+    </div>
     <div id="modal-sub-request" class="modal-overlay hidden" onclick="if(event.target===this)closeModal('modal-sub-request')">
         <div class="modal" id="subreq-box" style="max-width:420px;width:90%;max-height:92vh;max-height:92dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;background:#fff;border-radius:var(--radius-lg);padding:2rem;box-shadow:var(--shadow-lg);">
             <button type="button" onclick="closeModal('modal-sub-request')" aria-label="Close" style="position:sticky;top:0;float:right;z-index:3;width:34px;height:34px;margin:-1rem -1rem 0 .5rem;border-radius:50%;border:none;background:#eef1ea;color:#333;font-size:1.05rem;font-weight:700;line-height:1;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.15);">✕</button>
@@ -871,6 +882,7 @@
                 <div id="subreq-warn" style="display:none;font-size:.78rem;color:#b26a00;background:#fff8e6;border:1px solid #ffe2a8;border-radius:6px;padding:.45rem .65rem;margin-top:.5rem;"></div>
             </div>
             <div id="subreq-summary" style="margin-bottom:1rem;background:#f1f8f3;border:1.5px solid #cfe6d5;border-radius:var(--radius);padding:.8rem .95rem;"></div>
+            <div id="subreq-referral" class="pay-ui" style="display:none;margin-bottom:1rem;font-size:.82rem;font-weight:600;color:#2e7d32;background:#e8f5e9;border:1px solid #c8e6c9;border-radius:8px;padding:.5rem .75rem;"></div>
             <div style="margin-bottom:1rem;">
                 <label style="font-size:.8rem;font-weight:600;color:var(--text-muted);display:block;margin-bottom:.35rem;">YOUR PHONE / WHATSAPP</label>
                 <input type="tel" id="subreq-phone" placeholder="e.g. 0977 000 000" style="width:100%;padding:.6rem .9rem;border:1.5px solid var(--border);border-radius:var(--radius);font-size:.9rem;"/>
@@ -3930,6 +3942,8 @@
                     return null;
                 }
                 window.__licPubState = (p && typeof p === 'object' && p.tier) ? 'found' : 'empty';
+                // The referral counts ride on the published licence. Keep them even when that copy has no plan in it yet.
+                try { if (typeof storeReferralStat === 'function') storeReferralStat(uid, p && p.referral); } catch (e) {}
                 // For the Licence check box: what the server returned on THIS fetch, for which account.
                 try { window.__licPubInfo = { uid: uid, at: Date.now(), stamp: (p && p.updatedAt) || null, shops: Object.keys((p && p.shops) || {}) }; } catch (e) {}
                 return (p && typeof p === 'object' && p.tier) ? p : null;
@@ -4629,6 +4643,8 @@
             // exists so company name is guaranteed to reach Firebase before we redirect.
             try { await firebaseRequest('PUT', 'settings', existingSettings); } catch(e) { console.warn('ZamAgro: settings push failed', e); }
             try { await ensureSyncCode(); } catch(e) { console.warn('ZamAgro: sync code setup failed', e); }
+            // Step 6: record who referred this business. Never blocks sign-up; the stored ?ref= code is cleared afterwards.
+            try { await saveSignupReferral(); } catch (e) { clearStoredReferral(); }
 
             await publishUsernameDirectoryEntry(cloudAuth?.idToken, adminUser, {
                 uid: cloudAuth.uid, email: cloudEmail, role: 'admin', username: adminUser
@@ -4889,8 +4905,9 @@
             if (m) s = m[1];
             return s.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
         }
-        function setRefStatus(kind, text) {
-            const el = document.getElementById('signup-ref-status');
+        // p = which form: 'signup' (the Sign up tab, the default) or 'setup' (the older first-run form).
+        function setRefStatus(kind, text, p) {
+            const el = document.getElementById((p || 'signup') + '-ref-status');
             if (!el) return;
             if (!text) { el.style.display = 'none'; return; }
             const c = { wait: ['#f3f4f6', '#555'], ok: ['#e8f5e9', '#2e7d32'], bad: ['#ffebee', '#c62828'], info: ['#fff8e1', '#8a6d00'] }[kind] || ['#f3f4f6', '#555'];
@@ -4910,44 +4927,45 @@
             } catch (e) { return { status: 'error' }; }
             finally { clearTimeout(timer); }
         }
-        function scheduleReferralCheck() {
+        function scheduleReferralCheck(p) {
             clearTimeout(_refCheckTimer);
-            const inp = document.getElementById('signup-ref-code');
+            const inp = document.getElementById((p || 'signup') + '-ref-code');
             if (!inp) return;
             const code = normalizeReferralCode(inp.value);
             if (inp.value !== code) inp.value = code;
             _signupRef = { code: code, state: '', uid: '' };
-            if (code.length < 6) { setRefStatus('', ''); return; }     // still typing
+            if (code.length < 6) { setRefStatus('', '', p); return; }     // still typing
             if (!REFERRAL_CODE_RE.test(code)) {
                 _signupRef.state = 'bad';
-                setRefStatus('bad', '✘ That is not a valid code. Codes use letters and numbers, without I, O, 0 or 1.');
+                setRefStatus('bad', '✘ That is not a valid code. Codes use letters and numbers, without I, O, 0 or 1.', p);
                 return;
             }
-            setRefStatus('wait', '⏳ Checking code...');
-            _refCheckTimer = setTimeout(() => checkReferralCode(code), 500);
+            setRefStatus('wait', '⏳ Checking code...', p);
+            _refCheckTimer = setTimeout(() => checkReferralCode(code, p), 500);
         }
-        async function checkReferralCode(code) {
+        async function checkReferralCode(code, p) {
             const r = await lookupReferralCode(code);
-            const inp = document.getElementById('signup-ref-code');
+            const inp = document.getElementById((p || 'signup') + '-ref-code');
             if (!inp || normalizeReferralCode(inp.value) !== code) return;   // the box changed while we were checking
-            if (r.status === 'found') { _signupRef = { code: code, state: 'found', uid: r.uid }; setRefStatus('ok', '✔ Referral code accepted.'); }
-            else if (r.status === 'notfound') { _signupRef = { code: code, state: 'bad', uid: '' }; setRefStatus('bad', '✘ We could not find that code. You can still create your account without it.'); }
-            else { _signupRef = { code: code, state: 'unknown', uid: '' }; setRefStatus('info', 'Could not check the code right now. We will try again when you tap Create.'); }
+            if (r.status === 'found') { _signupRef = { code: code, state: 'found', uid: r.uid }; setRefStatus('ok', '✔ Referral code accepted.', p); }
+            else if (r.status === 'notfound') { _signupRef = { code: code, state: 'bad', uid: '' }; setRefStatus('bad', '✘ We could not find that code. You can still create your account without it.', p); }
+            else { _signupRef = { code: code, state: 'unknown', uid: '' }; setRefStatus('info', 'Could not check the code right now. We will try again when you tap Create.', p); }
         }
         // Fills the box from a stored ?ref= link when the Sign up tab opens.
-        function prefillSignupReferral() {
-            const inp = document.getElementById('signup-ref-code');
+        function prefillSignupReferral(p) {
+            const inp = document.getElementById((p || 'signup') + '-ref-code');
             if (!inp || inp.value) return;
             const c = getStoredReferral();
-            if (c) { inp.value = c; scheduleReferralCheck(); }
+            if (c) { inp.value = c; scheduleReferralCheck(p); }
         }
         // Called by handleSignup before the account is created. Returns { code, referrerUid } or null.
         // It never blocks sign-up: a missing, wrong or unreachable code simply means no referral is recorded.
-        async function resolveSignupReferral() {
+        async function resolveSignupReferral(p) {
             try {
-                const j = document.getElementById('signup-join-mode');
+                p = p || 'signup';
+                const j = document.getElementById(p + '-join-mode');
                 if (j && j.checked) return null;                      // joining an existing business, not a new customer
-                const inp = document.getElementById('signup-ref-code');
+                const inp = document.getElementById(p + '-ref-code');
                 const code = normalizeReferralCode(inp ? inp.value : '');
                 if (!code || !REFERRAL_CODE_RE.test(code)) return null;
                 if (_signupRef.code === code && _signupRef.state === 'found') return { code: code, referrerUid: _signupRef.uid };
@@ -4955,6 +4973,315 @@
                 if (r.status === 'found') return { code: code, referrerUid: r.uid };
             } catch (e) {}
             return null;
+        }
+
+        // ── Step 6: record who referred whom ──────────────────────────────
+        // Right after sign-up the referral is written once to referrals/{newUid} = { referrerUid, code, ts }.
+        // The code is KEPT until that write has worked: it is parked against this account (za_ref_pending) and
+        // tried again at the next start of the app, when the phone comes back online, and at sign-in, for up to
+        // REFERRAL_STORE_DAYS. It is dropped once it is written, or once the rules refuse it for good (the
+        // business has already sent a subscription request, or a referral is already on file). None of this can
+        // block or fail sign-up. The ?ref= code in za_ref is always cleared here, so it cannot prefill another sign-up.
+        const REFERRAL_PENDING_KEY = 'za_ref_pending';   // { uid, referrerUid, code, at }
+        let _refRetryBusy = false, _refRetryAt = 0;
+        function getPendingReferralWrite() {
+            try {
+                const p = JSON.parse(localStorage.getItem(REFERRAL_PENDING_KEY));
+                if (p && p.uid && p.referrerUid && REFERRAL_CODE_RE.test(String(p.code)) && Date.now() - Number(p.at) < REFERRAL_STORE_DAYS * 86400000) return p;
+            } catch (e) {}
+            return null;
+        }
+        function clearPendingReferralWrite() { try { localStorage.removeItem(REFERRAL_PENDING_KEY); } catch (e) {} }
+        // One attempt. Returns 'ok', 'final' (the rules refuse it; trying again cannot help) or 'retry' (try later).
+        async function _putReferral(uid, referrerUid, code) {
+            const ac = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+            const timer = setTimeout(() => { if (ac) ac.abort(); }, 6000);
+            try {
+                const tok = await getFreshIdToken();
+                if (!tok) return 'retry';
+                const r = await fetch(FIREBASE_CONFIG.databaseURL + '/referrals/' + encodeURIComponent(uid) + '.json?auth=' + tok, {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ referrerUid: referrerUid, code: code, ts: Date.now() }),
+                    signal: ac ? ac.signal : undefined
+                });
+                if (r.ok) return 'ok';
+                if (r.status === 401 || r.status === 403) {
+                    let msg = ''; try { msg = JSON.stringify(await r.json()); } catch (e) {}
+                    if (/permission/i.test(msg)) { console.warn('ZamAgro: referral refused by the rules, dropping it'); return 'final'; }
+                    return 'retry';                              // an expired token looks the same: ask again later
+                }
+                console.warn('ZamAgro: referral not saved (' + r.status + ')');
+                return (r.status === 408 || r.status === 429 || r.status >= 500) ? 'retry' : 'final';
+            } catch (e) { console.warn('ZamAgro: referral not saved', e); return 'retry'; }
+            finally { clearTimeout(timer); }
+        }
+        // Finishes a parked referral. Only for the account it was made for. Throttled to once every 2 minutes unless forced.
+        async function retryPendingReferral(force) {
+            try {
+                const p = getPendingReferralWrite();
+                if (!p) { try { if (localStorage.getItem(REFERRAL_PENDING_KEY)) clearPendingReferralWrite(); } catch (e) {} return false; }   // also drops an expired one
+                if (!cloudAuth || cloudAuth.uid !== p.uid || !isCloudConfigured() || navigator.onLine === false) return false;
+                if (_refRetryBusy || (!force && Date.now() - _refRetryAt < 120000)) return false;
+                _refRetryBusy = true; _refRetryAt = Date.now();
+                try {
+                    const res = await _putReferral(p.uid, p.referrerUid, p.code);
+                    if (res === 'ok' || res === 'final') clearPendingReferralWrite();
+                    return res === 'ok';
+                } finally { _refRetryBusy = false; }
+            } catch (e) { return false; }
+        }
+        async function saveSignupReferral() {
+            const pend = _pendingReferral;
+            _pendingReferral = null;
+            try {
+                const uid = cloudAuth && cloudAuth.uid;
+                if (!pend || !REFERRAL_CODE_RE.test(String(pend.code || '')) || !pend.referrerUid || !uid || pend.referrerUid === uid || !isCloudConfigured()) return false;
+                try { localStorage.setItem(REFERRAL_PENDING_KEY, JSON.stringify({ uid: uid, referrerUid: pend.referrerUid, code: pend.code, at: Date.now() })); } catch (e) {}
+                return await retryPendingReferral(true);
+            } catch (e) { console.warn('ZamAgro: referral not saved', e); return false; }
+            finally { clearStoredReferral(); }
+        }
+        // Later attempts: shortly after the app loads, when the phone comes back online, and at sign-in (see applyLicenseUI).
+        try {
+            window.addEventListener('online', function () { retryPendingReferral(false); });
+            setTimeout(function () { retryPendingReferral(false); }, 4000);
+        } catch (e) {}
+
+        // ── Step 7: this account's own referral, for the subscription request ──
+        // undefined = not looked up yet, null = no referral on this account, object = { code, referrerUid, qualifiedAt }.
+        // qualifiedAt is set by the admin once the first payment is approved, after which the bonus is used up.
+        let _myReferral;
+        async function loadMyReferral() {
+            if (IS_PLAY_BUILD || !cloudAuth || !cloudAuth.uid || cloudAuth.staff) { _myReferral = null; return null; }
+            const ac = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+            const timer = setTimeout(() => { if (ac) ac.abort(); }, 5000);
+            try {
+                const tok = await getFreshIdToken();
+                if (!tok) return _myReferral;
+                const r = await fetch(FIREBASE_CONFIG.databaseURL + '/referrals/' + encodeURIComponent(cloudAuth.uid) + '.json?auth=' + tok, ac ? { signal: ac.signal } : undefined);
+                if (!r.ok) return _myReferral;
+                const d = await r.json();
+                _myReferral = (d && typeof d.referrerUid === 'string' && REFERRAL_CODE_RE.test(String(d.code)))
+                    ? { code: d.code, referrerUid: d.referrerUid, qualifiedAt: Number(d.qualifiedAt) || 0 } : null;
+            } catch (e) { /* offline: keep what we knew */ }
+            finally { clearTimeout(timer); }
+            return _myReferral;
+        }
+        function referralBonusApplies() { return !!(_myReferral && !_myReferral.qualifiedAt); }
+
+        // ── Step 8: the referral card in License Management ───────────────
+        const REFERRAL_STAT_KEY = 'za_ref_stat';   // the admin's published counts, kept for a licence copy that has no plan in it yet
+        let _refCodeTriedAt = 0;
+        function storeReferralStat(uid, referral) {
+            try {
+                if (referral && typeof referral === 'object') localStorage.setItem(REFERRAL_STAT_KEY, JSON.stringify({ uid: uid, referral: referral }));
+                else localStorage.removeItem(REFERRAL_STAT_KEY);
+            } catch (e) {}
+        }
+        // The count comes from lic.referral, which the admin publishes with the licence: { qualified, granted }.
+        // qualified = paying referrals not yet used up by a reward; granted = free months already given.
+        function referralStats(lic) {
+            let r = lic && lic.referral;
+            if (!r || typeof r !== 'object') {
+                try {
+                    const c = JSON.parse(localStorage.getItem(REFERRAL_STAT_KEY));
+                    if (c && c.uid === currentLicenseUid() && c.referral && typeof c.referral === 'object') r = c.referral;
+                } catch (e) {}
+            }
+            const q = Math.max(0, Math.floor(Number(r && r.qualified) || 0));
+            const g = Math.max(0, Math.floor(Number(r && r.granted) || 0));
+            return { qualified: q, granted: g, ready: Math.floor(q / REFERRALS_NEEDED), progress: q % REFERRALS_NEEDED };
+        }
+        function referralShareText(code, link) {
+            return 'I run my agro shop on ZamAgro Track: stock, sales, credit and FISP reports, even offline. Sign up with my link and your first paid plan gets ' + REFEREE_BONUS_DAYS + ' extra days:\n' + link + '\nMy code: ' + code;
+        }
+        function shareReferralWhatsApp() {
+            const code = getReferralCode(), link = getReferralLink(code);
+            if (!link) { showToast('Open the app from its web address to share your link', 'danger'); return; }
+            window.open('https://wa.me/?text=' + encodeURIComponent(referralShareText(code, link)), '_blank');
+        }
+        function copyReferralLink() {
+            const val = getReferralLink(getReferralCode());
+            if (!val) { showToast('Open the app from its web address to copy your link', 'danger'); return; }
+            const fallback = () => {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = val; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+                    document.body.appendChild(ta); ta.select();
+                    const ok = document.execCommand('copy');
+                    ta.remove();
+                    showToast(ok ? 'Link copied' : 'Could not copy: select and copy manually', ok ? 'success' : 'danger');
+                } catch (e) { showToast('Could not copy: select and copy manually', 'danger'); }
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(val).then(() => showToast('Link copied'), fallback);
+            else fallback();
+        }
+        function claimReferralReward() {
+            const co = ((db.settings || {}).companyName) || '';
+            helpWhatsApp('Hello, ' + REFERRALS_NEEDED + ' of my referred customers have paid on ZamAgro Track' + (co ? ' (' + co + ')' : '') + '. Please add my ' + REFERRER_REWARD_DAYS + ' free days.');
+        }
+        // Hidden for Lifetime accounts (nothing to extend), for staff and co-admins who are not the admin user, and in the Play build.
+        function referralCardHtml(lic) {
+            if (IS_PLAY_BUILD || lic.tier === 'lifetime' || currentUser !== 'admin') return '';
+            const i = '<button type="button" class="info-i" onclick="showInfo(\'referral\')" aria-label="What is this?">i</button>';
+            const head = '<strong>🎁 Refer a friend, earn free days</strong>' + i;
+            const wrap = inner => '<div class="pay-ui" style="grid-column:1/-1;border:1px solid #2E7D32;border-radius:8px;padding:.7rem .8rem;"><div>' + head + '</div>' + inner + '</div>';
+            const code = getReferralCode();
+            if (!code) {
+                if (!referralIsOwner()) return wrap('<div style="font-size:.82rem;margin-top:.35rem;">Your referral link appears here once the business owner opens this screen.</div>');
+                if (Date.now() - _refCodeTriedAt > 60000) {      // first open: make the code, then redraw
+                    _refCodeTriedAt = Date.now();
+                    ensureReferralCode().then(function (c) { if (c) { try { renderLicenseInfoBox(); } catch (e) {} } });
+                }
+                return wrap('<div style="font-size:.82rem;margin-top:.35rem;">Creating your link. This needs an internet connection.</div>');
+            }
+            const link = getReferralLink(code);
+            const s = referralStats(lic);
+            const left = REFERRALS_NEEDED - s.progress;
+            const pct = Math.round(s.progress / REFERRALS_NEEDED * 100);
+            let reward;
+            if (s.ready > 0) reward = '🎉 <strong>Reward earned: ' + (s.ready * REFERRER_REWARD_DAYS) + ' free days</strong> on your Main plan. <button type="button" class="btn btn-sm btn-primary" style="margin-left:.4rem;" onclick="claimReferralReward()">Claim</button>';
+            else if (s.granted > 0) reward = 'Free days received so far: ' + (s.granted * REFERRER_REWARD_DAYS) + '. ' + left + ' more paying customer' + (left !== 1 ? 's' : '') + ' for the next ' + REFERRER_REWARD_DAYS + ' days.';
+            else reward = 'No reward yet. ' + left + ' more paying customer' + (left !== 1 ? 's' : '') + ' to earn ' + REFERRER_REWARD_DAYS + ' free days.';
+            const linkRow = link
+                ? '<div style="display:flex;gap:.4rem;flex-wrap:wrap;margin:.5rem 0;"><input type="text" readonly value="' + esc(link) + '" onclick="this.select()" style="flex:1;min-width:180px;padding:.45rem .6rem;border:1.5px solid var(--border);border-radius:var(--radius-sm);font-size:.8rem;"/><button type="button" class="btn btn-sm btn-secondary" onclick="copyReferralLink()">Copy</button><button type="button" class="btn btn-sm btn-primary" style="background:#25D366;border-color:#25D366;color:#fff;" onclick="shareReferralWhatsApp()">WhatsApp</button></div>'
+                : '<div style="font-size:.82rem;margin:.5rem 0;">Open the app from its web address to get your shareable link.</div>';
+            return wrap(
+                '<div style="font-size:.82rem;margin:.3rem 0 0;">Share your link. Each friend who signs up with it gets ' + REFEREE_BONUS_DAYS + ' extra days on their first paid plan. When ' + REFERRALS_NEEDED + ' of them have paid, you get ' + REFERRER_REWARD_DAYS + ' free days.</div>' +
+                linkRow +
+                '<div style="font-size:.8rem;color:var(--text-muted);">Your code: <strong style="letter-spacing:1px;">' + esc(code) + '</strong></div>' +
+                '<div style="height:8px;background:#eee;border-radius:4px;margin:.55rem 0 .3rem;overflow:hidden;"><div style="height:100%;width:' + pct + '%;background:#2E7D32;"></div></div>' +
+                '<div style="font-size:.84rem;font-weight:600;">' + s.progress + ' of ' + REFERRALS_NEEDED + ' paying customers</div>' +
+                '<div style="font-size:.84rem;margin-top:.2rem;">' + reward + '</div>' +
+                '<div style="font-size:.76rem;color:var(--text-muted);margin-top:.35rem;">A friend counts once we approve their first payment. Main plan only, not extra shops.</div>'
+            );
+        }
+        // The Terms mention the programme numbers; keep them in step with the constants above.
+        function fillReferralText() {
+            try {
+                const v = { reward: REFERRER_REWARD_DAYS, needed: REFERRALS_NEEDED, bonus: REFEREE_BONUS_DAYS };
+                document.querySelectorAll('[data-ref]').forEach(function (el) { const k = el.getAttribute('data-ref'); if (v[k] != null) el.textContent = v[k]; });
+            } catch (e) {}
+        }
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fillReferralText); else fillReferralText();
+
+        // ── ONE-TIME ANNOUNCEMENTS ────────────────────────────────────────
+        // Popups shown once after login, one at a time, in the order listed in ANNOUNCEMENTS. Each is marked as seen only
+        // when the person taps its button, so a popup left open when the app closes shows again next time. Seen state is
+        // kept per device, per role and per business. A new announcement needs a new id (never reuse an id).
+        // They wait for the notification-email prompt and for any other open popup. Expired accounts (view-only mode) see them too.
+        const ANN_PREFIX = 'za_ann_', ANN_MAX_TRIES = 40;
+        let _annCurrent = null, _annTimer = null, _annTries = 0, _annPending = false;
+        const _annClosed = new Set();      // closed during this page session, in case storage is unavailable
+        function _annKey(id) { return ANN_PREFIX + id + '_' + (currentUser || ''); }
+        function annSeen(id) {
+            if (_annClosed.has(id)) return true;
+            try {
+                const s = JSON.parse(localStorage.getItem(_annKey(id)));
+                if (!s) return false;
+                const uid = currentLicenseUid();
+                return !(s.uid && uid && s.uid !== uid);   // a different business on the same device sees it again
+            } catch (e) { return false; }
+        }
+        function annOnWindowsPc() { return isWindows10Plus() && !isStandaloneApp(); }
+        function annTrialNow() { const l = getLicense() || {}; return l.tier === 'trial' || l.status === 'trial'; }
+        function annH(t) { return '<p style="font-weight:700;margin:.7rem 0 .2rem;color:var(--primary-dark);">' + t + '</p>'; }
+        const ANN_LIST = 'margin:0 0 .5rem 1.25rem;padding:0;';
+
+        const ANNOUNCEMENTS = [
+            {
+                id: 'windows-install-1',
+                // Everyone, in a browser. Not inside the installed Windows app or the Android app.
+                eligible: function () { return !isStandaloneApp() && !isWrappedApp(); },
+                title: '🖥️ ZamAgro Track now works on Windows',
+                body: function () {
+                    const steps = MS_STORE_URL
+                        ? '<li>Open ZamAgro Track on your Windows computer</li><li>Tap <strong>Install Windows App</strong>. The Microsoft Store opens.</li><li>Press <strong>Get</strong> or <strong>Install</strong> in the Store</li>'
+                        : '<li>Open ZamAgro Track on your Windows computer</li><li>Tap <strong>Install Windows App</strong></li><li>Extract the downloaded ZIP file</li><li>Right-click <strong>install.ps1</strong> and choose <strong>Run with PowerShell</strong></li>';
+                    return '<p>You can now install ZamAgro Track as a proper app on your Windows 10 or Windows 11 computer.</p>' +
+                        annH('Why install it?') +
+                        '<ul style="' + ANN_LIST + '"><li>Opens from your desktop like any other program</li><li>Runs full screen in its own window, with no browser tabs</li><li>Same account, same data. Anything you enter on your phone shows on your PC.</li></ul>' +
+                        annH('How to install') +
+                        '<ol style="' + ANN_LIST + '">' + steps + '</ol>' +
+                        (annOnWindowsPc()
+                            ? '<p>You can also find <strong>Install Windows App</strong> in the side menu at any time.</p>'
+                            : '<p>Not on a computer right now? No problem. Open the app on your Windows PC later and you will find the button on the landing page and in the side menu.</p>');
+                },
+                actions: function () {
+                    const pc = annOnWindowsPc();
+                    return (pc ? '<a href="./ZamAgro-Track-Windows.zip" download="ZamAgro-Track-Windows.zip" onclick="windowsInstallHint(); annDone(10000);" class="btn btn-primary windows-download-link hidden" style="width:100%;justify-content:center;text-decoration:none;margin-top:1rem;">🖥️ Install Windows App</a>' : '') +
+                        '<button type="button" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:' + (pc ? '.5rem;background:#eef1ea;color:#333;box-shadow:none;' : '1rem;') + '" onclick="annDone()">Got it</button>';
+                }
+            },
+            {
+                id: 'referral-1',
+                // The business owner (admin) on a paid or trial plan. Same rules as the Refer a friend card in Settings:
+                // not Lifetime, not staff or co-admins, not the Play build.
+                eligible: function () {
+                    if (IS_PLAY_BUILD || currentUser !== 'admin' || (cloudAuth && cloudAuth.staff)) return false;
+                    const lic = getLicense() || {};
+                    return !!lic.tier && lic.tier !== 'lifetime';
+                },
+                title: '🎁 Refer ' + REFERRALS_NEEDED + ' friends who subscribe, get 1 month free',
+                body: function () {
+                    const N = REFERRALS_NEEDED, D = REFERRER_REWARD_DAYS, B = REFEREE_BONUS_DAYS;
+                    return '<p>Share ZamAgro Track with other agro shop owners. For every ' + N + ' friends who sign up and pay, your Main plan gets ' + D + ' days free. Your friends win too: each one gets ' + B + ' extra days on their first paid plan.</p>' +
+                        annH('How it works') +
+                        '<ol style="' + ANN_LIST + '">' +
+                        '<li>Open <strong>Settings &gt; License Management</strong> and find <strong>Refer a friend</strong>. Tap <strong>WhatsApp</strong> to send your link, or <strong>Copy</strong> to paste it anywhere.</li>' +
+                        '<li>Your friend signs up with your link. Their referral code is filled in for them.</li>' +
+                        '<li>We approve your friend\'s first payment. They get <strong>' + B + ' extra days</strong>.</li>' +
+                        '<li>When <strong>' + N + ' friends</strong> have paid, tap <strong>Claim</strong> to message us, and we add <strong>1 free month (' + D + ' days)</strong> to your Main plan.</li>' +
+                        '</ol>' +
+                        '<p><strong>Good to know:</strong> Only the Main plan gets the free month, not extra shops. Free days are not paid in cash and cannot be transferred. We may hold back a reward if a referral looks fake, for example the same person or the same payment used twice.</p>' +
+                        (annTrialNow() ? '<p style="background:#fff3e0;border-radius:8px;padding:.5rem .7rem;"><strong>Still on the free trial?</strong> Your free month is added once you have paid for a plan.</p>' : '');
+                },
+                actions: function () {
+                    return '<button type="button" class="btn btn-primary" style="width:100%;justify-content:center;margin-top:1rem;" onclick="annDone()">I understand</button>';
+                }
+            }
+        ];
+
+        function annBlocked() {
+            if (document.querySelector('.modal-overlay:not(.hidden)')) return true;                 // any other popup is open
+            try { if (typeof _notifyGateBusy !== 'undefined' && _notifyGateBusy) return true; } catch (e) {}
+            try { if (notifyOwnerReady() && notifyNeedsAttention()) return true; } catch (e) {}       // the email prompt is about to open
+            // Wait a few seconds for the licence to be read from the cloud, so a Lifetime account never sees the referral offer by mistake.
+            try { if (_annTries < 12 && window.__licPubState === undefined && navigator.onLine !== false && isCloudConfigured()) return true; } catch (e) {}
+            return false;
+        }
+        function annKick(ms) { clearTimeout(_annTimer); _annTimer = setTimeout(annTry, ms); }
+        function annStart() { _annPending = true; _annTries = 0; annKick(2500); }
+        function annTry() {
+            _annTimer = null;
+            const modal = document.getElementById('modal-announce');
+            if (!modal) return;
+            if (_annCurrent && modal.classList.contains('hidden')) _annCurrent = null;
+            if (_annCurrent) return;
+            const layout = document.getElementById('app-layout');
+            if (!layout || layout.classList.contains('hidden') || !currentUser) return;              // not logged in
+            if (annBlocked()) { if (++_annTries <= ANN_MAX_TRIES) annKick(1500); return; }
+            let next = null;
+            for (const a of ANNOUNCEMENTS) { try { if (!annSeen(a.id) && a.eligible()) { next = a; break; } } catch (e) {} }
+            if (next) annShow(next); else _annPending = false;
+        }
+        function annShow(a) {
+            _annCurrent = a;
+            document.getElementById('ann-title').textContent = a.title;
+            document.getElementById('ann-body').innerHTML = a.body();
+            document.getElementById('ann-actions').innerHTML = a.actions();
+            openModal('modal-announce');
+            try { refreshInstallButtons(); } catch (e) {}
+            const box = document.querySelector('#modal-announce .modal'); if (box) box.scrollTop = 0;
+        }
+        // The only way out of the popup: its button. Marks it as seen, then opens the next one (if any) after a short pause.
+        function annDone(nextDelay) {
+            const a = _annCurrent; if (!a) return;
+            _annClosed.add(a.id);
+            try { localStorage.setItem(_annKey(a.id), JSON.stringify({ at: Date.now(), uid: currentLicenseUid() || '' })); } catch (e) {}
+            _annCurrent = null;
+            document.getElementById('modal-announce').classList.add('hidden');
+            _annTries = 0; annKick(typeof nextDelay === 'number' ? nextDelay : 400);
         }
 
         // ── EXTRA SHOP PRICING ────────────────────────────────────────────
@@ -5137,6 +5464,7 @@
             activitylog: { t: 'Staff Activity Log', b: '<p>Shows what your staff did, such as sales, returns, write-offs and below-cost sales, so you can check their work. Only the admin can see it.</p>' },
             shops: { t: 'My Shops', b: '<p>Run more than one shop from one account. Your existing records stay in the Main shop.</p><ol><li>Add each extra shop by name.</li><li>Use the shop switcher at the top to work in it.</li></ol><p>Each extra shop has its own paid-until date and its own plan. If one lapses it becomes view-only while your other shops keep working.</p>' },
             license: { t: 'License Management', b: '<p>Shows your plan, whether it is active, when it ends and each extra shop\'s paid-until date. After paying by Mobile Money, use <strong>Request / Upgrade Plan</strong> to send us your payment details.</p><p>Monthly plans and extra shops do not renew by themselves. Request a renewal before the end date. If a plan ends, the account becomes view-only.</p>' },
+            referral: { t: 'Refer a friend', b: '<p>Share your link or code with another agro shop owner. When they sign up with it and we approve their first payment, they get ' + REFEREE_BONUS_DAYS + ' extra days on that plan.</p><p>Once ' + REFERRALS_NEEDED + ' of the friends you referred have paid, you get ' + REFERRER_REWARD_DAYS + ' free days on your Main plan. Rewards apply to the Main plan only, not extra shops, and we add them by hand after checking each payment.</p>' },
             lifegoal: { t: 'Lifetime goal', b: '<p>An optional way to reach Lifetime through your monthly payments. Join the goal and the bar shows how much of the Lifetime price your payments have covered. When it is full, tap <strong>Claim Lifetime</strong> and we upgrade you at no extra charge.</p><p>Only the Main plan part of each payment counts, not extra shops. You can leave the goal at any time. Your total updates when we record your payments.</p>' },
             reorder: { t: 'Reorder point', b: '<p>The stock level at which you want to buy more of this item. When the quantity falls to this number it shows up in your low-stock alerts and the reorder list.</p>' },
             notifyEmail: { t: 'Email for updates & receipts', b: '<p>Where we send your plan approvals and receipts. It is confirmed with a 6-digit code, and the owner account must always have one.</p>' },
@@ -5168,6 +5496,7 @@
                     '<p>We check your payment and update the dates. Shops you do not tick keep their current plan until their paid date ends. After that they renew on the new plan.</p>';
             } },
             { t: 'Lifetime goal (optional)', cls: 'pay-ui', b: '<ol><li>Go to <strong>Settings &gt; License Management</strong> and tap <strong>Join the goal</strong>.</li><li>Keep paying your monthly plan. The bar shows how much of the Lifetime price your payments cover.</li><li>When it is full, tap <strong>Claim Lifetime</strong> and we upgrade you at no extra charge.</li></ol><p>Only the Main plan part of each payment counts, not extra shops. You can leave the goal at any time.</p>' },
+            { t: 'Refer a friend (optional)', cls: 'pay-ui', b: '<ol><li>Go to <strong>Settings &gt; License Management</strong> and find <strong>Refer a friend</strong>.</li><li>Tap <strong>WhatsApp</strong> to send your link, or <strong>Copy</strong> to paste it anywhere.</li><li>Your friend signs up with the link. Their code is filled in for them.</li><li>When we approve their first payment, they get ' + REFEREE_BONUS_DAYS + ' extra days.</li><li>After ' + REFERRALS_NEEDED + ' friends have paid, you get ' + REFERRER_REWARD_DAYS + ' free days on your Main plan. Tap <strong>Claim</strong> to remind us.</li></ol><p>Only the Main plan counts. Lifetime accounts do not use this.</p>' },
             { t: 'Staff and security', b: '<ol><li>Admins add staff accounts under <strong>Settings</strong>.</li><li>You can limit a staff member to one shop.</li><li>On the Pro plan, the <strong>Activity Log</strong> shows what each person did.</li></ol>' },
             { t: 'Backup, offline use and sync', b: '<p>The app keeps working offline and syncs to the cloud when you are connected. Download a backup from Settings from time to time. Use the cloud upload and restore buttons only when you need to force a sync.</p>' }
         ];
@@ -5324,6 +5653,7 @@
         }
 
         function applyLicenseUI() {
+            try { retryPendingReferral(false); } catch (e) {}   // finish a referral that could not be saved at sign-up
             const lic = getLicense();
             const active = isLicenseActive();
             // A shop can lapse on its own while the account licence is fine.
@@ -5473,6 +5803,7 @@
                     ${trialInfo}<div style="grid-column:1/-1;"><strong>Modules included:</strong> ${features}</div>
                     ${shopsBlock}
                     ${lifetimeGoalHtml(lic)}
+                    ${referralCardHtml(lic)}
                     ${(IS_PLAY_BUILD || lic.tier === 'lifetime') ? '' : '<div style="grid-column:1/-1;font-size:.82rem;color:var(--text-muted);">Monthly plans and extra shops do not renew automatically. Pay and request a renewal before the end date to keep adding records. If a plan ends, the account becomes view-only.</div>'}
                 </div>`;
         }
@@ -5685,6 +6016,7 @@
         function showSetup() {
             ['landing-page','login-page','app-layout'].forEach(id => document.getElementById(id).classList.add('hidden'));
             document.getElementById('setup-page').classList.remove('hidden');
+            try { prefillSignupReferral('setup'); } catch (e) {}
         }
 
         // Derive stable Firebase email from company + admin username
@@ -5771,6 +6103,8 @@
 
             // Cloud account creation MUST succeed before any local account is written — see
             // handleSignup() for the same rule and the reasoning behind it.
+            // Referral code (optional): never blocks sign-up.
+            _pendingReferral = await resolveSignupReferral('setup');
             const cloudEmail = deriveCloudEmail(companyName, adminUser);
             try {
                 await connectCloudSync(cloudEmail, adminPw, 'create');
@@ -5805,6 +6139,7 @@
             // name is guaranteed to reach the cloud before redirecting to login.
             try { await firebaseRequest('PUT', 'settings', existingSettings); } catch(e) { console.warn('ZamAgro: settings push failed', e); }
             try { await ensureSyncCode(); } catch(e) { console.warn('ZamAgro: sync code setup failed', e); }
+            try { await saveSignupReferral(); } catch (e) { clearStoredReferral(); }
 
             await publishUsernameDirectoryEntry(cloudAuth?.idToken, adminUser, {
                 uid: cloudAuth.uid, email: cloudEmail, role: 'admin', username: adminUser
@@ -6066,6 +6401,7 @@
                 nav('dashboard');
                 try { checkRecoveryNudge(); } catch (e) {}
                 try { checkNotifyEmailGate(); } catch (e) {}
+                try { annStart(); } catch (e) {}
             } else {
                 const attempts = (lk.attempts || 0) + 1;
                 if (attempts >= MAX_ATTEMPTS) {
@@ -7432,7 +7768,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 var m = document.getElementById(id); if (m && !m.classList.contains('hidden')) closeModal(id);
             });
         });
-        function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+        function closeModal(id) { document.getElementById(id).classList.add('hidden'); try { if (_annPending) { _annTries = 0; annKick(500); } } catch (e) {} }
 
         function showJoinAdminIdModal(uid) {
             document.getElementById('join-admin-id-value').textContent = uid;
@@ -7849,6 +8185,8 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             fetchPublicPricing(); fetchOwnerPricing(true);
             onSubReqTierChange();
             openModal('modal-sub-request');
+            _myReferral = undefined;   // look the account's referral up again each time the screen opens
+            loadMyReferral().then(function () { try { renderSubReq(); } catch (e) {} });
             _srCheckPending();
         }
 
@@ -8033,6 +8371,13 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                     '<div style="font-size:.8rem;color:var(--text-muted);">' + label + ' plan · ' + n + (n === 1 ? ' shop' : ' shops') + (q.isLife ? ' · once-off' : ' · ' + q.months + (q.months === 1 ? ' month' : ' months')) + '</div>' +
                     '<div style="font-size:.78rem;color:var(--text-muted);margin-top:.35rem;">Pay exactly this amount by Mobile Money, then enter the transaction ID below.</div>';
             }
+            // Referral bonus note: only for a referred account that has not had its first payment approved, on the Main plan, not in the Play build.
+            const refEl = document.getElementById('subreq-referral');
+            if (refEl) {
+                const show = !IS_PLAY_BUILD && referralBonusApplies() && q.mainTicked && !q.isLife;
+                refEl.textContent = '🎁 Referral applied: +' + REFEREE_BONUS_DAYS + ' days on your first paid month';
+                refEl.style.display = show ? '' : 'none';
+            }
         }
         // Kept under its old name because the pricing refresh calls it when new prices arrive.
         function updateSubReqQuote() { renderSubReq(); }
@@ -8128,6 +8473,11 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 };
 
                 if (email) payload.email = email;
+                // Referral info, so the admin sees it when approving (the +7 days and the referrer's count are applied there).
+                try {
+                    if (_myReferral === undefined) await loadMyReferral();
+                    if (!IS_PLAY_BUILD && referralBonusApplies()) payload.referral = { code: _myReferral.code, referrerUid: _myReferral.referrerUid };
+                } catch (e) {}
                 // Save the itemised quote (which shops, how many months, the price of each) so the admin
                 // can date just those shops and check the amount paid.
                 {
@@ -15573,6 +15923,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             nav('dashboard');
             try { checkRecoveryNudge(); } catch (e) {}
                 try { checkNotifyEmailGate(); } catch (e) {}
+                try { annStart(); } catch (e) {}
         }
         window.__zaStoreReady.then(boot);
 
@@ -15661,6 +16012,7 @@ function appendTPINToPrintDoc(win){
 
                 <h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">3. Subscription &amp; Payment</h4>
                 <p>ZamAgro Track is offered on subscription plans (Starter, Standard, Pro) and a one-time Lifetime plan. Subscription fees are payable in advance via Mobile Money or bank transfer to the numbers/accounts provided at checkout. Fees are non-refundable once a license key has been activated. We reserve the right to change pricing with 30 days' notice. Multiple shops: one account can run more than one shop. Your plan price covers your Main shop. Each additional active shop is charged at a percentage of your plan's monthly price (currently 50%, rounded to the nearest K5) or, on the Lifetime plan, a once-off fee per additional shop (currently K1,250). Additional shops are free during the free trial. The current rates are shown in the app and on our landing page, and the price quoted when you submit a request is the price payable for that request. Each shop has its own paid-until date; if one shop's subscription lapses, that shop becomes view-and-export only while your other shops keep working. Multi-Shop Points Bundles are no longer sold. Points bought earlier do not expire and can be redeemed for one shop's one-month subscription each, at the tier chosen at redemption, for shops registered to the purchasing owner; they are non-transferable.</p>
+                <p><strong>Referral rewards.</strong> If you share your referral link, you earn <span data-ref="reward">30</span> free days on your Main plan once <span data-ref="needed">2</span> businesses you referred have each had a first payment approved by us, and each referred business receives <span data-ref="bonus">7</span> extra days on that first payment. Rewards apply to the Main plan only, are not paid in cash and cannot be transferred. We add them by hand after verifying each payment. We may withhold or reverse a reward where a referral appears to be made by the same person or business, or where a payment is reversed or found to be false, and we may change or end the referral programme at any time.</p>
 
                 <h4 style="color:var(--primary-dark);margin:.75rem 0 .35rem;">4. Acceptable Use</h4>
                 <p>You agree not to use ZamAgro Track to store false, misleading, or fraudulent business records; to attempt to reverse-engineer, copy, or redistribute the software; or to engage in any activity that disrupts the service for other users.</p>
