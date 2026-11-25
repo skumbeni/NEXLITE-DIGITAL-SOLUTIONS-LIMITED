@@ -26,6 +26,7 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
 @media(max-width:760px){.hero{grid-template-columns:1fr}.hero-note{max-width:none}.restaurants{grid-template-columns:1fr 1fr}.layout{grid-template-columns:1fr}.cart-sticky{position:static}.head{align-items:flex-start}.area{font-size:11px}}
 @media(max-width:440px){.restaurants{grid-template-columns:1fr}.shell{padding-left:13px;padding-right:13px}.head{padding-left:13px;padding-right:13px}.brand h1{font-size:18px}.area{white-space:normal;text-align:center;max-width:112px}.two{grid-template-columns:1fr}}
 .geo{display:flex;gap:10px;align-items:center;justify-content:space-between;background:#e7f3eb;color:#176b45;border:1px solid #cfe3d5;border-radius:12px;padding:10px 12px;margin:10px 0;font-size:13px;line-height:1.45}.geo b{font-weight:700}.geo-x{background:none;border:0;color:inherit;cursor:pointer;font-size:15px;padding:0 4px}.geo .pill{margin-left:6px;cursor:pointer;color:var(--ink)}
+.cats{display:flex;gap:8px;overflow-x:auto;padding:8px 0;margin:0 0 2px;position:sticky;top:0;z-index:2;background:var(--card);scrollbar-width:none}.cats[hidden]{display:none}.cats::-webkit-scrollbar{display:none}.cat-chip{flex:0 0 auto;background:#fff;border:1px solid var(--line);border-radius:999px;padding:8px 13px;font:inherit;font-size:13px;color:var(--ink);cursor:pointer}.cat-chip:focus-visible{outline:2px solid var(--brand);outline-offset:2px}.cat-head{font-size:14px;font-weight:750;color:var(--brand);margin:16px 0 2px;scroll-margin-top:56px}.cat-head+.menu-item{border-top:0}
 @keyframes flashbg{0%,60%{background:#fff3cd}100%{background:transparent}}.towns-box.flash{animation:flashbg 1.4s ease;border-radius:12px}
 .status.ok{background:#e7f3eb;border:1px solid #cfe3d5;color:#18251f}.status.bad{background:#fff7e9;border:1px solid #f3dfb9;color:#72501d}
 @media(max-width:560px){.head{flex-wrap:wrap}}
@@ -72,6 +73,7 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
     <section class="panel">
       <div class="panel-head"><h3 id="menuTitle">Select a restaurant</h3><span class="tag" id="menuTag">Your town</span></div>
       <div id="menuIntro" class="muted tiny">Choose a restaurant above to view its menu.</div>
+      <div id="menuCats" class="cats" role="navigation" aria-label="Menu categories" hidden></div>
       <div id="menu" class="menu-list"><div class="empty"><b>Your food choices start here</b>Select a restaurant to browse its menu.</div></div>
       <div class="warning">Menu prices and availability are confirmed with the restaurant before you pay. If anything changes, we ask for your approval first.</div>
     </section>
@@ -196,6 +198,7 @@ function applyTown(){
 function resetMenu(){
   document.getElementById("menuTitle").textContent="Select a restaurant";
   document.getElementById("menuIntro").textContent="Choose a restaurant above to view its menu.";
+  setCats("","");
   document.getElementById("menu").innerHTML='<div class="empty"><b>Your food choices start here</b>Select a restaurant to browse its menu.</div>';
 }
 function renderBrand(){
@@ -346,7 +349,7 @@ function startLive(){
       const v=snap.val()||{};
       allRestaurants=Object.entries(v).filter(([,s])=>s.active!==false).map(([id,s])=>({
         id,name:s.name||"Supplier",category:s.category||"",icon:s.icon||"🏪",logo:/^data:image\/(png|jpeg|webp);base64,/.test(s.logo||"")?s.logo:"",area:s.area||"",townId:s.townId||"",eta:s.eta||"To be confirmed",
-        items:Object.entries(s.items||{}).filter(([,i])=>i.available!==false).map(([iid,i])=>({id:iid,name:i.name||"Item",description:i.description||"",price:Number(i.price)||0}))
+        items:Object.entries(s.items||{}).filter(([,i])=>i.available!==false).map(([iid,i])=>({id:iid,name:i.name||"Item",description:i.description||"",price:Number(i.price)||0,category:String(i.category||"").trim().slice(0,40)}))
       }));
       dataReady=true; resolveTown();
     },err=>{console.warn("Could not load suppliers",err);dataReady=true;renderRestaurants();});
@@ -365,7 +368,7 @@ const itemById = id => selectedRestaurant?.items.find(i=>i.id===id);
 function renderRestaurants(){
   if(!town){document.getElementById("restaurants").innerHTML=townPicker();return;}
   const q = document.getElementById("search").value.trim().toLowerCase();
-  const list = RESTAURANTS.filter(r => (r.name+" "+r.category+" "+r.items.map(i=>i.name).join(" ")).toLowerCase().includes(q));
+  const list = RESTAURANTS.filter(r => (r.name+" "+r.category+" "+r.items.map(i=>i.name+" "+(i.category||"")).join(" ")).toLowerCase().includes(q));
   document.getElementById("restaurants").innerHTML = list.map(r => `
     <button class="restaurant ${selectedRestaurant?.id===r.id?'selected':''}" onclick="selectRestaurant('${r.id}')">
       <div class="r-top"><div class="r-icon">${r.logo?`<img src="${r.logo}" alt="">`:r.icon}</div><div><h4>${escapeHtml(r.name)}</h4><small>${escapeHtml(r.category)}</small></div></div>
@@ -385,16 +388,52 @@ function selectRestaurant(id){
   document.getElementById("menuTag").textContent = town?town.name:next.area;
   renderRestaurants(); renderMenu(); calculate();
 }
+function menuRow(i){
+  const q=cart[i.id]||0;
+  return `<div class="menu-item"><div class="item-info"><strong>${escapeHtml(i.name)}</strong><small>${escapeHtml(i.description)}</small><div class="price">${money(i.price)}</div></div><div class="qty">${q?`<button aria-label="Remove one ${escapeHtml(i.name)}" onclick="changeQty('${i.id}',-1)">−</button><span>${q}</span>`:""}<button class="add" aria-label="Add ${escapeHtml(i.name)}" onclick="changeQty('${i.id}',1)">+</button></div></div>`;
+}
+// Category chips sit outside #menu so their sideways scroll position survives every + / − tap.
+function setCats(html,sig){
+  const bar=document.getElementById("menuCats"); if(!bar) return;
+  if(bar.dataset.sig===sig) return;
+  bar.dataset.sig=sig; bar.innerHTML=html; bar.hidden=!html;
+}
+function jumpCat(n){
+  const el=document.getElementById("cat-"+n); if(!el) return;
+  const calm=window.matchMedia&&matchMedia("(prefers-reduced-motion: reduce)").matches;
+  el.scrollIntoView({behavior:calm?"auto":"smooth",block:"start"});
+}
 function renderMenu(){
   if(!selectedRestaurant) return;
   if(!selectedRestaurant.items.length){
+    setCats("","");
     document.getElementById("menu").innerHTML = '<div class="empty"><b>Menu not added yet</b>Contact '+brandName()+' to have this supplier’s menu and prices added.</div>';
     return;
   }
-  document.getElementById("menu").innerHTML = selectedRestaurant.items.map(i=>{
-    const q=cart[i.id]||0;
-    return `<div class="menu-item"><div class="item-info"><strong>${escapeHtml(i.name)}</strong><small>${escapeHtml(i.description)}</small><div class="price">${money(i.price)}</div></div><div class="qty">${q?`<button aria-label="Remove one ${escapeHtml(i.name)}" onclick="changeQty('${i.id}',-1)">−</button><span>${q}</span>`:""}<button class="add" aria-label="Add ${escapeHtml(i.name)}" onclick="changeQty('${i.id}',1)">+</button></div></div>`;
-  }).join("");
+  // Group by item category (case-insensitive), in the order each category first appears.
+  // Items with no category go last under "Other". A menu with no categories at all renders as a plain list.
+  const groups=[],seen={};
+  let other=null;
+  selectedRestaurant.items.forEach(i=>{
+    const c=String(i.category||"").trim();
+    if(!c){(other=other||{name:"Other",items:[]}).items.push(i);return;}
+    const key=c.toLowerCase();
+    if(!seen[key]){seen[key]={name:c,items:[]};groups.push(seen[key]);}
+    seen[key].items.push(i);
+  });
+  if(!groups.length){
+    setCats("","");
+    document.getElementById("menu").innerHTML = selectedRestaurant.items.map(menuRow).join("");
+    return;
+  }
+  if(other) groups.push(other);
+  setCats(
+    groups.length>1?groups.map((g,n)=>'<button type="button" class="cat-chip" onclick="jumpCat('+n+')">'+escapeHtml(g.name)+'</button>').join(""):"",
+    selectedRestaurant.id+"|"+groups.map(g=>g.name).join("|")
+  );
+  document.getElementById("menu").innerHTML = groups.map((g,n)=>
+    '<h4 class="cat-head" id="cat-'+n+'">'+escapeHtml(g.name)+'</h4>'+g.items.map(menuRow).join("")
+  ).join("");
 }
 function changeQty(id,delta){
   const item=itemById(id); if(!item) return;
