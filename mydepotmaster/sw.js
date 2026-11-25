@@ -25,7 +25,26 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.146 (2026-11-25) — Staff tab: accessibility (index.html + sw.js; no new file, NO database RULES change)
+// Current version: v0.3.149 (2026-11-25) — Till: Text size setting − A + (pos.html + sw.js; no new file, NO database RULES change)
+//   - ADDED: Till settings > Text size, with − A + buttons. Five sizes (85, 100, 115, 130, 150 %); A shows the size and goes back to 100 %. Kept on that phone only
+//     (localStorage mdm_pos_text) and applied before the page paints. Every font size in pos.html's stylesheet is now calc(Npx*var(--ts,1)); the − / × icon buttons keep their
+//     size, a text field is never smaller than before (iPhone zooms into fields under 16 px), and the printed receipt always prints at its own size (@media print resets --ts).
+//   - NOT CHANGED: index.html (the main app has its own look), what any button does, prices, stock, the cart, Charge, the shift rule.
+//   - Ships on top of v0.3.148 (index.html, sales.js and shifts.js as before).
+// Previous version: v0.3.148 (2026-11-25) — Till: item tiles no longer cut their text (pos.html + sw.js; no new file, NO database RULES change)
+//   - FIXED: on the till's item grid a tile's wrapped lines spilled out of the tile (a two-line name, or the pack line such as BOX ×5 · CARTON ×100 · PACK ×1,000, ran over the bottom border).
+//     The flex column is now on an inner span (.tile .ti) instead of on the <button>, so the row height counts every wrapped line.
+//   - NOT CHANGED: what any tile or button does, prices, stock, the cart, Charge, the shift rule, index.html.
+//   - Ships on top of v0.3.147 (index.html, sales.js and shifts.js as before).
+// Previous version: v0.3.147 (2026-11-25) — Staff tab: accessibility, the leftovers of v0.3.146 (index.html + sw.js; no new file, NO database RULES change)
+//   - FIXED (contrast, dark theme): blue and purple text (the Earnings By task fold, the related-record icon, the Career line, the Net to date column, the Edit buttons and the Leave note) was 4.0 to 4.05:1 on a card, and 3.4:1 in the blue Leave note. In the Staff tab they are now lighter in the dark theme (8.0 / 6.8:1). The light theme keeps its colours (6.7 / 8.6:1).
+//   - FIXED (contrast, light theme): the Clock in button had dark text on a dark-green gradient (3.6:1 at the left end, 2.4:1 at the right); its text is white in the light theme (5.4 / 8.3:1). The role tag had a navy fill with grey text (1.4:1); it now has a light fill in the light theme (4.8:1).
+//   - FIXED (a word beside the colour, no emoji): the sync chip at the top of the Staff tab still used the emoji form (the check mark, cloud, phone and warning signs, which a screen reader reads out as pictures). It uses the same line-icon form as Inventory, also when it refreshes itself every 30 seconds. A failing-sync chip is red from the tab's red (3.8:1 on white before).
+//   - CHANGED (keyboard and touch): the edit and delete icon buttons and the search box show the green keyboard outline; the row menu button has a 44 px tap area on a wide screen too, without making rows taller.
+//   - CHECKED, no change needed: staff rows, the Active shifts banner, the By task fold, the note and related-record icons are buttons; the More, views and row menu buttons have a label, aria-haspopup and aria-expanded, and their sheet closes on Escape, keeps focus inside and gives it back; the chevron on a phone row says whether it is open. Table rows that open on a tap (phone only) have that chevron button for the keyboard, as in Inventory.
+//   - NOT CHANGED: the pop-ups (steps 17 to 27, including the profile's photo button, the Role history and Productivity folds), what any button does, the figures, the dashboard and Inventory (their Receive / Clock in style buttons have the same dark-text-on-green issue in the light theme; not touched here).
+//   - Ships on top of v0.3.146 (pos.html, sales.js and shifts.js as in v0.3.118).
+// Previous version: v0.3.146 (2026-11-25) — Staff tab: accessibility (index.html + sw.js; no new file, NO database RULES change)
 //   - CHECKED (step 16): the staff rows are already buttons (step 3); the More, views and row ⋯ buttons already have a label, aria-haspopup and aria-expanded, and the action sheet they open already closes on Escape, keeps focus inside and gives it back (the sheet's own code); the row chevrons, Select, ⋯ and the Export / period controls already had an outline and a 44 px tap area.
 //   - CHANGED (step 16): the Active shifts banner is a real button (the Clock out button sits beside it, not inside it, which would be a button in a button). The By task fold in Earnings is a button that says whether it is open (aria-expanded), and the note and related-record icons in Work logs are buttons with labels. They all have a visible outline and a 44 px tap area that does not make rows taller.
 //   - CHANGED (step 16, the rest): Clock in, Pay and the empty-state button now show the outline too; the tick boxes are 22 px; edit and delete buttons are 44 px on a touch screen; Clock out is 44 px.
@@ -2776,7 +2795,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.146';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.149';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
