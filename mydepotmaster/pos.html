@@ -354,6 +354,39 @@ button.warnb:disabled{opacity:.45;cursor:not-allowed}
 .seg.ts button{font-size:calc(18px*var(--ts,1));font-weight:700;line-height:1.2}
 .seg.ts button:disabled{opacity:.4;cursor:not-allowed}
 @media print{:root{--ts:1!important}}   /* the receipt prints at its own size whatever the screen's text size is */
+
+/* v0.3.150: the cart pane (Current sale) can never be wider or taller than the screen it sits on.
+   Width: the line grid and every row inside it may shrink (minmax(0,1fr), min-width:0) and wrap instead of pushing the pane out to the right, where .sell (overflow:hidden) cut it off.
+   Height: the lines keep at least 96 px; if the footer (offers, wholesale, discount, total, two buttons, Charge, hint) plus the header is taller than the window, the pane scrolls so
+   Charge can always be reached, and on windows under 720 px high the footer is made tighter first. */
+.cart{min-width:0;min-height:0;max-width:100%;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain}
+.cart-h{flex-wrap:wrap}
+.cart-h h2{min-width:0;overflow-wrap:anywhere}
+.lines{min-height:96px;overflow-x:hidden}
+.line{grid-template-columns:minmax(0,1fr) auto}
+.line .ln,.line .lp{min-width:0;overflow-wrap:anywhere}
+.line .lo{flex-wrap:wrap}
+.line .lu{flex-wrap:wrap;min-width:0}
+.line .lu select{min-width:0;flex:0 1 auto}
+.cart-f .sec-row{flex-wrap:wrap}
+.cart-f .sec-row .sec{flex:1 1 auto;min-width:0}
+.tot{flex-wrap:wrap;column-gap:8px}
+.tot b{min-width:0;overflow-wrap:anywhere}
+.drow{flex-wrap:wrap}
+@media (max-height:720px){
+  .cart-h{padding-bottom:6px}
+  .cart-f{padding:8px 14px calc(8px + env(safe-area-inset-bottom,0px))}
+  .tot{margin-bottom:6px}
+  .drow{margin-bottom:6px}
+  .cart-f .sec-row{margin-bottom:6px}
+  .cart-f .sec-row .sec{padding:7px 8px}
+  .cart-f .pri{padding:11px 18px}
+  .cart-f .hint{margin-top:5px}
+}
+
+/* v0.3.150: Full screen button in the header (icon only, like the ? button) */
+#b-fs{display:inline-flex;align-items:center;justify-content:center;min-width:38px;padding-left:10px;padding-right:10px}
+#b-fs svg{display:block;width:18px;height:18px}
 </style>
 <script>
 /* Theme first, before anything paints: mdm_pos_theme = dark (default, as before) | light | auto (follows the phone). Only the till reads this key. */
@@ -367,7 +400,7 @@ document.documentElement.setAttribute('data-theme',l?'light':'dark');var m=docum
   <div><b>🧾 Till <span id="tillcode"></span></b><small id="depot"></small></div>
   <div class="hr">
     <div class="pills"><span class="pill" id="p-shift"></span><span class="pill" id="p-net"></span><span class="pill" id="p-cloud"></span><span class="pill" id="p-till"></span><span class="pill" id="p-sales"></span><span class="pill" id="p-user"></span></div>
-    <div class="hb"><button class="sm" id="b-help" type="button" aria-label="How to use the Till" title="How to use the Till">?</button><button class="sm" id="b-ask" type="button" aria-label="Shop Assistant" title="Ask the Shop Assistant">Assistant</button><button class="sm" id="b-print" type="button">Printer</button><button class="sm" id="b-ret" type="button">Returns</button><button class="sm" id="b-shift" type="button">Shift</button><button class="sm" id="b-lock" type="button" hidden>🔒 Lock</button><button class="sm" id="b-set" type="button">Settings</button><button class="sm" id="b-mine" type="button" hidden>My sales</button><button class="sm" id="b-recv" type="button" hidden>Receive</button><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
+    <div class="hb"><button class="sm" id="b-help" type="button" aria-label="How to use the Till" title="How to use the Till">?</button><button class="sm" id="b-fs" type="button" aria-label="Full screen" title="Full screen" hidden></button><button class="sm" id="b-ask" type="button" aria-label="Shop Assistant" title="Ask the Shop Assistant">Assistant</button><button class="sm" id="b-print" type="button">Printer</button><button class="sm" id="b-ret" type="button">Returns</button><button class="sm" id="b-shift" type="button">Shift</button><button class="sm" id="b-lock" type="button" hidden>🔒 Lock</button><button class="sm" id="b-set" type="button">Settings</button><button class="sm" id="b-mine" type="button" hidden>My sales</button><button class="sm" id="b-recv" type="button" hidden>Receive</button><button class="sm" id="b-app" type="button">Main app</button><button class="sm" id="b-out" type="button">Log out</button></div>
   </div>
 </header>
 <main id="main"></main>
@@ -831,7 +864,7 @@ function initTillSettings(){
   document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')checkLockOnReturn();});
   addEventListener('storage',e=>{if(e.key&&e.key.startsWith('mdm_pos_cfg')){CFGC=null;paintLockBtn();paintLock();}});
   try{matchMedia('(prefers-color-scheme:light)').addEventListener('change',()=>{if(themePref()==='auto')applyTheme('auto');});}catch{}
-  $('b-set').onclick=openSettings;$('b-lock').onclick=lockTill;$('b-help').onclick=openHelp;$('b-ask').onclick=openAsk;
+  $('b-set').onclick=openSettings;$('b-lock').onclick=lockTill;$('b-help').onclick=openHelp;$('b-ask').onclick=openAsk;$('b-fs').onclick=toggleFs;paintFs();
   paintLockBtn();
 }
 
@@ -849,7 +882,7 @@ const HELP_TXT=[
   ['8. Returns','Tap Returns. A void cancels a whole sale, only in the shift it was made. A refund takes back some or all lines at any time. Both need a reason. An Admin or Manager approves it, anyone else needs a manager PIN. A sale is never edited or deleted.'],
   ['9. Check your day','My sales shows what you sold today. Shift then X report shows how the open shift stands and changes nothing.'],
   ['10. Close your shift','Shift then Close shift. Count the whole drawer including the float and type the amount. The app expects the float plus cash sales minus cash handed back, and saves any difference. Then print the Z report.'],
-  ['11. Lock, PIN and password','Settings at the top holds Appearance (Auto, Light or Dark), Text size (the \u2212 A + buttons make the writing smaller or bigger), Stay logged in, your Till PIN and Change password. Set a Till PIN, switch on Stay logged in, and use the Lock button whenever you step away. Your Till PIN is not the manager PIN.'],
+  ['11. Lock, PIN and password','Settings at the top holds Appearance (Auto, Light or Dark), Text size (the \u2212 A + buttons make the writing smaller or bigger), Stay logged in, your Till PIN and Change password. Set a Till PIN, switch on Stay logged in, and use the Lock button whenever you step away. Your Till PIN is not the manager PIN. The button with four corners, next to ?, takes the till full screen and back (Esc also leaves it).'],
   ['12. No signal','The Till keeps working without signal. Sales are saved on the phone and sent to the cloud when you are online again. A brand-new till needs signal once to get its code.'],
   ['13. Phone as scanner','A second phone can scan for this till. On this till tap the phone button next to the camera button, then Start receiving. On the other phone sign in with your own login, tap the same button, then either type this till\u2019s 4-character code or tap Scan till QR and scan the code this till shows under Show till QR for a phone, then tap Start scanning. Each scan adds one item to the cart: check the cart before you charge. Link only your own phones, on the shop\u2019s private WiFi, never guest WiFi. Tap Stop receiving when you leave the till. A locked or busy till refuses scans.'],
   ['14. Receive stock','Admin and Manager only. Tap Receive, then scan each unit that arrives: one scan adds one. Check the quantity, type the cost, and open Damaged, expiry, batch if the delivery has any. Choose the supplier, the date and how it was paid, then tap Save delivery. The main app opens for a moment to store it and brings you back here with the new stock. A code the app does not know is not added: tap Open in main app to add the item first.'],
@@ -4471,6 +4504,32 @@ function fitView(){
     });
   });
 }
+// ── FULL SCREEN (v0.3.150) ────────────────────────────────────────────────────────────────────────────
+// The header's icon button takes the till full screen (no browser bars, no taskbar) and back. The browser only allows it from a tap or click, so it cannot start by itself, and Esc or
+// the button leaves it. The button stays hidden where the browser has no full screen for a page (an iPhone). The size of the page follows through the resize event: fitView() runs again.
+const fsOn=()=>!!(document.fullscreenElement||document.webkitFullscreenElement);
+const fsCan=()=>{const r=document.documentElement;return !!(document.fullscreenEnabled||document.webkitFullscreenEnabled)&&!!(r.requestFullscreen||r.webkitRequestFullscreen);};
+function fsIcon(on){
+  const NS='http://www.w3.org/2000/svg',v=document.createElementNS(NS,'svg'),p=document.createElementNS(NS,'path');
+  [['viewBox','0 0 24 24'],['fill','none'],['stroke','currentColor'],['stroke-width','2.2'],['stroke-linecap','round'],['stroke-linejoin','round'],['aria-hidden','true']].forEach(([k,x])=>v.setAttribute(k,x));
+  p.setAttribute('d',on?'M9 3v6H3M15 3v6h6M9 21v-6H3M15 21v-6h6':'M3 9V3h6M21 9V3h-6M3 15v6h6M21 15v6h-6');   // corners pointing in (leave) or out (enter)
+  v.append(p);return v;
+}
+function paintFs(){
+  const b=document.getElementById('b-fs');if(!b)return;
+  const can=fsCan(),t=fsOn()?'Exit full screen':'Full screen';
+  b.hidden=!can;b.setAttribute('aria-label',t);b.title=t;b.replaceChildren(fsIcon(fsOn()));
+  fitView();
+}
+function toggleFs(){
+  try{
+    const d=document,r=d.documentElement,end=x=>{if(x&&x.catch)x.catch(()=>{});};
+    if(fsOn())end((d.exitFullscreen||d.webkitExitFullscreen).call(d));
+    else end((r.requestFullscreen||r.webkitRequestFullscreen).call(r,{navigationUI:'hide'}));
+  }catch{}
+}
+['fullscreenchange','webkitfullscreenchange'].forEach(e=>document.addEventListener(e,paintFs));
+
 ['resize','orientationchange','pageshow','focus'].forEach(e=>addEventListener(e,fitView));
 if(window.visualViewport)visualViewport.addEventListener('resize',fitView);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)fitView();});

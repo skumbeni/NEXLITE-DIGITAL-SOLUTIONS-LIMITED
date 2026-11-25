@@ -25,7 +25,15 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.149 (2026-11-25) — Till: Text size setting − A + (pos.html + sw.js; no new file, NO database RULES change)
+// Current version: v0.3.150 (2026-11-25) — Till: cart no longer cut at the right or the bottom, and a Full screen button (pos.html + sw.js; no new file, NO database RULES change)
+//   - FIXED (width): the Current sale pane could be pushed out to the right and cut off by the page (a line's grid, the unit list, the Preview receipt / Hold sale buttons and the
+//     offer line could not shrink or wrap, most of all with a bigger Text size). They now shrink and wrap, and the pane never scrolls sideways.
+//   - FIXED (height): when the pane's header and footer (offers, wholesale, discount, total, two buttons, Charge, hint) are taller than the window, the lines keep 96 px and the pane
+//     scrolls, so Charge can always be reached. On a window under 720 px high the footer is also made tighter first.
+//   - ADDED: a Full screen button in the header, next to ? (icon with four corners; leaves full screen again when tapped, or with Esc). Hidden where the browser cannot do it (iPhone).
+//   - NOT CHANGED: index.html, what any button does, prices, stock, the shift rule, Charge.
+//   - Ships on top of v0.3.149 (index.html, sales.js and shifts.js as before).
+// Previous version: v0.3.149 (2026-11-25) — Till: Text size setting − A + (pos.html + sw.js; no new file, NO database RULES change)
 //   - ADDED: Till settings > Text size, with − A + buttons. Five sizes (85, 100, 115, 130, 150 %); A shows the size and goes back to 100 %. Kept on that phone only
 //     (localStorage mdm_pos_text) and applied before the page paints. Every font size in pos.html's stylesheet is now calc(Npx*var(--ts,1)); the − / × icon buttons keep their
 //     size, a text field is never smaller than before (iPhone zooms into fields under 16 px), and the printed receipt always prints at its own size (@media print resets --ts).
@@ -2795,7 +2803,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.149';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.150';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
