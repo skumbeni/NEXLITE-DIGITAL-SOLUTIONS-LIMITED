@@ -40,7 +40,7 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
 [data-theme=dark] .btn.secondary{background:#1f3a2d;color:#9fe0bd;border-color:#2b5a43}
 [data-theme=dark] .r-icon{background:#2a3a31}
 [data-theme=dark] .status.ok{background:#1f3a2d;border-color:#2b5a43;color:var(--ink)}[data-theme=dark] .status.bad{background:#3a2f18;border-color:#5a4720;color:#f3dfb9}
-.hbox{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-top:18px;box-shadow:var(--shadow)}.hrow{border-top:1px solid var(--line);padding:12px 0}.hsp{display:flex;justify-content:space-between;gap:8px}.hon{background:var(--brand2)!important;color:var(--brand)!important}
+.paynum{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;margin:6px 0;font-weight:700;font-size:15px;letter-spacing:.02em}.hbox{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-top:18px;box-shadow:var(--shadow)}.hrow{border-top:1px solid var(--line);padding:12px 0}.hsp{display:flex;justify-content:space-between;gap:8px}.hon{background:var(--brand2)!important;color:var(--brand)!important}
 </style>
 <script>try{var t=localStorage.getItem("fcTheme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
@@ -55,7 +55,7 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
   <section id="historyBox" class="hbox hidden" aria-live="polite"></section>
   <section class="hero">
     <div><h2>Good food from local restaurants, delivered to your door.</h2><p>Choose a restaurant, place your order and pay <span data-brand>Food Connect</span> before we purchase your food. We handle the collection and delivery.</p></div>
-    <div class="hero-note"><strong>How it works</strong>1. Choose one restaurant<br>2. Confirm your order and delivery area<br>3. Pay us via mobile money<br>4. We purchase and deliver your food</div>
+    <div class="hero-note"><strong>How it works</strong>1. Choose one restaurant<br>2. Confirm your order and delivery area<br>3. Pay us via mobile money and enter the transaction ID<br>4. We purchase and deliver your food</div>
   </section>
 
   <div id="geoBar" class="geo hidden" role="status" aria-live="polite"></div>
@@ -94,10 +94,16 @@ h3.section{font-size:18px;margin:20px 0 12px}.restaurants{display:grid;grid-temp
       </div>
       <div class="field"><label for="address">Delivery address and landmark</label><textarea id="address" rows="2" maxlength="250" placeholder="Township / area, street, house or business name, landmark"></textarea></div>
       <div class="field"><label for="instructions">Order notes (optional)</label><textarea id="instructions" rows="2" maxlength="400" placeholder="Special instructions or substitutions to avoid"></textarea></div>
+      <div id="payBox" class="status">
+        <strong>Step 1: pay</strong>
+        <div style="margin:6px 0">Send <b id="payAmt">K0.00</b> by mobile money to either number:</div>
+        <div id="payNums"></div>
+        <div class="field" style="margin-top:10px"><label for="txn">Step 2: transaction ID from your payment message (required)</label><input id="txn" autocomplete="off" autocapitalize="characters" maxlength="40" placeholder="e.g. MP260101.1234.A56789"></div>
+      </div>
       <div id="orderStatus" class="status hidden" role="status" aria-live="polite"></div>
       <button class="btn" id="sendOrder" onclick="sendOrder()" disabled>Continue on WhatsApp</button>
-      <p class="notice">Your WhatsApp message is an order request, not payment confirmation. We will reply with the payment details. We only purchase after your payment is received and confirmed.</p>
-      <div class="status"><strong>Payment-first process</strong><br>We confirm the final restaurant price and availability with you. If anything changes, we ask for your approval before you pay or before we purchase.</div>
+      <p class="notice">Pay first using the numbers above, enter the transaction ID, then send the order on WhatsApp. We only purchase after we verify your payment.</p>
+      <div class="status"><strong>Payment-first process</strong><br>We confirm the final restaurant price and availability with you. If anything changes, we ask for your approval before we purchase.</div>
     </aside>
   </div>
   <div class="footer"><span data-brand>Food Connect</span> is an independent ordering, purchasing and delivery service. It is not affiliated with or endorsed by the restaurants listed.<br><a href="../privacy.html" style="color:inherit">Privacy Policy</a> · <a href="../terms.html" style="color:inherit">Terms of Service</a></div>
@@ -396,6 +402,27 @@ function changeQty(id,delta){
   if(!cart[id]) delete cart[id];
   renderMenu(); calculate();
 }
+function localNum(d){d=String(d||"").replace(/\D/g,"");if(d.startsWith("260")&&d.length===12)d="0"+d.slice(3);return d.length===10?d.slice(0,4)+" "+d.slice(4,7)+" "+d.slice(7):d;}
+// Customers pay to the town's WhatsApp number or the second line, then give the transaction ID.
+const PAY_NUMBERS_EXTRA=["260960271128"];
+function payNumbers(){
+  const wa=String((town&&town.whatsapp)||BUSINESS.whatsapp).replace(/\D/g,"");
+  return [wa].concat(PAY_NUMBERS_EXTRA).filter((n,i,a)=>n&&a.indexOf(n)===i);
+}
+function renderPayBox(){
+  const box=document.getElementById("payNums"); if(!box) return;
+  const amt=document.getElementById("payAmt"); if(amt) amt.textContent=money(currentTotals.total);
+  const html=payNumbers().map((n,i)=>'<div class="paynum"><span id="payNum'+i+'">'+escapeHtml(localNum(n))+'</span><button type="button" class="pill" onclick="copyNum('+i+',this)">Copy</button></div>').join("");
+  if(box.dataset.h!==html){box.innerHTML=html;box.dataset.h=html;}
+}
+function copyNum(i,btn){
+  const el=document.getElementById("payNum"+i); if(!el) return;
+  const t=el.textContent.replace(/\s/g,"");
+  const ok=()=>{btn.textContent="Copied";setTimeout(()=>{btn.textContent="Copy"},1500)};
+  if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(ok,()=>{btn.textContent=t});
+  else btn.textContent=t;
+}
+const TXN_RE=/^[A-Z0-9][A-Z0-9 .\-_\/]{5,39}$/;
 function calculate(){
   let food=0,count=0;
   if(selectedRestaurant) selectedRestaurant.items.forEach(i=>{const q=cart[i.id]||0;food+=q*i.price;count+=q;});
@@ -407,6 +434,7 @@ function calculate(){
   document.getElementById("serviceFee").textContent=money(service);
   document.getElementById("deliveryFee").textContent=money(delivery);
   document.getElementById("grandTotal").textContent=money(currentTotals.total);
+  renderPayBox();
   document.getElementById("cartCount").textContent=count+" item"+(count===1?"":"s");
   const lines=document.getElementById("cartLines");
   if(!count){lines.className="cart-empty";lines.textContent="Your basket is empty. Add items from a restaurant menu.";}
@@ -429,8 +457,10 @@ async function sendOrder(){
   if(!town){alert("Please choose your town first.");return;}
   if(!selectedRestaurant || !Object.keys(cart).length){alert("Please choose a restaurant and add food to your basket.");return;}
   if(!name||!phone||!address){alert("Please enter your name, phone number and delivery address.");return;}
+  const txn=(document.getElementById("txn").value||"").trim().toUpperCase();
+  if(!TXN_RE.test(txn)){alert("Pay first using the numbers shown, then enter the transaction ID from your payment message (6 to 40 letters or numbers).");const t=document.getElementById("txn");t.focus();t.scrollIntoView({block:"center"});return;}
   if(!/^[0-9+\s()-]{7,20}$/.test(phone)){alert("Please enter a valid phone number.");return;}
-  if(auth&&!auth.currentUser){alert("Please sign in or create an account to place your order.");const f=document.getElementById("authEmail");if(f)f.focus();return;}
+  if(auth&&!auth.currentUser){alert("Please sign in or create an account to place your order.");const f=document.getElementById("authPhone");if(f){f.focus();f.scrollIntoView({block:"center"});}return;}
   if(auth&&userBlocked){alert("Your account is on hold, so orders are paused. Please message us on WhatsApp.");return;}
   if(auth&&!userPhone){alert("Please save your phone number in the sign-in box before ordering.");return;}
   const zone=BUSINESS.zones[Number(document.getElementById("zone").value)]||BUSINESS.zones[0];
@@ -453,9 +483,11 @@ async function sendOrder(){
     "Phone: "+phone,
     "Delivery address: "+address,
     "Payment method: "+payment,
+    "TRANSACTION ID: "+txn,
+    "Amount to verify: "+money(currentTotals.total),
     notes?"Order notes: "+notes:"",
     "",
-    "Please confirm item availability and final price, then send payment instructions. Customer will pay "+brandName()+" before purchasing. Do not purchase until payment is verified."
+    "Customer has paid "+brandName()+" and gave the transaction ID above. Please verify the payment, confirm item availability and final price, and do not purchase until payment is verified."
   ].filter(Boolean).join("\n");
   const waNumber=String((town&&town.whatsapp)||BUSINESS.whatsapp).replace(/\D/g,"");
   const waUrl=m=>"https://wa.me/"+waNumber+"?text="+encodeURIComponent(m);
@@ -467,7 +499,7 @@ async function sendOrder(){
   if(!(db&&auth&&auth.currentUser)){openWhatsApp(waUrl(message));return;}
   const rec={ref:orderRef,uid:auth.currentUser.uid,email:auth.currentUser.email,source:"shop",restaurantId:selectedRestaurant.id,town:town.name,townId:town.id,restaurant:selectedRestaurant.name,items:orderLines,
     lines:selectedRestaurant.items.filter(i=>cart[i.id]).map(i=>({id:i.id,name:i.name,qty:cart[i.id],price:i.price})),
-    food:currentTotals.food,service:currentTotals.service,delivery:currentTotals.delivery,total:currentTotals.total,customer:name,phone,address,payment,notes,status:"new",createdAt:firebase.database.ServerValue.TIMESTAMP};
+    food:currentTotals.food,service:currentTotals.service,delivery:currentTotals.delivery,total:currentTotals.total,customer:name,phone,address,payment,txn,notes,status:"new",createdAt:firebase.database.ServerValue.TIMESTAMP};
   const sig=orderSig();
   sending=true; showOrderStatus("saving"); calculate();
   const res=await saveOrder(rec);
@@ -522,7 +554,7 @@ function renderHistory(){
   }else{
     const paid=list.filter(o=>PAID_SET.includes(o.status)),due=list.filter(o=>o.status==="new"||o.status==="confirmed"),sum=paid.reduce((a,o)=>a+Number(o.total||0),0);
     body='<div style="margin:10px 0">Total paid: <strong>'+money(sum)+'</strong> on '+paid.length+' order'+(paid.length===1?"":"s")+'</div>'
-     +due.map(o=>'<div class="hrow"><div class="hsp"><strong>Waiting for payment · '+escapeHtml(o.ref)+'</strong><strong>'+money(o.total)+'</strong></div><div style="color:var(--muted);font-size:13px">'+escapeHtml(o.payment)+' · we send payment instructions on WhatsApp once your order is confirmed</div></div>').join("")
+     +due.map(o=>'<div class="hrow"><div class="hsp"><strong>'+(o.txn?'Payment being verified':'Waiting for payment')+' · '+escapeHtml(o.ref)+'</strong><strong>'+money(o.total)+'</strong></div><div style="color:var(--muted);font-size:13px">'+escapeHtml(o.payment)+(o.txn?' · Transaction '+escapeHtml(o.txn)+' · we are checking it':' · no transaction ID on this order. Message us on WhatsApp')+'</div></div>').join("")
      +paid.map(o=>'<div class="hrow"><div class="hsp"><strong>'+escapeHtml(o.ref)+' · '+escapeHtml(o.restaurant)+'</strong><strong>'+money(o.total)+'</strong></div><div style="color:var(--muted);font-size:13px">'+escapeHtml(o.payment)+' · '+d(o.paidAt||o.createdAt)+(o.txn?' · Transaction '+escapeHtml(o.txn):'')+'</div></div>').join("")
      +(!paid.length&&!due.length?'<div class="empty"><b>No payments yet</b>Your payments will appear here once we confirm them.</div>':'');
   }
@@ -550,7 +582,7 @@ function showOrderStatus(kind,d){
   }
 }
 function hideOrderStatus(){const b=document.getElementById("orderStatus");b.className="status hidden";b.innerHTML="";}
-function newOrder(){cart={};placed=null;hideOrderStatus();document.getElementById("instructions").value="";renderMenu();calculate();}
+function newOrder(){cart={};placed=null;hideOrderStatus();document.getElementById("instructions").value="";document.getElementById("txn").value="";renderMenu();calculate();}
 
 
 const PHONE_RE=/^[0-9+\s()-]{7,20}$/;
@@ -560,19 +592,29 @@ const PHONE_DOMAIN="phone.nexlitedigitalsolutionslimited.digital";
 function normPhone(v){let d=String(v||"").replace(/\D/g,"");if(d.startsWith("0"))d="260"+d.slice(1);return /^260[0-9]{9}$/.test(d)?d:null;}
 function phoneEmail(d){return d+"@"+PHONE_DOMAIN;}
 function isPhoneAccount(u){return !!(u&&u.email&&u.email.endsWith("@"+PHONE_DOMAIN));}
+let authBusy=false;
+function withTimeout(p,ms,code){return new Promise((res,rej)=>{const t=setTimeout(()=>rej({code:code||"timeout"}),ms);Promise.resolve(p).then(v=>{clearTimeout(t);res(v);},e=>{clearTimeout(t);rej(e);});});}
+function phoneFromEmail(em){const m=/^(260[0-9]{9})@/.exec(em||"");return m?"0"+m[1].slice(3):"";}
 async function loadProfile(u){
   if(signingUp) return;
   userPhone=""; userName=""; userBlocked=false;
   if(u){
-    try{const p=(await db.ref("users/"+u.uid).get()).val()||{};userPhone=p.phone||"";userName=p.name||"";}catch(e){}
-    try{userBlocked=(await db.ref("blocked/"+u.uid).get()).exists();}catch(e){}
+    // Show the signed-in state at once; details fill in when the database answers (never waits forever).
+    if(isPhoneAccount(u)) userPhone=phoneFromEmail(u.email);
+    renderAuth(); fillPhone();
+    try{
+      const p=(await withTimeout(db.ref("users/"+u.uid).get(),8000)).val()||{};
+      if(!p.phone&&userPhone) db.ref("users/"+u.uid).update({phone:userPhone,email:u.email}).catch(()=>{});
+      userPhone=p.phone||userPhone; userName=p.name||"";
+    }catch(e){}
+    try{userBlocked=(await withTimeout(db.ref("blocked/"+u.uid).get(),8000)).exists();}catch(e){}
   }
   renderAuth(); fillPhone();
 }
 function fillPhone(){const ph=document.getElementById("phone"); if(userPhone&&ph&&!ph.value) ph.value=userPhone; const nm=document.getElementById("customer"); if(userName&&nm&&!nm.value) nm.value=userName;}
 function renderAuth(){
   const box=document.getElementById("authBox"); if(!box||!auth) return;
-  const u=auth.currentUser; box.classList.remove("hidden");
+  const u=auth.currentUser; box.classList.remove("hidden"); if(u) authMode="in";
   const hb=document.getElementById("historyBtn"); if(hb)hb.classList.toggle("hidden",!u); if(!u)closeHistory();
   const fld=(id,label,type,ac)=>`<div class="field"><label for="${id}">${label}</label><input id="${id}" type="${type}" autocomplete="${ac}"></div>`;
   const out=`<button class="pill" type="button" onclick="auth.signOut()">Sign out</button>`;
@@ -581,29 +623,48 @@ function renderAuth(){
   else if(u){box.innerHTML=`Signed in as <strong>${escapeHtml(who)}</strong> ${out}${fld("authPhone","Add your phone / WhatsApp number to order","tel","tel")}<button class="btn secondary" type="button" onclick="savePhone()">Save phone number</button><p class="notice" id="authMsg"></p>`;}
   else{
     const up=authMode==="up";
-    box.innerHTML=`<strong>${up?"Create your account":"Sign in to place your order"}</strong>${up?fld("authName","Your name","text","name"):""}${fld("authPhone",up?"Phone / WhatsApp number":"Phone number (or email)","text","username")}${fld("authPass","Password (6+ characters)","password",up?"new-password":"current-password")}<button class="btn" type="button" onclick="authGo()">${up?"Create account":"Sign in"}</button><p class="notice"><a href="#" onclick="authToggle();return false">${up?"Already have an account? Sign in":"New here? Create an account"}</a>${up?"":' · <a href="#" onclick="authReset();return false">Forgot password?</a>'}</p><p class="notice" id="authMsg"></p>`;
+    authBusy=false;
+    box.innerHTML=`<strong>${up?"Create your account":"Sign in to place your order"}</strong>${up?fld("authName","Your name","text","name"):""}${fld("authPhone",up?"Phone / WhatsApp number":"Phone number (or email)","text","username")}${fld("authPass","Password (6+ characters)","password",up?"new-password":"current-password")}<button class="btn" id="authBtn" type="button" onclick="authGo()">${up?"Create account":"Sign in"}</button><p class="notice"><a href="#" onclick="authToggle();return false">${up?"Already have an account? Sign in":"New here? Create an account"}</a>${up?"":' · <a href="#" onclick="authReset();return false">Forgot password?</a>'}</p><p class="notice" id="authMsg" role="status" aria-live="polite"></p>`;
+    ["authPhone","authPass","authName"].forEach(id=>{const e=document.getElementById(id);if(e)e.addEventListener("keydown",ev=>{if(ev.key==="Enter"){ev.preventDefault();authGo();}});});
   }
 }
-function authError(c){return {"auth/invalid-email":"That email address isn’t valid.","auth/weak-password":"Use a password with at least 6 characters.","auth/email-already-in-use":"This number already has an account. Tap Sign in, or Forgot password if you cannot remember it.","auth/invalid-credential":"Phone number or password is incorrect.","auth/wrong-password":"Phone number or password is incorrect.","auth/user-not-found":"No account for that number. Tap Create an account."}[c]||"Could not sign in ("+c+").";}
+function authError(c){return {"auth/invalid-email":"That email address isn’t valid.","auth/weak-password":"Use a password with at least 6 characters.","auth/email-already-in-use":"This number already has an account. Tap Sign in, or Forgot password if you cannot remember it.","auth/invalid-credential":"Phone number or password is incorrect.","auth/wrong-password":"Phone number or password is incorrect.","auth/user-not-found":"No account for that number. Tap Create an account.","auth/network-request-failed":"No connection to our server. Check your data or Wi-Fi and try again.","auth/too-many-requests":"Too many attempts. Wait a few minutes and try again.","auth/operation-not-allowed":"Accounts are switched off on our side. Please message us on WhatsApp.","auth/user-disabled":"This account is disabled. Please message us on WhatsApp."}[c]||"Could not continue ("+(c||"unknown error")+"). Check your connection and try again.";}
 function authToggle(){authMode=authMode==="up"?"in":"up";renderAuth();}
 function authGo(){
-  const id=document.getElementById("authPhone").value.trim(),p=document.getElementById("authPass").value,m=document.getElementById("authMsg");
+  if(authBusy) return;
+  const up=authMode==="up",m=document.getElementById("authMsg"),btn=document.getElementById("authBtn"),label=up?"Create account":"Sign in";
+  const id=document.getElementById("authPhone").value.trim(),p=document.getElementById("authPass").value;
   if(!id||!p){m.textContent="Enter your phone number and password.";return;}
-  if(authMode!=="up"){
-    let em=id;
-    if(!id.includes("@")){const d=normPhone(id);if(!d){m.textContent="Enter your number like 0977 638 790.";return;}em=phoneEmail(d);}
-    auth.signInWithEmailAndPassword(em,p).catch(x=>{m.textContent=authError(x.code);});return;
+  let em=id,d=null,name="";
+  if(up){
+    d=normPhone(id);name=(document.getElementById("authName").value||"").trim().slice(0,80);
+    if(!d){m.textContent="Enter your number like 0977 638 790.";return;}
+    if(!name){m.textContent="Enter your name.";return;}
+    em=phoneEmail(d);
+  }else if(!id.includes("@")){
+    d=normPhone(id);if(!d){m.textContent="Enter your number like 0977 638 790.";return;}
+    em=phoneEmail(d);
   }
-  const d=normPhone(id),name=(document.getElementById("authName").value||"").trim().slice(0,80);
-  if(!d){m.textContent="Enter your number like 0977 638 790.";return;}
-  if(!name){m.textContent="Enter your name.";return;}
-  const local="0"+d.slice(3),em=phoneEmail(d);
+  authBusy=true; if(btn){btn.disabled=true;btn.textContent="Please wait…";}
+  m.textContent=up?"Creating your account…":"Signing in…";
+  const slow=setTimeout(()=>{m.textContent="Still working. Your network is slow, please keep this page open.";},8000);
+  const fail=x=>{clearTimeout(slow);signingUp=false;authBusy=false;m.textContent=authError(x&&x.code);if(btn){btn.disabled=false;btn.textContent=label;}};
+  if(!up){
+    withTimeout(auth.signInWithEmailAndPassword(em,p),30000,"auth/network-request-failed")
+      .then(()=>{clearTimeout(slow);authBusy=false;if(!auth.currentUser)return;renderAuth();fillPhone();loadProfile(auth.currentUser);})
+      .catch(fail);
+    return;
+  }
+  const local="0"+d.slice(3);
   signingUp=true;
-  auth.createUserWithEmailAndPassword(em,p)
-    .then(c=>db.ref("users/"+c.user.uid).set({phone:local,name:name,email:em,createdAt:firebase.database.ServerValue.TIMESTAMP}))
-    .then(()=>{userPhone=local;userName=name;})
-    .catch(x=>{m.textContent=x.code?authError(x.code):"Account created, but your details were not saved. Add your number below.";})
-    .finally(()=>{signingUp=false; if(auth.currentUser){renderAuth();fillPhone();}});
+  withTimeout(auth.createUserWithEmailAndPassword(em,p),30000,"auth/network-request-failed")
+    .then(c=>{
+      // The account exists now: show the signed-in state immediately. Saving the profile never blocks the screen.
+      clearTimeout(slow);signingUp=false;authBusy=false;userPhone=local;userName=name;renderAuth();fillPhone();
+      withTimeout(db.ref("users/"+c.user.uid).set({phone:local,name:name,email:em,createdAt:firebase.database.ServerValue.TIMESTAMP}),15000)
+        .catch(e=>console.warn("Profile not saved yet; it is retried at next sign-in",e));
+    })
+    .catch(fail);
 }
 async function savePhone(){
   const v=document.getElementById("authPhone").value.trim(),m=document.getElementById("authMsg");

@@ -13,7 +13,7 @@
  *
  * To ship an update to cached files, bump VERSION below.
  */
-const VERSION = "v3";
+const VERSION = "v4";
 const CACHE = "fc-" + VERSION;
 
 const FIREBASE_SDK = [
@@ -91,7 +91,7 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.endsWith("/mfc-admin.html")) return;
 
   if (req.mode === "navigate") {
-    event.respondWith(pageNetworkFirst(req, url));
+    event.respondWith(pageNetworkFirst(event, req, url));
     return;
   }
 
@@ -111,16 +111,19 @@ async function sdkCacheFirst(req) {
   return res;
 }
 
-async function pageNetworkFirst(req, url) {
+async function pageNetworkFirst(event, req, url) {
   const cache = await caches.open(CACHE);
   // Same page with a different ?query (e.g. ?source=pwa) shares one cache entry.
   const key = url.origin + url.pathname;
-  try {
-    const res = await withTimeout(fetch(req), NAV_TIMEOUT_MS);
-    if (res && res.status === 200 && !res.redirected) {
-      cache.put(key, res.clone());
-    }
+  // The network request keeps running even if we stop waiting for it, so a slow
+  // connection still refreshes the cached copy for the next visit (no stale pages for ever).
+  const net = fetch(req).then((res) => {
+    if (res && res.status === 200 && !res.redirected) cache.put(key, res.clone());
     return res;
+  });
+  event.waitUntil(net.catch(() => {}));
+  try {
+    return await withTimeout(net, NAV_TIMEOUT_MS);
   } catch (_) {
     const cached = await cache.match(key);
     if (cached) return cached;
