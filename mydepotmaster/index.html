@@ -6363,7 +6363,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.152';
+const SW_VERSION  = 'v0.3.154';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -6825,6 +6825,7 @@ let STAFF_LIST_ROLE_FILTER='all'; // which registered role to show in the Staff 
 let DATE_RANGE={general:{from:'',to:''},maize:{from:'',to:''},staff:{from:'',to:''},dashboard:{from:'',to:''},roleHistory:{from:'',to:''},productivity:{from:'',to:''}};
 let STAB='logs'; // staff subtab
 let STAFF_LOG_TASK_FILTER='all'; // work logs task filter: 'all' or a specific task name
+let STAFF_LOG_Q=''; // search text of the Work logs table (v0.3.153: kept when the period or task dropdown redraws the tab)
 let MTAB='received'; // commodity subtab
 let CCOM=''; // currently selected commodity id — resolved dynamically to first defined commodity
 let GTAB='inventory'; // general subtab: inventory|issued|stockcount|summary|itemnames|pl|margin
@@ -9671,6 +9672,7 @@ function render(resetScroll=false){
     _renderAttempts = 0;         // reset error counter on clean render
     c.scrollTop = resetScroll ? 0 : prevScrollTop;
     attachTabListeners();
+    if(TAB==='staff'&&STAB==='logs'&&STAFF_LOG_Q)filterStaffLogTable(STAFF_LOG_Q);   // v0.3.153: the Work logs search survives a period / task change
   } catch(err) {
     _renderAttempts++;
     console.error('render() error on tab', TAB, err);
@@ -10285,7 +10287,8 @@ function dbIc(n){
     more:'<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
     trash:'<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
     search:'<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
-    info:'<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>'
+    info:'<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+    camera:'<path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>'
   };
   return '<svg class="dbi" viewBox="0 0 24 24" aria-hidden="true">'+(P[n]||P.box)+'</svg>';
 }
@@ -16942,7 +16945,7 @@ function _stToolbarHtml(o){
     .map(a=>`<option value="${a[0]}"${PERIOD.staff===a[0]?' selected':''}>${a[1]}</option>`).join('');
   const tk=o.task&&o.task.list.length>1?`<div class="tb-per tb-task"><select aria-label="Task" onchange="setStaffLogTaskFilter(this.value)"><option value="all"${STAFF_LOG_TASK_FILTER==='all'?' selected':''}>All tasks (${o.task.total})</option>${o.task.list.map(x=>`<option value="${esc(x)}"${STAFF_LOG_TASK_FILTER===x?' selected':''}>${esc(x)} (${o.task.counts[x]})</option>`).join('')}</select></div>`:'';
   return `<div class="invx-tb" role="toolbar" aria-label="${esc(o.label||'Search, period and export')}">
-    ${o.search?`<div class="sbx tb-s">${dbIc('search')}<input class="fi" id="${o.search.id}" placeholder="${o.search.ph}" aria-label="${o.search.al}" autocomplete="off" oninput="${o.search.fn}(this.value)"/></div>`:''}
+    ${o.search?`<div class="sbx tb-s">${dbIc('search')}<input class="fi" id="${o.search.id}" placeholder="${o.search.ph}" aria-label="${o.search.al}" autocomplete="off" value="${esc(o.search.val||'')}" oninput="${o.search.fn}(this.value)"/></div>`:''}
     ${o.period?`<div class="tb-per"><select aria-label="Period" onchange="setPeriod('staff',this.value)">${per}</select></div>`:''}
     ${tk}
     ${o.sel||''}
@@ -17158,7 +17161,7 @@ function renderStaffLogs(){
   }
   bulkClear('staff-log-table');
   // v0.3.142: one toolbar: search, period, task filter (dropdown), Select (Admin) and Export
-  const _tb=_stToolbarHtml({label:'Search, period, task and export',search:{id:'staff-log-search',ph:'Search by name, role or task',al:'Search work logs',fn:'filterStaffLogTable'},period:true,task:{list:_taskList,counts:_taskCounts,total:_workCount},sel:USER.role==='admin'?_rrSelBtn('staff-log-table'):'',exp:true});
+  const _tb=_stToolbarHtml({label:'Search, period, task and export',search:{id:'staff-log-search',ph:'Search by name, role or task',al:'Search work logs',fn:'filterStaffLogTable',val:STAFF_LOG_Q},period:true,task:{list:_taskList,counts:_taskCounts,total:_workCount},sel:USER.role==='admin'?_rrSelBtn('staff-log-table'):'',exp:true});
 
   return `
     ${_tb}
@@ -17191,7 +17194,8 @@ function renderStaffLogs(){
 }
 
 function filterStaffLogTable(q){
-  const term=(q||'').toLowerCase();
+  STAFF_LOG_Q=String(q||'');
+  const term=STAFF_LOG_Q.toLowerCase();
   const tbody=document.querySelector('#staff-log-table tbody');
   if(!tbody)return;
   tbody.querySelectorAll('tr').forEach(row=>{
@@ -17285,7 +17289,7 @@ function openStaffForm(){
   const roleNames=allRoleNames();
   const roleCbs=roleNames.map((r,i)=>`<label style="display:flex;align-items:center;gap:10px;background:var(--surface);border:1.5px solid var(--border);border-radius:8px;padding:10px 12px;cursor:pointer;font-size:17px"><input type="checkbox" class="sf-role-cb" value="${esc(r)}"${i===0?' checked':''}> ${esc(r)}</label>`).join('');
   openModal(`
-    <div class="sfx"><div class="sfx-h"><div class="mtitle">👤 Register Staff</div>${_sfxX()}</div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">Register Staff</div>${_sfxX()}</div>
     <div class="fw"><div class="fl">Full Name <span style="color:var(--red)">*</span></div><input class="fi" id="sf-name" placeholder="E.G. JOHN BANDA"/></div>
     <div class="fw"><div class="fl">Profile Photo (optional)</div><input type="file" class="fi" id="sf-photo" accept="image/png,image/jpeg,image/webp" style="padding:9px"></div>
     <div class="fw"><div class="fl">Job Role(s) <span style="color:var(--red)">*</span></div>
@@ -17303,7 +17307,7 @@ function openStaffForm(){
     <div class="fw"><div class="fl">Emergency Contact Name</div><input class="fi" id="sf-ecname" placeholder="E.G. MARY BANDA"/></div>
     <div class="fw"><div class="fl">Emergency Contact Phone</div><input class="fi" id="sf-ecphone" placeholder="0977 000 000" inputmode="tel" style="text-transform:none"/></div>
     <div class="fw"><div class="fl">Notes (optional)</div><textarea class="fi" id="sf-notes" placeholder="E.G. SEASONAL WORKER, PROBATION UNTIL DEC 2025…" rows="2" style="resize:none;height:auto"></textarea></div>
-    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveStaff()">✓ Register</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveStaff()">Register</button></div></div>`);
 }
 function _toggleSalaryField(prefix){
   const type=document.getElementById(prefix+'-paytype')?.value;
@@ -17365,7 +17369,7 @@ function openClockInForm(preStaffId){
     ? `<div class="fw"><div class="fl">Staff Member</div><div class="fi" style="background:var(--surface);padding:12px 14px;border-radius:10px;border:1.5px solid var(--border);font-weight:700">${esc(activeStaff.find(s=>String(s.id)===String(preStaffId))?.name||'')}</div><input type="hidden" id="ci-staff" value="${esc(preStaffId)}"/></div>`
     : `<div class="fw"><div class="fl">Staff Member</div><select class="fi" id="ci-staff" onchange="onClockInStaffChange()">${opts}</select></div>`;
   openModal(`
-    <div class="sfx"><div class="sfx-h"><div class="mtitle">⏵ Clock In ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">Clock In ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
     ${staffFieldHtml}
     <div id="ci-open-warn" style="display:none"></div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="ci-date" value="${today()}"/></div>
@@ -17373,7 +17377,7 @@ function openClockInForm(preStaffId){
     <div class="fw" id="ci-role-wrap"><div class="fl">Role</div><div id="ci-role-field"></div></div>
     <div class="fw"><div class="fl">Task</div><select class="fi" id="ci-task"><option>—</option></select></div>
     <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="ci-notes" placeholder="Any notes for this shift…"/></div>
-    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveClockIn()">⏵ Clock In</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveClockIn()">Clock In</button></div></div>`);
   onClockInStaffChange();
 }
 
@@ -17397,7 +17401,7 @@ function onClockInStaffChange(){
   const existing=_openShiftFor(sid);
   if(existing&&warnEl){
     warnEl.style.display='';
-    warnEl.innerHTML=`<div class="warn" style="margin-bottom:12px">⚠️ <strong>${esc(s?.name||'This staff member')}</strong> already has an open shift (clocked in ${existing.date}, ${existing.timeIn||'—'}).${isStaffRole()?' Ask your Admin to clock you out.':` <button type="button" onclick="closeModal();setTimeout(()=>openClockOutForm('${existing.id}'),50)" style="background:none;border:1px solid var(--amber);border-radius:6px;color:var(--amber);cursor:pointer;padding:2px 8px;font-size:16px;font-weight:700;margin-left:6px">⏹ Clock Out Now</button>`}</div>`;
+    warnEl.innerHTML=`<div class="warn" style="margin-bottom:12px">${dbIc('alert')} <strong>${esc(s?.name||'This staff member')}</strong> already has an open shift (clocked in ${existing.date}, ${existing.timeIn||'—'}).${isStaffRole()?' Ask your Admin to clock you out.':` <button type="button" onclick="closeModal();setTimeout(()=>openClockOutForm('${existing.id}'),50)" style="background:none;border:1px solid var(--amber);border-radius:6px;color:var(--amber);cursor:pointer;padding:2px 8px;font-size:16px;font-weight:700;margin-left:6px">Clock Out Now</button>`}</div>`;
   } else if(warnEl){
     warnEl.style.display='none';warnEl.innerHTML='';
   }
@@ -17466,14 +17470,14 @@ function openClockOutForm(logId){
   }).join(''):`<option value="${esc(log.task||'')}">${esc(log.task||'—')}</option>`;
   const qtyLbl=qtyLabelForTask(staffRole,log.task||'');
   openModal(`
-    <div class="sfx"><div class="sfx-h"><div class="mtitle">⏹ Clock Out ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
-    <div class="hint" style="margin-bottom:14px">👤 <strong>${esc(s?.name||'—')}</strong> &nbsp;·&nbsp; Clocked in: <strong>${log.date} ${log.timeIn||'—'}</strong></div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">Clock Out ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
+    <div class="hint" style="margin-bottom:14px"><strong>${esc(s?.name||'—')}</strong> &nbsp;·&nbsp; Clocked in: <strong>${log.date} ${log.timeIn||'—'}</strong></div>
     <div class="twobox">
       <div class="fw"><div class="fl">Time In</div><input class="fi" type="time" id="co-time-in" value="${log.timeIn||''}" oninput="calcCoGross()"/></div>
       <div class="fw"><div class="fl">Time Out</div><input class="fi" type="time" id="co-time-out" value="${nowTime()}" oninput="calcCoGross()"/></div>
     </div>
     <div id="co-hours-hint" style="margin-bottom:8px"></div>
-    <div class="fw" id="co-ot-wrap" style="display:none"><div class="fl">⚡ Overtime Multiplier <span style="color:var(--amber)">(OT detected)</span></div><select class="fi" id="co-ot-mult" onchange="calcCoGross()"><option value="1" selected>× 1.0 — No extra OT pay</option><option value="1.25">× 1.25 — Time &amp; quarter</option><option value="1.5">× 1.5 — Time &amp; a half</option><option value="2">× 2.0 — Double time</option></select></div>
+    <div class="fw" id="co-ot-wrap" style="display:none"><div class="fl">Overtime Multiplier <span style="color:var(--amber)">(OT detected)</span></div><select class="fi" id="co-ot-mult" onchange="calcCoGross()"><option value="1" selected>× 1.0 — No extra OT pay</option><option value="1.25">× 1.25 — Time &amp; quarter</option><option value="1.5">× 1.5 — Time &amp; a half</option><option value="2">× 2.0 — Double time</option></select></div>
     <div class="fw"><div class="fl">Task</div><select class="fi" id="co-task" onchange="onCoTaskChange()">${taskOpts}</select></div>
     <div id="co-stock-slot"></div>
     <div class="fw"><div class="fl" id="co-qty-label">${qtyLbl}</div><input class="fi" type="number" id="co-qty" value="0" placeholder="0" inputmode="decimal" step="0.01" oninput="calcCoGross()"/></div>
@@ -17483,13 +17487,13 @@ function openClockOutForm(logId){
         <div class="ded-line" style="display:grid;grid-template-columns:1fr 110px 28px;gap:6px;margin-bottom:6px">
           <select class="fi ded-reason" style="padding:8px 10px;font-size:17px"><option value="">None</option>${DATA.deductionReasons.map(r=>`<option>${r}</option>`).join('')}</select>
           <input class="fi ded-amount" type="number" placeholder="0.00" value="0" inputmode="decimal" step="0.01" oninput="calcCoGross()" style="padding:8px 10px;font-size:18px"/>
-          <button type="button" onclick="removeCoDeductionLine(this)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:22px;padding:0">🗑</button>
+          <button type="button" onclick="removeCoDeductionLine(this)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:22px;padding:0">${dbIc('trash')}<span class="db-sr">Remove deduction</span></button>
         </div>
       </div>
     </div>
     <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="co-notes" placeholder="Any shift notes…" value="${esc(log.notes||'')}"/></div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="co-date" value="${log.date}"/></div>
-    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveClockOut('${logId}')">⏹ Complete Shift</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveClockOut('${logId}')">Complete Shift</button></div></div>`);
   // Store role in hidden element for calcCoGross
   const m=document.querySelector('.modal');if(m)m.dataset.coRole=staffRole;
   refreshStockTag('co',staffRole,document.getElementById('co-task')?.value);
@@ -17543,7 +17547,7 @@ function addCoDeductionLine(){
   const c=document.getElementById('co-deductions');if(!c)return;
   const line=document.createElement('div');line.className='ded-line';
   line.style='display:grid;grid-template-columns:1fr 110px 28px;gap:6px;margin-bottom:6px';
-  line.innerHTML=`<select class="fi ded-reason" style="padding:8px 10px;font-size:17px"><option value="">None</option>${DATA.deductionReasons.map(r=>`<option>${r}</option>`).join('')}</select><input class="fi ded-amount" type="number" placeholder="0.00" value="0" inputmode="decimal" step="0.01" oninput="calcCoGross()" style="padding:8px 10px;font-size:18px"/><button type="button" onclick="removeCoDeductionLine(this)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:22px;padding:0">🗑</button>`;
+  line.innerHTML=`<select class="fi ded-reason" style="padding:8px 10px;font-size:17px"><option value="">None</option>${DATA.deductionReasons.map(r=>`<option>${r}</option>`).join('')}</select><input class="fi ded-amount" type="number" placeholder="0.00" value="0" inputmode="decimal" step="0.01" oninput="calcCoGross()" style="padding:8px 10px;font-size:18px"/><button type="button" onclick="removeCoDeductionLine(this)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:22px;padding:0">${dbIc('trash')}<span class="db-sr">Remove deduction</span></button>`;
   c.appendChild(line);
 }
 function removeCoDeductionLine(btn){
@@ -17609,7 +17613,7 @@ function openLogForm(){
   if(activeStaff.length===0){alert('No active staff. Check the Staff list for suspended or terminated staff.');return;}
   const opts=activeStaff.map(s=>`<option value="${esc(s.id)}">${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('');
   openModal(`
-    <div class="sfx"><div class="sfx-h"><div class="mtitle">📋 Log Work ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">Log Work ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
     <div class="fw"><div class="fl">Entry Type</div>
       <select class="fi" id="lf-entry-type" onchange="onEntryTypeChange()">
         <option value="work">Work Session</option>
@@ -17630,7 +17634,7 @@ function openLogForm(){
           <div class="ded-line" style="display:grid;grid-template-columns:1fr 110px 28px;gap:6px;margin-bottom:6px">
             <select class="fi ded-reason" style="padding:8px 10px;font-size:17px"><option value="">None</option>${DATA.deductionReasons.map(r=>`<option>${r}</option>`).join('')}</select>
             <input class="fi ded-amount" type="number" placeholder="0.00" value="0" inputmode="decimal" step="0.01" oninput="calcGross()" style="padding:8px 10px;font-size:18px"/>
-            <button type="button" onclick="removeDeductionLine(this)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:22px;padding:0">🗑</button>
+            <button type="button" onclick="removeDeductionLine(this)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:22px;padding:0">${dbIc('trash')}<span class="db-sr">Remove deduction</span></button>
           </div>
         </div>
       </div>
@@ -17639,11 +17643,11 @@ function openLogForm(){
         <div class="fw"><div class="fl">Time Out</div><input class="fi" type="time" id="lf-out" oninput="calcGross()"/></div>
       </div>
       <div id="lf-hours-hint" style="margin-bottom:8px"></div>
-      <div class="fw" id="lf-ot-wrap" style="display:none"><div class="fl">⚡ Overtime Multiplier <span style="color:var(--amber)">(OT detected)</span></div><select class="fi" id="lf-ot-mult" onchange="calcGross()"><option value="1" selected>× 1.0 — No extra OT pay</option><option value="1.25">× 1.25 — Time &amp; quarter</option><option value="1.5">× 1.5 — Time &amp; a half</option><option value="2">× 2.0 — Double time</option></select></div>
+      <div class="fw" id="lf-ot-wrap" style="display:none"><div class="fl">Overtime Multiplier <span style="color:var(--amber)">(OT detected)</span></div><select class="fi" id="lf-ot-mult" onchange="calcGross()"><option value="1" selected>× 1.0 — No extra OT pay</option><option value="1.25">× 1.25 — Time &amp; quarter</option><option value="1.5">× 1.5 — Time &amp; a half</option><option value="2">× 2.0 — Double time</option></select></div>
     </div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="lf-date" value="${today()}"/></div>
     <div class="fw" id="lf-note-wrap" style="display:none"><div class="fl">Note (optional)</div><input class="fi" id="lf-absence-note" placeholder="E.G. FAMILY EMERGENCY"/></div>
-    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveLog()">✓ Save Log</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveLog()">Save Log</button></div></div>`);
   onStaffChange();
 }
 function onEntryTypeChange(){
@@ -17714,7 +17718,7 @@ function _calcHoursHint(inId,outId,hintId){
     const hrs=(mins/60).toFixed(2);
     const stdHrs=Number((DATA.depotInfo||{}).standardShiftHours||8);
     const ot=mins/60>stdHrs;
-    hintEl.innerHTML=`<div class="${ot?'warn':'hint'}" style="margin-bottom:8px">⏱ Hours worked: <strong>${hrs} hrs</strong>${ot?` &nbsp;⚠️ Overtime (>${stdHrs}h standard shift)`:''}`;
+    hintEl.innerHTML=`<div class="${ot?'warn':'hint'}" style="margin-bottom:8px">Hours worked: <strong>${hrs} hrs</strong>${ot?` &nbsp;${dbIc('alert')} Overtime (>${stdHrs}h standard shift)`:''}`;
     if(otWrap)otWrap.style.display=ot?'':'none';
     if(!ot){const sel=document.getElementById('lf-ot-mult');if(sel)sel.value='1';}
   } else {
@@ -17763,7 +17767,7 @@ function addDeductionLine(){
   const line=document.createElement('div');
   line.className='ded-line';
   line.style='display:grid;grid-template-columns:1fr 110px 28px;gap:6px;margin-bottom:6px';
-  line.innerHTML=`<select class="fi ded-reason" style="padding:8px 10px;font-size:17px"><option value="">None</option>${DATA.deductionReasons.map(r=>`<option>${r}</option>`).join('')}</select><input class="fi ded-amount" type="number" placeholder="0.00" value="0" inputmode="decimal" step="0.01" oninput="calcGross()" style="padding:8px 10px;font-size:18px"/><button type="button" onclick="removeDeductionLine(this)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:22px;padding:0">🗑</button>`;
+  line.innerHTML=`<select class="fi ded-reason" style="padding:8px 10px;font-size:17px"><option value="">None</option>${DATA.deductionReasons.map(r=>`<option>${r}</option>`).join('')}</select><input class="fi ded-amount" type="number" placeholder="0.00" value="0" inputmode="decimal" step="0.01" oninput="calcGross()" style="padding:8px 10px;font-size:18px"/><button type="button" onclick="removeDeductionLine(this)" style="background:none;border:none;color:var(--red);cursor:pointer;font-size:22px;padding:0">${dbIc('trash')}<span class="db-sr">Remove deduction</span></button>`;
   container.appendChild(line);
 }
 function removeDeductionLine(btn){
@@ -17835,7 +17839,7 @@ function openBulkLogForm(){
   const roles=allRoleNames();
   const roleOpts=roles.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
   openModal(`
-    <div class="sfx"><div class="sfx-h"><div class="mtitle">👥 Bulk Log Work ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">Bulk Log Work ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
     <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Log the same task and time for every selected staff member in a role — enter each person's own quantity, then save all at once.</div>
     <div class="fw"><div class="fl">Role</div><select class="fi" id="bl-role" onchange="_blRoleChange()">${roleOpts}</select></div>
     <div class="fw"><div class="fl">Task</div><select class="fi" id="bl-task" onchange="_blTaskChange()"><option>—</option></select></div>
@@ -17857,7 +17861,7 @@ function openBulkLogForm(){
     </div>
     <div id="bl-staff-rows" style="margin-bottom:12px"></div>
     <div class="fw"><div class="fl">Notes (optional, applies to any staff without their own note above)</div><input class="fi" id="bl-notes" placeholder="Any notes for this batch of entries…"/></div>
-    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkLog()">✓ Save All</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkLog()">Save All</button></div></div>`);
   _blRoleChange();
 }
 
@@ -17968,7 +17972,7 @@ function openBulkClockInForm(){
   const roles=allRoleNames();
   const roleOpts=roles.map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
   openModal(`
-    <div class="sfx"><div class="sfx-h"><div class="mtitle">👥 Bulk Clock In ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">Bulk Clock In ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
     <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Clock in every selected staff member in a role at once. Tasks can differ per person for roles with more than one task — pick each person's task below, or set "same for everyone" to fill them all in one go.</div>
     <div class="fw"><div class="fl">Role</div><select class="fi" id="bci-role" onchange="_bciRoleChange()">${roleOpts}</select></div>
     <div class="fw"><div class="fl">Task (same for everyone)</div><select class="fi" id="bci-task" onchange="_bciApplyTaskAll()"><option>—</option></select></div>
@@ -17985,7 +17989,7 @@ function openBulkClockInForm(){
     </div>
     <div id="bci-staff-rows" style="margin-bottom:12px"></div>
     <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="bci-notes" placeholder="Any notes for this batch of clock-ins…"/></div>
-    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkClockIn()">⏵ Clock In All</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkClockIn()">Clock In All</button></div></div>`);
   _bciRoleChange();
 }
 
@@ -18013,7 +18017,7 @@ function _bciRoleChange(){
         <input type="checkbox" class="bci-row-check" data-staffid="${esc(s.id)}" ${open?'disabled':'checked'} style="width:18px;height:18px"/>
         <div>
           <div style="font-weight:600${open?';color:var(--muted)':''}">${esc(s.name)}</div>
-          ${open?`<div style="font-size:13px;color:var(--amber)">⚠️ Already clocked in (${open.date} ${open.timeIn||'—'}) — skipped</div>`
+          ${open?`<div style="font-size:13px;color:var(--amber)">${dbIc('alert')} Already clocked in (${open.date} ${open.timeIn||'—'}) — skipped</div>`
             :`<select class="fi bci-row-task" style="margin-top:4px;margin-bottom:0;padding:6px 8px;font-size:14px">${_bciTaskOptionsHtml(role)}</select>`}
         </div>
       </div>`;
@@ -18090,7 +18094,7 @@ function openBulkClockOutForm(){
   }).join('');
   const dedReasonOpts=`<option value="">No deduction</option>${DATA.deductionReasons.map(r=>`<option>${esc(r)}</option>`).join('')}`;
   openModal(`
-    <div class="sfx"><div class="sfx-h"><div class="mtitle">👥⏹ Bulk Clock Out ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">Bulk Clock Out ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
     <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Close out every selected open shift with the same time out — enter each person's own quantity, deduction and note, then save all at once.</div>
     <div class="fw"><div class="fl">Filter by Role</div><select class="fi" id="bco-role-filter" onchange="_bcoRenderRows()">${roleOpts}</select></div>
     <div class="twobox">
@@ -18114,7 +18118,7 @@ function openBulkClockOutForm(){
     </div>
     <div id="bco-rows" style="margin-bottom:12px"></div>
     <div class="fw"><div class="fl">Notes (optional, applies to any staff without their own note above)</div><input class="fi" id="bco-notes" placeholder="Any notes for this batch of clock-outs…"/></div>
-    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkClockOut()">⏹ Clock Out Selected</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkClockOut()">Clock Out Selected</button></div></div>`);
   _bcoRenderRows();
 }
 
@@ -18549,7 +18553,7 @@ function openRoleWorkHistory(){
     </div>`;
   }).join('');
   openModal(`<div class="sfx">
-    <div class="sfx-h"><div class="mtitle">📋 Work History by Role</div>${_sfxX()}</div>
+    <div class="sfx-h"><div class="mtitle">Work History by Role</div>${_sfxX()}</div>
     <div style="font-size:16px;color:var(--muted);margin-bottom:14px">Combined work logs from every staff member, grouped by role. Roles with more than one task (e.g. Loading → Loader / Stacking) show each task as its own separate sub-role. Tap to expand.</div>
     <div class="prow" style="margin-bottom:14px">${pBtns('roleHistory')}</div>
     ${sections||`<div class="empty">No work log entries recorded for this period.</div>`}
@@ -18668,7 +18672,7 @@ function openProductivity(){
     }).join('');
     const days=t.days.slice().sort((a,b)=>b.date.localeCompare(a.date));
     const dRows=days.slice(0,14).map(d=>`<div style="display:flex;justify-content:space-between;padding:5px 0;padding-left:10px;border-bottom:1px solid var(--border)">
-        <span style="font-size:14px;color:var(--muted)">${fmtDate(d.date)} · ${d.crew} ${d.crew===1?'person':'people'}${d.gang?' · 👥':''}</span>
+        <span style="font-size:14px;color:var(--muted)">${fmtDate(d.date)} · ${d.crew} ${d.crew===1?'person':'people'}${d.gang?' · Gang':''}</span>
         <span style="font-size:14px;font-weight:700">${_prodFmt(d.qty)} · ${_prodFmt(d.qty/d.crew)} each</span>
       </div>`).join('');
     const moreD=days.length-14;
@@ -18693,10 +18697,10 @@ function openProductivity(){
     </div>`;
   }).join('');
   openModal(`<div class="sfx">
-    <div class="sfx-h"><div class="mtitle">📈 Productivity</div>${_sfxX()}</div>
+    <div class="sfx-h"><div class="mtitle">Productivity</div>${_sfxX()}</div>
     <div style="font-size:16px;color:var(--muted);margin-bottom:12px">Output per person per shift, task by task. A shift is one person's work on one task in one day. Tap a task to expand.</div>
     <div class="prow" style="margin-bottom:8px">${pBtns('productivity')}</div>
-    <div class="prow" style="margin-bottom:12px">${modeBtn('all','All shifts')}${modeBtn('solo','Solo only')}${modeBtn('gang','👥 Gang only')}</div>
+    <div class="prow" style="margin-bottom:12px">${modeBtn('all','All shifts')}${modeBtn('solo','Solo only')}${modeBtn('gang','Gang only')}</div>
     ${sections||`<div class="empty">No approved work logs with a quantity in this period${_prodMode==='all'?'':' for this filter'}.</div>`}
     <div style="font-size:13px;color:var(--muted);line-height:1.5;margin-top:4px">Approved, completed logs only. Day-rate and hourly tasks, salaried staff and late/pooled stock-gap logs are left out. Gang shifts show each person's share of the gang's total, so they tell you about the crew more than about one person — use "Solo only" to compare individuals.</div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Close</button></div></div>`);
@@ -18741,7 +18745,7 @@ function openGangSplitForm(){
   if(!DATA.staff.some(s=>(!s.status||s.status==='active')&&s.payType!=='salary')){alert('No active staff on task pay. Check the Staff list.');return;}
   const roleOpts=allRoleNames().map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
   openModal(`
-    <div class="sfx"><div class="sfx-h"><div class="mtitle">👥➗ Gang Split ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">Gang Split ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
     <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Enter one total for the whole gang and share it out. Each person gets their own work log for their share.</div>
     <div class="fw"><div class="fl">Role</div><select class="fi" id="gs-role" onchange="_gsRoleChange()">${roleOpts}</select></div>
     <div class="fw"><div class="fl">Task</div><select class="fi" id="gs-task" onchange="_gsTaskChange()"><option>—</option></select></div>
@@ -18767,7 +18771,7 @@ function openGangSplitForm(){
     <div id="gs-sum" style="font-size:14px;color:var(--muted);margin-bottom:12px;line-height:1.5"></div>
     <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="gs-notes" placeholder="ANY NOTES FOR THIS GANG…" oninput="this.value=this.value.toUpperCase()"/></div>
     <div style="font-size:13px;color:var(--muted);margin-bottom:4px">Salaried staff are not listed. Approval works as for Bulk Log Work.</div>
-    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveGangSplit()">✓ Save Split</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveGangSplit()">Save Split</button></div></div>`);
   _gsRoleChange();
 }
 function _gsRoleChange(){
@@ -19011,7 +19015,7 @@ function openStaffDetail(id){
           <div style="font-size:17px;font-weight:700">${fmtDate(l.date)} <span style="color:var(--muted);font-weight:400;font-size:16px">${l.task}</span></div>
           <div style="font-size:16px;color:var(--muted)">${(()=>{const q=l.qty!=null?l.qty:l.bags;const ul=l.rateUnit&&l.rateUnit!=='bag'?taskRateUnitLabel(l.role||'',l.task||''):'bags';return Number(q||0).toLocaleString()+' '+ul;})()}· ${zm(Number(l.earnings||0)-Number(l.deduction||0))} net ${_payBadge(_payMap.get(String(l.id)),true)}</div>
         </div>
-        ${USER.role==='admin'?`<button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`closeModal();setTimeout(()=>openEditLog('${l.id}'),50)`:''}" title="${editable?'Edit':'Edit window closed (>'+_editWindowLabel(true)+')'}">✏️</button>`:''}
+        ${USER.role==='admin'?`<button class="${editable?'editbtn':'editbtn disabled'}" onclick="${editable?`closeModal();setTimeout(()=>openEditLog('${l.id}'),50)`:''}" title="${editable?'Edit':'Edit window closed (>'+_editWindowLabel(true)+')'}">${dbIc('edit')}<span class="db-sr">Edit</span></button>`:''}
       </div>
     </div>`;
   }).join('');
@@ -19070,16 +19074,16 @@ function openStaffDetail(id){
     (s.status==='terminated'||s.status==='resigned'||s.status==='expelled')
       ?`<button class="btn bg" onclick="setStaffStatus('${s.id}','active',true)">↩ Reinstate</button>`
       :s.status==='suspended'
-        ?`<div style="display:flex;gap:8px"><button class="btn bg bsm" style="flex:1;min-width:0;padding:10px 8px;font-size:16px" onclick="setStaffStatus('${s.id}','active',true)">↩ Reinstate</button><button class="btn br bsm" style="flex:1;min-width:0;padding:10px 8px;font-size:16px" onclick="setStaffStatusReason('${s.id}','terminated',true)">⛔ Terminate</button></div>`
-        :`<div style="display:flex;gap:6px"><button class="btn ba bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="setStaffStatus('${s.id}','suspended',true)">⏸ Suspend</button><button class="btn bo bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="setStaffStatusReason('${s.id}','resigned',true)">🚪 Resigned</button><button class="btn br bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="setStaffStatusReason('${s.id}','terminated',true)">⛔ Terminate</button></div>`
+        ?`<div style="display:flex;gap:8px"><button class="btn bg bsm" style="flex:1;min-width:0;padding:10px 8px;font-size:16px" onclick="setStaffStatus('${s.id}','active',true)">Reinstate</button><button class="btn br bsm" style="flex:1;min-width:0;padding:10px 8px;font-size:16px" onclick="setStaffStatusReason('${s.id}','terminated',true)">Terminate</button></div>`
+        :`<div style="display:flex;gap:6px"><button class="btn ba bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="setStaffStatus('${s.id}','suspended',true)">Suspend</button><button class="btn bo bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="setStaffStatusReason('${s.id}','resigned',true)">Resigned</button><button class="btn br bsm" style="flex:1;min-width:0;padding:10px 4px;font-size:15px" onclick="setStaffStatusReason('${s.id}','terminated',true)">Terminate</button></div>`
   ):'';
-  const editDetailsBtn=USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px" onclick="closeModal();setTimeout(()=>openEditStaffDetails('${s.id}'),50)">✏️ Edit Details</button>`:'';
-  const removePhotoBtn=(USER.role==='admin'&&s.photoDataUrl)?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--red);border-color:rgba(192,57,43,.4)" onclick="removeStaffPhoto('${s.id}')">🗑 Remove Photo</button>`:'';
+  const editDetailsBtn=USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px" onclick="closeModal();setTimeout(()=>openEditStaffDetails('${s.id}'),50)">Edit Details</button>`:'';
+  const removePhotoBtn=(USER.role==='admin'&&s.photoDataUrl)?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--red);border-color:rgba(192,57,43,.4)" onclick="removeStaffPhoto('${s.id}')">Remove Photo</button>`:'';
   const linkedUser=(DATA.users||[]).find(u=>String(u.linkedStaffId||'')===String(s.id));
   const loginAccountBtn = USER.role==='admin' ? (
     linkedUser
-      ? `<div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;margin-bottom:8px"><div style="font-size:16px"><span style="color:var(--muted)">🔑 Login: </span><strong>${esc(linkedUser.username)}</strong> <span class="bdg ${linkedUser.role==='admin'?'bg2':(linkedUser.role==='staff'?'br2':'ba2')}" style="margin-left:4px">${roleLabel(linkedUser.role)}</span></div><button class="editbtn" onclick="adminResetUserPass('${esc(linkedUser.username)}')">🔑 Reset</button></div>`
-      : `<button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--blue);border-color:rgba(59,130,246,.4)" onclick="closeModal();setTimeout(()=>addUser('${s.id}'),50)">👤 Create Login for ${esc(s.name.split(' ')[0])}</button>`
+      ? `<div style="display:flex;align-items:center;justify-content:space-between;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:9px 12px;margin-bottom:8px"><div style="font-size:16px"><span style="color:var(--muted)">Login: </span><strong>${esc(linkedUser.username)}</strong> <span class="bdg ${linkedUser.role==='admin'?'bg2':(linkedUser.role==='staff'?'br2':'ba2')}" style="margin-left:4px">${roleLabel(linkedUser.role)}</span></div><button class="editbtn" onclick="adminResetUserPass('${esc(linkedUser.username)}')">Reset</button></div>`
+      : `<button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--blue);border-color:rgba(59,130,246,.4)" onclick="closeModal();setTimeout(()=>addUser('${s.id}'),50)">Create Login for ${esc(s.name.split(' ')[0])}</button>`
   ) : '';
 
   openModal(`<div class="sfx">
@@ -19088,7 +19092,7 @@ function openStaffDetail(id){
         <div class="sl-avatar st" style="width:50px;height:50px;font-size:25px;overflow:hidden;${USER.role==='admin'?'cursor:pointer':''}" ${USER.role==='admin'?`onclick="triggerStaffPhotoUpload('${s.id}')"`:''}>
           ${s.photoDataUrl?`<img src="${s.photoDataUrl}" style="width:100%;height:100%;object-fit:cover">`:s.name.split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase()}
         </div>
-        ${USER.role==='admin'?`<div onclick="triggerStaffPhotoUpload('${s.id}')" style="position:absolute;bottom:-3px;right:-3px;width:20px;height:20px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;font-size:11px;border:2px solid var(--bg);cursor:pointer">📷</div>
+        ${USER.role==='admin'?`<div onclick="triggerStaffPhotoUpload('${s.id}')" style="position:absolute;bottom:-3px;right:-3px;width:20px;height:20px;border-radius:50%;background:var(--green);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--bg);border:2px solid var(--bg);cursor:pointer" title="Change photo">${dbIc('camera')}<span class="db-sr">Change photo</span></div>
         <input type="file" id="staff-photo-input-${s.id}" accept="image/png,image/jpeg,image/webp" style="display:none" onchange="handleStaffPhotoUpload('${s.id}',this)">`:''}
       </div>
       <div style="min-width:0;flex:1">
@@ -19103,20 +19107,20 @@ function openStaffDetail(id){
       ${_sfxX()}
     </div>
     ${(s.statusHistory&&s.statusHistory.length)?`<div style="margin-bottom:14px"><div style="font-size:16px;font-weight:700;color:var(--muted);letter-spacing:.8px;margin-bottom:4px">STATUS HISTORY</div>${s.statusHistory.slice().map((h,i)=>({h,i})).reverse().map(({h,i})=>{
-      const statusLabels={active:'↩ Reinstated',suspended:'⏸ Suspended',resigned:'🚪 Resigned',terminated:'⛔ Terminated'};
+      const statusLabels={active:'Reinstated',suspended:'Suspended',resigned:'Resigned',terminated:'Terminated'};
       return`<div style="padding:6px 0;border-bottom:1px solid var(--border)">
         <div style="display:flex;justify-content:space-between;align-items:center">
           <span style="font-size:17px;font-weight:700">${statusLabels[h.status]||h.status}</span>
           <div style="display:flex;align-items:center;gap:8px">
             <span style="font-size:15px;color:var(--muted)">${fmtDateTime(h.date,h.time)}</span>
-            ${USER.role==='admin'?`<button class="editbtn" title="Edit" onclick="editStatusHistoryEntry('${s.id}',${h.id?`'${h.id}'`:'null'},${i})">✏️</button>`:''}
+            ${USER.role==='admin'?`<button class="editbtn" title="Edit" onclick="editStatusHistoryEntry('${s.id}',${h.id?`'${h.id}'`:'null'},${i})">${dbIc('edit')}<span class="db-sr">Edit</span></button>`:''}
           </div>
         </div>
         ${h.reason||h.by?`<div style="font-size:15px;color:var(--muted);margin-top:2px">${h.reason?esc(h.reason):''}${h.reason&&h.by?' · ':''}${h.by?'by '+esc(h.by):''}</div>`:''}
       </div>`;
     }).join('')}</div>`:''}
-    ${s.emergencyContactName?`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:17px"><span style="color:var(--muted)">🆘 Emergency Contact: </span><strong>${esc(s.emergencyContactName)}</strong>${s.emergencyContactPhone?` · ${esc(s.emergencyContactPhone)}`:''}</div>`:''}
-    ${s.notes?`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:17px;color:var(--muted)">📝 ${esc(s.notes)}</div>`:''}
+    ${s.emergencyContactName?`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:17px"><span style="color:var(--muted)">Emergency Contact: </span><strong>${esc(s.emergencyContactName)}</strong>${s.emergencyContactPhone?` · ${esc(s.emergencyContactPhone)}`:''}</div>`:''}
+    ${s.notes?`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:17px;color:var(--muted)">Notes: ${esc(s.notes)}</div>`:''}
     <div class="srow">
       <div class="sbox"><div class="sv" style="font-size:25px">${zm(net)}</div><div class="sl">Total Earned</div></div>
       <div class="sbox bl"><div class="sv" style="font-size:25px">${zm(paid)}</div><div class="sl">Total Paid</div></div>
@@ -19136,14 +19140,14 @@ function openStaffDetail(id){
     ${editDetailsBtn}
     ${removePhotoBtn}
     ${loginAccountBtn}
-    <button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--green);border-color:rgba(0,214,143,.4)" onclick="printStaffIdCard('${s.id}')">🪪 Print ID Card</button>
-    ${USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--blue);border-color:rgba(59,130,246,.4)" onclick="printStaffProfile('${s.id}')">📄 Download Profile PDF</button>`:''}
-    ${USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px" onclick="closeModal();setTimeout(()=>openStaffWarnings('${s.id}'),50)">⚠️ Disciplinary / Warnings</button>`:''}
-    ${USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--amber);border-color:rgba(245,158,11,.4)" onclick="closeModal();setTimeout(()=>openLoansModal('${s.id}'),50)">🏦 Advances & Loans${_lnOwedBy(s.id)>0.004?' · owes '+zm(_lnOwedBy(s.id)):''}</button>`:''}
+    <button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--green);border-color:rgba(0,214,143,.4)" onclick="printStaffIdCard('${s.id}')">Print ID Card</button>
+    ${USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--blue);border-color:rgba(59,130,246,.4)" onclick="printStaffProfile('${s.id}')">Download Profile PDF</button>`:''}
+    ${USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px" onclick="closeModal();setTimeout(()=>openStaffWarnings('${s.id}'),50)">Disciplinary / Warnings</button>`:''}
+    ${USER.role==='admin'?`<button class="btn bo bsm" style="width:100%;margin-bottom:8px;color:var(--amber);border-color:rgba(245,158,11,.4)" onclick="closeModal();setTimeout(()=>openLoansModal('${s.id}'),50)">Advances & Loans${_lnOwedBy(s.id)>0.004?' · owes '+zm(_lnOwedBy(s.id)):''}</button>`:''}
     ${actionBtns?`<div style="margin-top:14px">${actionBtns}</div>`:''}
     <div style="display:flex;align-items:center;gap:8px;margin-top:14px;padding:8px 2px">
       <input type="checkbox" id="staff-modal-pin" ${STAFF_MODAL_PIN?'checked':''} onchange="toggleStaffModalPin('${s.id}',this.checked)" style="width:18px;height:18px;flex-shrink:0">
-      <label for="staff-modal-pin" style="font-size:16px;color:var(--muted)">📌 Keep this window open (don't auto-close after actions or tapping outside)</label>
+      <label for="staff-modal-pin" style="font-size:16px;color:var(--muted)">Keep this window open (don't auto-close after actions or tapping outside)</label>
     </div>
     <div style="margin-top:10px"><button class="btn bo" onclick="closeModal()">Close</button></div></div>`,STAFF_MODAL_PIN);
 }
@@ -19160,7 +19164,7 @@ function _openEditStaffDetails(id){
   const curRoles=staffRoleList(s);
   const roleCbs=roleNames.map(r=>`<label style="display:flex;align-items:center;gap:10px;background:var(--surface);border:1.5px solid var(--border);border-radius:8px;padding:10px 12px;cursor:pointer;font-size:17px"><input type="checkbox" class="esd-role-cb" value="${esc(r)}"${curRoles.includes(r)?' checked':''}> ${esc(r)}</label>`).join('');
   openModal(`
-    <div class="sfx"><div class="sfx-h"><div class="mtitle">✏️ Edit Staff Details</div>${_sfxX()}</div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">Edit Staff Details</div>${_sfxX()}</div>
     <div class="fw"><div class="fl">Full Name <span style="color:var(--red)">*</span></div><input class="fi" id="esd-name" value="${esc(s.name)}" placeholder="FULL NAME"/></div>
     <div class="fw"><div class="fl">Job Role(s) <span style="color:var(--red)">*</span></div>
       <div id="esd-roles" style="display:flex;flex-direction:column;gap:8px">${roleCbs||'<div style="color:var(--muted)">No roles defined</div>'}</div>
@@ -19177,7 +19181,7 @@ function _openEditStaffDetails(id){
     <div class="fw"><div class="fl">Emergency Contact Name</div><input class="fi" id="esd-ecname" value="${esc(s.emergencyContactName||'')}" placeholder="E.G. MARY BANDA"/></div>
     <div class="fw"><div class="fl">Emergency Contact Phone</div><input class="fi" id="esd-ecphone" value="${esc(s.emergencyContactPhone||'')}" placeholder="0977 000 000" inputmode="tel" style="text-transform:none"/></div>
     <div class="fw"><div class="fl">Notes</div><textarea class="fi" id="esd-notes" rows="2" style="resize:none;height:auto">${esc(s.notes||'')}</textarea></div>
-    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveEditStaffDetails('${id}')">✓ Save Changes</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveEditStaffDetails('${id}')">Save Changes</button></div></div>`);
 }
 function saveEditStaffDetails(id){
   if(!requireAdmin('edit staff details'))return;
@@ -19820,10 +19824,10 @@ function _renderWarningsModal(id){
   const wRows=warnings.length>0?warnings.map(w=>`
     <div style="background:var(--surface2);border:1px solid ${w.severity==='final'?'var(--red)':w.severity==='written'?'var(--amber)':'var(--border)'};border-radius:8px;padding:10px 12px;margin-bottom:8px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-        <span style="font-size:16px;font-weight:700;color:${w.severity==='final'?'var(--red)':w.severity==='written'?'var(--amber)':'var(--muted)'}">${w.severity==='verbal'?'🗣 VERBAL WARNING':w.severity==='written'?'📝 WRITTEN WARNING':'🛑 FINAL WARNING'}</span>
+        <span style="font-size:16px;font-weight:700;color:${w.severity==='final'?'var(--red)':w.severity==='written'?'var(--amber)':'var(--muted)'}">${w.severity==='verbal'?'VERBAL WARNING':w.severity==='written'?'WRITTEN WARNING':'FINAL WARNING'}</span>
         <div style="display:flex;align-items:center;gap:6px">
           <span style="font-size:16px;color:var(--muted)">${fmtDate(w.date)}</span>
-          ${isWithin24h(w,true)?`<button class="delbtn" onclick="delStaffWarning('${w.id}','${id}')">🗑</button>`:''}
+          ${isWithin24h(w,true)?`<button class="delbtn" onclick="delStaffWarning('${w.id}','${id}')">${dbIc('trash')}<span class="db-sr">Delete warning</span></button>`:''}
         </div>
       </div>
       <div style="font-size:17px;color:var(--text);line-height:1.5">${esc(w.incident)}</div>
@@ -19831,7 +19835,7 @@ function _renderWarningsModal(id){
     </div>`).join('')
     :`<div style="color:var(--muted);font-size:18px;margin-bottom:14px;text-align:center;padding:14px">No warnings on record for ${esc(s.name)}.</div>`;
   openModal(`
-    <div class="sfx"><div class="sfx-h"><div class="mtitle">⚠️ Disciplinary Record — ${esc(s.name)}</div>${_sfxX()}</div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">Disciplinary Record — ${esc(s.name)}</div>${_sfxX()}</div>
     <div style="max-height:220px;overflow-y:auto;margin-bottom:14px">${wRows}</div>
     <div class="sh" style="margin-bottom:8px">Add Warning / Incident</div>
     <div class="fw"><div class="fl">Severity</div><select class="fi" id="wf-severity"><option value="verbal">VERBAL WARNING</option><option value="written">WRITTEN WARNING</option><option value="final">FINAL WARNING</option></select></div>
@@ -19876,7 +19880,7 @@ function openPayForm(){
     return `<option value="${s.id}">${esc(s.name)} (${esc(staffRoleLabel(s))}${s.status&&s.status!=='active'?' — '+s.status.toUpperCase():''}) — Balance: ${zm(_ub)}</option>`;
   }).join('');
   openModal(`
-    <div class="sfx"><div class="sfx-h"><div class="mtitle">💳 Record Payment</div>${_sfxX()}</div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">Record Payment</div>${_sfxX()}</div>
     <div class="fw"><div class="fl">Staff Member</div><select class="fi" id="pf-staff" onchange="_pfStaffChanged()">${opts}</select></div>
     <div id="pf-period-wrap" style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:12px;background:var(--surface2)">
       <div class="fl" style="margin-bottom:6px">Pay for a period</div>
@@ -19899,7 +19903,7 @@ function openPayForm(){
     <div class="fw"><div class="fl">Date of Payment</div><input class="fi" type="date" id="pf-date" value="${today()}"/></div>
     <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="pf-notes" placeholder="E.G. CASH, MOBILE MONEY…" oninput="this.value=this.value.toUpperCase()"/></div>
     <div id="pf-total" style="display:none;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:17px"></div>
-    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="_confirmPayment()">✓ Save Payment</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="_confirmPayment()">Save Payment</button></div></div>`);
   _pfLast='amount';_pfPM='amt';_pfScope=null;_pfEdited=false;
   _pfStaffChanged();
 }
@@ -20298,7 +20302,7 @@ function _pfPeriodInfo(){
     if(_pfPM==='upto'){const lp=_ppLastPay(sc.sid);h+=`<div style="color:var(--muted)">Last paid: <strong style="color:var(--text)">${lp?fmtDate(lp):'never'}</strong> — starts from the first work not fully paid.</div>`;}
     if(sc.n)h+=`<div style="color:var(--muted)">${fmtDate(sc.first)}${sc.last!==sc.first?' → '+fmtDate(sc.last):''} · <strong style="color:var(--amber)">${sc.n} ${sc.n===1?'entry':'entries'} · ${zm(sc.amount)}</strong></div>`;
     else h+=`<div style="color:var(--muted)">No unpaid work ${_pfPM==='range'?'in this period':'up to that date'}.</div>`;
-    if(sc.earlier>0.004)h+=`<div style="color:var(--amber);margin-top:4px">⚠ ${zm(sc.earlier)} of older unpaid work (before ${fmtDate(sc.from)}) is still outstanding. Payments always settle the oldest work first, so this payment will go to that work before this period.</div>`;
+    if(sc.earlier>0.004)h+=`<div style="color:var(--amber);margin-top:4px">${dbIc('alert')} ${zm(sc.earlier)} of older unpaid work (before ${fmtDate(sc.from)}) is still outstanding. Payments always settle the oldest work first, so this payment will go to that work before this period.</div>`;
     if(_pfEdited&&sc.n)h+=`<div style="color:var(--blue);margin-top:4px">Amount changed — the period total is ${zm(sc.amount)}.</div>`;
   }
   el.innerHTML=h;el.style.display='';
@@ -21135,15 +21139,15 @@ function _lnRender(){
   const card=L=>{
     const p=_lnPlan(L),rep=_lnRepaid(L),bal=_lnBalance(L),pr=Number(L.principal||0),pct=Math.min(100,Math.round(rep/Math.max(0.01,pr)*100)),nx=_lnNext(L);
     const reps=approvedArr(DATA.loanRepayments||[]).filter(r=>String(r.loanId)===String(L.id)).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-    const nxt=nx?(nx.date<t?`<div style="font-size:14px;color:var(--red);margin-top:4px">⚠ ${zm(nx.amt)} overdue since ${fmtDate(nx.date)} — taken from the next payroll run</div>`
+    const nxt=nx?(nx.date<t?`<div style="font-size:14px;color:var(--red);margin-top:4px">${dbIc('alert')} ${zm(nx.amt)} overdue since ${fmtDate(nx.date)} — taken from the next payroll run</div>`
       :`<div style="font-size:14px;color:var(--muted);margin-top:4px">Next: <b style="color:var(--white)">${zm(nx.amt)}</b> on ${fmtDate(nx.date)} (${nx.k} of ${nx.n})</div>`):'';
     const sched=[];
     for(let k=1;k<=Math.max(1,Number(p.count||1));k++){
       const cum=_payR2(Number(p.offset||0)+(k<p.count?_lnEach(p)*k:Number(p.base||0))),dd=_lnDueDate(p,k),ok=rep>=cum-0.004;
-      sched.push(`<div style="display:flex;justify-content:space-between;font-size:13px;padding:1px 0;color:${ok?'var(--green)':(dd<t?'var(--red)':'var(--muted)')}"><span>${ok?'✓':(dd<t?'⚠':'○')} ${k}. ${fmtDate(dd)}</span><span>${zm(_lnInst(p,k))}</span></div>`);
+      sched.push(`<div style="display:flex;justify-content:space-between;font-size:13px;padding:1px 0;color:${ok?'var(--green)':(dd<t?'var(--red)':'var(--muted)')}"><span>${ok?'✓':(dd<t?dbIc('alert'):'○')} ${k}. ${fmtDate(dd)}</span><span>${zm(_lnInst(p,k))}</span></div>`);
     }
     const repRows=reps.map(r=>`<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;padding:1px 0"><span>${fmtDate(r.date)} · ${r.source==='payroll'?'Payroll run #'+esc(String(r.runNumber||'')):'Paid back'+(r.method?' ('+esc(_prMLabel(r.method))+')':'')}</span><span style="color:var(--green)">${zm(r.amount)}</span></div>`).join('');
-    const wo=(L.writeOffs||[]).map(w=>`<div style="font-size:13px;color:var(--amber);padding:1px 0">✂ ${fmtDate(w.date)} · written off ${zm(w.amount)} — ${esc(w.reason||'')}</div>`).join('');
+    const wo=(L.writeOffs||[]).map(w=>`<div style="font-size:13px;color:var(--amber);padding:1px 0">${fmtDate(w.date)} · written off ${zm(w.amount)} — ${esc(w.reason||'')}</div>`).join('');
     const stt=_lnState(L),chip=stt==='cleared'?'<span class="bdg bg2">✓ CLEARED</span>':(stt==='writtenoff'?'<span class="bdg ba2">WRITTEN OFF</span>':'');
     return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--surface2)${stt==='active'?'':';opacity:.8'}">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
@@ -21157,15 +21161,15 @@ function _lnRender(){
         <div style="margin:4px 0">${sched.join('')}</div>
         ${repRows?`<div style="border-top:1px solid var(--border);margin-top:4px;padding-top:4px">${repRows}</div>`:''}
       </details>
-      ${stt==='active'?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${btn('＋ Repayment','openLoanRepay',L.id)}${btn('🗓 Reschedule','openLoanResched',L.id)}${btn('✂ Write off','openLoanWo',L.id,'var(--amber)')}${reps.length?'':btn('🗑 Delete','delLoan',L.id,'var(--red)')}</div>`
-        :(reps.length||(L.writeOffs||[]).length?'':`<div style="margin-top:8px">${btn('🗑 Delete','delLoan',L.id,'var(--red)')}</div>`)}
+      ${stt==='active'?`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">${btn('Repayment','openLoanRepay',L.id)}${btn('Reschedule','openLoanResched',L.id)}${btn('Write off','openLoanWo',L.id,'var(--amber)')}${reps.length?'':btn('Delete','delLoan',L.id,'var(--red)')}</div>`
+        :(reps.length||(L.writeOffs||[]).length?'':`<div style="margin-top:8px">${btn('Delete','delLoan',L.id,'var(--red)')}</div>`)}
     </div>`;
   };
   const who=sid?`<div style="font-size:14px;color:var(--muted);margin-bottom:8px">Showing ${esc(_lnStaffName(sid))} · <a style="color:var(--blue);cursor:pointer;text-decoration:underline" onclick="_lnShowAll()">show everyone</a></div>`:'';
   const list=act.length?act.map(card).join(''):`<div class="empty" style="padding:14px 0;text-align:center">No active advances or loans${sid?' for this person':''}.</div>`;
-  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">🏦 Advances & Loans</div>${_sfxX()}</div>${who}
+  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">Advances & Loans</div>${_sfxX()}</div>${who}
     <div class="srow" style="margin-bottom:10px">${box('Outstanding',zm(out),'var(--amber)')}${box('Due by today',zm(due),due>0.004?'var(--red)':'var(--green)')}</div>
-    <button class="btn bg" style="width:100%;margin-bottom:10px" onclick="openLoanForm('${esc(sid)}')">＋ New advance / loan</button>
+    <button class="btn bg" style="width:100%;margin-bottom:10px" onclick="openLoanForm('${esc(sid)}')">New advance / loan</button>
     <div style="max-height:52vh;overflow:auto">${list}${old.length?`<details style="margin-top:6px"><summary style="font-size:14px;color:var(--muted);cursor:pointer">Cleared and written off (${old.length})</summary><div style="margin-top:6px">${old.map(card).join('')}</div></details>`:''}</div>
     <div style="font-size:12px;color:var(--muted);margin:8px 0;line-height:1.5">Instalments are taken automatically when you lock a payroll run: everything scheduled up to the run's end date, less what is already repaid, up to the pay available. Anything short stays due for the next run.</div>
     <div class="mact"><button class="btn bo" onclick="closeModal()">Close</button></div></div>`);
@@ -21178,7 +21182,7 @@ function openLoanForm(sid){
   if(!staff.length){alert('Register staff members first.');return;}
   const opts=staff.map(s=>`<option value="${esc(String(s.id))}"${String(s.id)===String(sid)?' selected':''}>${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('');
   const meth=_PR_METHODS.map(([k,l])=>`<option value="${k}">${l}</option>`).join('');
-  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">🏦 New Advance / Loan</div>${_sfxX()}</div>
+  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">New Advance / Loan</div>${_sfxX()}</div>
     <div class="fw"><div class="fl">Staff Member</div><select class="fi" id="ln-staff" onchange="_lnPrev()">${opts}</select></div>
     <div class="twobox"><div class="fw"><div class="fl">Type</div><select class="fi" id="ln-kind" onchange="_lnKindChg()"><option value="advance">Advance</option><option value="loan">Loan</option></select></div>
     <div class="fw"><div class="fl">Amount (${esc(cur())})</div><input class="fi" id="ln-amt" type="number" inputmode="decimal" min="0" step="0.01" oninput="_lnPrev()"/></div></div>
@@ -21211,7 +21215,7 @@ function _lnPrev(){
   const owed=_lnOwedBy(f.sid);
   if(f.date&&f.first<f.date)w.push('The first instalment is before the date given.');
   if(owed>0.004)w.push(`${esc(_lnStaffName(f.sid))} already owes ${zm(owed)} on other advances or loans.`);
-  el.innerHTML=`<div style="color:var(--white)"><b>${f.n} × ${zm(e)}</b>${last!==e?` (last ${zm(last)})`:''} · ${f.freq==='weekly'?'weekly':'monthly'}<br/>${fmtDate(_lnDueDate(p,1))} → ${fmtDate(_lnDueDate(p,f.n))}</div>${w.map(x=>`<div style="color:var(--amber)">⚠ ${x}</div>`).join('')}`;
+  el.innerHTML=`<div style="color:var(--white)"><b>${f.n} × ${zm(e)}</b>${last!==e?` (last ${zm(last)})`:''} · ${f.freq==='weekly'?'weekly':'monthly'}<br/>${fmtDate(_lnDueDate(p,1))} → ${fmtDate(_lnDueDate(p,f.n))}</div>${w.map(x=>`<div style="color:var(--amber)">${dbIc('alert')} ${x}</div>`).join('')}`;
 }
 function _lnSave(){
   const g=id=>document.getElementById(id),f=_lnFormPlan();
@@ -21238,7 +21242,7 @@ function openLoanRepay(id){
   const L=(DATA.staffLoans||[]).find(x=>String(x.id)===String(id));if(!L)return;
   if(isReadOnly()){alert('This account is in read-only mode. Contact your administrator.');return;}
   const bal=_lnBalance(L),nx=_lnNext(L),meth=_PR_METHODS.map(([k,l])=>`<option value="${k}">${l}</option>`).join('');
-  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">＋ Repayment</div>${_sfxX()}</div>
+  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">Repayment</div>${_sfxX()}</div>
     <div style="font-size:14px;color:var(--muted);line-height:1.6;margin-bottom:8px">${esc(_lnStaffName(L.staffId))} · owes <b style="color:var(--amber)">${zm(bal)}</b>.<br/>Use this when the person pays money back directly. It lowers what they owe but does not change their wages.</div>
     <div class="twobox"><div class="fw"><div class="fl">Amount (${esc(cur())})</div><input class="fi" id="lr-amt" type="number" inputmode="decimal" min="0" step="0.01" value="${nx?nx.amt:bal}"/></div>
     <div class="fw"><div class="fl">Date</div><input class="fi" id="lr-date" type="date" value="${today()}"/></div></div>
@@ -21265,7 +21269,7 @@ function openLoanResched(id){
   const L=(DATA.staffLoans||[]).find(x=>String(x.id)===String(id));if(!L)return;
   if(isReadOnly()){alert('This account is in read-only mode. Contact your administrator.');return;}
   const p=_lnPlan(L),bal=_lnBalance(L),nx=_lnNext(L);
-  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">🗓 Reschedule</div>${_sfxX()}</div>
+  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">Reschedule</div>${_sfxX()}</div>
     <div style="font-size:14px;color:var(--muted);line-height:1.6;margin-bottom:8px">${esc(_lnStaffName(L.staffId))} · <b style="color:var(--amber)">${zm(bal)}</b> still owed. Choose a new plan for what is left — for example, skip a month or spread it over more instalments. Repayments already made are kept.</div>
     <div class="twobox"><div class="fw"><div class="fl">Instalments left</div><input class="fi" id="lx-n" type="number" inputmode="numeric" min="1" max="60" value="${nx?Math.max(1,nx.n-nx.k+1):1}" oninput="_lnReschedPrev('${esc(String(L.id))}')"/></div>
     <div class="fw"><div class="fl">One every</div><select class="fi" id="lx-freq" onchange="_lnReschedPrev('${esc(String(L.id))}')"><option value="monthly"${p.freq!=='weekly'?' selected':''}>Month</option><option value="weekly"${p.freq==='weekly'?' selected':''}>Week</option></select></div></div>
@@ -21302,7 +21306,7 @@ function openLoanWo(id){
   const L=(DATA.staffLoans||[]).find(x=>String(x.id)===String(id));if(!L)return;
   if(isReadOnly()){alert('This account is in read-only mode. Contact your administrator.');return;}
   const bal=_lnBalance(L);
-  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">✂ Write off</div>${_sfxX()}</div>
+  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">Write off</div>${_sfxX()}</div>
     <div style="font-size:14px;color:var(--muted);line-height:1.6;margin-bottom:8px">${esc(_lnStaffName(L.staffId))} owes <b style="color:var(--amber)">${zm(bal)}</b>. Writing off stops it being taken from pay. The record stays, with the reason.</div>
     <div class="fw"><div class="fl">Amount to write off (${esc(cur())})</div><input class="fi" id="lw-amt" type="number" inputmode="decimal" min="0" step="0.01" value="${bal}"/></div>
     <div class="fw"><div class="fl">Reason</div><select class="fi" id="lw-why">${_LN_WO.map(r=>`<option>${esc(r)}</option>`).join('')}</select></div>
@@ -21435,13 +21439,13 @@ function _prRevShow(B){
   const P=_prProblems(_pr.from,_pr.to,_pr.group),L=_pr.lim,E=_prEnd(_pr.from,_pr.to);
   const lim=L.mode==='bags'&&B.H.on?`Pay up to ${L.bags} bags`:(L.mode==='date'&&B.H.on?`Pay up to ${fmtDate(L.date)}${L.time?' '+esc(L.time):''}`:'');
   const row=x=>{const id=String(x.s.id);return `<label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border)"><input type="checkbox" style="margin-top:4px" ${_prRev.ticked.has(id)?'checked':''} onchange="_prRevTick('${esc(id)}',this.checked)"/><div style="flex:1"><div style="font-weight:700;color:var(--white)">${esc(x.s.name)}</div><div style="font-size:13px;color:var(--muted)">${esc(staffRoleLabel(x.s))}${x.held>0.004?` · <span style="color:var(--amber)">${zm(x.held)} held</span>`:''}${x.carry>0.004?' · incl. '+zm(x.carry)+' carried':''}${x.stat&&x.stat.total>0.004?` · <span style="color:var(--red)">− ${zm(x.stat.total)} statutory</span>`:''}${x.loan>0.004?` · <span style="color:var(--blue)">− ${zm(x.loan)} loan</span>`:''}</div></div><div style="font-weight:800;color:${x.pay<-0.004?'var(--red)':'var(--green)'};white-space:nowrap">${x.pay<-0.004?'− ':''}${zm(Math.abs(x.pay))}</div></label>`;};
-  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">🔒 Review & Lock Run</div>${_sfxX()}</div>
+  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">Review & Lock Run</div>${_sfxX()}</div>
     <div style="font-size:14px;color:var(--muted);line-height:1.6;margin-bottom:8px">${fmtDate(_pr.from)} → ${fmtDate(E)}${_pr.group?' · '+esc(_pr.group)+'s':' · all staff'}${lim?' · '+lim:''}<br/>To pay <b style="color:var(--amber)">${zm(B.payNow)}</b>${B.heldSum>0.004?` · Held back <b style="color:var(--amber)">${zm(B.heldSum)}</b> (carried to next run)`:''}</div>
-    ${P.fixN?`<div style="font-size:14px;color:var(--red);margin-bottom:8px">⚠ ${P.fixN} item${P.fixN===1?'':'s'} still to fix in Problems.</div>`:''}
+    ${P.fixN?`<div style="font-size:14px;color:var(--red);margin-bottom:8px">${dbIc('alert')} ${P.fixN} item${P.fixN===1?'':'s'} still to fix in Problems.</div>`:''}
     <div style="font-size:13px;color:var(--muted);margin-bottom:4px">Tick each person once you have checked their figures.</div>
     <div style="max-height:45vh;overflow:auto">${B.R.rows.map(row).join('')}</div>
     <div id="prr-cnt" style="font-size:13px;color:var(--muted);margin:8px 0"></div>
-    <div class="mact"><button class="btn bo" onclick="_prReturn2()">Back</button><button class="btn bo" onclick="_prRevAll()">Tick all</button><button class="btn bg" id="prr-btn" onclick="_prLock()">🔒 Lock run</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="_prReturn2()">Back</button><button class="btn bo" onclick="_prRevAll()">Tick all</button><button class="btn bg" id="prr-btn" onclick="_prLock()">Lock run</button></div></div>`);
   _prRevBtn(B.R.rows.length);
 }
 function _prReturn2(){openPayrollPrep();}
@@ -21486,15 +21490,15 @@ function _prRunsHtml(){
     const po=r.payouts||[],ps=new Set(po.map(o=>o.sid)),due=r.rows.filter(x=>x.pay>0.004&&!ps.has(x.sid));
     const paidAmt=_payR2(po.reduce((a,o)=>a+Number(o.amount||0),0)),dueAmt=_payR2(due.reduce((a,x)=>a+x.pay,0));
     return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--surface2)">
-    <div style="font-weight:700;color:var(--white)">🔒 Run #${r.number} · ${fmtDate(r.from)} → ${fmtDate(r.end||r.to)}${r.group?' · '+esc(r.group)+'s':''}</div>
+    <div style="font-weight:700;color:var(--white)">${dbIc('lock')}<span class="db-sr">Locked </span> Run #${r.number} · ${fmtDate(r.from)} → ${fmtDate(r.end||r.to)}${r.group?' · '+esc(r.group)+'s':''}</div>
     <div style="font-size:13px;color:var(--muted)">Locked ${fmtDate(r.date)} ${esc(r.time||'')} by ${esc(r.enteredBy||'—')}${r.limit&&r.limit.mode&&r.limit.mode!=='off'?' · Pay up to '+(r.limit.mode==='bags'?esc(String(r.limit.bags))+' bags':fmtDate(r.limit.date)+(r.limit.time?' '+esc(r.limit.time):'')):''}</div>
     <div style="font-size:15px;margin-top:4px">To pay <b style="color:var(--amber)">${zm(r.totals.payNow)}</b>${r.totals.held>0.004?` · Held <b style="color:var(--amber)">${zm(r.totals.held)}</b> → next run`:''}</div>
-    ${(r.totals.stat||0)>0.004?`<div style="font-size:14px;color:var(--red);margin-top:2px">🧾 Statutory withheld ${zm(r.totals.stat)}${r.totals.statBy?` <span style="color:var(--muted)">(NAPSA ${zm(r.totals.statBy.napsa)} · NHIMA ${zm(r.totals.statBy.nhima)} · PAYE ${zm(r.totals.statBy.paye)})</span><div style="font-size:13px;color:var(--muted)">Employer adds NAPSA ${zm(r.totals.statBy.eNapsa)} + NHIMA ${zm(r.totals.statBy.eNhima)}</div>`:''}</div>`:''}
-    ${(r.totals.loans||0)>0.004?`<div style="font-size:14px;color:var(--blue);margin-top:2px">🏦 Loan instalments taken ${zm(r.totals.loans)}</div>`:''}
+    ${(r.totals.stat||0)>0.004?`<div style="font-size:14px;color:var(--red);margin-top:2px">Statutory withheld ${zm(r.totals.stat)}${r.totals.statBy?` <span style="color:var(--muted)">(NAPSA ${zm(r.totals.statBy.napsa)} · NHIMA ${zm(r.totals.statBy.nhima)} · PAYE ${zm(r.totals.statBy.paye)})</span><div style="font-size:13px;color:var(--muted)">Employer adds NAPSA ${zm(r.totals.statBy.eNapsa)} + NHIMA ${zm(r.totals.statBy.eNhima)}</div>`:''}</div>`:''}
+    ${(r.totals.loans||0)>0.004?`<div style="font-size:14px;color:var(--blue);margin-top:2px">Loan instalments taken ${zm(r.totals.loans)}</div>`:''}
     ${po.length?`<div style="font-size:14px;color:var(--green);margin-top:2px">✓ ${po.length} paid · ${zm(paidAmt)}</div>`:''}
-    ${po.some(o=>o.method==='airtel'||o.method==='mtn')?`<button class="btn bo" style="width:100%;margin-top:6px" onclick="_prMmOpen('run','${esc(String(r.id))}')">📱 Mobile money CSV (${po.filter(o=>o.method==='airtel'||o.method==='mtn').length})</button>`:''}
-    ${due.length?`<button class="btn bg" style="width:100%;margin-top:8px" onclick="_prPayOpen('${esc(String(r.id))}')">💸 Create payments (${due.length} · ${zm(dueAmt)})</button>`:(po.length?'':'')}
-    <button class="btn bo" style="width:100%;margin-top:6px" onclick="_prSlOpen('${esc(String(r.id))}')">🧾 Payslips (${r.rows.length})</button>
+    ${po.some(o=>o.method==='airtel'||o.method==='mtn')?`<button class="btn bo" style="width:100%;margin-top:6px" onclick="_prMmOpen('run','${esc(String(r.id))}')">Mobile money CSV (${po.filter(o=>o.method==='airtel'||o.method==='mtn').length})</button>`:''}
+    ${due.length?`<button class="btn bg" style="width:100%;margin-top:8px" onclick="_prPayOpen('${esc(String(r.id))}')">Create payments (${due.length} · ${zm(dueAmt)})</button>`:(po.length?'':'')}
+    <button class="btn bo" style="width:100%;margin-top:6px" onclick="_prSlOpen('${esc(String(r.id))}')">Payslips (${r.rows.length})</button>
     <details style="margin-top:6px"><summary style="font-size:14px;color:var(--muted);cursor:pointer">${r.rows.length} ${r.rows.length===1?'person':'people'}</summary>${r.rows.map(x=>{const o=po.find(q=>q.sid===x.sid);return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:14px;padding:3px 0"><span>${esc(x.name)}${x.held>0.004?` <span style="color:var(--amber)">(${zm(x.held)} held)</span>`:''}${(x.stat&&x.stat.total||0)>0.004?` <span style="color:var(--red)">(− ${zm(x.stat.total)} statutory)</span>`:''}${(x.loan||0)>0.004?` <span style="color:var(--blue)">(− ${zm(x.loan)} loan)</span>`:''}${o?` <span style="color:var(--green)">✓ ${esc(ml(o.method))}${o.ref?' · '+esc(o.ref):''}</span>`:''}</span><span style="font-weight:700;white-space:nowrap">${zm(x.pay)}</span></div>`;}).join('')}</details></div>`;
   };
   return runs.map(card).join('')+`<div style="font-size:12px;color:var(--muted);line-height:1.5">Locked runs are never edited. Held work and any later corrections to a locked period are carried into the next run.</div>`;
@@ -21563,7 +21567,7 @@ function _prPayCash(){
   const el=document.getElementById('pp-cash-out');if(!el||!_prPay)return;
   const C=_prCashCalc(),nl=n=>Object.keys(n).map(Number).sort((a,b)=>b-a).map(d=>`${zm(d)} × ${n[d]}`).join(' · ');
   const w=[];
-  if(C.over)w.push(`<div style="color:var(--red);font-weight:700;margin-bottom:4px">⚠ Cash payments ${zm(C.total)} are more than the cash available ${zm(C.avail)} — short by ${zm(_payR2(C.total-C.avail))}.</div>`);
+  if(C.over)w.push(`<div style="color:var(--red);font-weight:700;margin-bottom:4px">${dbIc('alert')} Cash payments ${zm(C.total)} are more than the cash available ${zm(C.avail)} — short by ${zm(_payR2(C.total-C.avail))}.</div>`);
   else if(C.allOver)w.push(`<div style="color:var(--amber);margin-bottom:4px">Total payroll ${zm(C.all)} is more than the cash available ${zm(C.avail)}; the Airtel / MTN / bank part must come from those balances.</div>`);
   el.innerHTML=(C.total>0?`${w.join('')}<div style="font-size:14px;margin-bottom:4px">Cash to pay: <b style="color:var(--amber)">${zm(C.total)}</b> (${C.people.length} ${C.people.length===1?'person':'people'})</div>
     <div style="font-size:14px;color:var(--white);line-height:1.7"><b>Notes needed:</b> ${nl(C.tot)||'—'}${C.rest>0.004?` · + ${zm(C.rest)} in coins`:''}</div>
@@ -21620,12 +21624,12 @@ function _prMmOpen(src,id){
   }
   _prMm={...(_prMmBuild(items)),label,title,back};
   const M=_prMm,nets=['mtn','airtel'].filter(n=>M.rows.some(r=>r.net===n)),tot=rs=>zm(_payR2(rs.reduce((a,r)=>a+r.amount,0)));
-  const btn=(n,l)=>{const c=M.rows.filter(r=>n==='all'||r.net===n).length;return `<button class="btn bg" style="width:100%;margin-bottom:6px" onclick="_prMmGet('${n}','dl')">⬇ ${l} (${c})</button>`;};
-  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">📱 Mobile Money CSV</div>${_sfxX()}</div>
+  const btn=(n,l)=>{const c=M.rows.filter(r=>n==='all'||r.net===n).length;return `<button class="btn bg" style="width:100%;margin-bottom:6px" onclick="_prMmGet('${n}','dl')">${l} (${c})</button>`;};
+  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">Mobile Money CSV</div>${_sfxX()}</div>
     <div style="font-size:14px;color:var(--muted);margin-bottom:8px">${esc(M.title)} · ${M.rows.length} ${M.rows.length===1?'person':'people'} · <b style="color:var(--amber)">${tot(M.rows)}</b>${nets.map(n=>` · ${_prMLabel(n)} ${M.rows.filter(r=>r.net===n).length} (${tot(M.rows.filter(r=>r.net===n))})`).join('')}</div>
-    ${M.skipped.length?`<div style="font-size:14px;color:var(--red);margin-bottom:6px">⚠ Not in the CSV (no usable phone number): ${esc(M.skipped.join(', '))}. Add the number in the staff profile.</div>`:''}
+    ${M.skipped.length?`<div style="font-size:14px;color:var(--red);margin-bottom:6px">${dbIc('alert')} Not in the CSV (no usable phone number): ${esc(M.skipped.join(', '))}. Add the number in the staff profile.</div>`:''}
     ${M.mism.length?`<div style="font-size:14px;color:var(--amber);margin-bottom:6px">Check the network: ${esc(M.mism.join('; '))}.</div>`:''}
-    ${M.rows.length?`${nets.length>1?btn('all','Download all'):''}${nets.map(n=>btn(n,'Download '+_prMLabel(n)+' only')).join('')}<button class="btn bo" style="width:100%;margin-bottom:6px" onclick="_prMmGet('all','copy')">📋 Copy all as text</button>
+    ${M.rows.length?`${nets.length>1?btn('all','Download all'):''}${nets.map(n=>btn(n,'Download '+_prMLabel(n)+' only')).join('')}<button class="btn bo" style="width:100%;margin-bottom:6px" onclick="_prMmGet('all','copy')">Copy all as text</button>
     <details><summary style="font-size:14px;color:var(--muted);cursor:pointer">Preview</summary>${M.rows.map(r=>`<div style="display:flex;justify-content:space-between;gap:8px;font-size:13px;padding:2px 0"><span>${esc(r.name)} · ${esc(r.phone)} · ${esc(_prMLabel(r.net))}</span><b>${zm(r.amount)}</b></div>`).join('')}</details>`:`<div style="font-size:14px;color:var(--muted)">Nothing to export.</div>`}
     <div style="font-size:12px;color:var(--muted);margin:8px 0;line-height:1.5">Columns: Name, Phone (260…), Amount, Network, Reference.</div>
     <div class="mact"><button class="btn bo" onclick="${back}">Back</button></div></div>`);
@@ -21650,7 +21654,7 @@ function _prMmGet(net,mode){
 function _prPayMm(){
   const el=document.getElementById('pp-mm'),P=_prPay;if(!el||!P)return;
   const pk=P.due.filter(x=>P.rows[x.sid].on&&['airtel','mtn'].includes(P.rows[x.sid].method||P.method));
-  el.innerHTML=pk.length?`<button class="btn bo" style="width:100%" onclick="_prMmOpen('form')">📱 Mobile money CSV (${pk.length} · ${zm(_payR2(pk.reduce((a,x)=>a+x.pay,0)))})</button>`:'';
+  el.innerHTML=pk.length?`<button class="btn bo" style="width:100%" onclick="_prMmOpen('form')">Mobile money CSV (${pk.length} · ${zm(_payR2(pk.reduce((a,x)=>a+x.pay,0)))})</button>`:'';
 }
 // ── Batch payslips from a locked run ─────────────────────────────────────────
 // One payslip per person, built from the run's LOCKED snapshot (never recalculated,
@@ -21734,24 +21738,24 @@ function _prSlShow(){
   const S=_prSl;
   const row=x=>{
     const sid=String(x.sid),id=esc(sid),st=(DATA.staff||[]).find(q=>String(q.id)===sid),m=_prMsisdn(st&&st.phone),po=_prSlPay(run,sid);
-    const wa=m?`<a class="btn bo bsm" style="text-decoration:none;display:inline-block" href="https://wa.me/${m}?text=${encodeURIComponent(_prSlText(run,x))}" target="_blank" rel="noopener" onclick="_prSlSent('${id}',this)">${S.sent.has(sid)?'✓':'💬'} WhatsApp</a>`
+    const wa=m?`<a class="btn bo bsm" style="text-decoration:none;display:inline-block" href="https://wa.me/${m}?text=${encodeURIComponent(_prSlText(run,x))}" target="_blank" rel="noopener" onclick="_prSlSent('${id}',this)">${S.sent.has(sid)?'✓ ':''}WhatsApp</a>`
       :`<span style="font-size:13px;color:var(--red);align-self:center">no phone number</span>`;
     return `<div style="padding:8px 0;border-bottom:1px solid var(--border)">
       <label style="display:flex;gap:10px;align-items:center"><input type="checkbox" ${S.on.has(sid)?'checked':''} onchange="_prSlTick('${id}',this.checked)"/><span style="flex:1"><b>${esc(x.name)}</b><br><span style="font-size:13px;color:var(--muted)">Pay now ${zm(Math.max(0,x.pay))}${po?' · ✓ '+esc(_prMLabel(po.method)):''}${Number(x.held||0)>0.004?' · '+zm(x.held)+' held':''}</span></span></label>
-      <div style="display:flex;gap:6px;margin:6px 0 0 30px"><button class="btn bo bsm" onclick="_prSlPdf('${id}')">🧾 PDF</button>${wa}</div></div>`;
+      <div style="display:flex;gap:6px;margin:6px 0 0 30px"><button class="btn bo bsm" onclick="_prSlPdf('${id}')">PDF</button>${wa}</div></div>`;
   };
-  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">🧾 Payslips — Run #${esc(String(run.number))}</div>${_sfxX()}</div>
+  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">Payslips — Run #${esc(String(run.number))}</div>${_sfxX()}</div>
     <div style="font-size:14px;color:var(--muted);margin-bottom:8px">${fmtDate(run.from)} → ${fmtDate(run.end||run.to)} · ${run.rows.length} ${run.rows.length===1?'person':'people'}. Built from the locked run.</div>
     <button class="btn bg" id="prsl-all" style="width:100%;margin-bottom:8px" onclick="_prSlPdfAll()"></button>
     <div style="font-size:13px;margin-bottom:4px;color:var(--muted)">Tick: <span style="color:var(--green);cursor:pointer" onclick="_prSlSel('all')">all</span> · <span style="color:var(--green);cursor:pointer" onclick="_prSlSel('none')">none</span> · <span style="color:var(--green);cursor:pointer" onclick="_prSlSel('owed')">only people paid now</span></div>
     <div style="max-height:46vh;overflow-y:auto">${run.rows.map(row).join('')}</div>
-    <div style="font-size:12px;color:var(--muted);margin:8px 0;line-height:1.5">💬 WhatsApp sends the payslip as a message to the number on the staff profile (a link cannot attach a file). To send the PDF itself, open the person's 🧾 PDF and tap Share.</div>
+    <div style="font-size:12px;color:var(--muted);margin:8px 0;line-height:1.5">WhatsApp sends the payslip as a message to the number on the staff profile (a link cannot attach a file). To send the PDF itself, open the person's PDF and tap Share.</div>
     <div class="mact"><button class="btn bo" onclick="openPayrollPrep()">Back</button></div></div>`);
   _prSlCount();
 }
 function _prSlCount(){
   const b=document.getElementById('prsl-all'),S=_prSl;if(!b||!S)return;
-  b.textContent=`📄 One PDF — ${S.on.size} payslip${S.on.size===1?'':'s'}`;b.disabled=!S.on.size;
+  b.textContent=`One PDF — ${S.on.size} payslip${S.on.size===1?'':'s'}`;b.disabled=!S.on.size;
 }
 function _prSlTick(sid,on){const S=_prSl;if(!S)return;if(on)S.on.add(String(sid));else S.on.delete(String(sid));_prSlCount();}
 function _prSlSel(w){
@@ -21784,15 +21788,15 @@ function _prPayShow(){
   const P=_prPay;if(!P)return;
   const opts=sel=>_PR_METHODS.map(([k,l])=>`<option value="${k}"${sel===k?' selected':''}>${l}</option>`).join('');
   const row=x=>{const r=P.rows[x.sid],id=esc(x.sid);return `<div style="padding:8px 0;border-bottom:1px solid var(--border)"><label style="display:flex;gap:10px;align-items:center"><input type="checkbox" ${r.on?'checked':''} onchange="_prPayRow('${id}','on',this.checked)"/><span style="flex:1;font-weight:700;color:var(--white)">${esc(x.name)}</span><span style="font-weight:800;color:var(--green);white-space:nowrap">${zm(x.pay)}</span></label><div style="display:flex;gap:6px;margin:6px 0 0 28px"><select class="fi" style="flex:0 0 38%" onchange="_prPayRow('${id}','method',this.value)"><option value="">Default</option>${opts(r.method)}</select><input class="fi" style="flex:1" placeholder="Txn ref (optional)" value="${esc(r.ref)}" oninput="this.value=this.value.toUpperCase();_prPayRow('${id}','ref',this.value)"/></div></div>`;};
-  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">💸 Create Payments — Run #${P.run.number}</div>${_sfxX()}</div>
+  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">Create Payments — Run #${P.run.number}</div>${_sfxX()}</div>
     <div class="twobox"><div class="fw"><div class="fl">Payment date</div><input class="fi" type="date" id="pp-date" value="${esc(P.date)}"/></div><div class="fw"><div class="fl">Default method</div><select class="fi" onchange="_prPay.method=this.value;_prPayTot()">${opts(P.method)}</select></div></div>
     <div class="fw"><div class="fl">Batch reference</div><input class="fi" id="pp-ref" value="${esc(P.ref)}" oninput="this.value=this.value.toUpperCase()"/></div>
     <div style="font-size:13px;color:var(--muted);margin:4px 0">Untick anyone you are not paying now. Each payment marks the oldest unpaid work as paid.</div>
     <div style="max-height:40vh;overflow:auto">${P.due.map(row).join('')}</div>
-    <div style="border:1px solid var(--border);border-radius:10px;padding:8px 10px;margin:8px 0"><div style="font-weight:700;color:var(--white);margin-bottom:6px">💵 Cash</div><div class="twobox"><div class="fw"><div class="fl">Cash available</div><input class="fi" type="number" inputmode="decimal" id="pp-cash" value="${esc(String(P.cash!==''?P.cash:P.est))}" oninput="_prPay.cash=this.value;_prPayCash()"/></div><div class="fw"><div class="fl">Notes (largest first)</div><input class="fi" id="pp-den" value="${esc(P.den)}" oninput="_prPay.den=this.value;_prPayCash()"/></div></div><div id="pp-cash-out"></div></div>
+    <div style="border:1px solid var(--border);border-radius:10px;padding:8px 10px;margin:8px 0"><div style="font-weight:700;color:var(--white);margin-bottom:6px">Cash</div><div class="twobox"><div class="fw"><div class="fl">Cash available</div><input class="fi" type="number" inputmode="decimal" id="pp-cash" value="${esc(String(P.cash!==''?P.cash:P.est))}" oninput="_prPay.cash=this.value;_prPayCash()"/></div><div class="fw"><div class="fl">Notes (largest first)</div><input class="fi" id="pp-den" value="${esc(P.den)}" oninput="_prPay.den=this.value;_prPayCash()"/></div></div><div id="pp-cash-out"></div></div>
     <div id="pp-mm" style="margin:6px 0"></div>
     <div id="pp-tot" style="font-size:14px;margin:8px 0;color:var(--amber);font-weight:700"></div>
-    <div class="mact"><button class="btn bo" onclick="_prPay=null;openPayrollPrep()">Back</button><button class="btn bg" onclick="_prPayGo()">💸 Create payments</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="_prPay=null;openPayrollPrep()">Back</button><button class="btn bg" onclick="_prPayGo()">Create payments</button></div></div>`);
   _prPayTot();
 }
 function _prPayRow(sid,k,v){const r=_prPay&&_prPay.rows[sid];if(!r)return;r[k]=v;if(k==='on'||k==='method')_prPayTot();}
@@ -21929,12 +21933,12 @@ function _prLimHtml(H){
       ?(H.n?`Paying ${_payR2(H.total-H.heldQty).toLocaleString()} of ${H.total.toLocaleString()} bags — <b>${H.heldQty.toLocaleString()} held</b> from ${fmtDate(H.cutDay)} onward (${H.n} ${u(H.n)}).`:`The limit covers all ${H.total.toLocaleString()} bags — nothing held.`)
       :(H.n?`<b>${H.n} ${u(H.n)} held</b> (${zm(H.heldAmt)}) — after ${fmtDate(L.date)}${L.time?' '+esc(L.time):''}.`:'No work after that limit — nothing held.');
   }
-  return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--surface2)"><div style="font-weight:700;color:var(--white);margin-bottom:6px">⏸ Pay up to</div><div style="display:flex;gap:6px">${bt('off','Off')}${bt('date','Date / time')}${bt('bags','Bags')}</div>${inp}${info?`<div style="font-size:14px;color:var(--amber);margin-top:8px">${info}</div>`:''}<div style="font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5">Counts oldest work first for the chosen group and period; a log at the limit is split. Held work is not paid this run. Salaried staff are not affected.</div></div>`;
+  return `<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:10px;background:var(--surface2)"><div style="font-weight:700;color:var(--white);margin-bottom:6px">Pay up to</div><div style="display:flex;gap:6px">${bt('off','Off')}${bt('date','Date / time')}${bt('bags','Bags')}</div>${inp}${info?`<div style="font-size:14px;color:var(--amber);margin-top:8px">${info}</div>`:''}<div style="font-size:12px;color:var(--muted);margin-top:6px;line-height:1.5">Counts oldest work first for the chosen group and period; a log at the limit is split. Held work is not paid this run. Salaried staff are not affected.</div></div>`;
 }
 function _prHeldRows(x){
   const h=x.heldInfo;if(!h||x.held<=0.004)return'';
   const rows=h.rows.slice(0,3).map(r=>{const l=r.l,q=_prQty(l),u=esc(_pfUnitText(taskRateUnitLabel(l.role||'',l.task||'')||'bag',q));
-    return `<div style="font-size:13px;color:var(--amber)">⏸ ${fmtDate(l.date)} · ${esc(l.task||'—')} · ${r.f<0.9999?`${_payR2(q-r.qty).toLocaleString()} paid, ${r.qty.toLocaleString()} held of ${q.toLocaleString()}`:`${q.toLocaleString()} held`} ${u}</div>`;}).join('');
+    return `<div style="font-size:13px;color:var(--amber)">${fmtDate(l.date)} · ${esc(l.task||'—')} · ${r.f<0.9999?`${_payR2(q-r.qty).toLocaleString()} paid, ${r.qty.toLocaleString()} held of ${q.toLocaleString()}`:`${q.toLocaleString()} held`} ${u}</div>`;}).join('');
   return `<div style="margin-top:6px">${rows}${h.rows.length>3?`<div style="font-size:13px;color:var(--muted)">+ ${h.rows.length-3} more held</div>`:''}</div>`;
 }
 function _prCompute(from,to,group){
@@ -22186,7 +22190,7 @@ function _gapOpenLate(r){
   if(bd.min>bd.max){alert('This month has no valid date inside the chosen period.');return;}
   const opts=people.map(x=>`<option value="${esc(x.s.id)}|${esc(x.role)}">${esc(x.s.name)} — ${esc(x.role)}</option>`).join('');
   const isCom=r.ref.indexOf('com:')===0;
-  openModal(`<div class="sfx">${_gapHead('＋ Add Late Log',r)}
+  openModal(`<div class="sfx">${_gapHead('Add Late Log',r)}
     <div class="fw"><div class="fl">Staff</div><select class="fi" id="gl-staff" onchange="_glPay()">${opts}</select></div>
     <div class="twobox">
       <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="gl-date" min="${bd.min}" max="${bd.max}" value="${_gapBestDate(r,bd)}"/></div>
@@ -22196,7 +22200,7 @@ function _gapOpenLate(r){
     ${isCom?`<div class="fw"><div class="fl">Batch (optional)</div><input class="fi" id="gl-batch" list="gl-batches" placeholder="Batch" autocomplete="off" oninput="this.value=this.value.toUpperCase()"/><datalist id="gl-batches">${stockBatchNames(r.ref).map(x=>`<option value="${esc(x)}"></option>`).join('')}</datalist></div>`:''}
     <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="gl-note" placeholder="WHY WAS THIS MISSED?" oninput="this.value=this.value.toUpperCase()"/></div>
     <div style="font-size:13px;color:var(--muted);margin-bottom:4px">Saved as an approved work log tagged to ${esc(r.label)}, dated inside ${_gapMonthLabel(r.month)}.</div>
-    <div class="mact"><button class="btn bo" onclick="_prReturn()">Back</button><button class="btn bg" onclick="_gapSaveLate()">✓ Save Log</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="_prReturn()">Back</button><button class="btn bg" onclick="_gapSaveLate()">Save Log</button></div></div>`);
   _glPay();
 }
 function _glPay(){
@@ -22233,7 +22237,7 @@ function _gapOpenPool(r){
   const eff=_gapState(r).eff,bd=_gapBounds(r);
   if(bd.min>bd.max){alert('This month has no valid date inside the chosen period.');return;}
   _gapPoolOff=new Set();
-  openModal(`<div class="sfx">${_gapHead('👥 Add Pooled Log',r)}
+  openModal(`<div class="sfx">${_gapHead('Add Pooled Log',r)}
     <div class="twobox">
       <div class="fw"><div class="fl">Shift date</div><input class="fi" type="date" id="gp-date" min="${bd.min}" max="${bd.max}" value="${_gapBestDate(r,bd)}" onchange="_gpDate()"/></div>
       <div class="fw"><div class="fl">Bags to share</div><input class="fi" type="number" id="gp-qty" value="${eff>0?eff:''}" step="0.01" min="0" inputmode="decimal" oninput="_gpRender()"/></div>
@@ -22244,7 +22248,7 @@ function _gapOpenPool(r){
     <div id="gp-sum" style="font-size:14px;color:var(--muted);margin-bottom:12px"></div>
     <div class="fw"><div class="fl">Notes (optional)</div><input class="fi" id="gp-note" placeholder="WHY WAS THIS MISSED?" oninput="this.value=this.value.toUpperCase()"/></div>
     <div style="font-size:13px;color:var(--muted);margin-bottom:4px">Each ticked person gets their own approved work log for their share, in the role they worked that day.</div>
-    <div class="mact"><button class="btn bo" onclick="_prReturn()">Back</button><button class="btn bg" onclick="_gapSavePool()">✓ Save Logs</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="_prReturn()">Back</button><button class="btn bg" onclick="_gapSavePool()">Save Logs</button></div></div>`);
   _gpRender();
 }
 function _gpCompute(){
@@ -22295,12 +22299,12 @@ function _gapOpenOff(r){
   const eff=_gapState(r).eff;
   if(Math.abs(eff)<0.0005){alert('Nothing left to write off.');return;}
   const reasons=eff>0?GAP_REASONS_POS:GAP_REASONS_NEG;
-  openModal(`<div class="sfx">${_gapHead('✂ Write Off Gap',r)}
+  openModal(`<div class="sfx">${_gapHead('Write Off Gap',r)}
     <div class="fw"><div class="fl">Bags to write off</div><input class="fi" type="number" id="gw-qty" value="${Math.abs(eff)}" step="0.01" min="0" inputmode="decimal"/></div>
     <div class="fw"><div class="fl">Reason</div><select class="fi" id="gw-reason"><option value="">— Choose a reason —</option>${reasons.map(x=>`<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select></div>
     <div class="fw"><div class="fl">Note (needed for “Other”)</div><input class="fi" id="gw-note" placeholder="DETAILS" oninput="this.value=this.value.toUpperCase()"/></div>
     <div style="font-size:13px;color:var(--muted);margin-bottom:4px">A write-off explains the gap in this check. It does not change stock or anyone's pay. You can undo it later.</div>
-    <div class="mact"><button class="btn bo" onclick="_prReturn()">Back</button><button class="btn bg" onclick="_gapSaveOff()">✂ Write Off</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="_prReturn()">Back</button><button class="btn bg" onclick="_gapSaveOff()">Write Off</button></div></div>`);
 }
 function _gapSaveOff(){
   const r=_gapCur;if(!r)return;
@@ -22331,10 +22335,10 @@ function _gapUndoOff(r){
 
 // ⏸ Hold — leave the gap unresolved on purpose --------------------------------------
 function _gapOpenHold(r){
-  openModal(`<div class="sfx">${_gapHead('⏸ Hold Gap',r)}
+  openModal(`<div class="sfx">${_gapHead('Hold Gap',r)}
     <div class="fw"><div class="fl">Note (optional)</div><input class="fi" id="gh-note" placeholder="E.G. WAITING FOR STOCK COUNT" oninput="this.value=this.value.toUpperCase()"/></div>
     <div style="font-size:13px;color:var(--muted);margin-bottom:4px">Marks this gap as unresolved so it is not forgotten. It stays in the check until a log fixes it, you write it off, or you release the hold.</div>
-    <div class="mact"><button class="btn bo" onclick="_prReturn()">Back</button><button class="btn bg" onclick="_gapSaveHold()">⏸ Hold</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="_prReturn()">Back</button><button class="btn bg" onclick="_gapSaveHold()">Hold</button></div></div>`);
 }
 function _gapSaveHold(){
   const r=_gapCur;if(!r)return;
@@ -22361,7 +22365,7 @@ function _prStockHtml(){
   const okSide=txt=>`<div style="text-align:right"><div style="font-weight:800;color:var(--green)">✓</div><div style="font-size:11px;color:var(--muted)">${txt}</div></div>`;
   const row=(r,g)=>{
     if(r.untagged){
-      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border)"><div style="min-width:0"><div style="font-weight:600">🏷️ Not tagged</div><div style="font-size:12px;color:var(--muted)">Logged ${n(r.logged)} bags with no stock tag — tag them (Bulk Edit) to include them in the check</div></div><div style="text-align:right"><div style="font-weight:800;color:var(--amber)">${n(r.logged)}</div><div style="font-size:11px;color:var(--muted)">LOGGED</div></div></div>`;
+      return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:6px 0;border-top:1px solid var(--border)"><div style="min-width:0"><div style="font-weight:600">Not tagged</div><div style="font-size:12px;color:var(--muted)">Logged ${n(r.logged)} bags with no stock tag — tag them (Bulk Edit) to include them in the check</div></div><div style="text-align:right"><div style="font-weight:800;color:var(--amber)">${n(r.logged)}</div><div style="font-size:11px;color:var(--muted)">LOGGED</div></div></div>`;
     }
     const matched=_stockWithinTol(r.stock,r.gap);
     const st=_gapState(r);
@@ -22371,15 +22375,15 @@ function _prStockHtml(){
     else if(st.cleared)side=okSide('WRITTEN OFF');
     else{
       const held=st.holds.length>0,col=held||st.eff>0?'var(--amber)':'var(--red)';
-      side=`<div style="text-align:right"><div style="font-weight:800;color:${col}">${sg(st.eff)}</div><div style="font-size:11px;color:var(--muted)">${held?'⏸ HELD':'GAP'}</div></div>`;
+      side=`<div style="text-align:right"><div style="font-weight:800;color:${col}">${sg(st.eff)}</div><div style="font-size:11px;color:var(--muted)">${held?'HELD':'GAP'}</div></div>`;
     }
     let sub=`Stock ${n(r.stock)} · Logged ${n(r.logged)}${matched&&Math.abs(r.gap)>=0.0005?` · gap ${sg(r.gap)}`:''}${r.unit?` · stock counted in ${esc(r.unit)}, not bags`:''}`;
     let extra='',acts='';
     if(!matched){
-      st.wo.forEach(a=>{extra+=`<div style="font-size:12px;color:var(--muted);margin-top:2px">✂ Written off ${sg(a.qty)} — ${esc(a.reason)}${a.note?': '+esc(a.note):''} · ${_gapWho(a)}</div>`;});
-      st.holds.forEach(a=>{extra+=`<div style="font-size:12px;color:var(--amber);margin-top:2px">⏸ On hold${a.note?' — '+esc(a.note):''} · ${_gapWho(a)}</div>`;});
+      st.wo.forEach(a=>{extra+=`<div style="font-size:12px;color:var(--muted);margin-top:2px">Written off ${sg(a.qty)} — ${esc(a.reason)}${a.note?': '+esc(a.note):''} · ${_gapWho(a)}</div>`;});
+      st.holds.forEach(a=>{extra+=`<div style="font-size:12px;color:var(--amber);margin-top:2px">On hold${a.note?' — '+esc(a.note):''} · ${_gapWho(a)}</div>`;});
       if(!st.cleared){
-        acts=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${st.eff>0?gbtn(idx,'late','＋ Late log')+gbtn(idx,'pool','👥 Pooled log'):''}${gbtn(idx,'off','✂ Write off')}${st.holds.length?gbtn(idx,'release','▶ Release hold'):gbtn(idx,'hold','⏸ Hold')}</div>`;
+        acts=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${st.eff>0?gbtn(idx,'late','Late log')+gbtn(idx,'pool','Pooled log'):''}${gbtn(idx,'off','Write off')}${st.holds.length?gbtn(idx,'release','Release hold'):gbtn(idx,'hold','Hold')}</div>`;
       }else{
         acts=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">${gbtn(idx,'undo','↩ Undo write-off')}</div>`;
       }
@@ -22387,7 +22391,7 @@ function _prStockHtml(){
     return `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding:6px 0;border-top:1px solid var(--border)"><div style="min-width:0"><div style="font-weight:600">${esc(r.label)}</div><div style="font-size:12px;color:var(--muted)">${sub}</div>${extra}${acts}</div>${side}</div>`;
   };
   const cards=R.groups.map(g=>`<div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--surface2)">
-    <div style="font-weight:700;color:var(--white)">${esc(g.name)} <span style="font-size:13px;font-weight:600;color:var(--muted)">${g.dir==='received'?'📥 Received':'📤 Issued'}${g.roles.length>1?' · '+g.roles.map(esc).join(', '):''}</span></div>
+    <div style="font-weight:700;color:var(--white)">${esc(g.name)} <span style="font-size:13px;font-weight:600;color:var(--muted)">${g.dir==='received'?'Received':'Issued'}${g.roles.length>1?' · '+g.roles.map(esc).join(', '):''}</span></div>
     ${g.months.map(mo=>`<div style="font-size:13px;font-weight:700;color:var(--blue);margin-top:8px">${_gapMonthLabel(mo.m)}</div>${mo.rows.map(r=>row(r,g)).join('')}`).join('')}
   </div>`).join('');
   const none=`<div class="empty" style="padding:18px 0;text-align:center">No stock-linked per-bag tasks have stock or logged work in this period.<br><span style="font-size:13px">Link a task to stock in Roles &amp; Rates to include it.</span></div>`;
@@ -22556,24 +22560,24 @@ function _prProbAct(i){const f=_prProbActs[i];if(typeof f==='function')f();}
 function _prProblemsHtml(){
   const P=_prProblems(_pr.from,_pr.to,_pr.group);
   _prProbActs=[];
-  const icon={open:'🟢',rate:'💲',neg:'➖',pending:'⏳',dup:'👯',zero:'0️⃣',high:'📈',loan:'🏦'};
+  const icon={open:dbIc('clock'),rate:dbIc('tag'),neg:dbIc('down'),pending:dbIc('clipcheck'),dup:dbIc('users'),zero:dbIc('xcircle'),high:dbIc('up'),loan:dbIc('receipt')};
   const card=p=>{
     let btn='';
     if(p.act){const i=_prProbActs.push(p.act.fn)-1;btn=`<button type="button" class="btn bo bsm" style="padding:4px 10px;font-size:13px;margin-top:6px" onclick="_prProbAct(${i})">${esc(p.act.label)}</button>`;}
-    return `<div style="border:1px solid var(--border);border-left:4px solid ${p.sev==='fix'?'var(--red)':'var(--amber)'};border-radius:10px;padding:9px 12px;margin-bottom:8px;background:var(--surface2)"><div style="font-weight:700;color:var(--white)">${icon[p.kind]||'⚠'} ${esc(p.title)}</div><div style="font-size:13px;color:var(--muted);margin-top:2px">${esc(p.detail)}</div>${btn}</div>`;
+    return `<div style="border:1px solid var(--border);border-left:4px solid ${p.sev==='fix'?'var(--red)':'var(--amber)'};border-radius:10px;padding:9px 12px;margin-bottom:8px;background:var(--surface2)"><div style="font-weight:700;color:var(--white)">${icon[p.kind]||dbIc('alert')} ${esc(p.title)}</div><div style="font-size:13px;color:var(--muted);margin-top:2px">${esc(p.detail)}</div>${btn}</div>`;
   };
   const box=(l,v,c)=>`<div class="sbox"><div class="sv" style="color:${c};font-size:18px">${v}</div><div class="sl">${l}</div></div>`;
   const sec=(t,c,arr)=>arr.length?`<div style="font-size:14px;font-weight:700;color:${c};margin:6px 0">${t} (${arr.length})</div>${arr.map(card).join('')}`:'';
   const head=P.items.length?`<div class="srow" style="margin-bottom:10px">${box('To fix',P.fixN,P.fixN?'var(--red)':'var(--green)')}${box('To check',P.checkN,P.checkN?'var(--amber)':'var(--green)')}</div>`:'';
   const body=P.items.length?sec('Fix before paying','var(--red)',P.items.filter(x=>x.sev==='fix'))+sec('Check','var(--amber)',P.items.filter(x=>x.sev==='check'))
-    :`<div style="text-align:center;padding:22px 0"><div style="font-size:36px;margin-bottom:6px">✅</div><div style="color:var(--muted);font-size:16px">No problems found for ${_pr.group?esc(_pr.group)+'s':'staff'} in this period.</div></div>`;
+    :`<div style="text-align:center;padding:22px 0"><div style="font-size:36px;margin-bottom:6px;color:var(--green)">${dbIc('check')}<span class="db-sr">Checked</span></div><div style="color:var(--muted);font-size:16px">No problems found for ${_pr.group?esc(_pr.group)+'s':'staff'} in this period.</div></div>`;
   return `${head}${body}<div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5">${fmtDate(_pr.from)} → ${fmtDate(_pr.to)}. Checks open shifts, missing rates and negative net pay (fix), then pending entries, duplicates, zero quantities and unusually high pay (check — a log at ${_PR_HIGH_MULT}× the task's usual quantity or more, needing ${_PR_MIN_BASE}+ earlier logs, or a person at ${_PR_HIGH_MULT}× the group's median, needing ${_PR_MIN_PEERS}+ people). Nothing is blocked here; each item opens the screen where it is fixed.</div>`;
 }
 function openPayrollPrep(){
   if(!requireAdmin('prepare payroll'))return;
   if(!hasFeature('payroll_run')){showUpgradePrompt('payroll_run');return;}
   if(_pr.preset!=='custom'||!_pr.from||!_pr.to){const r=_prRange(_pr.preset)||_prRange('thismonth');_pr.from=r.from;_pr.to=r.to;}
-  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">🧮 Prepare Payroll</div>${_sfxX()}</div><div id="pr-ctl"></div><div id="pr-body"></div><div class="mact"><button class="btn bo" onclick="closeModal()">Close</button></div></div>`);
+  openModal(`<div class="sfx"><div class="sfx-h"><div class="mtitle">Prepare Payroll</div>${_sfxX()}</div><div id="pr-ctl"></div><div id="pr-body"></div><div class="mact"><button class="btn bo" onclick="closeModal()">Close</button></div></div>`);
   _prRenderCtl();_prRenderBody();
 }
 function _prSetPreset(p){
@@ -22587,7 +22591,7 @@ function _prSetView(v){_pr.view=v;_prRenderCtl();_prRenderBody();}
 function _prRenderCtl(){
   const el=document.getElementById('pr-ctl');if(!el)return;
   const _P=(_pr.from&&_pr.to&&_pr.from<=_pr.to)?_prProblems(_pr.from,_pr.to,_pr.group):{items:[],fixN:0};
-  const views=[['pay','👥 Pay'],['stock','📦 Stock check'+(hasFeature('stock_check')?'':' 🔒')],['problems','⚠ Problems'+(_P.items.length?' '+_P.items.length:'')],['runs','🔒 Runs'+((DATA.payrollRuns||[]).length?' '+(DATA.payrollRuns||[]).length:'')]].map(([k,l])=>`<button class="pb${_pr.view===k?' act':''}" style="flex:1 1 auto;padding:5px 8px;font-size:15px${k==='problems'&&_P.fixN&&_pr.view!==k?';color:var(--red);border-color:var(--red)':''}" onclick="_prSetView('${k}')">${l}</button>`).join('');
+  const views=[['pay','Pay'],['stock','Stock check'+(hasFeature('stock_check')?'':' '+dbIc('lock')+'<span class="db-sr"> (locked)</span>')],['problems','Problems'+(_P.items.length?' '+_P.items.length:'')],['runs','Runs'+((DATA.payrollRuns||[]).length?' '+(DATA.payrollRuns||[]).length:'')]].map(([k,l])=>`<button class="pb${_pr.view===k?' act':''}" style="flex:1 1 auto;padding:5px 8px;font-size:15px${k==='problems'&&_P.fixN&&_pr.view!==k?';color:var(--red);border-color:var(--red)':''}" onclick="_prSetView('${k}')">${l}</button>`).join('');
   const pills=_PR_PRESETS.map(([k,l])=>`<button class="pb${_pr.preset===k?' act':''}" onclick="_prSetPreset('${k}')">${l}</button>`).join('');
   const custom=_pr.preset==='custom'?`<div class="twobox" style="margin-bottom:8px"><div class="fw"><div class="fl">From</div><input class="fi" type="date" value="${esc(_pr.from)}" onchange="_prSetDate('from',this.value)"/></div><div class="fw"><div class="fl">To</div><input class="fi" type="date" value="${esc(_pr.to)}" onchange="_prSetDate('to',this.value)"/></div></div>`:'';
   const roles=(DATA.staffRoles||[]).map(r=>r.name).filter(Boolean);
@@ -22629,21 +22633,21 @@ function _prRenderBody(){
         <div style="text-align:right"><div style="font-family:var(--fh);font-size:21px;font-weight:800;color:${nc};white-space:nowrap">${x.pay<-0.004?'− ':''}${zm(Math.abs(x.pay))}</div><div style="font-size:11px;color:var(--muted);font-weight:700">${tag}</div></div>
       </div>
       <div style="font-size:14px;display:grid;gap:2px">${lines}</div>${_prHeldRows(x)}${_dedRefCard(x.s.id,_DR)}
-      ${x.loanShort>0.004?`<div style="font-size:13px;color:var(--amber);margin-top:6px">🏦 Instalment short by ${zm(x.loanShort)} (${zm(x.loanDue)} due) — not enough pay to take it; it stays due for the next run</div>`:''}
+      ${x.loanShort>0.004?`<div style="font-size:13px;color:var(--amber);margin-top:6px">Instalment short by ${zm(x.loanShort)} (${zm(x.loanDue)} due) — not enough pay to take it; it stays due for the next run</div>`:''}
       ${x.before>0.004&&!x.carry?`<div style="font-size:13px;color:var(--amber);margin-top:6px">Also unpaid from before this period: ${zm(x.before)} (not included)</div>`:''}
     </div>`;
   };
   const box=(l,v,c)=>`<div class="sbox"><div class="sv" style="color:${c};font-size:18px">${v}</div><div class="sl">${l}</div></div>`;
   const summary=R.rows.length?`<div class="srow" style="margin-bottom:8px">${box('Gross',zm(R.gross),'var(--green)')}${box('Cuts',zm(R.cuts),'var(--red)')}</div><div class="srow" style="margin-bottom:10px">${box('Paid / advance',zm(R.already),'var(--blue)')}${box('To pay',zm(payNow),'var(--amber)')}</div>${heldSum>0.004?`<div class="srow" style="margin-bottom:10px">${box('Held back',zm(heldSum),'var(--amber)')}</div>`:''}${R.loans>0.004?`<div class="srow" style="margin-bottom:10px">${box('Loan instalments',zm(R.loans),'var(--blue)')}</div>`:''}${R.stat>0.004?`<div class="srow" style="margin-bottom:6px">${box('NAPSA · NHIMA · PAYE',zm(R.stat),'var(--red)')}</div><div style="font-size:12px;color:var(--muted);margin:0 0 10px;line-height:1.5">NAPSA ${zm(R.statBy.napsa)} · NHIMA ${zm(R.statBy.nhima)} · PAYE ${zm(R.statBy.paye)}. Employer adds NAPSA ${zm(R.statBy.eNapsa)} + NHIMA ${zm(R.statBy.eNhima)} (not taken from pay). These are usually due by the 10th of next month.</div>`:''}`:'';
   const notes=[
-    R.pending?`<div style="font-size:14px;color:var(--amber);margin-bottom:6px">⏳ ${R.pending} pending entr${R.pending===1?'y':'ies'} in this period ${R.pending===1?'is':'are'} not counted until approved.</div>`:'',
-    R.negative?`<div style="font-size:14px;color:var(--red);margin-bottom:6px">⚠ ${R.negative} ${R.negative===1?'person has':'people have'} a negative net (paid or advanced more than earned). “To pay” ignores them.</div>`:'',
-    (()=>{const P=_prProblems(_pr.from,_pr.to,_pr.group);return P.items.length?`<div style="font-size:14px;color:${P.fixN?'var(--red)':'var(--amber)'};margin-bottom:6px;cursor:pointer;text-decoration:underline" onclick="_prSetView('problems')">⚠ ${P.items.length} problem${P.items.length===1?'':'s'} to review${P.fixN?' ('+P.fixN+' to fix)':''} — tap to see</div>`:'';})()
+    R.pending?`<div style="font-size:14px;color:var(--amber);margin-bottom:6px">${R.pending} pending entr${R.pending===1?'y':'ies'} in this period ${R.pending===1?'is':'are'} not counted until approved.</div>`:'',
+    R.negative?`<div style="font-size:14px;color:var(--red);margin-bottom:6px">${dbIc('alert')} ${R.negative} ${R.negative===1?'person has':'people have'} a negative net (paid or advanced more than earned). “To pay” ignores them.</div>`:'',
+    (()=>{const P=_prProblems(_pr.from,_pr.to,_pr.group);return P.items.length?`<div style="font-size:14px;color:${P.fixN?'var(--red)':'var(--amber)'};margin-bottom:6px;cursor:pointer;text-decoration:underline" onclick="_prSetView('problems')">${dbIc('alert')} ${P.items.length} problem${P.items.length===1?'':'s'} to review${P.fixN?' ('+P.fixN+' to fix)':''} — tap to see</div>`:'';})()
   ].join('');
   const list=R.rows.length?R.rows.map(card).join(''):`<div class="empty" style="padding:18px 0;text-align:center">No payroll activity for ${_pr.group?esc(_pr.group)+'s':'staff'} in this period.</div>`;
   const foot=`<div style="font-size:12px;color:var(--muted);margin-top:4px;line-height:1.5">${fmtDate(_pr.from)} → ${fmtDate(_pr.to)}. Net = earnings + salary + carried forward − deductions − unpaid leave − paid already − advances − NAPSA/NHIMA/PAYE − loan instalments. Approved entries only.${R.hidden?` ${R.hidden} staff with no activity hidden.`:''}</div>`;
-  const clash=_prClash(),lockBtn=R.rows.length?`<button class="btn bg" style="width:100%;margin:6px 0" onclick="_prReview()">🔒 Review & lock run</button>`:'';
-  const lockNote=clash?`<div style="font-size:14px;color:var(--blue);margin-bottom:8px;cursor:pointer;text-decoration:underline" onclick="_prSetView('runs')">🔒 Run #${clash.number} is locked for this period — this screen is live; the snapshot is under Runs.</div>`:'';
+  const clash=_prClash(),lockBtn=R.rows.length?`<button class="btn bg" style="width:100%;margin:6px 0" onclick="_prReview()">Review & lock run</button>`:'';
+  const lockNote=clash?`<div style="font-size:14px;color:var(--blue);margin-bottom:8px;cursor:pointer;text-decoration:underline" onclick="_prSetView('runs')">Run #${clash.number} is locked for this period — this screen is live; the snapshot is under Runs.</div>`:'';
   el.innerHTML=lockNote+_prLimHtml(H)+summary+notes+list+lockBtn+foot;
 }
 
@@ -22683,7 +22687,7 @@ function openBulkPayForm(resume){
     staff.forEach(s=>{const id=String(s.id);if((_bp.tasks[id]||[]).length>1){const r=_bp.rows[id];r.tk=_bpTkBuild(id);_bpTkFillOwed(r);_bpTkSync(id);}});
   }
   openModal(`
-    <div class="sfx"><div class="sfx-h"><div class="mtitle">💳👥 Bulk Pay ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">Bulk Pay ${!ONLINE?'<span style="font-size:19px;color:var(--amber)">· Offline</span>':''}</div>${_sfxX()}</div>
     <div style="font-size:15px;color:var(--muted);margin-bottom:12px">Pay several staff at once. Tap one or more roles to narrow the list (none = everyone), tick who to pay and adjust each amount — it starts at what each person is owed. You can also type the quantity of work paid for (hours, bags, days…) and the amount is worked out from the task rate — or type the amount and the quantity is worked out. Use “Pay for a period” to fill each person's amount from their unpaid work — between two dates, or up to a date (picking up from each person's last pay). Staff with more than one task get a tick-list: tick the tasks to pay — each task has its own quantity and amount, and the person's total is the sum of the ticked tasks. Every payment settles that person's oldest unpaid work first (ticked tasks settle only their own work).</div>
     <div class="fw"><div class="fl">Roles</div><div id="bp-chips" style="display:flex;flex-wrap:wrap;gap:8px"></div></div>
     ${_bpPeriodCard()}
@@ -22704,7 +22708,7 @@ function openBulkPayForm(resume){
     <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--muted);margin-bottom:8px"><input type="checkbox" id="bp-hide" ${_bp.hideZero?'checked':''} onchange="_bpToggleHide(this.checked)"/> Hide staff with nothing owed</label>
     <div id="bp-rows" style="margin-bottom:12px"></div>
     <div id="bp-total" style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:17px"></div>
-    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkPay()">💳 Pay Selected</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveBulkPay()">Pay Selected</button></div></div>`);
   _bpRender();
 }
 // Staff currently shown (role filter + "hide nothing owed"). Only these are ever paid.
@@ -22920,9 +22924,9 @@ function _bpPeriodCalc(){
 function _bpPerText(id){
   const r=_bp.rows[id],sc=r&&r.per;if(!sc)return'';
   if(!(sc.n>0))return'No unpaid work '+((_bp.pm||'amt')==='range'?'in this period':'up to that date');
-  if(r.tk)return `📅 ${fmtDate(sc.first)}${sc.last!==sc.first?' → '+fmtDate(sc.last):''} · ${sc.n} ${sc.n===1?'entry':'entries'}`;
+  if(r.tk)return `${fmtDate(sc.first)}${sc.last!==sc.first?' → '+fmtDate(sc.last):''} · ${sc.n} ${sc.n===1?'entry':'entries'}`;
   const sk=_ppScale(sc,parseFloat(r.amt)||0);
-  return `📅 ${fmtDate(sc.first)}${sc.last!==sc.first?' → '+fmtDate(sc.last):''} · ${sc.n} ${sc.n===1?'entry':'entries'} · <strong style="color:var(--text)">${esc(_ppQtyText(sk.by)||'—')}</strong>${r.edited?' <span style="color:var(--blue)">(amount edited)</span>':''}`;
+  return `${fmtDate(sc.first)}${sc.last!==sc.first?' → '+fmtDate(sc.last):''} · ${sc.n} ${sc.n===1?'entry':'entries'} · <strong style="color:var(--text)">${esc(_ppQtyText(sk.by)||'—')}</strong>${r.edited?' <span style="color:var(--blue)">(amount edited)</span>':''}`;
 }
 function _bpPerPaint(id){const e=document.getElementById('bp-per-'+id);if(e)e.innerHTML=_bpPerText(id);}
 function _bpPeriodInfo(){
@@ -22940,7 +22944,7 @@ function _bpPeriodInfo(){
   let h=n?`<div style="color:var(--muted)"><strong style="color:var(--amber)">${n} staff</strong> ha${n===1?'s':'ve'} unpaid work ${where} · ${zm(tot)}${_ppQtyText(by)?' · '+esc(_ppQtyText(by)):''}</div>`
          :`<div style="color:var(--muted)">No unpaid work ${where} for the staff shown.</div>`;
   if(m==='upto')h+=`<div style="color:var(--muted);margin-top:4px">Each person is paid from their own last pay — the first work entry not fully paid yet.</div>`;
-  if(ne)h+=`<div style="color:var(--amber);margin-top:4px">⚠ ${ne} staff still have older unpaid work (${zm(earlier)}) from before ${fmtDate(_bp.from)}. Payments settle the oldest work first, so it goes to that work before this period.</div>`;
+  if(ne)h+=`<div style="color:var(--amber);margin-top:4px">${dbIc('alert')} ${ne} staff still have older unpaid work (${zm(earlier)}) from before ${fmtDate(_bp.from)}. Payments settle the oldest work first, so it goes to that work before this period.</div>`;
   el.innerHTML=h;el.style.display='';
 }
 // Bottom line: total quantity across everyone ticked, per unit
@@ -23518,13 +23522,13 @@ function calcEditGross(){
 function _openEditAbsence(log,staffOpts){
   const t=log.entryType;
   openModal(`
-    <div class="sfx"><div class="sfx-h"><div class="mtitle">✏️ Edit Attendance Entry</div>${_sfxX()}</div>
-    <div class="warn">⏰ Editing is only allowed within ${_editWindowLabel(true)} of entry.</div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">Edit Attendance Entry</div>${_sfxX()}</div>
+    <div class="warn">Editing is only allowed within ${_editWindowLabel(true)} of entry.</div>
     <div class="fw"><div class="fl">Entry Type</div><select class="fi" id="elg-type"><option value="absent"${t==='absent'?' selected':''}>Absent (Unexcused)</option><option value="leave"${t==='leave'?' selected':''}>On Leave</option><option value="sick"${t==='sick'?' selected':''}>Sick Day</option></select></div>
     <div class="fw"><div class="fl">Staff Member</div><select class="fi" id="elg-staff">${staffOpts}</select></div>
     <div class="fw"><div class="fl">Date</div><input class="fi" type="date" id="elg-date" value="${log.date||''}"/></div>
     <div class="fw"><div class="fl">Note (optional)</div><input class="fi" id="elg-note" value="${esc(log.absenceNote||'')}" placeholder="E.G. FAMILY EMERGENCY" oninput="this.value=this.value.toUpperCase()"/></div>
-    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveEditLog('${log.id}')">✓ Save Changes</button></div></div>`);
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveEditLog('${log.id}')">Save Changes</button></div></div>`);
 }
 function _saveEditAbsence(id){
   const before=DATA.staffLogs.find(l=>String(l.id)===String(id));
