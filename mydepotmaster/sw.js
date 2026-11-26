@@ -25,7 +25,12 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.151 (2026-11-26) — New till icon, company name corrected, new app description (index.html + pos.html + manifest.json + privacy.html + terms.html + sw.js + NEW icon PNGs; no new script, NO database RULES change)
+// Current version: v0.3.152 (2026-11-26) — The "MDM" logo tile is now the cash-register picture (index.html + sw.js; no new file, NO database RULES change)
+//   - CHANGED (logo): the green "MDM" tile on the landing page, sign-in, sign-up and recovery screens (and the wide-screen sign-in panel) now shows the same cash register as the app icon. The picture is drawn once (#till-mark, right after <body>) and each tile points to it, so it takes the tile's colours in the dark and light themes.
+//   - CHANGED (header): on a narrow screen the app header's short title says "Shop Manager" instead of "MDM" (it already shortens with an ellipsis if there is no room).
+//   - NOT CHANGED: PDF and print headers, ID-card badge and the "MDM" file and backup names, which still use the letters MDM; the payment screen's account names.
+//   - Ships on top of v0.3.151 (pos.html, manifest.json, privacy.html, terms.html and the icons as there).
+// Previous version: v0.3.151 (2026-11-26) — New till icon, company name corrected, new app description (index.html + pos.html + manifest.json + privacy.html + terms.html + sw.js + NEW icon PNGs; no new script, NO database RULES change)
 //   - CHANGED (icons): the green "MDM" tile is replaced by a cash-register icon (receipt, display, keys, drawer; same green and navy). New icons/icon-192.png, icon-512.png, icon-maskable-192.png and icon-maskable-512.png (the maskable pair is full-bleed with the picture inside the safe circle). The apple-touch-icon in index.html is the same picture.
 //   - FIXED (company): the Terms (sections 1 and 7) and Privacy Policy (section 1) no longer say "trading as Spike Trading and General Dealers"; the company is NEXLITE DIGITAL SOLUTIONS LIMITED, written with spaces, not hyphens. Same change in privacy.html and terms.html, and their last-updated date is 26 November 2026.
 //   - CHANGED (name): manifest.json description now describes a till and stock manager; pos.html's Shop Assistant prompt says Shop Inventory & Sales Manager instead of My Depot Master. name, short_name and id are unchanged.
@@ -2809,7 +2814,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.151';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.152';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
