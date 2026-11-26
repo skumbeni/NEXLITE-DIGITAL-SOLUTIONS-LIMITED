@@ -25,7 +25,13 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.150 (2026-11-25) — Till: cart no longer cut at the right or the bottom, and a Full screen button (pos.html + sw.js; no new file, NO database RULES change)
+// Current version: v0.3.151 (2026-11-26) — New till icon, company name corrected, new app description (index.html + pos.html + manifest.json + privacy.html + terms.html + sw.js + NEW icon PNGs; no new script, NO database RULES change)
+//   - CHANGED (icons): the green "MDM" tile is replaced by a cash-register icon (receipt, display, keys, drawer; same green and navy). New icons/icon-192.png, icon-512.png, icon-maskable-192.png and icon-maskable-512.png (the maskable pair is full-bleed with the picture inside the safe circle). The apple-touch-icon in index.html is the same picture.
+//   - FIXED (company): the Terms (sections 1 and 7) and Privacy Policy (section 1) no longer say "trading as Spike Trading and General Dealers"; the company is NEXLITE DIGITAL SOLUTIONS LIMITED, written with spaces, not hyphens. Same change in privacy.html and terms.html, and their last-updated date is 26 November 2026.
+//   - CHANGED (name): manifest.json description now describes a till and stock manager; pos.html's Shop Assistant prompt says Shop Inventory & Sales Manager instead of My Depot Master. name, short_name and id are unchanged.
+//   - NOT CHANGED: the Airtel Money and MTN MoMo account names on the payment screen (they must match what the networks show the payer), the "MDM" letters on the sign-in screens, the version of index.html's other code, the sync, the database rules, delete-account.html.
+//   - Ships on top of v0.3.150 (sales.js, shifts.js, returns.js and gate.js as before).
+// Previous version: v0.3.150 (2026-11-25) — Till: cart no longer cut at the right or the bottom, and a Full screen button (pos.html + sw.js; no new file, NO database RULES change)
 //   - FIXED (width): the Current sale pane could be pushed out to the right and cut off by the page (a line's grid, the unit list, the Preview receipt / Hold sale buttons and the
 //     offer line could not shrink or wrap, most of all with a bigger Text size). They now shrink and wrap, and the pane never scrolls sideways.
 //   - FIXED (height): when the pane's header and footer (offers, wholesale, discount, total, two buttons, Charge, hint) are taller than the window, the lines keep 96 px and the pane
@@ -2803,7 +2809,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.150';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.151';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
