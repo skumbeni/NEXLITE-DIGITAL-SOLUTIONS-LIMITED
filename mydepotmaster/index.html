@@ -9767,7 +9767,7 @@ function _amGroups(kind){
     row('truck','Transport','Record a transport cost',()=>openTransportForm())
   ]);
   add('Setup',[
-    USER.role==='admin'&&row('sliders','Manage',inv?'Items, units and groups':'Commodities and their units',inv?()=>openManageInventory():()=>openManageCommodities()),
+    USER.role==='admin'&&row('sliders','Manage',inv?'Min stock, reserved stock and item details':'Commodities and their units',inv?()=>openManageInventory():()=>openManageCommodities()),
     USER.role==='admin'&&row('tag','Prices','Buying and selling prices',()=>openPriceList())
   ]);
   return G;
@@ -11693,7 +11693,7 @@ function renderGenSummary(){
     </div>`;
   }).join('');
   return uniqueItems.length===0
-    ?`<div class="card"><div class="empty">No inventory items yet.<br>Add items in Settings first.</div></div>`
+    ?`<div class="card"><div class="empty">No inventory items yet.<br>Add items in Item names first.</div></div>`
     :cards;
 }
 
@@ -13255,7 +13255,7 @@ function renderGenStockCount(){
       Negative = shortage (missing units) &nbsp;&#x2022;&nbsp; Positive = surplus (extra units found) &nbsp;&#x2022;&nbsp; Sales and receipts after the count do not change it
     </div>
     ${uniqueItems.length===0
-      ?`<div class="card"><div class="empty">No inventory items yet. Add items in Settings and receive stock first.</div></div>`
+      ?`<div class="card"><div class="empty">No inventory items yet. Add items in Item names and receive stock first.</div></div>`
       :`<div class="card iv-p0">
           <div style="padding:14px 16px 8px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
             <div class="iv-fh iv-title iv-w7 iv-wh">${dbIc('clipcheck')} Latest count vs system</div>
@@ -13378,7 +13378,7 @@ function renderGenItemNamesTab(){
         </div>
         ${_itemChipsHtml(item)}
       </div>`).join('')}</div></div>`
-    :`<div class="iv-mute iv-body iv-mb12">No items defined yet. Add items below.</div>`;
+    :`<div class="iv-mute iv-body iv-mb12">No items defined yet. Add your first item below.</div>`;
   const atCap = isAtCap('inventoryItems', items.length);
   // Items already recorded in actual stock activity (received/issued) but not yet
   // formalised in the definitions list — these can be picked instead of retyped.
@@ -15697,7 +15697,7 @@ function openPriceList(){
   const sections=
     (items.length?`<div class="pl-sec"><div class="pl-head">📦 Stock items (${items.length})</div>${itemRows}</div>`:'')+
     (coms.length?`<div class="pl-sec"><div class="pl-head">🌾 Commodities (${coms.length})</div>${comRows}</div>`:'')+
-    (orphans.length?`<div class="pl-sec"><div class="pl-head">📋 Other stock, not in Manage Inventory Items (${orphans.length})</div>${orphanRows}</div>`:'');
+    (orphans.length?`<div class="pl-sec"><div class="pl-head">📋 Other stock, not in Item names (${orphans.length})</div>${orphanRows}</div>`:'');
   openModal(`
     <div class="mtitle">💲 Price List</div>
     <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">Set the <strong style="color:var(--text)">selling price</strong> of every item and commodity here, before you sell. The Till and the Issue forms use these prices. Press <strong style="color:var(--text)">Enter</strong> to jump to the next price. Leave a price blank for none.<br>Under each one you can also set a <strong style="color:var(--text)">wholesale price</strong> (lower than the selling price) and the quantity from which the item is sold at it by itself. The Till uses wholesale prices only after you switch them on in Settings.</div>
@@ -15705,7 +15705,7 @@ function openPriceList(){
     <input class="fi" id="pl-q" placeholder="🔍 Search" autocomplete="off" style="margin-bottom:8px" oninput="_plFilter()"/>
     <label style="display:flex;align-items:center;gap:8px;font-size:17px;color:var(--muted);margin-bottom:6px"><input type="checkbox" id="pl-nb" onchange="_plFilter()"/> Only show unpriced <span id="pl-count" style="margin-left:auto"></span></label>
     <div id="pl-list">${sections}</div>`
-    :`<div style="color:var(--muted);font-size:18px;margin:12px 0">Nothing to price yet. Add items under <strong style="color:var(--text)">Manage Inventory Items</strong> and commodities under <strong style="color:var(--text)">Manage Commodities</strong>.</div>`}
+    :`<div style="color:var(--muted);font-size:18px;margin:12px 0">Nothing to price yet. Add items under <strong style="color:var(--text)">Item names</strong> and commodities under <strong style="color:var(--text)">Manage Commodities</strong>.</div>`}
     <div class="mact"><button class="btn bo" onclick="_plCancel()">${sections?'Cancel':'Close'}</button>${sections?`<button class="btn bg" id="pl-save" onclick="savePriceList()">Save prices</button>`:''}</div>`,'uncloseable');
   _plRefreshAll();
 }
@@ -16729,24 +16729,16 @@ function renderManageInventoryModal(){
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin-top:6px"><button class="btn bo" style="width:auto;padding:6px 12px" onclick="openItemDetails('${esc(_invItemId(item))}','manage')">✏️ Details</button><button class="delbtn" onclick="removeInvItemModal(${i})">🗑 Remove</button></div>
       </div>`).join('')
-    :`<div style="color:var(--muted);font-size:18px;margin-bottom:12px">No items defined yet. Add items below.</div>`;
-  const atCap = isAtCap('inventoryItems', items.length);
-  const addFormHtml = atCap
-    ? `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;text-align:center">
-        <div style="font-size:15px;color:var(--muted);margin-bottom:10px">You've reached the ${currentCaps().inventoryItems} inventory-item limit on your <strong style="color:var(--text)">${esc(TIER_META[currentTier()].label)} plan</strong>.</div>
-        <button class="btn bg" onclick="closeModal();showCapReachedPrompt('inventoryItems','Inventory Items')">${window.PLAY_MODE?'ℹ️ About This Limit':'📈 See Upgrade Options'}</button>
-      </div>`
-    : `<div style="display:flex;gap:8px">
-      <input class="fi" id="new-inv-item-modal" placeholder="E.G. FERTILIZER, BAGS…" style="flex:1" oninput="this.value=this.value.toUpperCase()"/>
-      <button class="btn bg" style="width:auto;padding:10px 16px" onclick="addInvItemModal()">+ ADD</button>
-    </div>`;
+    :`<div style="color:var(--muted);font-size:18px;margin-bottom:12px">No items yet. Open <strong style="color:var(--text)">Item names</strong> to add your first one.<div style="margin-top:10px"><button class="btn bg" style="width:auto;padding:8px 14px" onclick="openItemNames()">Open Item names</button></div></div>`;
   openModal(`
     <div class="mtitle">⚙️ Manage Inventory Items</div>
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:12px">
+      <div style="flex:1 1 180px;font-size:17px;line-height:1.5">To add a new item, open <strong>Item names</strong>.</div>
+      <button class="btn bg" style="width:auto;padding:8px 14px" onclick="openItemNames()">Open Item names</button>
+    </div>
     <div style="font-size:17px;color:var(--muted);margin-bottom:12px;line-height:1.7">Set <strong style="color:var(--text)">Min Stock</strong> for low-stock alerts. Set <strong style="color:var(--text)">Reserved Qty</strong> to hold stock aside (e.g. for contracts). Tap <strong style="color:var(--text)">✏️ Details</strong> to set barcode, SKU, unit, category, prices and VAT.</div>
     <div style="margin-bottom:12px">${items.length>8?_itemSearchBoxHtml('inv-modal-list'):''}<div id="inv-modal-list">${listHtml}</div></div>
     ${_itemImportBarHtml('manage')}
-    <div class="sh" style="margin-top:16px;margin-bottom:8px">Add New Item</div>
-    ${addFormHtml}
     <div class="mact"><button class="btn bo" onclick="closeModal()">Close</button></div>`);
 }
 function _setInvMinStock(idx,val){
@@ -16764,17 +16756,6 @@ function _setInvReserved(idx,val){
   if(!items[idx])return;
   items[idx]={...items[idx],reservedQty:Math.max(0,Number(val)||0)};
   updateData(d=>({...d,inventoryItems:items}));
-  renderManageInventoryModal();
-}
-function addInvItemModal(){
-  if(!requireAdmin('add inventory items'))return;
-  const items0=(DATA.inventoryItems||[]).map(x=>typeof x==='string'?{name:x,minStock:0,reservedQty:0}:x);
-  if (isAtCap('inventoryItems', items0.length)) { closeModal(); showCapReachedPrompt('inventoryItems', 'Inventory Items'); return; }
-  const val=document.getElementById('new-inv-item-modal').value.trim().toUpperCase();
-  if(!val){alert('Enter an item name.');return;}
-  const items=(DATA.inventoryItems||[]).map(x=>typeof x==='string'?{name:x,minStock:0,reservedQty:0}:x);
-  if(items.some(x=>x.name===val)){alert('Item already exists.');return;}
-  updateData(d=>({...d,inventoryItems:[...(d.inventoryItems||[]).map(x=>typeof x==='string'?{name:x,minStock:0,reservedQty:0}:x),_newInvItem(val)]}));
   renderManageInventoryModal();
 }
 function removeInvItemModal(idx){
@@ -30273,8 +30254,8 @@ const FR_STEPS = [
   {
     id: 'inventory',
     title: 'Add inventory items or commodities',
-    desc: 'Go to General → Item Names to define what you stock, or Commodities to track bags of maize, wheat etc.',
-    nav: ()=>{ dismissFirstRun(); showTab('general'); },
+    desc: 'Open Item names to define what you stock, or Commodities to track bags of maize, wheat etc.',
+    nav: ()=>{ dismissFirstRun(); openItemNames(); },
     done: ()=> (DATA.inventoryItems||[]).length > 0 || (DATA.commodities||[]).length > 0
   }
 ];
