@@ -6077,6 +6077,14 @@ async function submitSubscriptionRequest(planTier) {
 
   btn.disabled = true; btn.textContent = '⏳ Submitting…';
 
+  // v0.3.159: no cloud session = the request would go out with no token and come back
+  // "401 Permission denied". Say so and offer the reconnect instead of the raw error.
+  if (!(await _getIdToken())) {
+    btn.disabled = false; btn.textContent = '📤 Submit Application';
+    _subShowSessionLost(err, { tier: planTier, email, method, txid });
+    return;
+  }
+
   const di = DATA.depotInfo || {};
   const payload = {
     // Exactly the fields subscriptionRequests/<id>/<ts> allows, clamped to the rules'
@@ -6108,8 +6116,56 @@ async function submitSubscriptionRequest(planTier) {
   } catch(e) {
     btn.disabled = false; btn.textContent = '📤 Submit Application';
     err.style.display = 'block';
-    err.textContent = '❌ Submission failed: ' + (e.message || 'Please try again.');
+    const msg = (e && e.message) || '';
+    if (/HTTP 401|permission denied/i.test(msg)) {
+      err.textContent = '⏳ Checking why it was refused…';
+      const dg = await _subDiagnose401();
+      if (dg.kind === 'nosession') { _subShowSessionLost(err, { tier: planTier, email, method, txid }); return; }
+      if (dg.kind === 'notmember') {
+        err.innerHTML = '🚫 This login is not authorised for this depot\'s cloud, so the application was refused. Your payment is safe: send your transaction ID to support.'
+          + '<div style="font-size:13px;margin-top:8px;word-break:break-all;opacity:.85">Depot ID: ' + esc(key) + '<br>UID: ' + esc(dg.uid) + '</div>';
+        return;
+      }
+      if (dg.kind === 'rules') {
+        err.innerHTML = '⚠️ Your login is authorised, but the database rules refused the application. Support: publish the latest database_rules.json (Firebase Console → Realtime Database → Rules).'
+          + '<div style="font-size:13px;margin-top:8px;word-break:break-all;opacity:.85">Depot ID: ' + esc(key) + '<br>UID: ' + esc(dg.uid) + '</div>';
+        return;
+      }
+    }
+    err.textContent = '❌ Submission failed: ' + (msg || 'Please try again.');
   }
+}
+
+// v0.3.159: a 401 on the application has three causes; tell them apart.
+//   nosession = no Firebase Auth session on this device (fixed by a password reconnect)
+//   notmember = signed in, but this uid is not in depots/<id>/authorizedUids (needs a grant)
+//   rules     = signed in AND a member, yet the write was refused (live rules differ from database_rules.json)
+async function _subDiagnose401() {
+  try {
+    const u = (typeof firebase !== 'undefined' && firebase.auth) ? firebase.auth().currentUser : null;
+    if (!u) return { kind: 'nosession' };
+    try {
+      const m = await fbGet('depots/' + depotKey() + '/authorizedUids/' + u.uid);
+      return m ? { kind: 'rules', uid: u.uid } : { kind: 'notmember', uid: u.uid };
+    } catch (e) {
+      // Reading your own authorizedUids entry is refused for a non-member (401); anything else is just the network.
+      return /HTTP 401/.test((e && e.message) || '') ? { kind: 'notmember', uid: u.uid } : { kind: 'unknown' };
+    }
+  } catch (e) { return { kind: 'unknown' }; }
+}
+
+function _subShowSessionLost(err, draft) {
+  window._subResume = draft;
+  err.style.display = 'block';
+  err.innerHTML = '🔒 Your cloud session expired on this device, so the application could not be sent. Reconnect with your password, then it opens again with your details filled in.'
+    + '<div style="margin-top:10px"><button type="button" class="btn bo" onclick="closeModal();reconnectCloudSync()">Reconnect now</button></div>';
+}
+
+// After a reconnect that was started from the application form: open the form again with what was typed.
+function _subReopen(d) {
+  openSubscriptionForm(d.tier);
+  const set = (id, v) => { const el = document.getElementById(id); if (el && v) el.value = v; };
+  set('sub-email', d.email); set('sub-method', d.method); set('sub-txid', d.txid);
 }
 
 // Confirmation modal shown right after a subscription/upgrade payment claim is
@@ -6425,7 +6481,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.158';
+const SW_VERSION  = 'v0.3.159';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -7869,6 +7925,7 @@ async function _confirmReconnectCloudSync(){
     _fbAuthSessionLost = false;
     closeModal();
     showToast('☁ Cloud sync reconnected');
+    if (window._subResume) { const _d = window._subResume; window._subResume = null; setTimeout(() => _subReopen(_d), 350); }
     flushOfflineQueue().then(() => scheduleFbSync()).catch(e => console.warn('[MDM] post-flush sync failed', e));
     fbRestoreData().catch(()=>{});
   } catch (e) {

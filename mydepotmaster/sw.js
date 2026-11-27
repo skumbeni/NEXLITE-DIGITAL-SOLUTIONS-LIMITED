@@ -25,7 +25,10 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.158 (2026-11-27) — Plan banner redone, and a plan can be renewed before it ends (index.html + sw.js; no new file, NO database RULES change, no new field on any record)
+// Current version: v0.3.159 (2026-11-27) — Upgrade application: a 401 "Permission denied" now says why and, for a lost session, recovers in place (index.html + sw.js; no new file, NO database RULES change, no new field on any record)
+//   - FIXED (application): Submit Application showed the raw "HTTP 401: Permission denied". It now checks for a cloud session first; with none it offers Reconnect, and after the password it reopens the form with the email, method and reference already filled in.
+//   - CHANGED (application): if a session exists and the write is still refused, the form reads depots/<id>/authorizedUids/<uid> to tell "this uid is not a member" (shows Depot ID and UID to send to support) from "member, but the live rules refused it" (publish database_rules.json).
+// Previous version: v0.3.158 (2026-11-27) — Plan banner redone, and a plan can be renewed before it ends (index.html + sw.js; no new file, NO database RULES change, no new field on any record)
 //   - CHANGED (banner): the trial / subscription warning strip is rebuilt. Severity is an accent bar, a line icon and the button colour (blue 8-10 days, amber 4-7, red 3 or fewer or in read-only grace); the text keeps the normal colour. The days left are a plain pill ("5 days left", "Ends today"), the title says what is ending ("Pro plan ends 2 Dec"), and one line says what to do. No emoji, no capitals, no letter-spacing. The refresh control is a real button with a name.
 //   - CHANGED (action): the banner has a button (Renew now / Upgrade / Subscribe now) that opens a plan chooser (openPlanChooser), then the usual application form. Before, the banner only said the plan was ending and gave no way to act.
 //   - CHANGED (one component): trial, trial grace, subscription grace, Free after a trial and Free after a lapse all draw through _planBanner(). The two Free-plan notes used the old license-banner strip with no space made for it, so they sat over the top of the page; they now push the page down like the others. The strip's height is measured (--tb-h) so a wrapped line never hides content.
@@ -2864,7 +2867,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.158';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.159';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
