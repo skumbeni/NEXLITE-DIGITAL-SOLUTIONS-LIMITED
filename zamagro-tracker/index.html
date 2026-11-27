@@ -1926,6 +1926,7 @@
             <div id="dn-print-body"></div>
             <div style="display:flex;gap:.5rem;margin-top:1.25rem;flex-wrap:wrap;" id="dn-print-actions">
                 <button class="btn btn-primary" style="flex:1;" onclick="printDoc(this)">🖨 Print</button>
+                <button class="btn btn-sm" style="flex:1;background:var(--surface-2);border:1.5px solid var(--border);font-weight:600;" onclick="dnSignFromPrint('issuer')">✍ Issuer</button>
                 <button class="btn btn-sm" style="flex:1;background:var(--surface-2);border:1.5px solid var(--border);font-weight:600;" onclick="dnSignFromPrint('driver')">✍ Driver</button>
                 <button class="btn btn-sm" style="flex:1;background:var(--surface-2);border:1.5px solid var(--border);font-weight:600;" onclick="dnSignFromPrint('cust')">✍ Customer</button>
                 <button class="btn btn-sm" style="flex:1;background:#eee;" onclick="closeModal('modal-dn-print')">Close</button>
@@ -1944,6 +1945,7 @@
                     <div class="form-group"><input type="text" id="grn-dn" placeholder="Supplier Delivery Note No." maxlength="100"></div>
                 </div>
                 <div class="form-group"><input type="text" id="grn-by" placeholder="Received by" maxlength="100" required></div>
+                <div class="grid" style="grid-template-columns:1fr 1fr;gap:10px;"><div class="form-group"><input type="text" id="grn-driver" placeholder="Delivered by (driver name)" maxlength="100"></div><div class="form-group"><input type="text" id="grn-vehicle" placeholder="Vehicle reg. no." maxlength="40"></div></div>
                 <div style="font-weight:700;font-size:.85rem;margin:.4rem 0;">Items received</div>
                 <div id="grn-lines"></div>
                 <div style="display:flex;gap:.4rem;flex-wrap:wrap;margin:.3rem 0 .6rem;">
@@ -1973,6 +1975,8 @@
             <div id="grn-print-body"></div>
             <div style="display:flex;gap:.5rem;margin-top:1.25rem;flex-wrap:wrap;" id="grn-print-actions">
                 <button class="btn btn-primary" style="flex:1;" onclick="printDoc(this)">🖨 Print</button>
+                <button class="btn btn-sm" style="flex:1;background:var(--surface-2);border:1.5px solid var(--border);font-weight:600;" onclick="grnSignFromPrint('driver')">✍ Driver</button>
+                <button class="btn btn-sm" style="flex:1;background:var(--surface-2);border:1.5px solid var(--border);font-weight:600;" onclick="grnSignFromPrint('recv')">✍ Receiver</button>
                 <button class="btn btn-sm" style="flex:1;background:#eee;" onclick="closeModal('modal-grn-print')">Close</button>
             </div>
         </div>
@@ -2818,6 +2822,22 @@
         @media print and (max-width: 75mm) {
             #receipt-body table, #invoice-print-body table, #statement-body table, #grn-print-body table, #dn-print-body table, #cd-print-body table, #ret-print-body table, #trf-print-body table, #report-print-body table { font-size: 0.5rem !important; }
             #receipt-body th, #invoice-print-body th, #statement-body th, #grn-print-body th, #dn-print-body th, #cd-print-body th, #ret-print-body th, #trf-print-body th, #report-print-body th, #receipt-body td, #invoice-print-body td, #statement-body td, #grn-print-body td, #dn-print-body td, #cd-print-body td, #ret-print-body td, #trf-print-body td, #report-print-body td { font-size: 0.48rem !important; }
+        }
+    </style>
+
+    <style id="print-safety-sign">
+        /* Signature rows (DN has 3 cells, GRN 2): wrap instead of squeezing, keep room for the signature image,
+           never split across pages, and stack on roll paper (80 mm / 58 mm) so no label or line is cut. */
+        .grn-sign { flex-wrap: wrap; row-gap: 70px; }
+        .grn-sign > div { min-width: 96px; overflow-wrap: anywhere; }
+        @media print {
+            .grn-sign { flex-wrap: wrap !important; row-gap: 70px !important; break-inside: avoid; page-break-inside: avoid; }
+            .grn-sign > div { min-width: 96px !important; box-sizing: border-box; }
+            .sig-cell img.sig-img { max-width: 100% !important; height: auto; }
+        }
+        @media print and (max-width: 100mm) {
+            .grn-sign { flex-direction: column !important; row-gap: 64px !important; }
+            .grn-sign > div { flex: none !important; width: 100% !important; min-width: 0 !important; }
         }
     </style>
 
@@ -11489,8 +11509,8 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const d = db.deliveries.find(x => x.id === _dnPrintId);
             if (!d) return;
             openSignPad({
-                title: who === 'driver' ? 'Driver signature' : 'Customer signature: goods received',
-                name: who === 'driver' ? (d.driver || '') : (d.receivedBy || d.cust || ''),
+                title: who === 'issuer' ? 'Issuer signature: goods released' : (who === 'driver' ? 'Driver signature' : 'Customer signature: goods received'),
+                name: who === 'issuer' ? (d.issuerSigName || d.issuedBy || _signerName()) : (who === 'driver' ? (d.driver || '') : (d.receivedBy || d.cust || '')),
                 onDone: r => dnApplySig(d.id, who, r)
             });
         }
@@ -11508,6 +11528,34 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
         function _dnSignCell(label, sig, name, at) {
             const ok = _sigOK(sig);
             return `<div class="sig-cell">${ok ? `<img class="sig-img" src="${sig}" alt="">` : ''}${label}${ok ? `<span style="display:block;font-size:.7rem;color:#222;margin-top:2px;">${esc(name || '')}${at ? ' · ' + esc(at) : ''}</span>` : ''}</div>`;
+        }
+
+        // GRN: the driver who delivered and the person who received both sign on screen
+        let _grnPrintId = null;
+        function _signerName() { return currentDisplayName || (currentUser === 'admin' ? 'Admin' : currentUser) || ''; }
+        function grnSignFromPrint(who) {
+            const g = db.grns.find(x => x.id === _grnPrintId);
+            if (!g) return;
+            openSignPad({
+                title: who === 'driver' ? 'Driver signature: goods delivered' : 'Receiver signature: goods received',
+                name: who === 'driver' ? (g.driver || '') : (g.receivedBy || _signerName()),
+                onDone: r => grnApplySig(g.id, who, r)
+            });
+        }
+        function grnApplySig(id, who, r) {
+            const list = db.grns;
+            const g = list.find(x => x.id === id);
+            if (!g) return;
+            g[who + 'Sig'] = r.sig; g[who + 'SigName'] = r.name; g[who + 'SigAt'] = r.at;
+            db.grns = list;
+            renderGRNs();
+            const m = document.getElementById('modal-grn-print');
+            if (_grnPrintId === id && m && !m.classList.contains('hidden')) printGRN(id, true);
+            showToast('Signature saved');
+        }
+        function _grnSigNote(g) {
+            const n = (_sigOK(g.driverSig) ? 1 : 0) + (_sigOK(g.recvSig) ? 1 : 0);
+            return n ? `<div style="font-size:.72rem;color:var(--text-muted);">${n === 2 ? '✅ Signed by both' : '✍ 1 of 2 signed'}</div>` : '';
         }
 
         function convertQuotationToSale() {
@@ -12257,6 +12305,8 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             document.getElementById('grn-ref').value = g ? (g.ref || '') : '';
             document.getElementById('grn-dn').value = g ? (g.delivNote || '') : '';
             document.getElementById('grn-by').value = g ? (g.receivedBy || '') : getGeneratedByLabel();
+            document.getElementById('grn-driver').value = g ? (g.driver || '') : '';
+            document.getElementById('grn-vehicle').value = g ? (g.vehicle || '') : '';
             document.getElementById('grn-notes').value = g ? (g.notes || '') : '';
             document.getElementById('grn-credit').checked = !!(g && g.onCredit);
             document.getElementById('grn-modal-title').textContent = g ? '✏️ Edit ' + g.id : '📦 New Goods Received Note';
@@ -12450,6 +12500,14 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 }
             }
 
+            // Signatures covered the goods as received: changed items mean the GRN must be signed again.
+            let keepGrnSigs = true;
+            const _g0 = grnEditId ? db.grns.find(x => x.id === grnEditId) : null;
+            const _gk = a => (a || []).map(i => [i.prodId, i.qtyReceived, i.qtyRejected, i.unitCost].join('|')).join(';');
+            if (_g0 && (_sigOK(_g0.driverSig) || _sigOK(_g0.recvSig)) && _gk(_g0.items) !== _gk(items)) {
+                if (!confirm('This GRN is already signed. Changing the items clears the signatures so it can be signed again. Continue?')) return;
+                keepGrnSigs = false;
+            }
             // Auto-register supplier (same as Record Purchase)
             const suppliers = db.suppliers;
             if (!suppliers.find(s => (s.name || '').toLowerCase() === supplier.toLowerCase())) {
@@ -12491,9 +12549,12 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 delivNote: document.getElementById('grn-dn').value.trim(),
                 receivedBy: document.getElementById('grn-by').value.trim(),
                 notes: document.getElementById('grn-notes').value.trim(),
+                driver: document.getElementById('grn-driver').value.trim(),
+                vehicle: document.getElementById('grn-vehicle').value.trim(),
                 items: items, total: _r2(total), recordedBy: prev ? (prev.recordedBy || by) : by
             };
             if (prev) rec.editedBy = by;
+            if (prev && keepGrnSigs) ['driver', 'recv'].forEach(k => { if (_sigOK(prev[k + 'Sig'])) { rec[k + 'Sig'] = prev[k + 'Sig']; rec[k + 'SigName'] = prev[k + 'SigName'] || ''; rec[k + 'SigAt'] = prev[k + 'SigAt'] || ''; } });
             if (poId) rec.poId = poId;
             if (document.getElementById('grn-credit').checked) rec.onCredit = true;
             const ix = prev ? grns.findIndex(x => x.id === prev.id) : -1;
@@ -12538,7 +12599,7 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 const refCell = [g.poId ? 'PO ' + g.poId : '', g.ref, g.delivNote].filter(Boolean).map(esc).join(' / ') || '—';
                 const del = currentUser === 'admin'
                     ? `<button class="btn btn-sm btn-primary" onclick="openGRNModal('${esc(g.id)}')">✏️</button><button class="btn btn-sm btn-danger" onclick="deleteRecord('grns','${esc(g.id)}')">🗑</button>` : '';
-                return `<tr><td>${esc(g.id)}</td><td>${esc(g.date)}</td><td>${esc(g.supplier)}</td><td>${refCell}</td><td>${itemsCell}</td><td>${formatZMW(g.total || 0)}</td><td><span class="badge ${st.cls}">${st.label}</span></td><td style="white-space:nowrap;display:flex;gap:4px;"><button class="btn btn-sm" style="background:#eee;" onclick="printGRN('${esc(g.id)}')">🖨</button>${del}</td></tr>`;
+                return `<tr><td>${esc(g.id)}</td><td>${esc(g.date)}</td><td>${esc(g.supplier)}</td><td>${refCell}</td><td>${itemsCell}</td><td>${formatZMW(g.total || 0)}</td><td><span class="badge ${st.cls}">${st.label}</span>${_grnSigNote(g)}</td><td style="white-space:nowrap;display:flex;gap:4px;"><button class="btn btn-sm" style="background:#eee;" onclick="printGRN('${esc(g.id)}')">🖨</button><button class="btn btn-sm" style="background:#eee;" title="Open and sign" onclick="printGRN('${esc(g.id)}',true)">✍</button>${del}</td></tr>`;
             }).join('');
         }
 
@@ -12809,9 +12870,10 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             return rows;
         }
 
-        function printGRN(id) {
+        function printGRN(id, screen) {
             const g = db.grns.find(x => x.id === id);
             if (!g) return;
+            _grnPrintId = id;
             const co = getCompanyInfo();
             const sub = [co.phone, co.address, co.tpin ? 'TPIN: ' + co.tpin : ''].filter(Boolean).map(esc).join(' · ');
             const rows = (g.items || []).map((i, n) => `<tr><td>${n + 1}</td><td>${esc(i.prodName)}</td><td class="num">${i.qtyOrdered || '—'}</td><td class="num">${esc(i.qtyReceived)}</td><td class="num">${esc(i.qtyRejected || 0)}</td><td class="num">${formatZMW(i.unitCost || 0)}</td><td class="num">${formatZMW(i.lineTotal || 0)}</td></tr>`).join('');
@@ -12828,12 +12890,14 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 ${g.poId ? `<div class="grn-row"><span>PO No:</span><span>${esc(g.poId)}</span></div>` : ''}
                 ${g.ref ? `<div class="grn-row"><span>Supplier Invoice No:</span><span>${esc(g.ref)}</span></div>` : ''}
                 ${g.delivNote ? `<div class="grn-row"><span>Delivery Note No:</span><span>${esc(g.delivNote)}</span></div>` : ''}
+                ${g.driver ? `<div class="grn-row"><span>Delivered by (driver):</span><span>${esc(g.driver)}</span></div>` : ''}
+                ${g.vehicle ? `<div class="grn-row"><span>Vehicle:</span><span>${esc(g.vehicle)}</span></div>` : ''}
                 <div class="grn-row"><span>Received by:</span><span>${esc(g.receivedBy || '—')}</span></div>
                 <table><thead><tr><th>#</th><th>Item</th><th class="num">Ordered</th><th class="num">Received</th><th class="num">Rejected</th><th class="num">Unit Cost</th><th class="num">Value</th></tr></thead><tbody>${rows}</tbody></table>
                 <div class="grn-row" style="font-weight:800;font-size:1rem;border-top:1.5px solid #333;padding-top:6px;"><span>TOTAL VALUE RECEIVED</span><span>${formatZMW(g.total || 0)}</span></div>
                 ${g.notes ? `<div style="margin-top:8px;font-size:.78rem;background:#f7f7f7;padding:6px 8px;border-radius:4px;"><strong>Notes:</strong> ${esc(g.notes)}</div>` : ''}
-                <div class="grn-sign"><div>Delivered by (name &amp; signature)</div><div>Received by (name &amp; signature)</div></div>`;
-            showDoc('modal-grn-print', 'grn-print-body');
+                <div class="grn-sign" style="margin-top:${(_sigOK(g.driverSig) || _sigOK(g.recvSig)) ? 64 : 28}px;">${_dnSignCell('Delivered by (driver: name &amp; signature)', g.driverSig, g.driverSigName, g.driverSigAt)}${_dnSignCell('Received by (name &amp; signature)', g.recvSig, g.recvSigName, g.recvSigAt)}</div>`;
+            if (screen) openModal('modal-grn-print'); else showDoc('modal-grn-print', 'grn-print-body');
         }
 
         // ── STOCK TRANSFERS BETWEEN SHOPS ─────────────────────────────────
@@ -13715,6 +13779,13 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             const v = id => document.getElementById(id).value.trim();
             const list = db.deliveries;
             const prev = dnEditId ? list.find(x => x.id === dnEditId) : null;
+            // Signatures covered the goods as they were: changed items mean the note must be signed again.
+            const _ik = a => (a || []).map(i => [i.prodId, i.qty].join('|')).join(';');
+            let dnClearSigs = false;
+            if (prev && ['issuer', 'driver', 'cust'].some(k => _sigOK(prev[k + 'Sig'])) && _ik(prev.items) !== _ik(items)) {
+                if (!confirm('This delivery note is already signed. Changing the items clears the signatures so it can be signed again. Continue?')) return;
+                dnClearSigs = true;
+            }
             const by = currentUser || 'unknown';
             const rec = Object.assign({}, prev || {}, {
                 id: prev ? prev.id : uid('DN'),
@@ -13723,10 +13794,12 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 driver: v('dn-driver'), vehicle: v('dn-vehicle'), notes: v('dn-notes'),
                 saleId: document.getElementById('dn-sale').value || '',
                 status: prev ? prev.status : 'Pending',
-                items: items, recordedBy: prev ? (prev.recordedBy || by) : by
+                items: items, recordedBy: prev ? (prev.recordedBy || by) : by,
+                issuedBy: prev ? (prev.issuedBy || _signerName() || by) : (_signerName() || by)
             });
             const ix = prev ? list.findIndex(x => x.id === prev.id) : -1;
             if (ix >= 0) list[ix] = rec; else list.push(rec);
+            if (dnClearSigs) ['issuer', 'driver', 'cust'].forEach(k => { delete rec[k + 'Sig']; delete rec[k + 'SigName']; delete rec[k + 'SigAt']; });
             db.deliveries = list;
             dnEditId = null;
             closeModal('modal-dn');
@@ -13754,6 +13827,9 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
             db.deliveries = list;
             renderDNs();
             showToast('Marked as ' + status);
+            if (status === 'Dispatched' && !_sigOK(d.issuerSig)) {
+                openSignPad({ title: 'Issuer signature: goods released', name: d.issuedBy || _signerName(), skipLabel: 'Skip', onDone: r => dnApplySig(id, 'issuer', r) });
+            }
             if (status === 'Delivered') {
                 openSignPad({ title: 'Customer signature: goods received', name: d.receivedBy || d.cust || '', skipLabel: 'Skip', onDone: r => dnApplySig(id, 'cust', r) });
             }
@@ -13806,12 +13882,12 @@ function notifyCancel() { document.getElementById('notify-step1').style.display 
                 </div>
                 <div class="grn-title">DELIVERY NOTE</div>
                 <div class="grn-row"><span>DN No:</span><strong>${esc(d.id)}</strong></div>
-                ${row('Date', d.date)}${row('Sale ref', d.saleId)}${row('Customer', d.cust)}${row('Phone', d.phone)}${row('Deliver to', d.address)}${row('Driver', d.driver)}${row('Vehicle', d.vehicle)}${row('Status', d.status)}
+                ${row('Date', d.date)}${row('Sale ref', d.saleId)}${row('Customer', d.cust)}${row('Phone', d.phone)}${row('Deliver to', d.address)}${row('Driver', d.driver)}${row('Vehicle', d.vehicle)}${row('Issued by', d.issuedBy)}${row('Status', d.status)}
                 <table><thead><tr><th>#</th><th>Item</th><th class="num">Qty</th></tr></thead><tbody>${rows}</tbody></table>
                 ${d.notes ? `<div style="margin-top:8px;font-size:.78rem;background:#f7f7f7;padding:6px 8px;border-radius:4px;"><strong>Notes:</strong> ${esc(d.notes)}</div>` : ''}
                 ${d.status === 'Delivered' ? `<div style="margin-top:8px;font-size:.8rem;">Received by <strong>${esc(d.receivedBy || '—')}</strong> on ${esc(d.deliveredAt || '')}</div>` : ''}
                 <div style="margin-top:10px;font-size:.78rem;color:#444;">Goods received in good condition and the correct quantity.</div>
-                <div class="grn-sign" style="margin-top:${(_sigOK(d.driverSig) || _sigOK(d.custSig)) ? 64 : 28}px;">${_dnSignCell('Driver (name &amp; signature)', d.driverSig, d.driverSigName, d.driverSigAt)}${_dnSignCell('Customer (name, signature &amp; date)', d.custSig, d.custSigName, d.custSigAt)}</div>`;
+                <div class="grn-sign" style="margin-top:${(_sigOK(d.issuerSig) || _sigOK(d.driverSig) || _sigOK(d.custSig)) ? 64 : 28}px;">${_dnSignCell('Issued by (name &amp; signature)', d.issuerSig, d.issuerSigName, d.issuerSigAt)}${_dnSignCell('Driver (name &amp; signature)', d.driverSig, d.driverSigName, d.driverSigAt)}${_dnSignCell('Customer (name, signature &amp; date)', d.custSig, d.custSigName, d.custSigAt)}</div>`;
             openModal('modal-dn-print');
         }
 
