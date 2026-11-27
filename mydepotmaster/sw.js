@@ -25,7 +25,13 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.159 (2026-11-27) — Upgrade application: a 401 "Permission denied" now says why and, for a lost session, recovers in place (index.html + sw.js; no new file, NO database RULES change, no new field on any record)
+// Current version: v0.3.160 (2026-11-27) — Staff pop-ups: the step 18 leftovers, no emoji in the pop-ups v0.3.157 wrapped (index.html + sw.js; no new file, NO database RULES change, no new field on any record)
+//   - CHANGED (titles): each emoji is now a dashboard line icon (dbIc) in the title: Bulk edit work logs (edit), Tag stock (tag), Delete contract (trash) / Replace contract (upload), Edit payment (edit), Review changes (search), Edit N payments (edit), N payments updated (check), Generate payslip (receipt), Edit work log (edit), Edit status entry (edit), Log leave / absence (calendar), Deduction reference (search), Create login / Add user (user).
+//   - CHANGED (notes and buttons): the clock, padlock and warning marks in the notes of Edit payment, Review changes, Edit work log and Tag stock are line icons (clock, lock, alert); the plus on "Add another task (split)" is a line icon; the warning in the live line of Edit work log ("task not priced for this role") is a line icon with its words. The tick, receipt and similar marks in front of Apply tag, Continue, Confirm (status change and Resignation / Termination), Save (status entry), Generate and Add user are gone: the word is the button.
+//   - CHANGED (words in place of a padlock): Edit payment's read-only boxes say "Staff Member (locked)" and, on a payroll-run payment, "Amount Paid (locked)", so the state is a word and not a picture. The overtime label lost its bolt. The status list in Edit status entry reads Suspended / Resigned / Terminated / Reinstated, without the pictures.
+//   - NOT CHANGED: what any button does, the figures, the saved values (the option values are the same), the toast and confirm() texts (they still carry their emoji), the printed payslip, ID card and profile PDF, the Clock in button on the staff login's own dashboard, and Settings (Add user is shared with it; only its title and button changed).
+//   - Ships on top of v0.3.159 (pos.html, sales.js, shifts.js, returns.js, gate.js, manifest.json and the icons as there).
+// Previous version: v0.3.159 (2026-11-27) — Upgrade application: a 401 "Permission denied" now says why and, for a lost session, recovers in place (index.html + sw.js; no new file, NO database RULES change, no new field on any record)
 //   - FIXED (application): Submit Application showed the raw "HTTP 401: Permission denied". It now checks for a cloud session first; with none it offers Reconnect, and after the password it reopens the form with the email, method and reference already filled in.
 //   - CHANGED (application): if a session exists and the write is still refused, the form reads depots/<id>/authorizedUids/<uid> to tell "this uid is not a member" (shows Depot ID and UID to send to support) from "member, but the live rules refused it" (publish database_rules.json).
 // Previous version: v0.3.158 (2026-11-27) — Plan banner redone, and a plan can be renewed before it ends (index.html + sw.js; no new file, NO database RULES change, no new field on any record)
@@ -2867,7 +2873,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.159';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.160';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
