@@ -25,7 +25,18 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.157 (2026-11-27) — Staff pop-ups: the leftovers of steps 19 and 20 (index.html + sw.js; no new file, NO database RULES change, no new field on any record)
+// Current version: v0.3.158 (2026-11-27) — Plan banner redone, and a plan can be renewed before it ends (index.html + sw.js; no new file, NO database RULES change, no new field on any record)
+//   - CHANGED (banner): the trial / subscription warning strip is rebuilt. Severity is an accent bar, a line icon and the button colour (blue 8-10 days, amber 4-7, red 3 or fewer or in read-only grace); the text keeps the normal colour. The days left are a plain pill ("5 days left", "Ends today"), the title says what is ending ("Pro plan ends 2 Dec"), and one line says what to do. No emoji, no capitals, no letter-spacing. The refresh control is a real button with a name.
+//   - CHANGED (action): the banner has a button (Renew now / Upgrade / Subscribe now) that opens a plan chooser (openPlanChooser), then the usual application form. Before, the banner only said the plan was ending and gave no way to act.
+//   - CHANGED (one component): trial, trial grace, subscription grace, Free after a trial and Free after a lapse all draw through _planBanner(). The two Free-plan notes used the old license-banner strip with no space made for it, so they sat over the top of the page; they now push the page down like the others. The strip's height is measured (--tb-h) so a wrapped line never hides content.
+//   - FIXED (stale colour): the tag stayed red after a grace period ended because only the other banner's tag was reset. The tag is now set on every draw.
+//   - FIXED (price): the active-plan warning quoted TIER_META price; an extra site is quoted at planPriceOf() everywhere else. It now uses planPriceOf().
+//   - FIXED (read-only grace): body.readonly-mode greys out and disables every .btn.bg, which included Submit Application, so a user in the 3-day grace could not send the payment they were told to make. #sub-submit-btn is exempt.
+//   - FIXED (pay early): Settings > My Plan showed the payment section only on trial / Free / lapsed, and the current plan had no button. An active plan (not Lifetime) now shows it, with Renew early on the current plan; the grace states show it too.
+//   - NOT CHECKED (mdm-admin.html was not available): whether approving a renewal adds the new month to the end date that is already there, or to today. Paying early only loses days if it is to today.
+//   - NOT CHANGED: what an application records, the licence rules, the till, receipts, the read-only banner for suspended accounts.
+//   - Ships on top of v0.3.157 (pos.html, sales.js, shifts.js, returns.js, gate.js, manifest.json and the icons as there).
+// Previous version: v0.3.157 (2026-11-27) — Staff pop-ups: the leftovers of steps 19 and 20 (index.html + sw.js; no new file, NO database RULES change, no new field on any record)
 //   - CHANGED (wrapper): the Staff pop-ups that v0.3.154 to v0.3.156 left out now have the .sfx wrapper (slim title row with a close button, one primary button, sentence case from step 19): Edit payment (the form and its Review changes screen), Edit payments in bulk (the form and the "Updated" result), Edit work log, Bulk edit work logs, Tag stock on work logs, Delete / Replace contract, Confirm status change, Resignation / Termination, Edit status entry, Log leave / absence and the Generate payslip period picker.
 //   - CHANGED (step 20, a problem while filling a form): in those pop-ups a problem is now ONE plain line just above the buttons, not an alert() box, with the field marked and given keyboard focus (same helper as v0.3.155, _sfxErr). Edit payment: the date, and the amount or the ticked tasks. Edit work log: staff, quantity, task, and a task that is not priced for the role. Bulk edit work logs: quantity and task. Tag stock: the stock item. Log leave: staff and date.
 //   - CHANGED (step 20, before a pop-up opens): the checks that stop a pop-up from opening (a record older than the edit window, record not found, read-only account, nothing ticked, selected rows that cannot be edited or deleted, no contract on file, contract file too big or unreadable, payslip for a staff member who is not found) are a toast of 7 seconds instead of an alert(). The emoji (padlock, clock, green circle, no-entry) in those messages are gone. The same helper shows the line inside the pop-up when a Staff pop-up is open.
@@ -2853,7 +2864,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.157';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.158';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
