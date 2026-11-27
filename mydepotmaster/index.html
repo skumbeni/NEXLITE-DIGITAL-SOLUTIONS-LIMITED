@@ -4271,6 +4271,13 @@ let _lastFbSyncError = null;
 // Used to (a) turn the sync chip/pill red once failures persist, and
 // (b) toast a warning after repeated silent failures instead of never.
 let _fbSyncFailCount = 0;
+// v0.3.161: a refused or expired cloud login (HTTP 401 / 403, "Permission denied", unauthorized) is shown to the person as
+// "Tap to connect" and never as the raw error text. Tapping it opens the same password box as "Tap to reconnect".
+// With no argument it judges the last sync error; the toasts pass their own text (a failed download does not set it).
+function _syncErrIsAuth(txt){
+  const m = String(txt !== undefined ? txt : (_lastFbSyncError || ''));
+  return /\b40[13]\b|permission denied|unauthori[sz]ed/i.test(m);
+}
 
 // Fix: "sync only works after logout/login" turned out to be a real Auth
 // session loss, not just the earlier restoration race — this device's
@@ -4489,6 +4496,8 @@ function _syncFailureToast(fallbackMsg){
     showToast('🔒 Cloud sync session expired — tap to reconnect', 8000, reconnectCloudSync);
   } else if (_fbAuthorizationDenied) {
     showToast('🚫 Account not authorized for cloud sync — tap for details', 8000, showAuthorizationDeniedInfo);
+  } else if (_syncErrIsAuth(fallbackMsg)) {
+    showToast('🔒 Cloud sync needs a connection — tap to connect', 8000, reconnectCloudSync);   // v0.3.161: no error text
   } else {
     showToast(fallbackMsg, 6000);
   }
@@ -4575,7 +4584,11 @@ function updateLastSyncDisplay() {
     return;
   }
   if (_fbSyncFailCount >= 3) {
-    el.textContent = '⚠️ Sync failing — ' + (_lastFbSyncError || 'unknown error');
+    if (_syncErrIsAuth()) {
+      el.innerHTML = '🔒 <span style="text-decoration:underline;cursor:pointer" onclick="reconnectCloudSync()">Tap to connect</span>';
+    } else {
+      el.textContent = '⚠️ Sync failing — ' + (_lastFbSyncError || 'unknown error');
+    }
     el.style.color = '#ef4444';
     return;
   }
@@ -6481,7 +6494,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.160';
+const SW_VERSION  = 'v0.3.162';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -7839,8 +7852,9 @@ function updateConnStatus(){
 function updPill(){
   const p=document.getElementById('sync-pill');
   if(!p)return;
-  p.onclick = _fbAuthSessionLost ? reconnectCloudSync : (_fbAuthorizationDenied ? showAuthorizationDeniedInfo : null);
-  p.style.cursor = (_fbAuthSessionLost || _fbAuthorizationDenied) ? 'pointer' : 'default';
+  const _authFail = _fbSyncFailCount>=3 && _syncErrIsAuth();   // v0.3.161: a refused login reads "Tap to connect"
+  p.onclick = _fbAuthSessionLost ? reconnectCloudSync : (_fbAuthorizationDenied ? showAuthorizationDeniedInfo : (_authFail ? reconnectCloudSync : null));
+  p.style.cursor = (_fbAuthSessionLost || _fbAuthorizationDenied || _authFail) ? 'pointer' : 'default';
   if(!ONLINE){p.className='spill sp-of';p.textContent=_offlineQueue&&_offlineQueue.length?'📵 Offline ('+_offlineQueue.length+' queued)':'📵 Offline';return;}
   // Fix: distinguish "the Firebase Auth session behind sync has been lost"
   // (fixed with a quick password re-entry, one tap) from a generic sync
@@ -7859,7 +7873,10 @@ function updPill(){
   // Fix: a broken auto-sync (App Check / auth / rules failure) previously
   // looked identical to a healthy pill that just hadn't pushed recently.
   // After 3+ consecutive failed attempts, surface it in red instead.
-  if(_fbSyncFailCount>=3){p.className='spill sp-err';p.title=_lastFbSyncError||'';p.textContent='⚠️ Sync failing';return;}
+  if(_fbSyncFailCount>=3){
+    if(_authFail){p.className='spill sp-err';p.title='Tap to connect cloud sync';p.textContent='🔒 Tap to connect';return;}
+    p.className='spill sp-err';p.title=_lastFbSyncError||'';p.textContent='⚠️ Sync failing';return;
+  }
   if(ageMs<10*60*1000){p.className='spill sp-on';p.textContent='✅ Synced';}
   else{p.className='spill sp-sy';p.textContent='☁ Online';}
 }
@@ -26105,9 +26122,9 @@ function addUser(preStaffId){
   if(!hasFeature('staff_multi_user')){ showUpgradePrompt('staff_multi_user'); return; }
   const preStaff = preStaffId ? (DATA.staff||[]).find(s=>String(s.id)===String(preStaffId)) : null;
   const suggestedUser = preStaff ? _suggestUsername(preStaff.name) : '';
+  window._auPre = preStaffId || null;   // v0.3.162: _auBack() opens the same form again after the admin password box
   openModal(`
-    <div class="mtitle">${dbIc('user')} ${preStaff?`Create Login — ${esc(preStaff.name)}`:'Add User'}</div>
-    <div id="au-err" class="err-box" style="display:none"></div>
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">${dbIc('user')} ${preStaff?`Create login — ${esc(preStaff.name)}`:'Add user'}</div>${_sfxX()}</div>
     <div class="fw"><div class="fl">Username <span style="color:var(--red)">*</span></div>
       <input class="fi" id="au-user" placeholder="e.g. dataentry1" autocapitalize="none" autocomplete="off" style="text-transform:none" value="${esc(suggestedUser)}"/>
     </div>
@@ -26139,59 +26156,65 @@ function addUser(preStaffId){
       <input class="fi" type="password" id="au-pass2" placeholder="Repeat password" autocomplete="new-password"/>
     </div>
     <div class="mact">
-      <button class="btn bg" onclick="_confirmAddUser()">Add User</button>
       <button class="btn bo" onclick="closeModal()">Cancel</button>
-    </div>`);
+      <button class="btn bg" onclick="_confirmAddUser()">Add user</button>
+    </div></div>`);
 }
+// v0.3.162 (step 20): a problem is ONE plain line above the buttons, with the field marked and focused (_sfxErr), not an alert() or a red box.
 async function _confirmAddUser(){
   if(!requireAdmin('add users'))return;
-  if(isReadOnly()){alert('🔒 Account is in read-only mode.');return;}
+  if(isReadOnly())return _sfxErr('This account is in read-only mode, so users cannot be added.');
   const username = (document.getElementById('au-user')?.value||'').trim().toLowerCase().replace(/\s+/g,'');
   const role = document.getElementById('au-role')?.value||'data_entry';
   const pass = document.getElementById('au-pass')?.value||'';
   const pass2 = document.getElementById('au-pass2')?.value||'';
-  const err = document.getElementById('au-err');
-  err.style.display='none';
   const auEmail = (document.getElementById('au-email')?.value||'').trim().toLowerCase();
-  if(!_emailOk(auEmail)){ err.style.display='block'; err.textContent='⚠️ Enter a valid email address for this user.'; return; }
+  if(!_emailOk(auEmail))return _sfxErr('Enter a valid email address for this user.','au-email');
   window._auEmail = auEmail;
-  if(!username){ err.style.display='block'; err.textContent='⚠️ Enter a username.'; return; }
-  if(!/^[a-z0-9_]+$/.test(username)){ err.style.display='block'; err.textContent='⚠️ Username can only contain letters, numbers and underscores.'; return; }
+  if(!username)return _sfxErr('Enter a username.','au-user');
+  if(!/^[a-z0-9_]+$/.test(username))return _sfxErr('The username can only contain letters, numbers and underscores.','au-user');
   // Local duplicate check — case-insensitive within this depot
   const exists=(DATA.users||[]).some(u=>(u.username||'').toLowerCase()===username);
-  if(exists){ err.style.display='block'; err.textContent='⛔ Username "'+username+'" is already taken. Choose a different one.'; return; }
-  if(pass.length<8){ err.style.display='block'; err.textContent='⚠️ Password must be at least 8 characters.'; return; }
-  if(pass!==pass2){ err.style.display='block'; err.textContent='❌ Passwords do not match.'; return; }
+  if(exists)return _sfxErr('The username "'+username+'" is already taken. Choose a different one.','au-user');
+  if(pass.length<8)return _sfxErr('The password must be at least 8 characters.','au-pass');
+  if(pass!==pass2)return _sfxErr('The passwords do not match.','au-pass2');
   let linkedStaffId = '';
   if(role==='staff'){
     linkedStaffId = document.getElementById('au-linked-staff')?.value||'';
-    if(!linkedStaffId){ err.style.display='block'; err.textContent='⚠️ Select which staff profile this Staff login belongs to.'; return; }
+    if(!linkedStaffId)return _sfxErr('Select which staff profile this Staff login belongs to.','au-linked-staff');
   }
 
   requireAdminPassword('add this user', async ()=>{
-    await _finishAddUser(username, role, pass, linkedStaffId, err);
+    await _finishAddUser(username, role, pass, linkedStaffId);
   });
 }
-async function _finishAddUser(username, role, pass, linkedStaffId, err){
+// The cloud checks below run AFTER the admin password box has closed the form, so a problem here opens the form again with what was typed
+// (username, email, role, staff profile; never the passwords) and shows the one line in it.
+function _auBack(msg,fieldId,v){
+  addUser(window._auPre||undefined);
+  const put=(id,x)=>{const e=document.getElementById(id);if(e&&x!=null&&x!=='')e.value=x;};
+  put('au-user',v.username);put('au-email',window._auEmail||'');
+  if(!window._auPre){put('au-role',v.role);_onAddUserRoleChange();put('au-linked-staff',v.linkedStaffId);}
+  return _sfxErr(msg,fieldId);
+}
+async function _finishAddUser(username, role, pass, linkedStaffId){
+  const _v={username,role,linkedStaffId};
   // ── GLOBAL FIREBASE DUPLICATE CHECK ────────────────────────────────────────
   // Usernames are registered globally across all depots in Firebase usernames/.
   // A sub-user added here must not collide with an admin username from another depot.
   const addBtn = document.querySelector('#modal-body button.bg');
   if(isFbConfigured()){
     if(!navigator.onLine){
-      alert('⚠️ An internet connection is required to verify username availability.');
-      return;
+      return _auBack('An internet connection is needed to check that the username is free. Connect and try again.','au-user',_v);
     }
     if(addBtn){ addBtn.disabled=true; addBtn.textContent='⏳ Checking username…'; }
     try{
       const existing = await fbGet('usernames/' + username);
       if(existing && existing.installId){
-        alert('⛔ Username "'+username+'" is already taken globally. Choose a different one.');
-        return;
+        return _auBack('The username "'+username+'" is already taken. Choose a different one.','au-user',_v);
       }
     } catch(uce){
-      alert('⚠️ Could not verify username availability. Please try again.');
-      return;
+      return _auBack('Could not check that the username is free. Try again.','au-user',_v);
     }
   }
   // ── END GLOBAL CHECK ────────────────────────────────────────────────────────
@@ -26204,8 +26227,7 @@ async function _finishAddUser(username, role, pass, linkedStaffId, err){
       await fbSetIfNotExists('usernames/' + username, { installId: depotKey(), createdAt: Date.now() });
     } catch(race){
       if(race.code===412){
-        alert('⛔ Username "'+username+'" was just taken by another account. Choose a different one.');
-        return;
+        return _auBack('The username "'+username+'" was just taken by another account. Choose a different one.','au-user',_v);
       }
       // Non-critical: log but don't block — local uniqueness is already guaranteed
       console.warn('Firebase username register failed for sub-user:', race.message);
@@ -27234,6 +27256,9 @@ function _syncStatusChip(flat){   // flat (v0.3.125): line icons, used inside th
   // Fix: a broken auto-sync (App Check / auth / rules failure) previously
   // looked identical to a healthy chip that just hadn't pushed recently —
   // there was no "error" state at all. Surface it once failures persist.
+  if(_fbSyncFailCount>=3 && _syncErrIsAuth()){   // v0.3.161: tappable, no error text
+    return `<div role="button" tabindex="0" onclick="reconnectCloudSync()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();reconnectCloudSync();}" style="display:inline-flex;align-items:center;gap:5px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:20px;padding:3px 10px;font-size:15px;font-weight:700;color:#ef4444;margin-bottom:10px;cursor:pointer" class="sync-bad">${flat?dbIc('lock')+' ':'🔒 '}Tap to connect</div>`;
+  }
   if(_fbSyncFailCount>=3){
     const errTxt=(_lastFbSyncError||'unknown error').slice(0,60);
     return `<div style="display:inline-flex;align-items:center;gap:5px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);border-radius:20px;padding:3px 10px;font-size:15px;font-weight:700;color:#ef4444;margin-bottom:10px" class="sync-bad">${flat?dbIc('alert')+' ':'⚠️ '}Sync failing — ${esc(errTxt)}</div>`;
