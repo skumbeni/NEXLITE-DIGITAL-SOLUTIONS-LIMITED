@@ -6795,7 +6795,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.177';
+const SW_VERSION  = 'v0.3.178';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -26193,7 +26193,7 @@ function _dedRefCard(sid,DR){
 // role.loginType = the sign-in level a login gets when it is made for a person who holds this job role: 'staff', 'data_entry' (shown as Manager) or 'cashier'
 // (the login role codes themselves). Missing, empty or unknown = 'staff', so every role made before this version counts as Staff and nothing changes for it.
 // Cashier is not offered in the Play build (the Add user form hides it there too) and counts as Staff there. Nothing reads this yet except the Staff Roles & Rates
-// screen; Settings > Add user will (step 3). A Login type edit never changes a login that already exists.
+// screen and Settings > Add user (v0.3.178, step 3: staffLoginType / loginTargetFor). A Login type edit never changes a login that already exists.
 const LOGIN_TYPES=[{value:'staff',label:'Staff'},{value:'data_entry',label:'Manager'},{value:'cashier',label:'Cashier'}];
 function loginTypeOptions(){return LOGIN_TYPES.filter(o=>!(o.value==='cashier'&&window.PLAY_MODE));}
 function _loginTypeAllowed(v){return loginTypeOptions().some(o=>o.value===v);}
@@ -26482,17 +26482,64 @@ async function changePw(){
   _m.innerHTML='<div class="ok-msg">✅ Password updated!</div>';
   document.getElementById('pw-new').value='';document.getElementById('pw-conf').value='';
 }
-function _onAddUserRoleChange(){
-  const role=document.getElementById('au-role')?.value;
-  const wrap=document.getElementById('au-linked-staff-wrap');
-  if(wrap) wrap.style.display = (role==='staff') ? '' : 'none';
+// ── ADD USER = GIVE AN EXISTING PROFILE A LOGIN (v0.3.178, login-link step 3) ─────────────────────────────────────────────────
+// Settings > Add user no longer makes staff profiles (the Staff tab's Add staff is the one place for that, with Reports to and the staff cap checked there).
+// It picks an ACTIVE profile that has NO login yet, or Admin (a second Admin is allowed and is not linked to any profile). The sign-in role is not typed:
+// it comes from the Login type of the person's job role(s), the HIGHEST one when they hold several (Manager over Cashier over Staff; a role with no Login
+// type, or one that is no longer in the roles list, counts as Staff). loginTargetFor() is the ONE rule; the form only shows its answer, and the save step asks it
+// again, so nothing typed or changed in the page can pick a different role. A profile can have only one login.
+const AU_ADMIN='__admin__';
+function staffLoginType(s){
+  const rank={staff:0,cashier:1,data_entry:2};
+  let best='staff';
+  staffRoleList(s).forEach(n=>{
+    const t=roleLoginType((DATA.staffRoles||[]).find(r=>r.name===n));
+    if(rank[t]>rank[best]) best=t;
+  });
+  return best;
 }
-// v0.3.172 (hierarchy step 4): a Staff login is added with a NEW staff profile (the default) or linked to an existing one.
-function _onAuProfModeChange(){
-  const link=document.getElementById('au-prof-mode')?.value==='link';
-  const a=document.getElementById('au-new-prof'), b=document.getElementById('au-link-prof');
-  if(a) a.style.display=link?'none':'';
-  if(b) b.style.display=link?'':'none';
+function staffLoginOf(id){ return (DATA.users||[]).find(u=>String(u.linkedStaffId||'')===String(id))||null; }
+function staffLoginProblem(s){
+  if(!s) return 'That staff profile is not in the list any more.';
+  if(s.status&&s.status!=='active') return s.name+'\'s profile is not active, so a login cannot be made for it.';
+  const u=staffLoginOf(s.id);
+  if(u) return s.name+' already has a login ("'+u.username+'"). A profile can have only one.';
+  return '';
+}
+function loginProfiles(){ return (DATA.staff||[]).filter(s=>!staffLoginProblem(s)).sort((a,b)=>String(a.name).localeCompare(String(b.name))); }
+// who = a staff id, or AU_ADMIN. Returns {role, linkedStaffId, problem}: problem is '' when the login can be made.
+function loginTargetFor(who){
+  who=String(who==null?'':who);
+  if(who===AU_ADMIN) return {role:'admin',linkedStaffId:'',problem:''};
+  if(!who) return {role:'',linkedStaffId:'',problem:'Choose who this login is for: a staff profile, or Admin.'};
+  const s=(DATA.staff||[]).find(x=>String(x.id)===who);
+  const problem=staffLoginProblem(s);
+  return problem?{role:'',linkedStaffId:'',problem}:{role:staffLoginType(s),linkedStaffId:String(s.id),problem:''};
+}
+function _auRoleInfoHtml(who){
+  const cap=t=>`<div class="u-fs-cap u-c-muted u-mt-6 u-lh-1p6">${t}</div>`;
+  if(!who) return cap('Choose who the login is for. The role comes from that person\'s job role.');
+  const t=loginTargetFor(who);
+  if(t.problem) return cap(esc(t.problem));
+  const blurb={
+    data_entry:'Manager: can add records (stock, staff logs, sales) but not edit/delete or access full Settings. Gets a personal Settings tab (password, theme, text size).',
+    staff:'Staff: view-only — dashboards, own earnings, and can clock themselves in (not out). Gets a personal Settings tab (password, theme, text size).',
+    cashier:'Cashier: signs in straight to the Till and sees nothing else except their own sales for the day and a change-password box; their sales never wait for approval.',
+    admin:'Admin: full access to everything, including all of Settings. An Admin login is not linked to a staff profile.'
+  };
+  let h=`<span class="bdg ${t.role==='admin'?'bg2':(t.role==='staff'?'br2':'ba2')}">${roleLabel(t.role)}</span>`+cap(esc(blurb[t.role]||''));
+  if(t.role!=='admin'){
+    const s=(DATA.staff||[]).find(x=>String(x.id)===String(t.linkedStaffId));
+    const names=staffRoleList(s), types=names.map(n=>roleLoginType((DATA.staffRoles||[]).find(r=>r.name===n)));
+    if(new Set(types).size>1) h+=cap('Job roles: '+names.map((n,i)=>esc(n)+' ('+loginTypeLabel(types[i])+')').join(', ')+'. The highest level is used.');
+    h+=cap('The role comes from the Login type on the job role (Settings → Staff Roles &amp; Rates). It cannot be changed here.');
+  }
+  return h;
+}
+function _onAuWhoChange(){
+  const who=window._auPre?String(window._auPre):(document.getElementById('au-who')?.value||'');
+  const box=document.getElementById('au-role-show');
+  if(box) box.innerHTML=_auRoleInfoHtml(who);
 }
 function _suggestUsername(name){
   const base=(name||'').toLowerCase().replace(/[^a-z0-9\s]/g,'').trim().split(/\s+/).join('.')||'staff';
@@ -26505,8 +26552,13 @@ function addUser(preStaffId){
   if(!requireAdmin('add users'))return;
   if(!hasFeature('staff_multi_user')){ showUpgradePrompt('staff_multi_user'); return; }
   const preStaff = preStaffId ? (DATA.staff||[]).find(s=>String(s.id)===String(preStaffId)) : null;
+  if(preStaffId){   // opened from a profile (its Sign-in menu, or the Add staff tick): refuse a profile that is gone, not active, or already has a login
+    const pp=staffLoginProblem(preStaff);
+    if(pp){ _sfxErr(pp); return false; }
+  }
   const suggestedUser = preStaff ? _suggestUsername(preStaff.name) : '';
-  window._auPre = preStaffId || null;   // v0.3.162: _auBack() opens the same form again after the admin password box
+  window._auPre = preStaff ? String(preStaff.id) : null;   // v0.3.162: _auBack() opens the same form again after the admin password box
+  const profs = preStaff ? [] : loginProfiles();
   openModal(`
     <div class="sfx"><div class="sfx-h"><div class="mtitle">${dbIc('user')} ${preStaff?`Create login — ${esc(preStaff.name)}`:'Add user'}</div>${_sfxX()}</div>
     <div class="fw"><div class="fl">Username <span class="u-c-red">*</span></div>
@@ -26516,42 +26568,18 @@ function addUser(preStaffId){
       <input class="fi u-tt-none" type="email" id="au-email" placeholder="their@email.com" autocapitalize="none" spellcheck="false" />
       <div class="u-fs-cap u-c-muted u-mt-6 u-lh-1p6">Used to recover this login. They will be asked to verify it the first time they sign in.</div>
     </div>
-    <div class="fw"><div class="fl">Role <span class="u-c-red">*</span></div>
-      <select class="fi" id="au-role" onchange="_onAddUserRoleChange()" ${preStaff?'disabled':''}>
-        <option value="data_entry">Manager</option>
-        <option value="staff"${preStaff?' selected':''}>Staff</option>
-        ${window.PLAY_MODE?'':'<option value="cashier">Cashier (till only)</option>'}
-        <option value="admin">Admin</option>
+    <div class="fw"><div class="fl">Login for <span class="u-c-red">*</span></div>
+      <select class="fi" id="au-who" onchange="_onAuWhoChange()" ${preStaff?'disabled':''}>
+        ${preStaff
+          ?`<option value="${esc(preStaff.id)}" selected>${esc(preStaff.name)} (${esc(staffRoleLabel(preStaff))})</option>`
+          :`<option value="">${profs.length?'Select a staff profile':'No staff profile is waiting for a login'}</option>`
+            +profs.map(s=>`<option value="${esc(s.id)}">${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('')
+            +`<option value="${AU_ADMIN}">Admin (not linked to a staff profile)</option>`}
       </select>
-      <div class="u-fs-cap u-c-muted u-mt-6 u-lh-1p6">Manager: can add records (stock, staff logs, sales) but not edit/delete or access full Settings. Staff: view-only — dashboards, own earnings, and can clock themselves in (not out). Manager and Staff both get a personal Settings tab (password, theme, text size) but not company-wide settings. Cashier: signs in straight to the Till and sees nothing else except their own sales for the day and a change-password box; their sales never wait for approval.</div>
+      <div class="u-fs-cap u-c-muted u-mt-6 u-lh-1p6">${preStaff?'This login belongs to this staff profile, so they see their own records and can clock themselves in.':(profs.length?'Only active staff profiles without a login are listed. To give someone new a login, register them in the Staff tab first and tick "Create a login for this person after saving".':'Every active staff profile already has a login. To give someone new a login, register them in the Staff tab first and tick "Create a login for this person after saving".')}</div>
     </div>
-    <div class="fw" id="au-linked-staff-wrap" style="display:${preStaff?'':'none'}">
-      ${preStaff?'':`<div class="fl">Staff profile <span class="u-c-red">*</span></div>
-      <select class="fi" id="au-prof-mode" onchange="_onAuProfModeChange()">
-        <option value="new">Create a new staff profile</option>
-        <option value="link">Link to an existing profile</option>
-      </select>
-      <div id="au-new-prof" style="margin-top:12px">
-        <div class="fw"><div class="fl">Full name <span class="u-c-red">*</span></div>
-          <input class="fi" id="au-pname" placeholder="e.g. John Banda" autocomplete="off" />
-        </div>
-        <div class="fw"><div class="fl">Job role <span class="u-c-red">*</span></div>
-          <select class="fi" id="au-prole">${allRoleNames().map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('')||'<option value="">No job roles defined</option>'}</select>
-        </div>
-        <div class="fw"><div class="fl">Reports to</div>
-          <select class="fi" id="au-preports">${_reportsToOptions({})}</select>
-          <div class="u-fs-cap u-c-muted u-mt-6 u-lh-1p6">The person directly above this one. Leave it as No one if they are at the top.</div>
-        </div>
-        <div class="u-fs-cap u-c-muted u-lh-1p6">The profile and the login are created together. Add phone, pay and the other details later from the Staff tab.</div>
-      </div>`}
-      <div id="au-link-prof"${preStaff?'':' style="display:none;margin-top:12px"'}>
-        <div class="fl">Link to Staff Profile <span class="u-c-red">*</span></div>
-        <select class="fi" id="au-linked-staff" ${preStaff?'disabled':''}>
-          <option value="">Select the staff member this login belongs to</option>
-          ${(DATA.staff||[]).filter(s=>!s.status||s.status==='active').map(s=>`<option value="${esc(s.id)}"${preStaff&&String(s.id)===String(preStaff.id)?' selected':''}>${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('')}
-        </select>
-        <div class="u-fs-cap u-c-muted u-mt-6 u-lh-1p6">This links the login to a staff profile so they can clock themselves in — they won't be able to clock in on behalf of anyone else.</div>
-      </div>
+    <div class="fw"><div class="fl">Role</div>
+      <div id="au-role-show">${_auRoleInfoHtml(window._auPre||'')}</div>
     </div>
     <div class="fw"><div class="fl">Password <span class="u-c-red">*</span></div>
       <input class="fi" type="password" id="au-pass" placeholder="Min 8 characters" autocomplete="new-password"/>
@@ -26563,13 +26591,13 @@ function addUser(preStaffId){
       <button class="btn bo" onclick="closeModal()">Cancel</button>
       <button class="btn bg" onclick="_confirmAddUser()">Add user</button>
     </div></div>`);
+  return true;   // v0.3.178: the form is open (false = it was refused and said why), so _auBack() knows whether to put a line in it
 }
 // v0.3.162 (step 20): a problem is ONE plain line above the buttons, with the field marked and focused (_sfxErr), not an alert() or a red box.
 async function _confirmAddUser(){
   if(!requireAdmin('add users'))return;
   if(isReadOnly())return _sfxErr('This account is in read-only mode, so users cannot be added.');
   const username = (document.getElementById('au-user')?.value||'').trim().toLowerCase().replace(/\s+/g,'');
-  const role = document.getElementById('au-role')?.value||'data_entry';
   const pass = document.getElementById('au-pass')?.value||'';
   const pass2 = document.getElementById('au-pass2')?.value||'';
   const auEmail = (document.getElementById('au-email')?.value||'').trim().toLowerCase();
@@ -26582,58 +26610,35 @@ async function _confirmAddUser(){
   if(exists)return _sfxErr('The username "'+username+'" is already taken. Choose a different one.','au-user');
   if(pass.length<8)return _sfxErr('The password must be at least 8 characters.','au-pass');
   if(pass!==pass2)return _sfxErr('The passwords do not match.','au-pass2');
-  let linkedStaffId = '', newProf = null;
-  if(role==='staff'){
-    // v0.3.172 (step 4): opened from a staff profile (_auPre) it always links to that profile; from Settings the admin picks a new profile (default) or an existing one.
-    const mode = window._auPre ? 'link' : (document.getElementById('au-prof-mode')?.value||'new');
-    if(mode==='link'){
-      linkedStaffId = document.getElementById('au-linked-staff')?.value||'';
-      if(!linkedStaffId)return _sfxErr('Select which staff profile this Staff login belongs to.','au-linked-staff');
-    } else {
-      const pname = uc(document.getElementById('au-pname')?.value);
-      if(!pname)return _sfxErr('Enter the full name for the new staff profile.','au-pname');
-      const prole = document.getElementById('au-prole')?.value||'';
-      if(!prole)return _sfxErr('No job roles are set up yet. Add one in the Staff tab first, or link an existing profile.','au-prole');
-      const prep = document.getElementById('au-preports')?.value||'';
-      const rp = reportsToProblem('',prep);
-      if(rp)return _sfxErr(rp,'au-preports');
-      if(isAtCap('staff',(DATA.staff||[]).length)){ closeModal(); showCapReachedPrompt('staff','Staff Profiles'); return; }
-      newProf = {name:pname, role:prole, reportsTo:prep};
-    }
-  }
-
+  // v0.3.178 (step 3): who the login is for decides its role (loginTargetFor). Opened from a profile (_auPre) it is always that profile; the page is never asked for the role.
+  const who = window._auPre ? String(window._auPre) : (document.getElementById('au-who')?.value||'');
+  const tgt = loginTargetFor(who);
+  if(tgt.problem)return _sfxErr(tgt.problem,'au-who');
   requireAdminPassword('add this user', async ()=>{
-    await _finishAddUser(username, role, pass, linkedStaffId, newProf);
+    await _finishAddUser(username, tgt.role, pass, tgt.linkedStaffId);
   });
 }
 // The cloud checks below run AFTER the admin password box has closed the form, so a problem here opens the form again with what was typed
-// (username, email, role, staff profile; never the passwords) and shows the one line in it.
+// (username, email, who the login is for; never the passwords) and shows the one line in it.
 function _auBack(msg,fieldId,v){
-  addUser(window._auPre||undefined);
+  if(!addUser(window._auPre||undefined)) return false;   // the form would not open (the profile is gone, inactive or has a login now): addUser already said why, once
   const put=(id,x)=>{const e=document.getElementById(id);if(e&&x!=null&&x!=='')e.value=x;};
   put('au-user',v.username);put('au-email',window._auEmail||'');
   if(!window._auPre){
-    put('au-role',v.role);_onAddUserRoleChange();put('au-linked-staff',v.linkedStaffId);
-    if(v.role==='staff'){   // v0.3.172: bring back the new-profile fields too
-      const np=v.newProf;
-      put('au-prof-mode',np?'new':'link');_onAuProfModeChange();
-      if(np){
-        put('au-pname',np.name);put('au-prole',np.role);put('au-preports',np.reportsTo);
-        const rs=document.getElementById('au-preports');if(rs&&rs.selectedIndex<0)rs.selectedIndex=0;
-      }
-    }
+    put('au-who',v.linkedStaffId||(v.role==='admin'?AU_ADMIN:''));
+    const ws=document.getElementById('au-who');if(ws&&ws.selectedIndex<0)ws.selectedIndex=0;
+    _onAuWhoChange();
   }
   return _sfxErr(msg,fieldId);
 }
-async function _finishAddUser(username, role, pass, linkedStaffId, newProf){
-  const _v={username,role,linkedStaffId,newProf:newProf||null};
-  // v0.3.172 (step 4): check the new profile against the staff list as it is NOW (the admin password box took time and a sync may have changed it),
-  // BEFORE the username is claimed or a sign-in account is made in the cloud, so a refusal leaves nothing behind.
-  if(newProf){
-    if(isAtCap('staff',(DATA.staff||[]).length)){ closeModal(); showCapReachedPrompt('staff','Staff Profiles'); return; }
-    const _rp=reportsToProblem('',newProf.reportsTo);
-    if(_rp) return _auBack(_rp,'au-preports',_v);
-  }
+async function _finishAddUser(username, role, pass, linkedStaffId){
+  const _v={username,role,linkedStaffId};
+  // v0.3.178 (step 3): ask the rule again with the staff list and roles as they are NOW (the admin password box took time and a sync may have changed them), BEFORE the
+  // username is claimed or a sign-in account is made in the cloud, so a refusal leaves nothing behind. A profile that got a login meanwhile, went inactive or was
+  // removed is refused; a changed sign-in role (its job role or Login type was edited meanwhile) opens the form again showing the new one instead of saving the old one.
+  const _now=loginTargetFor(linkedStaffId||(role==='admin'?AU_ADMIN:''));
+  if(_now.problem) return _auBack(_now.problem,'au-who',_v);
+  if(_now.role!==role) return _auBack('The role for this person changed to '+loginTypeLabel(_now.role)+' while you were confirming. Check it and add the user again.','au-who',_v);
   // ── GLOBAL FIREBASE DUPLICATE CHECK ────────────────────────────────────────
   // Usernames are registered globally across all depots in Firebase usernames/.
   // A sub-user added here must not collide with an admin username from another depot.
@@ -26687,21 +26692,10 @@ async function _finishAddUser(username, role, pass, linkedStaffId, newProf){
     } catch(ae) { console.warn('Firebase Auth signup failed for sub-user (will migrate on first login):', ae.message); }
   }
 
-  // v0.3.172 (step 4): with a new profile, the profile is put in the staff list FIRST and the login after it, in this ONE write, so the login can never point at a profile that is not there.
-  const _newId = newProf ? uid() : '';
-  const _linked = newProf ? _newId : linkedStaffId;
-  updateData(d=>{
-    const out={...d};
-    if(newProf){
-      const boss=newProf.reportsTo&&(d.staff||[]).some(x=>String(x.id)===String(newProf.reportsTo))?newProf.reportsTo:'';
-      out.staff=[...(d.staff||[]),{id:_newId,name:newProf.name,role:newProf.role,roles:[newProf.role],contractType:'permanent',reportsTo:boss,payType:'rate',monthlySalary:0,statNapsa:false,statNhima:false,statPaye:false,dateJoined:today(),dateOfBirth:'',phone:'',employeeId:'',emergencyContactName:'',emergencyContactPhone:'',notes:'',status:'active',photoDataUrl:null}];
-    }
-    out.users=[...(d.users||[]),{username,password:hashed,role,recoveryEmail:(window._auEmail||''),emailVerified:false,...(_linked?{linkedStaffId:_linked}:{}),..._newUserAuth}];
-    return out;
-  });
-  logAuditEvent('CREATE','User',`${username} · Role: ${roleLabel(role)}${_linked?' · Linked to staff ID '+_linked:''}${newProf?' · New staff profile: '+newProf.name:''}`);   // step 20: who may sell at the till (never the password)
+  updateData(d=>({...d,users:[...(d.users||[]),{username,password:hashed,role,recoveryEmail:(window._auEmail||''),emailVerified:false,...(linkedStaffId?{linkedStaffId}:{}),..._newUserAuth}]}));
+  logAuditEvent('CREATE','User',`${username} · Role: ${roleLabel(role)}${linkedStaffId?' · Linked to staff ID '+linkedStaffId:''}`);   // step 20: who may sell at the till (never the password)
   closeModal();
-  showToast(newProf?'✅ User "'+username+'" and staff profile "'+newProf.name+'" added.':'✅ User "'+username+'" added.');
+  showToast('✅ User "'+username+'" added.');
 }
 function removeUser(username){
   if(!requireAdmin('remove users'))return;
@@ -31291,9 +31285,9 @@ const CHAPTERS=[
     ],{where:'Staff → Add Staff, Roles & Rates',go:'rolesrates',chk:'staff',extra:[CAP('staff','staff members')]}),
     ST('Create logins for your team',[
       'Open **Settings → Account & Security → User Accounts → + Add User**.',
-      'Type a **username** (letters, numbers and underscores), the person\'s **email** (they confirm it the first time they sign in), the **role** and a **password** of at least 8 characters, typed twice. [[i:own_login]]',
-      'For a Staff login, choose the **staff profile** it belongs to, so they see their own records and can clock themselves in.',
-      'Roles: **Manager**, **Staff**, **Cashier (till only)** or **Admin**. See **Who can do what**. Next to each login there is 🔑 Reset (new password) and 🗑 (remove).'
+      'Type a **username** (letters, numbers and underscores), the person\'s **email** (they confirm it the first time they sign in) and a **password** of at least 8 characters, typed twice. [[i:own_login]]',
+      'Under **Login for**, choose the staff profile this login belongs to. Only active profiles without a login are listed, and a profile can have only one login. A new person? Register them first in **Staff → + Add Staff** and tick **Create a login for this person after saving**.',
+      'You do not choose the role. It comes from the **Login type** of the person\'s job role, set in **Staff → ⚙️ Roles & Rates** (the highest one if they hold several). To make another Admin, choose **Admin** under Login for. Roles are **Manager**, **Staff**, **Cashier (till only)** or **Admin**. See **Who can do what**. Next to each login there is 🔑 Reset (new password) and 🗑 (remove).'
     ],{where:'Settings → Account & Security → User Accounts',go:'adduser',chk:'logins',f:'staff_multi_user'}),
     ST('Set the Manager PIN and the till rules',[
       'Each Admin and Manager: open **Settings → Account & Security → Manager PIN**. Type your account password, then a new 4 to 6 digit PIN twice. [[i:manager_pin]]',
