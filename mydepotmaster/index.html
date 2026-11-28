@@ -6799,7 +6799,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.186';
+const SW_VERSION  = 'v0.3.187';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -17897,7 +17897,7 @@ function _staffFormHtml(p,s,o){
   o=o||{};s=s||{};const edit=!!o.edit;
   const REQ=' <span class="sfx-req">required</span>';
   const curRoles=edit?staffRoleList(s):[];
-  const roleCbs=allRoleNames().map((r,i)=>`<label class="u-d-flex u-ai-center u-g-10 u-bg-surface u-bd-1p5-solid-border u-r-r u-p-10-12 u-cur-pointer u-fs-body"><input type="checkbox" class="${p}-role-cb" value="${esc(r)}"${(edit?curRoles.includes(r):i===0)?' checked':''}> ${esc(r)}</label>`).join('');
+  const roleCbs=allRoleNames().map((r,i)=>`<label class="u-d-flex u-ai-center u-g-10 u-bg-surface u-bd-1p5-solid-border u-r-r u-p-10-12 u-cur-pointer u-fs-body"><input type="checkbox" class="${p}-role-cb" value="${esc(r)}"${(edit?curRoles.includes(r):(Array.isArray(o.roles)?o.roles.includes(r):i===0))?' checked':''}> ${esc(r)}</label>`).join('');
   const contract=s.contractType||'permanent';
   const payType=s.payType||'rate';
   const salary=Number(s.monthlySalary||0)||'';
@@ -17959,36 +17959,49 @@ function _toggleSalaryField(prefix){
   const wrap=document.getElementById(prefix+'-salary-wrap');
   if(wrap) wrap.style.display = type==='salary' ? 'block' : 'none';
 }
-function saveStaff(){if(staffWriteBlocked())return;if(isReadOnly()){_sfxErr('This account is in read-only mode. Contact your administrator.');return;}
-  if (isAtCap('staff', (DATA.staff||[]).length)) { closeModal(); showCapReachedPrompt('staff', 'Staff Profiles'); return; }
+// v0.3.187: reading and checking the Register staff form (ids sf-*), building the profile it describes, and reading its photo are shared by saveStaff and
+// saveStaffForLogin (Create profile for a Manager or Cashier login). Nothing about Register staff changes: same checks, same messages, same profile.
+// _sfCheckForm(): null after saying why in the pop-up's one line, otherwise {name,roles,joined,payType,monthlySalary}.
+function _sfCheckForm(){
   const name=uc(document.getElementById('sf-name').value);
-  if(!name){_sfxErr('Enter staff name.','sf-name');return;}
+  if(!name){_sfxErr('Enter staff name.','sf-name');return null;}
   const roles=[...document.querySelectorAll('#sf-roles .sf-role-cb:checked')].map(cb=>cb.value);
-  if(roles.length===0){_sfxErr('Select at least one job role.','sf-roles');return;}
+  if(roles.length===0){_sfxErr('Select at least one job role.','sf-roles');return null;}
   const joined=document.getElementById('sf-joined').value;
-  if(!joined){_sfxErr('Enter date joined.','sf-joined');return;}
+  if(!joined){_sfxErr('Enter date joined.','sf-joined');return null;}
   const payType=document.getElementById('sf-paytype')?.value||'rate';
   const monthlySalary=payType==='salary'?Math.max(0,Number(document.getElementById('sf-salary')?.value)||0):0;
-  if(payType==='salary'&&monthlySalary<=0){_sfxErr('Enter a monthly salary amount.','sf-salary');return;}
+  if(payType==='salary'&&monthlySalary<=0){_sfxErr('Enter a monthly salary amount.','sf-salary');return null;}
   const _rtp=reportsToProblem('',document.getElementById('sf-reportsto')?.value||'');   // v0.3.172 (step 2)
-  if(_rtp){_sfxErr(_rtp,'sf-reportsto');return;}
-  const _mkLogin=!!document.getElementById('sf-mklogin')?.checked;   // v0.3.177: read now, while the pop-up is still open (a photo is read after it)
+  if(_rtp){_sfxErr(_rtp,'sf-reportsto');return null;}
+  return {name,roles,joined,payType,monthlySalary};
+}
+// _sfPayload(v,photoDataUrl): the new profile. Reads the other fields from the open form, so call it while the form is still on screen.
+function _sfPayload(v,photoDataUrl){
+  const {name,roles,joined,payType,monthlySalary}=v;
+  return {id:uid(),name,role:roles[0],roles,contractType:document.getElementById('sf-contract').value||'permanent',reportsTo:document.getElementById('sf-reportsto')?.value||'',payType,monthlySalary,..._stRead('sf'),dateJoined:joined,dateOfBirth:document.getElementById('sf-dob')?.value||'',phone:document.getElementById('sf-phone').value,employeeId:(document.getElementById('sf-empid').value||'').trim(),emergencyContactName:uc(document.getElementById('sf-ecname').value),emergencyContactPhone:(document.getElementById('sf-ecphone').value||'').trim(),notes:uc(document.getElementById('sf-notes').value),status:'active',photoDataUrl:photoDataUrl||null};
+}
+// _sfReadPhoto(finish, pending): picks up the chosen photo (shrunk to ~320px) and calls finish(dataUrl) once, with null when there is no photo or it cannot be used.
+// pending = true when the profile is saved a moment later (after the Admin password box), so the messages say "will be saved" instead of "was saved".
+function _sfReadPhoto(finish,pending){
   const photoFile=document.getElementById('sf-photo')?.files?.[0]||null;
-  const finish=(photoDataUrl)=>{
-    const payload={id:uid(),name,role:roles[0],roles,contractType:document.getElementById('sf-contract').value||'permanent',reportsTo:document.getElementById('sf-reportsto')?.value||'',payType,monthlySalary,..._stRead('sf'),dateJoined:joined,dateOfBirth:document.getElementById('sf-dob')?.value||'',phone:document.getElementById('sf-phone').value,employeeId:(document.getElementById('sf-empid').value||'').trim(),emergencyContactName:uc(document.getElementById('sf-ecname').value),emergencyContactPhone:(document.getElementById('sf-ecphone').value||'').trim(),notes:uc(document.getElementById('sf-notes').value),status:'active',photoDataUrl:photoDataUrl||null};
+  if(!photoFile){ finish(null); return; }
+  if(photoFile.size > STAFF_PHOTO_MAX_BYTES){ showToast(pending?'Photo too large (over 8MB), so the profile will be saved without it. Add a smaller photo later from the profile.':'Photo too large (over 8MB), so the staff member was saved without it. Add a smaller photo later from the profile.',7000); finish(null); return; }
+  const reader=_newCompactReader(320, 0.72);
+  reader.onload=()=>finish(reader.result);
+  reader.onerror=()=>{ showToast(pending?'Could not read that photo — the profile will be saved without it. You can add it later from the profile.':'Could not read that photo — staff saved without it. You can add it later from the profile.',7000); finish(null); };
+  reader.readAsDataURL(photoFile);
+}
+function saveStaff(){if(staffWriteBlocked())return;if(isReadOnly()){_sfxErr('This account is in read-only mode. Contact your administrator.');return;}
+  if (isAtCap('staff', (DATA.staff||[]).length)) { closeModal(); showCapReachedPrompt('staff', 'Staff Profiles'); return; }
+  const v=_sfCheckForm();if(!v)return;
+  const _mkLogin=!!document.getElementById('sf-mklogin')?.checked;   // v0.3.177: read now, while the pop-up is still open (a photo is read after it)
+  _sfReadPhoto(photoDataUrl=>{
+    const payload=_sfPayload(v,photoDataUrl);
     updateData(d=>({...d,staff:[...d.staff,payload]}));
     closeModal();
     if(_mkLogin)addUser(payload.id);   // v0.3.177: the profile is saved first; cancelling the login form leaves it saved (Create login in its menu does it later)
-  };
-  if(photoFile){
-    if(photoFile.size > STAFF_PHOTO_MAX_BYTES){ showToast('Photo too large (over 8MB), so the staff member was saved without it. Add a smaller photo later from the profile.',7000); finish(null); return; }
-    const reader=_newCompactReader(320, 0.72);
-    reader.onload=()=>finish(reader.result);
-    reader.onerror=()=>{ showToast('Could not read that photo — staff saved without it. You can add it later from the profile.',7000); finish(null); };
-    reader.readAsDataURL(photoFile);
-  } else {
-    finish(null);
-  }
+  });
 }
 
 // ── TWO-STAGE SHIFT LOG ───────────────────────────────────────────────────────
@@ -19109,13 +19122,15 @@ function _sflSum(a,s,i){const n=a+s+i;return n+(n===1?' person':' people')+(n?' 
 function filterStaffRows(q){   // hides the rows that do not match; the rows stay in the page, so a shorter search brings them back
   STAFF_LIST_Q=String(q||'');
   const t=STAFF_LIST_Q.trim().toLowerCase(),c={active:0,suspended:0,inactive:0};
+  let lg=0;   // v0.3.187: rows of logins without a profile (data-lg) follow the same search, but they are not people yet, so they are not in the counts
   document.querySelectorAll('.sfl-row').forEach(r=>{
     const ok=!t||(r.getAttribute('data-q')||'').includes(t);
-    r.hidden=!ok;if(ok)c[r.getAttribute('data-st')]++;
+    r.hidden=!ok;if(ok){if(r.hasAttribute('data-lg'))lg++;else c[r.getAttribute('data-st')]++;}
   });
-  const n=c.active+c.suspended+c.inactive,sum=document.getElementById('sfl-sum'),none=document.getElementById('sfl-none');
+  const n=c.active+c.suspended+c.inactive,sum=document.getElementById('sfl-sum'),none=document.getElementById('sfl-none'),box=document.getElementById('sfl-lgbox');
   if(sum)sum.textContent=_sflSum(c.active,c.suspended,c.inactive);
-  if(none)none.hidden=n>0;
+  if(box)box.hidden=lg===0;
+  if(none)none.hidden=(n+lg)>0;
 }
 function openStaffRowMenu(id){
   const s=(DATA.staff||[]).find(x=>String(x.id)===String(id));if(!s)return;
@@ -19132,11 +19147,12 @@ function openStaffRowMenu(id){
 }
 function renderStaffList(){
   const _sList=scopedStaff(),adm=USER.role==='admin';
-  if(_sList.length===0)return `<div class="sfl">${_emptyHtml(adm?'No staff added yet.':'No staff added yet. Ask an Admin to add them.',adm?'Add staff':'','openStaffForm()')}</div>`;
+  if(_sList.length===0&&!(adm&&loginsWithoutProfile().length))return `<div class="sfl">${_emptyHtml(adm?'No staff added yet.':'No staff added yet. Ask an Admin to add them.',adm?'Add staff':'','openStaffForm()')}</div>`;   // v0.3.187: not empty while a Manager or Cashier login is waiting for its profile
   const roles=isStaffRole()?[...new Set(_sList.flatMap(s=>staffRoleList(s)))]:allRoleNames();
   // Only offer roles that have at least one registered staff member
   const rolesWithStaff=roles.filter(role=>_sList.some(s=>staffHasRole(s,role)));
   if(STAFF_LIST_ROLE_FILTER!=='all'&&!rolesWithStaff.includes(STAFF_LIST_ROLE_FILTER))STAFF_LIST_ROLE_FILTER='all';
+  const _lgs=(adm&&STAFF_LIST_ROLE_FILTER==='all')?loginsWithoutProfile():[];   // v0.3.187: Manager and Cashier logins with no staff profile (Admin only; they have no job role, so a role filter hides them)
   const list=STAFF_LIST_ROLE_FILTER==='all'?_sList:_sList.filter(s=>staffHasRole(s,STAFF_LIST_ROLE_FILTER));
   const t=String(STAFF_LIST_Q||'').trim().toLowerCase(),cnt={active:0,suspended:0,inactive:0};
   const initials=n=>String(n||'').split(' ').map(w=>w[0]||'').join('').slice(0,2).toUpperCase();
@@ -19155,6 +19171,22 @@ function renderStaffList(){
       </button>${mn}
     </div>`;
   }).join('');
+  // v0.3.187: the Manager and Cashier logins that have no profile yet, in their own box above the list. Each row opens the full profile form (openCreateProfileForLogin).
+  const _lgQ=u=>[u.username,_roleWord(u.role),'login no profile'].join(' ').toLowerCase();
+  const lgN=_lgs.filter(u=>!t||_lgQ(u).includes(t)).length;
+  const lgRows=_lgs.map(u=>{
+    const show=!t||_lgQ(u).includes(t);
+    return `<div class="sfl-row" data-lg="1" data-q="${esc(_lgQ(u))}"${show?'':' hidden'}>
+      <button type="button" class="sfl-main" data-u="${esc(u.username)}" onclick="openCreateProfileForLogin(this.dataset.u)">
+        <span class="sfl-av">${esc(String(u.username||'').slice(0,2).toUpperCase())}</span>
+        <span class="sfl-tx"><span class="sfl-nm">${esc(u.username)} ${_stc('warn','No profile')}</span><span class="sfl-sub">${esc(_roleWord(u.role))} login \u00b7 Tap to create their profile</span></span>
+      </button>
+    </div>`;
+  }).join('');
+  const lgBox=_lgs.length?`<div id="sfl-lgbox"${lgN?'':' hidden'}>
+      <div class="sfl-sum">Logins that are not on the staff list yet. Tap one to create the person's profile.</div>
+      <div class="sfl-list">${lgRows}</div>
+    </div>`:'';
   const sel=rolesWithStaff.length>1?`<div class="tb-per"><select aria-label="Role" onchange="setStaffListRoleFilter(this.value)"><option value="all">All roles</option>${rolesWithStaff.map(r=>`<option value="${esc(r)}"${STAFF_LIST_ROLE_FILTER===r?' selected':''}>${esc(r)}</option>`).join('')}</select></div>`:'';
   const n=cnt.active+cnt.suspended+cnt.inactive;
   return `<div class="sfl">
@@ -19163,14 +19195,77 @@ function renderStaffList(){
       ${sel}
       <button type="button" class="tb-btn" id="btn-export" aria-label="Export this view as PDF" onclick="exportCurrentTabCSV()">${dbIc('download')}<span>Export</span></button>
     </div>
+    ${lgBox}
     <div class="sfl-sum" id="sfl-sum" aria-live="polite">${_sflSum(cnt.active,cnt.suspended,cnt.inactive)}</div>
     <div class="sfl-list">${rows}</div>
-    <div class="empty" id="sfl-none"${n>0?' hidden':''}>No one matches this search.</div>
+    <div class="empty" id="sfl-none"${(n>0||lgN>0)?' hidden':''}>No one matches this search.</div>
   </div>`;
 }
 function setStaffListRoleFilter(role){
   STAFF_LIST_ROLE_FILTER=role;
   render();
+}
+
+// ── MANAGER AND CASHIER LOGINS IN THE STAFF LIST (v0.3.187) ─────────────────────────────────────────────────────────────────
+// WHY: a Manager or Cashier login made before staff profiles carried logins (before v0.3.178) lives only in DATA.users, so the Staff list, which reads DATA.staff, never
+// showed that person. Settings > User Accounts can Link such a login, but only to a profile that already exists. Now the Admin's Staff list shows each of these logins in
+// its own box above the list. Tapping one opens the SAME full form as Register staff (photo, phone, date of birth, ID, job roles, contract, reports to, date joined,
+// pay, status, emergency contact, notes). Saving it makes the profile AND links the login to it in ONE write, after the Admin password. From then on the person is an
+// ordinary row in the list, with the full profile pop-up, Edit details, the status menu and the rest.
+// A login is "without a profile" when it is a Manager or Cashier login (loginLinkable) and has no linkedStaffId, or its linkedStaffId points at a profile that is gone.
+// The login itself changes in ONE way only: it gets linkedStaffId. Its role, password, email and username are untouched. The new profile counts toward the plan's staff cap.
+function loginsWithoutProfile(){
+  const have=new Set((DATA.staff||[]).map(s=>String(s.id)));
+  return (DATA.users||[]).filter(u=>loginLinkable(u)&&!(u.linkedStaffId&&have.has(String(u.linkedStaffId))));
+}
+// The job role to tick first: a role whose Login type is this login's level, preferring one named MANAGER / CASHIER. '' when no job role has that Login type.
+function _loginJobRole(u){
+  const k=_roleKey(u.role),want=k==='cashier'?'CASHIER':'MANAGER';
+  const m=(DATA.staffRoles||[]).filter(r=>r&&r.name&&roleLoginType(r)===k);
+  const best=m.find(r=>String(r.name).trim().toUpperCase()===want)||m[0];
+  return best?best.name:'';
+}
+function openCreateProfileForLogin(username){
+  if(!requireAdmin('create a staff profile'))return;
+  const u=(DATA.users||[]).find(x=>x.username===username);
+  if(!u||!loginLinkable(u)){ _sfxBlock('Not available','That login is not in the list any more, or it is not a Manager or Cashier login.'); return; }
+  if(!loginsWithoutProfile().some(x=>x.username===u.username)){ _sfxBlock('Already on the staff list','"'+u.username+'" already has a staff profile.'); return; }
+  if(isReadOnly()){ _sfxBlock('Read-only','This account is in read-only mode. Contact your administrator.'); return; }
+  if(isAtCap('staff',(DATA.staff||[]).length)){ showCapReachedPrompt('staff','Staff Profiles'); return; }
+  const pre=_loginJobRole(u),word=_roleWord(u.role);
+  openModal(`
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">${dbIc('userplus')} Create profile \u2014 ${esc(u.username)}</div>${_sfxX()}</div>
+    <div class="u-fs-cap u-c-muted u-lh-1p6 u-mb-10">The ${esc(word)} login <b>${esc(u.username)}</b> can sign in but is not on the staff list. Fill in this person's details. Saving makes the profile and links the login to it. It does not change what the login can do.${pre?'':' No job role has the '+esc(word)+' Login type yet, so choose the role that fits (or add one under Staff, Roles &amp; Rates).'}</div>
+    ${_staffFormHtml('sf',null,{edit:false,empId:true,roles:pre?[pre]:[]})}
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" data-u="${esc(u.username)}" onclick="saveStaffForLogin(this.dataset.u)">Create profile</button></div></div>`);
+}
+function saveStaffForLogin(username){
+  if(!isAdmin())return;
+  if(isReadOnly()){_sfxErr('This account is in read-only mode. Contact your administrator.');return;}
+  const u=(DATA.users||[]).find(x=>x.username===username);
+  if(!u||!loginsWithoutProfile().some(x=>x.username===u.username)){_sfxErr('That login is not waiting for a profile any more.');return;}
+  if(isAtCap('staff',(DATA.staff||[]).length)){closeModal();showCapReachedPrompt('staff','Staff Profiles');return;}
+  const v=_sfCheckForm();if(!v)return;
+  _sfReadPhoto(photoDataUrl=>{
+    const payload=_sfPayload(v,photoDataUrl);   // built now, while the form is still open: the password box replaces it
+    requireAdminPassword('create the profile for "'+username+'" and link the login',()=>_finishCreateProfileForLogin(username,payload));
+  },true);
+}
+// Runs after the Admin password box. Checks AGAIN with the data as it is now (a sync may have changed it while the box was open); anything else: one toast, nothing written.
+function _finishCreateProfileForLogin(username,payload){
+  const say=m=>{ showToast(m+' Nothing was changed.',7000); return false; };
+  const u=(DATA.users||[]).find(x=>x.username===username);
+  if(!u) return say('That login is not in the list any more.');
+  if(!loginLinkable(u)) return say('Only Manager and Cashier logins can be given a profile here.');
+  if(!loginsWithoutProfile().some(x=>x.username===username)) return say('"'+username+'" was linked to a staff profile while you were confirming.');
+  if(isAtCap('staff',(DATA.staff||[]).length)){ showCapReachedPrompt('staff','Staff Profiles'); return false; }
+  const rp=reportsToProblem('',payload.reportsTo);
+  if(rp) return say(rp);
+  updateData(d=>({...d,staff:[...(d.staff||[]),payload],users:(d.users||[]).map(x=>x.username===username?{...x,linkedStaffId:String(payload.id)}:x)}));
+  logAuditEvent('UPDATE','User',`${username} \u00b7 Profile created and linked to staff ID ${payload.id} (${payload.name})`);
+  const lvl=staffLoginType(payload),cur=_roleKey(u.role),diff=lvl!==cur;
+  showToast('\u2705 '+payload.name+' is on the staff list and "'+username+'" is linked to them.'+(diff?' Their job roles give a '+_roleWord(lvl)+' login; this login stays '+_roleWord(cur)+'.':''),diff?9000:6000);
+  return true;
 }
 
 // ── ROLE WORK HISTORY (admin) ────────────────────────────────────────────
@@ -31845,7 +31940,7 @@ const CHAPTERS=[
       'Under **Login for**, choose the staff profile this login belongs to. Only active profiles without a login are listed, and a profile can have only one login. A new person? Register them first in **Staff → + Add Staff** and tick **Create a login for this person after saving**.',
       'You do not choose the role. It comes from the **Login type** of the person\'s job role, set in **Staff → ⚙️ Roles & Rates** (the highest one if they hold several). To make another Admin, choose **Admin** under Login for. Roles are **Manager**, **Staff**, **Cashier (till only)** or **Admin**. See **Who can do what**. Next to each login there is 🔑 Reset (new password) and 🗑 (remove).',
       'To change a login\'s role later, open the person in **Staff**, open their menu and choose **Sign-in → Change login role**. If you change a person\'s job roles so that their Login type changes, the app also asks whether to apply the new role. Either way they are asked to sign in again at their phone\'s next sync.',
-      'A Manager or Cashier login made before staff profiles had logins shows **Not linked** in the list. Tap **🔗 Link** to tie it to a staff profile (**Change** or **Unlink** later). Until it is linked it works as before, and linking changes no role.'
+      'A Manager or Cashier login made before staff profiles had logins shows **Not linked** in the list. Tap **🔗 Link** to tie it to a staff profile (**Change** or **Unlink** later). Until it is linked it works as before, and linking changes no role. The same logins are listed at the top of **Staff** (Admin only): tap one to fill in the full profile form, and saving creates the profile and links the login in one step.'
     ],{where:'Settings → Account & Security → User Accounts',go:'adduser',chk:'logins',f:'staff_multi_user'}),
     ST('Set the Manager PIN and the till rules',[
       'Each Admin and Manager: open **Settings → Account & Security → Manager PIN**. Type your account password, then a new 4 to 6 digit PIN twice. [[i:manager_pin]]',
