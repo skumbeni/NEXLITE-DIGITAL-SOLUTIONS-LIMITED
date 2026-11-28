@@ -2841,6 +2841,20 @@
         }
     </style>
 
+    <style id="preview-fit">
+        /* The app's global "table { min-width: 800px }" also applied to the on-screen document previews, so on a phone
+           the delivery note table was 800px wide inside a ~300px card: the Qty column sat far off to the right behind a
+           sideways scroll and the Item column looked empty. The print rules already reset this; this does the same on
+           screen, so the preview and the printout both fit the page width exactly. */
+        #receipt-body table, #invoice-print-body table, #statement-body table, #grn-print-body table, #dn-print-body table, #cd-print-body table, #ret-print-body table, #trf-print-body table { width: 100%; min-width: 0; max-width: 100%; table-layout: auto; }
+        #receipt-body th, #invoice-print-body th, #statement-body th, #grn-print-body th, #dn-print-body th, #cd-print-body th, #ret-print-body th, #trf-print-body th, #receipt-body td, #invoice-print-body td, #statement-body td, #grn-print-body td, #dn-print-body td, #cd-print-body td, #ret-print-body td, #trf-print-body td { white-space: normal; overflow-wrap: break-word; word-break: normal; }
+        #receipt-body th.num, #invoice-print-body th.num, #statement-body th.num, #grn-print-body th.num, #dn-print-body th.num, #cd-print-body th.num, #ret-print-body th.num, #trf-print-body th.num, #receipt-body td.num, #invoice-print-body td.num, #statement-body td.num, #grn-print-body td.num, #dn-print-body td.num, #cd-print-body td.num, #ret-print-body td.num, #trf-print-body td.num, #receipt-body th.r, #invoice-print-body th.r, #statement-body th.r, #grn-print-body th.r, #dn-print-body th.r, #cd-print-body th.r, #ret-print-body th.r, #trf-print-body th.r, #receipt-body td.r, #invoice-print-body td.r, #statement-body td.r, #grn-print-body td.r, #dn-print-body td.r, #cd-print-body td.r, #ret-print-body td.r, #trf-print-body td.r { white-space: nowrap; overflow-wrap: normal; }
+        #receipt-body, #invoice-print-body, #statement-body, #grn-print-body, #dn-print-body, #cd-print-body, #ret-print-body, #trf-print-body { max-width: 100%; overflow-wrap: anywhere; }
+        /* Delivery note: "#" and "Qty" take only the room they need, Item takes the rest, and Qty lines up with the right edge. */
+        #dn-print-body table th:first-child, #dn-print-body table td:first-child { width: 1%; white-space: nowrap; }
+        #dn-print-body table th.num, #dn-print-body table td.num { width: 1%; white-space: nowrap; text-align: right; padding-right: 4px; }
+    </style>
+
     <!-- WhatsApp assistant: generic preview-and-send box (kept last so it sits above other modals) -->
     <div id="modal-wamsg" class="modal-overlay hidden">
         <div class="modal-content" style="max-width:480px;">
@@ -5239,11 +5253,49 @@
         // when the person taps its button, so a popup left open when the app closes shows again next time. Seen state is
         // kept per device, per role and per business. A new announcement needs a new id (never reuse an id).
         // They wait for the notification-email prompt and for any other open popup. Expired accounts (view-only mode) see them too.
+        // WEEKLY announcements (weekly: true) are the exception: they are not one-time. They show once per calendar week
+        // (Monday to Sunday), on the first day of that week the owner opens or logs in to the app, and are counted as shown the
+        // moment they appear. The week is remembered in the business settings (so it follows the account to every device)
+        // and on this device (so it also works offline and in view-only mode).
         const ANN_PREFIX = 'za_ann_', ANN_MAX_TRIES = 40;
         let _annCurrent = null, _annTimer = null, _annTries = 0, _annPending = false;
         const _annClosed = new Set();      // closed during this page session, in case storage is unavailable
         function _annKey(id) { return ANN_PREFIX + id + '_' + (currentUser || ''); }
-        function annSeen(id) {
+        // Calendar week, Monday to Sunday, in the phone's local time. The key is the Monday's date (YYYY-MM-DD).
+        function annWeekKey(ts) {
+            const d = new Date(ts == null ? Date.now() : ts);
+            d.setHours(0, 0, 0, 0);
+            d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        }
+        function annSeenThisWeek(id) {
+            const wk = annWeekKey();
+            if (_annClosed.has(id + '|' + wk)) return true;
+            // Account-wide: kept in the business settings, which sync to every device of this business.
+            try { const st = db.settings || {}; if (st.annWeekly && st.annWeekly[id] === wk) return true; } catch (e) {}
+            // This device: a record from the old one-time popup counts too, by the day it was shown.
+            try {
+                const s = JSON.parse(localStorage.getItem(_annKey(id)));
+                if (s) {
+                    const uid = currentLicenseUid();
+                    if (!(s.uid && uid && s.uid !== uid) && (s.wk || annWeekKey(s.at)) === wk) return true;
+                }
+            } catch (e) {}
+            return false;
+        }
+        function annMarkWeek(id) {
+            const wk = annWeekKey();
+            _annClosed.add(id + '|' + wk);
+            try { localStorage.setItem(_annKey(id), JSON.stringify({ at: Date.now(), wk: wk, uid: currentLicenseUid() || '' })); } catch (e) {}
+            try {
+                if (isReadOnly()) return;                                  // expired account: the device record above is enough
+                const st = db.settings || {};
+                if (!st.annWeekly || typeof st.annWeekly !== 'object') st.annWeekly = {};
+                if (st.annWeekly[id] !== wk) { st.annWeekly[id] = wk; writeSettings(st); }
+            } catch (e) {}
+        }
+        function annSeen(id, weekly) {
+            if (weekly) return annSeenThisWeek(id);
             if (_annClosed.has(id)) return true;
             try {
                 const s = JSON.parse(localStorage.getItem(_annKey(id)));
@@ -5284,6 +5336,7 @@
             },
             {
                 id: 'referral-1',
+                weekly: true,      // shown once a week, not once ever (see WEEKLY above)
                 // The business owner (admin) on a paid or trial plan. Same rules as the Refer a friend card in Settings:
                 // not Lifetime, not staff or co-admins, not the Play build.
                 eligible: function () {
@@ -5331,11 +5384,12 @@
             if (!layout || layout.classList.contains('hidden') || !currentUser) return;              // not logged in
             if (annBlocked()) { if (++_annTries <= ANN_MAX_TRIES) annKick(1500); return; }
             let next = null;
-            for (const a of ANNOUNCEMENTS) { try { if (!annSeen(a.id) && a.eligible()) { next = a; break; } } catch (e) {} }
+            for (const a of ANNOUNCEMENTS) { try { if (!annSeen(a.id, a.weekly) && a.eligible()) { next = a; break; } } catch (e) {} }
             if (next) annShow(next); else _annPending = false;
         }
         function annShow(a) {
             _annCurrent = a;
+            if (a.weekly) annMarkWeek(a.id);        // counted as this week's showing the moment it appears
             document.getElementById('ann-title').textContent = a.title;
             document.getElementById('ann-body').innerHTML = a.body();
             document.getElementById('ann-actions').innerHTML = a.actions();
@@ -5346,8 +5400,10 @@
         // The only way out of the popup: its button. Marks it as seen, then opens the next one (if any) after a short pause.
         function annDone(nextDelay) {
             const a = _annCurrent; if (!a) return;
-            _annClosed.add(a.id);
-            try { localStorage.setItem(_annKey(a.id), JSON.stringify({ at: Date.now(), uid: currentLicenseUid() || '' })); } catch (e) {}
+            if (!a.weekly) {                         // weekly ones were already marked when shown
+                _annClosed.add(a.id);
+                try { localStorage.setItem(_annKey(a.id), JSON.stringify({ at: Date.now(), uid: currentLicenseUid() || '' })); } catch (e) {}
+            }
             _annCurrent = null;
             document.getElementById('modal-announce').classList.add('hidden');
             _annTries = 0; annKick(typeof nextDelay === 'number' ? nextDelay : 400);
