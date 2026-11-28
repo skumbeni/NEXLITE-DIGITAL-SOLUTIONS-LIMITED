@@ -6795,7 +6795,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.182';
+const SW_VERSION  = 'v0.3.183';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -23868,45 +23868,143 @@ function _bpTkQty(id,i,v){
 // ══ END BULK PAY ═════════════════════════════════════════════
 
 // ── PAYSLIP GENERATOR (Fix 5) ────────────────────────────────────────────────
-function generatePayslip(staffId, periodMonth, periodYear){
+// ── PAYSLIP: date range and pay date (v0.3.183) ───────────────────────────────────────────────────────────────────────────
+function _pslipSwap(){
+  const m=document.getElementById('ps-mode').value,sh=(id,on,d)=>{const e=document.getElementById(id);if(e)e.style.display=on?(d||''):'none';};
+  sh('ps-b-month',m==='month');sh('ps-b-range',m==='range');sh('ps-b-paydate',m==='paydate');
+}
+function _pslipGo(staffId){
+  const m=document.getElementById('ps-mode').value,v=id=>(document.getElementById(id)||{}).value||'';
+  if(m==='range'){
+    const f=v('ps-from'),t=v('ps-to');
+    if(!f||!t){_sfxErr('Pick both dates.');return;}
+    if(f>t){_sfxErr('The From date is after the To date.');return;}
+    closeModal();generatePayslip(staffId,undefined,undefined,{mode:'range',from:f,to:t});return;
+  }
+  if(m==='paydate'){
+    const d=v('ps-date');
+    if(!d){_sfxErr('This person has no payment to make a payslip for.');return;}
+    closeModal();generatePayslip(staffId,undefined,undefined,{mode:'paydate',date:d});return;
+  }
+  closeModal();generatePayslip(staffId,+v('ps-month'),+v('ps-year'));
+}
+// NAPSA / NHIMA / PAYE taken by the payroll runs locked inside a date range (the month payslip uses the calendar month instead)
+function _pslipStatIn(sid,from,to){
+  const o={napsa:0,nhima:0,paye:0};
+  (DATA.payrollRuns||[]).forEach(R=>{
+    if(R.status!=='locked'||!R.to||R.to<from||R.to>to)return;
+    (R.rows||[]).forEach(r=>{if(String(r.sid)!==String(sid)||!r.stat)return;o.napsa+=Number(r.stat.napsa||0);o.nhima+=Number(r.stat.nhima||0);o.paye+=Number(r.stat.paye||0);});
+  });
+  return{napsa:_payR2(o.napsa),nhima:_payR2(o.nhima),paye:_payR2(o.paye)};
+}
+// A payslip for one pay date: what was paid that day, the work it settled by role and sub role, and what is still owed after it.
+function _pslipPayDate(s,pd){
+  const di=DATA.depotInfo||{},today=new Date(),sid=String(s.id);
+  const pays=approvedArr((DATA.staffPayments||[]).filter(p=>String(p.staffId)===sid&&p.date===pd));
+  if(!pays.length){_sfxErr('No approved payment for '+s.name+' on '+fmtDate(pd)+'.');return;}
+  const total=_payR2(pays.reduce((a,p)=>a+Number(p.amount||0),0)),salaried=s.payType==='salary';
+  const ses=n=>n+' entr'+(n!==1?'ies':'y');
+  let settled='',earnedTo=0,paidTo=0;
+  if(!salaried){
+    const aft=_psAllocUpTo(sid,pd,true),bef=_psAllocUpTo(sid,pd,false),was=new Map(bef.rows.map(r=>[String(r.log.id),r.paid]));
+    const G={};
+    aft.rows.forEach(r=>{
+      if(r.log.date<=pd){earnedTo+=r.net;paidTo+=r.paid;}
+      const d=_payR2(r.paid-(was.get(String(r.log.id))||0));
+      if(d<=0.004)return;
+      const role=r.log.role||s.role||'\u2014',task=r.log.task||'(no task)';
+      const g=G[role]||(G[role]={role,n:0,amt:0,subs:{}}),t=g.subs[task]||(g.subs[task]={task,n:0,amt:0});
+      g.n++;g.amt+=d;t.n++;t.amt+=d;
+    });
+    settled=Object.values(G).sort((a,b)=>a.role.localeCompare(b.role)).map(g=>
+      `<tr style="background:#f3f4f6;font-weight:700"><td>${esc(g.role)} \u2014 ${ses(g.n)}</td><td class="num">${zm(g.amt)}</td></tr>`
+      +Object.values(g.subs).sort((a,b)=>a.task.localeCompare(b.task)).map(t=>`<tr><td style="padding-left:22px">\u21b3 ${esc(t.task)} \u00b7 ${ses(t.n)}</td><td class="num">${zm(t.amt)}</td></tr>`).join('')).join('');
+    const ahead=_payR2(aft.poolLeft-bef.poolLeft);
+    if(ahead>0.004)settled+=`<tr><td>Paid ahead of work done</td><td class="num">${zm(ahead)}</td></tr>`;
+    earnedTo=_payR2(earnedTo);paidTo=_payR2(Math.min(paidTo,earnedTo));
+  }
+  const out=_payR2(earnedTo-paidTo);
+  const payRows=pays.map(p=>`<tr><td>${esc(p.notes||'Payment')}</td><td class="num">${zm(p.amount)}</td></tr>`).join('');
+  const html=`
+${_getBrandedHeader('Payslip \u2014 '+s.name)}
+<table>
+  <tr><th>Employee Name</th><td>${esc(s.name)}</td><th>Pay Date</th><td>${fmtDate(pd)}</td></tr>
+  <tr><th>Job Role</th><td>${esc(staffRoleLabel(s))}</td><th>Date Issued</th><td>${today.toLocaleDateString('en-GB')}</td></tr>
+  ${s.dateJoined?`<tr><th>Date Joined</th><td>${fmtDate(s.dateJoined)}</td><th>Employee ID</th><td>${esc(s.employeeId||'\u2014')}</td></tr>`:''}
+</table>
+<div class="pay-section-title">Payment${pays.length!==1?'s':''} made on ${fmtDate(pd)}</div>
+<table>
+  <thead><tr><th>Description</th><th style="text-align:right">Amount (ZMW)</th></tr></thead>
+  <tbody>${payRows}${pays.length>1?`<tr style="font-weight:700"><td>Total paid</td><td class="num">${zm(total)}</td></tr>`:''}</tbody>
+</table>
+${settled?`<div class="pay-section-title">Work settled by this payment</div>
+<table>
+  <thead><tr><th>Role / Sub role</th><th style="text-align:right">Amount (ZMW)</th></tr></thead>
+  <tbody>${settled}</tbody>
+</table>`:''}
+<table>
+  <tbody>
+    <tr class="net-row"><td>PAID ON ${esc(fmtDate(pd))}</td><td class="num">${zm(total)}</td></tr>
+    ${salaried?'':`<tr><td style="color:#555">Work earned up to this date</td><td class="num" style="color:#555">${zm(earnedTo)}</td></tr>
+    <tr><td style="color:#555">Paid up to and including this date</td><td class="num" style="color:#555">${zm(paidTo)}</td></tr>
+    <tr style="font-weight:700;color:${out>0.004?'#c00':'var(--accent)'}"><td>${out>0.004?'OUTSTANDING AFTER THIS PAYMENT':'\u2705 FULLY PAID'}</td><td class="num">${zm(out)}</td></tr>`}
+  </tbody>
+</table>
+<div class="sig-row">
+  <div class="sig-box">Employee Signature<br><br>${esc(s.name)}</div>
+  <div class="sig-box">Authorised By<br><br>${esc(di.name||'Management')}</div>
+</div>
+<div class="pdf-footer">Generated by Shop Inventory & Sales Manager \u00b7 ${today.toLocaleString('en-GB')} \u00b7 This payslip must be verified by management before payment.</div>
+`;
+  _pdfPrint(html,'Payslip \u2014 '+s.name+' \u2014 '+pd);
+  showToast('🧾 Opening payslip PDF for '+s.name);
+}
+
+function generatePayslip(staffId, periodMonth, periodYear, sel){
   if(!hasFeature('payslip_generate')){ showUpgradePrompt('payslip_generate'); return; }
   const s=DATA.staff.find(x=>String(x.id)===String(staffId));
   if(!s){_sfxErr('Staff not found.');return;}
   const di=DATA.depotInfo||{};
   const today=new Date();
-  // If called without period args, show a picker modal first
-  if(periodMonth===undefined||periodYear===undefined){
+  // If called without period args, show a picker modal first (v0.3.183: a month, a date range, or a pay date)
+  if(!sel&&(periodMonth===undefined||periodYear===undefined)){
     const nowM=today.getMonth();const nowY=today.getFullYear();
     const monthOpts=['January','February','March','April','May','June','July','August','September','October','November','December']
       .map((m,i)=>`<option value="${i}"${i===nowM?' selected':''}>${m}</option>`).join('');
     const yrOpts=[nowY-2,nowY-1,nowY,nowY+1].map(y=>`<option value="${y}"${y===nowY?' selected':''}>${y}</option>`).join('');
+    const pd={};approvedArr((DATA.staffPayments||[]).filter(p=>String(p.staffId)===String(s.id)&&p.date)).forEach(p=>{pd[p.date]=_payR2((pd[p.date]||0)+Number(p.amount||0));});
+    const pdOpts=Object.keys(pd).sort().reverse().map(d=>`<option value="${esc(d)}">${esc(fmtDate(d))} \u00b7 ${zm(pd[d])}</option>`).join('');
     openModal(`
       <div class="sfx"><div class="sfx-h"><div class="mtitle">${dbIc('receipt')} Generate Payslip</div>${_sfxX()}</div>
       <div style="font-size:18px;color:var(--muted);margin-bottom:14px">Select the pay period for <strong style="color:var(--text)">${esc(s.name)}</strong></div>
-      <div class="twobox">
+      <div class="fw"><div class="fl">Payslip for</div><select class="fi" id="ps-mode" onchange="_pslipSwap()"><option value="month">A month</option><option value="range">A date range</option><option value="paydate">A pay date</option></select></div>
+      <div class="twobox" id="ps-b-month">
         <div class="fw"><div class="fl">Month</div><select class="fi" id="ps-month">${monthOpts}</select></div>
         <div class="fw"><div class="fl">Year</div><select class="fi" id="ps-year">${yrOpts}</select></div>
       </div>
+      <div class="twobox" id="ps-b-range" style="display:none">
+        <div class="fw"><div class="fl">From</div><input class="fi" type="date" id="ps-from" value="${_prIso(new Date(nowY,nowM,1))}"/></div>
+        <div class="fw"><div class="fl">To</div><input class="fi" type="date" id="ps-to" value="${today.getFullYear()+'-'+String(nowM+1).padStart(2,'0')+'-'+String(today.getDate()).padStart(2,'0')}"/></div>
+      </div>
+      <div class="fw" id="ps-b-paydate" style="display:none"><div class="fl">Pay date</div>${pdOpts?`<select class="fi" id="ps-date">${pdOpts}</select>`:'<div style="font-size:17px;color:var(--muted)">No payments recorded for this person yet.</div>'}</div>
       <div class="mact">
         <button class="btn bo" onclick="closeModal()">Cancel</button>
-        <button class="btn bg" onclick="closeModal();generatePayslip('${staffId}',+document.getElementById('ps-month').value,+document.getElementById('ps-year').value)">Generate</button>
+        <button class="btn bg" onclick="_pslipGo('${staffId}')">Generate</button>
       </div></div>`);
     return;
   }
-  const period=new Date(periodYear,periodMonth,1).toLocaleDateString('en-GB',{month:'long',year:'numeric'});
-  const sLogs=DATA.staffLogs.filter(l=>{
-    if(l.staffId!==s.id||!(!l.entryType||l.entryType==='work'))return false;
-    const d=new Date(l.date+'T00:00:00');
-    return d.getMonth()===periodMonth&&d.getFullYear()===periodYear;
-  });
-  const payments=(DATA.staffPayments||[]).filter(p=>{
-    if(p.staffId!==s.id)return false;
-    const d=new Date(p.date+'T00:00:00');
-    return d.getMonth()===periodMonth&&d.getFullYear()===periodYear;
-  });
+  if(sel&&sel.mode==='paydate')return _pslipPayDate(s,sel.date);
+  const isRange=!!(sel&&sel.mode==='range');
+  const pFrom=isRange?sel.from:_prIso(new Date(periodYear,periodMonth,1)),pTo=isRange?sel.to:_prIso(new Date(periodYear,periodMonth+1,0));
+  const period=isRange?fmtDate(pFrom)+' \u2192 '+fmtDate(pTo):new Date(periodYear,periodMonth,1).toLocaleDateString('en-GB',{month:'long',year:'numeric'});
+  const sLogs=DATA.staffLogs.filter(l=>l.staffId===s.id&&(!l.entryType||l.entryType==='work')&&l.date>=pFrom&&l.date<=pTo);
+  const payments=(DATA.staffPayments||[]).filter(p=>p.staffId===s.id&&p.date>=pFrom&&p.date<=pTo);
   const isSalaried = s.payType==='salary';
   let gross, earningsRowLabel;
-  if(isSalaried){
+  if(isSalaried&&isRange){
+    gross=_payR2(_prSalary(s,pFrom,pTo));   // prorated month by month over the range
+    earningsRowLabel='Salary (prorated for the period)';
+  } else if(isSalaried){
     // Fixed monthly salary — prorate for the days actually employed within
     // this calendar month (handles staff joining or leaving mid-month).
     const monthStart=new Date(periodYear,periodMonth,1);
@@ -23961,8 +24059,8 @@ function generatePayslip(staffId, periodMonth, periodYear){
   const totalDed=Object.values(dedByReason).reduce((a,b)=>a+b,0);
   const net=Math.max(0,gross-totalDed);
   const totalPaid=payments.reduce((a,b)=>a+Number(b.amount||0),0);
-  const loanTaken=_payR2(_lnOnlyIn(s.id,_prIso(new Date(periodYear,periodMonth,1)),_prIso(new Date(periodYear,periodMonth+1,0))));   // loan instalments withheld this month
-  const _stm=_stMonthTaken(s.id,periodYear,periodMonth),statTaken=_payR2(_stm.napsa+_stm.nhima+_stm.paye);   // NAPSA/NHIMA/PAYE withheld for this month
+  const loanTaken=_payR2(_lnOnlyIn(s.id,pFrom,pTo));   // loan instalments withheld this month
+  const _stm=isRange?_pslipStatIn(s.id,pFrom,pTo):_stMonthTaken(s.id,periodYear,periodMonth),statTaken=_payR2(_stm.napsa+_stm.nhima+_stm.paye);   // NAPSA/NHIMA/PAYE withheld for this month
   const unpaid=net-totalPaid-loanTaken-statTaken;
   const dedRows=Object.entries(dedByReason).map(([r,a])=>`<tr><td style="padding:6px 10px">${esc(r)}</td><td style="text-align:right;padding:6px 10px;color:#c00">- ${zm(a)}</td></tr>`).join('')||'<tr><td colspan="2" style="padding:6px 10px;color:#888">None</td></tr>';
   const html=`
