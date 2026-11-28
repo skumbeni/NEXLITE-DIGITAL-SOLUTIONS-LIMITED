@@ -79,6 +79,10 @@ const Shifts = (function () {
   // The app's date rule: the DEVICE's own calendar date (index.html's today(), pos.html's localYMD and sales.js give the same). It used to be the UTC date.
   const localDay = t => { const d = t instanceof Date ? t : new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
   const str = (x, n) => (x == null ? '' : String(x)).slice(0, n);
+  // Login-link step 7: the staff profile behind a login travels on the record as a plain string of 1 to 64 characters, and ONLY when the login is linked to one.
+  // staffIdOf() is what the builders use (an odd value is left out, never cut short, so a sale is never refused over it); okStaffId() is what validate checks.
+  const staffIdOf = v => { const t = v == null ? '' : String(v); return t.length >= 1 && t.length <= 64 ? t : ''; };
+  const okStaffId = v => typeof v === 'string' && v.length >= 1 && v.length <= 64;
   function err(code, msg, extra) { const e = new Error(msg || code); e.code = code; if (extra) Object.assign(e, extra); return e; }
   const arr = x => Array.isArray(x) ? x : (x && typeof x === 'object' ? Object.keys(x).sort((a, b) => a - b).map(k => x[k]) : []);
   const idOf = (till, seq) => till + '-S' + String(seq).padStart(4, '0');
@@ -86,24 +90,28 @@ const Shifts = (function () {
   // ══════════════════════════════════════════════════════════════════════════════
   // THE RECORDS
   // ══════════════════════════════════════════════════════════════════════════════
-  // OPEN : { v:1, type:'open', id, shiftId, till, tillId, seq, at, date, time, cashier, cashierRole, float }
-  // CLOSE: { v:1, type:'close', id, shiftId, till, tillId, at, date, time, closedBy, closedByRole, forced,
+  // OPEN : { v:1, type:'open', id, shiftId, till, tillId, seq, at, date, time, cashier, cashierRole, cashierStaffId?, float }
+  // CLOSE: { v:1, type:'close', id, shiftId, till, tillId, at, date, time, closedBy, closedByRole, closedByStaffId?, forced,
   //          float, cashSales, cashOut, expectedCash, countedCash, variance,
   //          saleCount, total, credit, byMethod:{cash,mtn,airtel,card}, firstReceipt, lastReceipt, note }
   //   forced: true when someone other than the opener closed it (a manager closing a forgotten shift).
   //   total = value of the sales, credit = what was left unpaid on them, byMethod = money taken per method.
   //   note: why the count differs (free text, optional)
+  //   cashierStaffId / closedByStaffId (login-link step 7): the staff profile linked to the login that opened / closed the shift; present only when that login is linked.
   function openRecord(b, opts) {
     opts = opts || {};
     const at = Math.round(Number(b.at));
     const dateOf = opts.dateOf || localDay;
     const timeOf = opts.timeOf || (t => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); });
     const id = idOf(String(b.till), Number(b.seq));
-    return JSON.parse(JSON.stringify({
+    const o = {
       v: V, type: OPEN, id, shiftId: id, till: String(b.till), tillId: String(b.tillId), seq: Number(b.seq),
       at, date: dateOf(at), time: timeOf(at),
       cashier: str(b.cashier, 80), cashierRole: str(b.cashierRole, 20), float: r2(Number(b.float))
-    }));
+    };
+    const staffId = staffIdOf(b.cashierStaffId);          // step 7: only when the login is linked to a staff profile
+    if (staffId) o.cashierStaffId = staffId;
+    return JSON.parse(JSON.stringify(o));
   }
   function validateOpen(s) {
     if (!s || typeof s !== 'object' || s.type !== OPEN) return 'not a shift record';
@@ -115,6 +123,7 @@ const Shifts = (function () {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.date)) || !/^\d{2}:\d{2}$/.test(String(s.time))) return 'bad date';
     if (typeof s.cashier !== 'string' || !s.cashier || s.cashier.length > 80) return 'bad cashier';
     if (typeof s.cashierRole !== 'string' || s.cashierRole.length > 20) return 'bad cashier role';
+    if (s.cashierStaffId !== undefined && !okStaffId(s.cashierStaffId)) return 'bad cashier profile id';
     if (!isNum(s.float) || s.float < 0 || s.float > MAX_MONEY || toC(s.float) !== Math.round(s.float * 100)) return 'bad float';
     return '';
   }
@@ -126,7 +135,7 @@ const Shifts = (function () {
     const dateOf = opts.dateOf || localDay;
     const timeOf = opts.timeOf || (t => { const d = new Date(t); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); });
     const by = {}; METHODS.forEach(m => { by[m] = r2(Number((b.byMethod || {})[m]) || 0); });
-    return JSON.parse(JSON.stringify({
+    const o = {
       v: V, type: CLOSE, id: String(b.shiftId), shiftId: String(b.shiftId), till: String(b.till), tillId: String(b.tillId),
       at, date: dateOf(at), time: timeOf(at),
       closedBy: str(b.closedBy, 80), closedByRole: str(b.closedByRole, 20), forced: !!b.forced,
@@ -134,7 +143,10 @@ const Shifts = (function () {
       expectedCash: r2(Number(b.expectedCash)), countedCash: r2(Number(b.countedCash)), variance: r2(Number(b.variance)),
       saleCount: Number(b.saleCount), total: r2(Number(b.total)), credit: r2(Number(b.credit)), byMethod: by,
       firstReceipt: str(b.firstReceipt, 16), lastReceipt: str(b.lastReceipt, 16), note: str(b.note, 300)
-    }));
+    };
+    const staffId = staffIdOf(b.closedByStaffId);         // step 7: only when the closing login is linked to a staff profile
+    if (staffId) o.closedByStaffId = staffId;
+    return JSON.parse(JSON.stringify(o));
   }
   function validateClose(s) {
     if (!s || typeof s !== 'object' || s.type !== CLOSE) return 'not a shift record';
@@ -145,6 +157,7 @@ const Shifts = (function () {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.date)) || !/^\d{2}:\d{2}$/.test(String(s.time))) return 'bad date';
     if (typeof s.closedBy !== 'string' || !s.closedBy || s.closedBy.length > 80) return 'bad closer';
     if (typeof s.closedByRole !== 'string' || s.closedByRole.length > 20) return 'bad closer role';
+    if (s.closedByStaffId !== undefined && !okStaffId(s.closedByStaffId)) return 'bad closer profile id';
     if (typeof s.forced !== 'boolean') return 'bad forced flag';
     const money = ['float', 'cashSales', 'cashOut', 'expectedCash', 'countedCash', 'total', 'credit'];
     for (const k of money) if (!isNum(s[k]) || s[k] < 0 || s[k] > MAX_MONEY) return 'bad ' + k;
@@ -162,7 +175,8 @@ const Shifts = (function () {
   // expected cash is never negative in the record (a drawer cannot hold less than nothing): if payouts ever exceed float + cash
   // sales, the record says 0 and the variance carries the rest.
 
-  // AUDIT: { v:1, type:'audit', id, till, tillId, at, date, time, user, role, event, shiftId?, what?, approver?, note? }
+  // AUDIT: { v:1, type:'audit', id, till, tillId, at, date, time, user, role, staffId?, event, shiftId?, what?, approver?, note? }
+  //   staffId (login-link step 7): the staff profile linked to the signed-in login; present only when that login is linked.
   //   user/role: who was signed in at the till.  event: one of AUDIT_EVENTS.  shiftId: the shift on the till, when there is one.
   //   what: what the event was about, a few words ('leave the till', 'allow a discount', 'copy').  approver: exit_ok only, the PIN holder.
   //   note: a short extra ('2 wrong PINs in a row').  Nothing secret goes in: never a PIN.
@@ -177,6 +191,8 @@ const Shifts = (function () {
       v: V, type: AUDIT, id: auditId(String(b.till), at, rnd), till: String(b.till), tillId: String(b.tillId),
       at, date: dateOf(at), time: timeOf(at), user: str(b.user, 80), role: str(b.role, 20), event: String(b.event)
     };
+    const staffId = staffIdOf(b.staffId);                 // step 7: only when the login is linked to a staff profile
+    if (staffId) o.staffId = staffId;
     if (b.shiftId) o.shiftId = str(b.shiftId, 24);
     if (b.what) o.what = str(b.what, 40);
     if (b.approver) o.approver = str(b.approver, 80);
@@ -192,6 +208,7 @@ const Shifts = (function () {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.date)) || !/^\d{2}:\d{2}$/.test(String(s.time))) return 'bad date';
     if (typeof s.user !== 'string' || !s.user || s.user.length > 80) return 'bad user';
     if (typeof s.role !== 'string' || s.role.length > 20) return 'bad role';
+    if (s.staffId !== undefined && !okStaffId(s.staffId)) return 'bad profile id';
     if (AUDIT_EVENTS.indexOf(s.event) < 0) return 'bad event';
     if (s.shiftId !== undefined && !SID_RE.test(String(s.shiftId))) return 'bad shift id';
     for (const [k, n] of [['what', 40], ['approver', 80], ['note', 200]]) if (s[k] !== undefined && (typeof s[k] !== 'string' || s[k].length > n)) return 'bad ' + k;
@@ -618,7 +635,7 @@ const Shifts = (function () {
       const mineOpen = openShiftOf(events, till.tillId);
       if (mineOpen) throw err('ALREADY_OPEN', 'This till already has an open shift', { shift: mineOpen });
       const seq = 1 + events.filter(e => e.type === OPEN && e.till === till.code).reduce((m, e) => Math.max(m, e.seq), 0);
-      const rec = openRecord({ till: till.code, tillId: till.tillId, seq, at: now || Date.now(), cashier: who.username, cashierRole: who.role, float: f }, env.opts);
+      const rec = openRecord({ till: till.code, tillId: till.tillId, seq, at: now || Date.now(), cashier: who.username, cashierRole: who.role, cashierStaffId: who.staffId, float: f }, env.opts);
       const bad = validateOpen(rec);
       if (bad) throw err('INVALID', 'The shift is not valid: ' + bad);
       try { await A.add(d, OPEN, rec); }
@@ -642,7 +659,7 @@ const Shifts = (function () {
       const sum = summary(live.open, sales, extra);
       const rec = closeRecord(Object.assign({}, sum, {
         at: now || Date.now(), till: live.open.till, tillId: live.open.tillId,
-        closedBy: who.username, closedByRole: who.role, forced: String(who.username).toLowerCase() !== String(live.open.cashier).toLowerCase(),
+        closedBy: who.username, closedByRole: who.role, closedByStaffId: who.staffId, forced: String(who.username).toLowerCase() !== String(live.open.cashier).toLowerCase(),
         countedCash: r2(c), variance: varianceOf(sum, c), note
       }), env.opts);
       const bad = validateClose(rec);
@@ -662,7 +679,7 @@ const Shifts = (function () {
       const x = extra || {};
       for (let attempt = 0; attempt < 3; attempt++) {         // two entries in the same millisecond differ by their random tail
         const rnd = env.opts && typeof env.opts.rand === 'function' ? env.opts.rand() : Math.random().toString(36).slice(2, 5).padEnd(3, '0');
-        const rec = auditRecord({ till: till.code, tillId: till.tillId, at: now || Date.now(), user: who.username, role: who.role, event,
+        const rec = auditRecord({ till: till.code, tillId: till.tillId, at: now || Date.now(), user: who.username, role: who.role, staffId: who.staffId, event,
           shiftId: x.shiftId, what: x.what, approver: x.approver, note: x.note, rnd }, env.opts);
         const bad = validateAudit(rec);
         if (bad) throw err('INVALID', 'The audit entry is not valid: ' + bad);

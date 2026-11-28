@@ -13,6 +13,7 @@
  * WHAT A RECORD HOLDS
  *   { v:1, id, kind:'void'|'refund', till, tillId, seq, saleId,                  saleId = the receipt number of the sale
  *     at, date, time, cashier, cashierRole,                                        who took it at the till
+ *     cashierStaffId (optional),                                                    login-link step 7: the staff profile linked to that login (1 to 64 characters); absent when the login is linked to nobody
  *     approvedBy,                                                                   the manager who allowed it: a PIN holder's PIN, or the Admin / Manager who did it themselves
  *     shiftId (optional),                                                           the shift whose drawer paid it out
  *     reason (required, a short phrase), note (optional),
@@ -67,6 +68,10 @@ const Returns = (function () {
   const r3 = n => Math.round(n * 1000) / 1000;
   const toC = n => Math.round((Number(n) || 0) * 100);
   const str = (x, n) => (x == null ? '' : String(x)).slice(0, n);
+  // Login-link step 7: the staff profile behind a login travels on the record as a plain string of 1 to 64 characters, and ONLY when the login is linked to one.
+  // staffIdOf() is what the builders use (an odd value is left out, never cut short, so a sale is never refused over it); okStaffId() is what validate checks.
+  const staffIdOf = v => { const t = v == null ? '' : String(v); return t.length >= 1 && t.length <= 64 ? t : ''; };
+  const okStaffId = v => typeof v === 'string' && v.length >= 1 && v.length <= 64;
   function err(code, msg) { const e = new Error(msg || code); e.code = code; return e; }
   const arr = x => Array.isArray(x) ? x : (x && typeof x === 'object' ? Object.keys(x).sort((a, b) => a - b).map(k => x[k]) : []);
   // Step 26 (multiple units): a line sold in a pack or carton carries `factor` (base units in one) and `base` (the base unit's name), copied from the sale line.
@@ -110,6 +115,8 @@ const Returns = (function () {
     };
     if (!rec.shiftId) delete rec.shiftId;
     if (!rec.note) delete rec.note;
+    const staffId = staffIdOf(b.cashierStaffId);          // step 7: only when the login is linked to a staff profile
+    if (staffId) rec.cashierStaffId = staffId;
     return JSON.parse(JSON.stringify(rec));
   }
 
@@ -125,6 +132,7 @@ const Returns = (function () {
     if (!isNum(s.at) || s.at <= 0) return 'bad time';
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.date)) || !/^\d{2}:\d{2}$/.test(String(s.time))) return 'bad date';
     if (typeof s.cashier !== 'string' || !s.cashier || s.cashier.length > 80) return 'bad cashier';
+    if (s.cashierStaffId !== undefined && !okStaffId(s.cashierStaffId)) return 'bad cashier profile id';
     if (typeof s.approvedBy !== 'string' || !s.approvedBy || s.approvedBy.length > 80) return 'a return needs the person who allowed it';
     if (s.shiftId !== undefined && (!SID_RE.test(String(s.shiftId)) || String(s.shiftId).slice(0, 4) !== s.till)) return 'bad shift id';
     if (typeof s.reason !== 'string' || !s.reason.trim() || s.reason.length > 60) return 'a return needs a reason';

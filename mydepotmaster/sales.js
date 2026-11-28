@@ -95,6 +95,10 @@ const Sales = (function () {
   const r3 = n => Math.round(n * 1000) / 1000;
   const toC = n => Math.round((Number(n) || 0) * 100);
   const str = (x, n) => (x == null ? '' : String(x)).slice(0, n);
+  // Login-link step 7: the staff profile behind a login travels on the record as a plain string of 1 to 64 characters, and ONLY when the login is linked to one.
+  // staffIdOf() is what the builders use (an odd value is left out, never cut short, so a sale is never refused over it); okStaffId() is what validate checks.
+  const staffIdOf = v => { const t = v == null ? '' : String(v); return t.length >= 1 && t.length <= 64 ? t : ''; };
+  const okStaffId = v => typeof v === 'string' && v.length >= 1 && v.length <= 64;
   function err(code, msg) { const e = new Error(msg || code); e.code = code; return e; }
   // Realtime Database hands back an array as {"0":..,"1":..}, and drops an empty one altogether.
   const arr = x => Array.isArray(x) ? x : (x && typeof x === 'object' ? Object.keys(x).sort((a, b) => a - b).map(k => x[k]) : []);
@@ -142,6 +146,7 @@ const Sales = (function () {
   //   v:1, id, receiptNo, tillId, till, seq,            id === receiptNo; till = 4-char code; tillId = long random id
   //   at, date, time,                                    epoch ms; date/time as the main app writes them
   //   cashier, cashierRole,
+  //   cashierStaffId (optional; login-link step 7: the id of the staff profile linked to the cashier's login, 1 to 64 characters; absent when the login is linked to nobody, and on every sale before step 7),
   //   shiftId (optional; step 16: the shift this sale was taken in, e.g. K7F2-S0001; sales before step 16 have none),
   //   lines:[{itemId, kind:'item'|'commodity', name, unit, qty, price, total}],   price copied at the moment of sale
   //   lineCount, qtyTotal, total,
@@ -185,6 +190,8 @@ const Sales = (function () {
       creditStatus: String(b.creditStatus), customerId: str(b.customerId, 80), customerName: str(b.customerName, 200)
     };
     if (!rec.shiftId) delete rec.shiftId;                // no shift (a sale from before step 16): the field is simply absent
+    const staffId = staffIdOf(b.cashierStaffId);         // step 7: only when the login is linked to a staff profile
+    if (staffId) rec.cashierStaffId = staffId;
     const dsum = rec.lines.reduce((a, l) => a + toC(l.discount), 0);
     const psum = rec.lines.reduce((a, l) => a + toC(l.promoDiscount), 0);
     if (dsum > 0) {
@@ -208,6 +215,7 @@ const Sales = (function () {
     if (!isNum(s.at) || s.at <= 0) return 'bad time';
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s.date)) || !/^\d{2}:\d{2}$/.test(String(s.time))) return 'bad date';
     if (typeof s.cashier !== 'string' || s.cashier.length > 80) return 'bad cashier';
+    if (s.cashierStaffId !== undefined && !okStaffId(s.cashierStaffId)) return 'bad cashier profile id';
     if (s.shiftId !== undefined && (!SID_RE.test(String(s.shiftId)) || String(s.shiftId).slice(0, 4) !== s.till)) return 'bad shift id';
     const lines = s.lines;
     if (!Array.isArray(lines) || !lines.length || lines.length > MAX_LINES) return 'bad lines';
@@ -593,6 +601,7 @@ const Sales = (function () {
           enteredBy: s.cashier, enteredByRole: s.cashierRole || '', enteredAt: s.at, approvalStatus: 'approved',
           payMethods: methodsOf(s)
         };
+        if (s.cashierStaffId) base.enteredByStaffId = s.cashierStaffId;   // step 7: the main app's "entered by" finds the person (same field the main app's own entries carry)
         if (l.kind === 'commodity') {
           const cid = l.itemId.slice(4);
           (com[cid] || (com[cid] = [])).push(Object.assign(base, { batchName: BATCH_NAME, transporter: '', salePrice: netPrice(l) }));
@@ -619,6 +628,7 @@ const Sales = (function () {
           customerId: r.customerId || '', customerName: r.customerName || '',
           enteredBy: r.cashier, enteredByRole: r.cashierRole || '', enteredAt: r.at, approvalStatus: 'approved', payMethods: how
         };
+        if (r.cashierStaffId) base.enteredByStaffId = r.cashierStaffId;   // step 7: as for sales
         if (l.kind === 'commodity') {
           const cid = l.itemId.slice(4);
           (com[cid] || (com[cid] = [])).push(Object.assign(base, { batchName: BATCH_NAME, transporter: '', salePrice: netPrice(l) }));

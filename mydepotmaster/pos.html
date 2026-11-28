@@ -507,9 +507,24 @@ async function loadData(){
 }
 
 // ── SESSION: handed over by index.html (this tab) or a valid "stay signed in" ─
+// v0.3.185 (login-link step 4): the same rule as index.html's loginRoleBlock(). The main app hands over the role the session started with (r). If the login's record now says a
+// different role, the till does not open: the person signs in again. Only the four known roles count, and a session with no r (the "stay signed in" way in) is not compared: the till
+// then simply reads the record. A copy because the till page does not load index.html (it belongs in gate.js, which is not part of this change). The till does not pull staff data, so
+// a Till page that is ALREADY OPEN is re-checked only when it is opened again (the same limit as the suspension check).
+let HANDOFF_ROLE='';
+const _ROLE_WORD={admin:'Admin',data_entry:'Manager',staff:'Staff',cashier:'Cashier'};
+function _roleKey(r){r=String(r==null?'':r);return r==='manager'?'data_entry':r;}
+function _roleWord(r){const k=_roleKey(r);return Object.prototype.hasOwnProperty.call(_ROLE_WORD,k)?_ROLE_WORD[k]:'';}
+function loginRoleBlock(sessionRole,rec){
+  if(!rec)return '';
+  const was=_roleWord(sessionRole)?_roleKey(sessionRole):'',now=_roleWord(rec.role)?_roleKey(rec.role):'';
+  if(!was||!now||was===now)return '';
+  return 'Your role changed to '+_roleWord(now)+'. Sign in again.';
+}
 function sessionUser(){
   let u=null;
-  try{const p=JSON.parse(sessionStorage.getItem(SESSION_KEY)||'null');if(p&&p.u&&Date.now()-p.t<SESSION_MS)u=p.u;}catch{}
+  HANDOFF_ROLE='';
+  try{const p=JSON.parse(sessionStorage.getItem(SESSION_KEY)||'null');if(p&&p.u&&Date.now()-p.t<SESSION_MS){u=p.u;HANDOFF_ROLE=p.r?String(p.r):'';}}catch{}   // v0.3.185: r = the role the main app handed over
   if(!u)try{const p=JSON.parse(localStorage.getItem(STAY_KEY)||'null');if(p&&p.enabled&&p.username&&p.expiresAt>Date.now())u=p.username;}catch{}
   if(!u)return null;
   return (DATA.users||[]).find(x=>String(x.username||'').toLowerCase()===String(u).toLowerCase())||null;
@@ -526,6 +541,11 @@ function staffStatusBlock(u){
   if(!Object.prototype.hasOwnProperty.call(_STAFF_STATUS_BLOCKS,st))return '';
   return 'Your staff profile is '+_STAFF_STATUS_BLOCKS[st]+'. Ask your Admin.';
 }
+// v0.3.176 (login-link step 7): the staff profile behind the signed-in login, '' when the login is linked to nobody (an Admin login, or a Manager / Cashier login not linked yet).
+// It is stamped on what the till writes (cashierStaffId on sales, returns and shift opens, closedByStaffId on shift closes, staffId on till audit entries); the ledgers leave
+// out an empty or odd value, so an unlinked login writes exactly what it wrote before. Receipts do not show it.
+function myStaffId(){const v=USER&&USER.linkedStaffId;if(v==null)return '';const t=String(v);return t.length>=1&&t.length<=64?t:'';}
+function tillWho(){const o={username:String(USER.username),role:String(USER.role||'')},sid=myStaffId();if(sid)o.staffId=sid;return o;}   // who = the person at the till, for the shift ledger
 
 // ── LICENSE / TIER: signed cache written by index.html, same rules as currentTier() ─
 async function loadLicense(){
@@ -1796,7 +1816,7 @@ function makeBasket(pay){
   });
   const b=Object.assign({
     id:null,receiptNo:null,at:Date.now(),
-    cashier:USER?String(USER.username):'',cashierRole:USER?String(USER.role||''):'',
+    cashier:USER?String(USER.username):'',cashierRole:USER?String(USER.role||''):'',cashierStaffId:myStaffId(),   // step 7: '' when the login is linked to nobody (left out of the record)
     lines,lineCount:lines.length,
     qtyTotal:Math.round(lines.reduce((a,l)=>a+l.qty,0)*1000)/1000,
     total:Math.round(lines.reduce((a,l)=>a+Math.round(l.total*100),0))/100
@@ -2815,7 +2835,7 @@ function tillAudit(event,o){
     const t=NUM.peek();
     if(!USER||!t||!t.registered)return Promise.resolve(null);          // a till that has not claimed its code has nothing to attach it to
     const x=Object.assign({shiftId:SHIFT?SHIFT.open.shiftId:undefined},o||{});
-    return SHIFTLG.log(t,{username:String(USER.username),role:String(USER.role||'')},event,x).catch(e=>{console.warn('Audit entry not saved',e);return null;});
+    return SHIFTLG.log(t,tillWho(),event,x).catch(e=>{console.warn('Audit entry not saved',e);return null;});
   }catch(e){console.warn('Audit entry not saved',e);return Promise.resolve(null);}
 }
 let SHIFT=null,SHIFT_ALL=[],SHIFTS_PENDING=0,SHIFT_ERR='',shiftsBusy=false,shiftPrompted=false;   // SHIFT: {open,close:null} for THIS till, or null
@@ -2970,7 +2990,7 @@ function renderOpen(){
     SHBUSY=true;go.disabled=true;go.textContent='Opening\u2026';
     let failed='';
     try{
-      await withShiftLock(()=>SHIFTLG.open(NUM.peek(),{username:String(USER.username),role:String(USER.role||'')},f));
+      await withShiftLock(()=>SHIFTLG.open(NUM.peek(),tillWho(),f));
     }catch(e){
       console.warn('Shift not opened',e);
       if(e&&e.code==='ALREADY_OPEN')failed='A shift is already open on this till.';
@@ -3053,7 +3073,7 @@ function renderClose(sh,forced){
         const sales=(await LEDGER.load(ledgerArgs(rets))).list;   // everything on this phone, read fresh: another tab may have sold meanwhile
         const cur=await SHIFTLG.current(o.tillId);
         if(!cur||cur.open.shiftId!==o.shiftId){const x=new Error('closed');x.code='ALREADY_CLOSED';throw x;}
-        return SHIFTLG.close(cur,sales,c,{username:String(USER.username),role:String(USER.role||'')},note.value.trim(),{out:Returns.cashOutOf(cur.open.shiftId,rets)});
+        return SHIFTLG.close(cur,sales,c,tillWho(),note.value.trim(),{out:Returns.cashOutOf(cur.open.shiftId,rets)});
       });
     }catch(e){
       console.warn('Shift not closed',e);
@@ -3572,7 +3592,7 @@ async function doReturn(approvedBy,refunds,P){
   if(RT.btn){RT.btn.disabled=true;RT.btn.textContent='Saving\u2026';}
   const x=RT.sale,lines=P.lines.map(l=>Object.assign({},l,{restock:!!RT.restock}));
   const b={
-    kind:RT.kind,saleId:x.id,cashier:String(USER.username),cashierRole:String(USER.role||''),approvedBy,
+    kind:RT.kind,saleId:x.id,cashier:String(USER.username),cashierRole:String(USER.role||''),cashierStaffId:myStaffId(),approvedBy,
     reason:RT.reason,note:RT.note.trim(),
     lines,lineCount:lines.length,qtyTotal:Math.round(lines.reduce((a,l)=>a+l.qty,0)*1000)/1000,
     total:P.totalC/100,creditApplied:P.creditC/100,refunds,refunded:P.moneyC/100,
@@ -4554,11 +4574,12 @@ async function boot(){
   USER=sessionUser();
   if(!USER)return card('🔑','Please sign in','Sign in on the main app, then open the Till from there.',[['Open main app',toApp,true]]);
   {const sb=staffStatusBlock(USER);if(sb){USER=null;try{sessionStorage.removeItem(SESSION_KEY);}catch{}return card('⏸','Sign-in not available',sb,[['Back to app',toApp,true]]);}}   // v0.3.175 (hierarchy step 8)
+  {const rb=loginRoleBlock(HANDOFF_ROLE,USER);if(rb){USER=null;try{sessionStorage.removeItem(SESSION_KEY);}catch{}try{const q=JSON.parse(localStorage.getItem(STAY_KEY)||'null');if(q)localStorage.setItem(STAY_KEY,JSON.stringify({enabled:q.enabled,days:q.days}));}catch{}return card('🔑','Your role changed',rb,[['Back to app',toApp,true]]);}}   // v0.3.185 (login-link step 4): the stay-signed-in token is ended too, so "Sign in again" is true
   LAST_SEEN=readActive();                              // till settings: when this login last used the till, read BEFORE idleReset() stamps "now"
   LICENSE=await loadLicense();
   if(!hasFeature('pos_till'))return card('🔒','Till not available','The Till is not available on this account. Check the main app.',[['Back to app',toApp,true]]);
   if(isReadOnly())return card('⏸','Till unavailable','This account is read-only right now (suspended, pending or in grace period). Check the main app.',[['Back to app',toApp,true]]);
-  try{sessionStorage.setItem(SESSION_KEY,JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now()}));}catch{}
+  try{sessionStorage.setItem(SESSION_KEY,JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now(),...(HANDOFF_ROLE?{r:HANDOFF_ROLE}:{})}));}catch{}   // v0.3.185: keep the role the session started with
   const di=DATA.depotInfo||{};
   $('depot').textContent=di.name||'';
   setPill('p-user',USER.username+(USER.role?' · '+USER.role:''));

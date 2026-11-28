@@ -3947,6 +3947,7 @@ async function _fbAdopt(key) {
   _fbBaselineSet({ key, ts: cloudTs, dev, h: cc.h, k: cc.k, lists: cc.lists, leg: cc.leg, dups: cc.dups });
   sv(DATA);
   if (USER) setTimeout(_staffStatusEnforce, 0);   // v0.3.175 (hierarchy step 8): the merge may have brought in a suspension of this signed-in login
+  if (USER) setTimeout(_roleChangeEnforce, 0);    // v0.3.185 (login-link step 4): ...or a change of this login's role
   return { adopted: m.take.length, conflicts: m.conflicts };
 }
 // After a merge changed DATA outside a pull: redraw (not under an open form) and say so.
@@ -4747,6 +4748,9 @@ async function forceCloudRestore() {
     render();
     showToast('✅ Data downloaded from cloud');
     updateLastSyncDisplay();
+    // v0.3.176 (login-link step 6): a manual download replaces DATA outside the sync, so it needs the same signed-in checks as _fbAdopt: a suspension or a role change
+    // made on another phone reaches this session now, not only at the next sync.
+    if (USER) { setTimeout(_staffStatusEnforce, 0); setTimeout(_roleChangeEnforce, 0); }
   } catch(e) {
     // Fix: this previously never called _flagIfAuthSessionLost, so a session
     // loss or authorization gap hit via "Download from Cloud" specifically
@@ -6795,7 +6799,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.184';
+const SW_VERSION  = 'v0.3.186';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -7099,6 +7103,7 @@ const DEFAULT={
   loanRepayments:[],    // {id,loanId,staffId,date,forDate,amount,source:'payroll'|'manual',method,runId,runNumber,note}
   stockGapActions:[],   // stock-check gap write-offs / holds {id,gapKey,kind:'writeoff'|'hold',task,dir,stockRef,month,qty,reason,note,date,undoneAt}
   staffRoles:[],
+  loginRolesDone:false, // v0.3.176: the ready-made job roles MANAGER and CASHIER have been offered once (withLoginRoles); deleting one never brings it back
   deductionReasons:['Damaged bags','Late arrival','Misconduct','Short count'],
   depotInfo:{name:'',district:'',province:'',country:'',setupDone:false},
   currency:'',    // depot-wide currency ISO code — admin must define (e.g. ZMW, USD, KES)
@@ -7228,6 +7233,7 @@ async function initData(){
       }
       // if equal: both are in sync, do nothing
       migrateItemIds();   // IDB copy may predate item ids
+      migrateLoginRoles();   // ...or the ready-made job roles
     }
   }catch(e){
     console.warn('IndexedDB load failed, using localStorage data',e);
@@ -7246,6 +7252,7 @@ var _SALE_NONE={ver:-1,gen:[],com:{}};
 let DATA=ld(); // immediate sync load from localStorage
 migrateShiftLogStatus();  // Two-Stage Shift Log: tag legacy logs as completed
 migrateItemIds();         // Item master: stamp itemId on existing stock records (additive)
+migrateLoginRoles();      // v0.3.176: offer the job roles MANAGER and CASHIER once (additive)
 let USER=null;
 let STAFF_MODAL_PIN=false; // when true, staff profile modal stays open across actions instead of auto-closing
 let TAB='dashboard';
@@ -9013,7 +9020,7 @@ async function signupFinish() {
     fresh._v = 1;
     window._evNextKind = 'signup';   // first prompt after sign-in sends the welcome + verification code
 
-    DATA = Object.assign({}, fresh);
+    DATA = withLoginRoles(Object.assign({}, fresh));   // v0.3.176: a new depot starts with the job roles MANAGER and CASHIER
     sv(DATA);
     _persistInstallId(newInstallId);
 
@@ -9618,11 +9625,13 @@ function _doLogoutNow(){
 // is signed in (username only — never a password or hash), even when "stay signed in" is off, and
 // lets this page restore that user when they come back. Cleared by every logout.
 const _POS_SESSION_KEY=Gate.KEYS.posSession;
+// v0.3.185 (login-link step 4): the handoff also carries the role this session started with (r), so the till can tell, when it is next opened, that the login's role has since changed.
+function _posSessionJson(){ return JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now(),r:String(USER.role||'')}); }
 function openTill(){
   if(!hasFeature('pos_till')){showUpgradePrompt('pos_till');return;}
   if(!USER)return;
   if(isReadOnly()){alert('The Till is unavailable while this account is read-only.');return;}
-  try{sessionStorage.setItem(_POS_SESSION_KEY,JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now()}));}catch{}
+  try{sessionStorage.setItem(_POS_SESSION_KEY,_posSessionJson());}catch{}
   location.href='pos.html';
 }
 function _posReturnUser(){
@@ -9646,7 +9655,7 @@ function cashierOpenTill(){
   if(!isCashierRole()||!USER) return;
   const why=_cashierTillBlocker();
   if(why){ alert(why); return; }
-  try{sessionStorage.setItem(_POS_SESSION_KEY,JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now()}));}catch{}
+  try{sessionStorage.setItem(_POS_SESSION_KEY,_posSessionJson());}catch{}
   try{sessionStorage.setItem(_CASHIER_LAUNCH_KEY,String(Date.now()));}catch{}
   location.replace('pos.html');            // replace, not assign: the Back button must not return to this page and bounce forward again
 }
@@ -9672,7 +9681,7 @@ function _cashierAutoTill(){
 // belongs to this page. render() sees the flag once, a small box asks for the CURRENT password (Settings > Change Password below does not) and the
 // new one, the password is saved exactly as changePw() saves it (mdm2 hash, authMigrated:false), the sync is run, and the person goes back to the till.
 function _tillBack(){
-  try{sessionStorage.setItem(_POS_SESSION_KEY,JSON.stringify({u:String(USER.username).toLowerCase(),t:Date.now()}));}catch{}
+  try{sessionStorage.setItem(_POS_SESSION_KEY,_posSessionJson());}catch{}
   location.replace('pos.html');
 }
 function _tillHandoffOnce(){
@@ -16586,6 +16595,31 @@ function migrateItemIds(){
     if(n!==DATA){DATA=n;try{localStorage.setItem(LK,JSON.stringify(DATA));}catch{}}
   }catch(e){console.warn('[MDM] item-id migration skipped',e);}
 }
+// ── READY-MADE JOB ROLES: MANAGER AND CASHIER (v0.3.176, login-link step 3) ────
+// Every depot is offered two job roles once, so Add staff has them to tick and Create login gives the matching sign-in level (loginType 'data_entry' = Manager, 'cashier'):
+//   MANAGER (Login type Manager) and CASHIER (Login type Cashier; not offered in the Play build, where Cashier does not exist).
+// They are ordinary job roles in every other way (no tasks, no rate; rename, edit or delete them in Roles & rates). Rules:
+//   - a depot with no real ID yet (before sign-up) is left alone; the sign-up adds them to the new depot;
+//   - a role that already has that name (any capitals) is kept exactly as it is, Login type included: nothing the Admin set up is changed;
+//   - done once: loginRolesDone is saved with the data, so a role the Admin deletes does not come back;
+//   - the ids are fixed (role_default_manager / role_default_cashier), so two phones that add them separately end up with one of each after a sync.
+// withLoginRoles(d) returns d itself when there is nothing to do. Declared inside a function body only: it runs at load, before the rest of this script has executed.
+function withLoginRoles(d){
+  if(!d||typeof d!=='object'||!d.installId||String(d.installId).indexOf('?')>=0||d.loginRolesDone)return d;   // no real depot id yet (empty, or the "MDM-????" placeholder), or already offered
+  const want=[{id:'role_default_manager',name:'MANAGER',loginType:'data_entry'}];
+  if(!window.PLAY_MODE)want.push({id:'role_default_cashier',name:'CASHIER',loginType:'cashier'});
+  const have=Array.isArray(d.staffRoles)?d.staffRoles:[];
+  const add=want.filter(w=>!have.some(r=>r&&(r.id===w.id||String(r.name||'').trim().toUpperCase()===w.name))).map(w=>({id:w.id,name:w.name,tasks:[],loginType:w.loginType}));
+  return{...d,staffRoles:have.concat(add),loginRolesDone:true};
+}
+function migrateLoginRoles(){
+  try{
+    const n=withLoginRoles(DATA);
+    if(n!==DATA){DATA=n;try{localStorage.setItem(LK,JSON.stringify(DATA));}catch{}}
+  }catch(e){console.warn('[MDM] job-role defaults skipped',e);}
+}
+// True when at least one job role has a task: the forms that log work need that, not just a role (the two ready-made roles have no tasks).
+function hasTaskRoles(){return(DATA.staffRoles||[]).some(r=>r&&Array.isArray(r.tasks)&&r.tasks.length>0);}
 
 // Small read-only summary line shown under an item's name.
 function _itemChipsHtml(item){
@@ -17967,7 +18001,7 @@ function _openShiftFor(staffId){
 // Stage 1 — Clock In
 function openClockInForm(preStaffId){
   if(DATA.staff.length===0){_sfxNoStaff();return;}
-  if((DATA.staffRoles||[]).length===0){_sfxNoRoles();return;}
+  if(!hasTaskRoles()){_sfxNoRoles();return;}   // v0.3.176: the ready-made MANAGER and CASHIER roles have no tasks, so "roles" alone no longer means "ready"
   const activeStaff=DATA.staff.filter(s=>!s.status||s.status==='active');
   if(activeStaff.length===0){_sfxNoActive();return;}
 
@@ -18214,7 +18248,7 @@ function saveClockOut(logId){
 function openLogForm(){
   if(isStaffRole()){_sfxBlock('Not available','Staff logins can only clock themselves in. Ask your Admin to log manual work entries.');return;}
   if(DATA.staff.length===0){_sfxNoStaff();return;}
-  if((DATA.staffRoles||[]).length===0){_sfxNoRoles();return;}
+  if(!hasTaskRoles()){_sfxNoRoles();return;}   // v0.3.176: the ready-made MANAGER and CASHIER roles have no tasks, so "roles" alone no longer means "ready"
   const activeStaff=DATA.staff.filter(s=>!s.status||s.status==='active');
   if(activeStaff.length===0){_sfxNoActive();return;}
   const opts=activeStaff.map(s=>`<option value="${esc(s.id)}">${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('');
@@ -18427,7 +18461,7 @@ function saveLog(){if(isReadOnly()){_sfxErr('This account is in read-only mode. 
 function openBulkLogForm(){
   if(isStaffRole()){_sfxBlock('Not available','Staff logins can only clock themselves in. Ask your Admin to log work entries.');return;}
   if(DATA.staff.length===0){_sfxNoStaff();return;}
-  if((DATA.staffRoles||[]).length===0){_sfxNoRoles();return;}
+  if(!hasTaskRoles()){_sfxNoRoles();return;}   // v0.3.176: the ready-made MANAGER and CASHIER roles have no tasks, so "roles" alone no longer means "ready"
   const activeStaff=DATA.staff.filter(s=>!s.status||s.status==='active');
   if(activeStaff.length===0){_sfxNoActive();return;}
   const roles=allRoleNames();
@@ -18558,7 +18592,7 @@ function saveBulkLog(){
 function openBulkClockInForm(){
   if(isStaffRole()){_sfxBlock('Not available','Staff logins can only clock themselves in. Ask your Admin to bulk clock in.');return;}
   if(DATA.staff.length===0){_sfxNoStaff();return;}
-  if((DATA.staffRoles||[]).length===0){_sfxNoRoles();return;}
+  if(!hasTaskRoles()){_sfxNoRoles();return;}   // v0.3.176: the ready-made MANAGER and CASHIER roles have no tasks, so "roles" alone no longer means "ready"
   const activeStaff=DATA.staff.filter(s=>!s.status||s.status==='active');
   if(activeStaff.length===0){_sfxNoActive();return;}
   const roles=allRoleNames();
@@ -19353,7 +19387,7 @@ function _gangWhole(total,weights){
 function openGangSplitForm(){
   if(isStaffRole()){_sfxBlock('Not available','Staff logins can only clock themselves in. Ask your Admin or Manager to split gang work.');return;}
   if(DATA.staff.length===0){_sfxNoStaff();return;}
-  if((DATA.staffRoles||[]).length===0){_sfxNoRoles();return;}
+  if(!hasTaskRoles()){_sfxNoRoles();return;}   // v0.3.176: the ready-made MANAGER and CASHIER roles have no tasks, so "roles" alone no longer means "ready"
   if(!DATA.staff.some(s=>(!s.status||s.status==='active')&&s.payType!=='salary')){_sfxBlock('No staff on task pay','Gang split needs active staff who are paid by task, and there are none. Check the Staff list.',{label:'Open staff list',js:"_sfxGo('stafflist')"});return;}
   const roleOpts=allRoleNames().map(r=>`<option value="${esc(r)}">${esc(r)}</option>`).join('');
   openModal(`
@@ -19722,7 +19756,8 @@ function openStaffActions(id){
     row('download','Download profile PDF',()=>printStaffProfile(s.id)),
     s.photoDataUrl&&row('trash','Remove photo',()=>removeStaffPhoto(s.id),{cls:'am-danger'})
   ]);
-  add('Sign-in',[linked?row('key','Reset password',()=>adminResetUserPass(linked.username),{h:'Login: '+linked.username}):row('user','Create login',()=>addUser(s.id),{h:'Sign-in for '+first})]);
+  add('Sign-in',[linked?row('key','Reset password',()=>adminResetUserPass(linked.username),{h:'Login: '+linked.username}):row('user','Create login',()=>addUser(s.id),{h:'Sign-in for '+first}),
+    linked&&_roleKey(linked.role)!=='admin'&&row('edit','Change login role',()=>openChangeLoginRole(s.id),{h:'Now '+(_roleWord(linked.role)||'Staff')})]);   // v0.3.185 (login-link step 4): never for an Admin login
   add('Pay and records',[
     row('bank','Advances and loans',()=>openLoansModal(s.id),owed>0.004?{h:'Owes '+zm(owed)}:null),
     row('alert','Warnings',()=>openStaffWarnings(s.id),{h:'Disciplinary records'})
@@ -19791,9 +19826,12 @@ function saveEditStaffDetails(id){
   const _stv=_stRead('esd');
   const _rtEl=document.getElementById('esd-reportsto');
   if(_rtEl){const _rtp=reportsToProblem(id,_rtEl.value);if(_rtp){_sfxErr(_rtp,'esd-reportsto');return;}}   // v0.3.172 (step 2): not yourself, not anyone beneath you
+  const _lrOld=(DATA.staff||[]).find(x=>String(x.id)===String(id));
+  const _lr=_lrOld?loginRoleChangeFor(_lrOld,{..._lrOld,name,role,roles}):null;   // v0.3.185 (login-link step 4): do these job roles change the sign-in role? (asked after the profile is saved)
   updateData(d=>({...d,staff:d.staff.map(s=>String(s.id)===String(id)?{...s,name,role,roles,contractType,payType,monthlySalary,..._stv,dateJoined:document.getElementById('esd-joined')?.value||s.dateJoined,phone,dateOfBirth,employeeId,emergencyContactName,emergencyContactPhone,notes,reportsTo:_rtEl?_rtEl.value:(s.reportsTo||'')}:s)}));
   closeModal();
   showToast('✅ Staff details updated.');
+  if(_lr) openLoginRoleChangePrompt(_lr);
 }
 
 // ── STAFF PROFILE PHOTO ──────────────────────────────────────────────────────
@@ -25558,14 +25596,7 @@ function _renderStaffSettings(){
 }
 
 function _renderAdminSettings(){
-  const users=DATA.users.map(u=>`
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
-      <div><div style="font-weight:700">${esc(u.username)}</div><span class="bdg ${u.role==='admin'?'bg2':(u.role==='staff'?'br2':'ba2')}">${roleLabel(u.role)}</span></div>
-      <div style="display:flex;gap:6px;align-items:center">
-        <button class="editbtn" onclick="adminResetUserPass('${esc(u.username)}')">🔑 Reset</button>
-        ${u.username!==USER.username?`<button class="delbtn" onclick="removeUser('${esc(u.username)}')">🗑</button>`:''}
-      </div>
-    </div>`).join('');
+  const users=DATA.users.map(_userRowHtml).join('');   // v0.3.186 (login-link step 5): one function per row, with the link line
   return `
     ${!DATA.currency&&USER.role==='admin'?`<div class="warn" style="margin-bottom:12px">⚠️ No currency set. Go to <strong>Display Preferences → Currency</strong> below to set your currency (e.g. ZMW, USD, KES).</div>`:''}
     ${statusBanner()}
@@ -26950,6 +26981,248 @@ async function _finishAddUser(username, role, pass, linkedStaffId){
   logAuditEvent('CREATE','User',`${username} · Role: ${roleLabel(role)}${linkedStaffId?' · Linked to staff ID '+linkedStaffId:''}`);   // step 20: who may sell at the till (never the password)
   closeModal();
   showToast('✅ User "'+username+'" added.');
+}
+// ── CHANGING A LOGIN'S ROLE (v0.3.185, login-link step 4) ─────────────────────────────────────────────────────────────────
+// A login's role is set when it is made (step 3). After that it changes ONLY through the Admin's say-so, in two ways that end in the same place (changeLoginRole):
+//  (a) saving a profile whose job roles change its Login type (Edit details) asks "Sign-in role changes from X to Y. Apply?" after the profile is saved;
+//  (b) the profile's menu: Sign-in > Change login role (Staff, Manager or Cashier; never Admin; no Cashier in the Play build).
+// Both need the Admin password and write an audit entry. Editing a job role's Login type (Staff Roles & Rates) still changes no login. An Admin login is never changed here.
+// Nothing in the cloud changes: depots/<id>/authorizedUids stores only 'admin' or 'staff', and Staff, Manager and Cashier are all 'staff' there.
+// The signed-in person is told at their phone's next sync: _roleChangeEnforce (called with _staffStatusEnforce at the end of _fbAdopt) signs out a session whose role no longer
+// matches its record: "Your role changed to Manager. Sign in again." Nothing is deleted; unsent till work stays on that phone. The till reads the record when it is opened,
+// and compares the role the session started with (the handoff's r) to it (pos.html boot).
+const _ROLE_WORD={admin:'Admin',data_entry:'Manager',staff:'Staff',cashier:'Cashier'};
+function _roleKey(r){ r=String(r==null?'':r); return r==='manager'?'data_entry':r; }
+function _roleWord(r){ const k=_roleKey(r); return Object.prototype.hasOwnProperty.call(_ROLE_WORD,k)?_ROLE_WORD[k]:''; }
+// Would saving these job roles change this person's login role? oldS / newS = the profile before and after. Returns {staffId,name,username,from,to} or null.
+// null when: no login; an Admin login; odd role data; the job roles did not change the Login type; or the login is already at the new level.
+function loginRoleChangeFor(oldS,newS){
+  if(!oldS||!newS) return null;
+  const u=staffLoginOf(newS.id);
+  if(!u) return null;
+  const cur=_roleKey(u.role);
+  if(cur==='admin'||!_roleWord(cur)) return null;
+  const before=staffLoginType(oldS), after=staffLoginType(newS);
+  if(before===after||cur===after) return null;
+  return {staffId:String(newS.id),name:newS.name,username:u.username,from:cur,to:after};
+}
+// '' while an open session still matches its record, otherwise the ONE sign-out line. Only the four known roles count: odd or missing data never signs anyone out.
+function loginRoleBlock(sessionRole,rec){
+  if(!rec) return '';
+  const was=_roleWord(sessionRole)?_roleKey(sessionRole):'', now=_roleWord(rec.role)?_roleKey(rec.role):'';
+  if(!was||!now||was===now) return '';
+  return 'Your role changed to '+_roleWord(now)+'. Sign in again.';
+}
+function _roleChangeEnforce(){
+  try{
+    if(!USER) return;
+    const why=loginRoleBlock(USER.role,_myUserRec());
+    if(!why) return;
+    _doLogoutNow();
+    showLoginScreen();
+    _loginNotice(why);
+    showToast('🔒 Signed out. '+why,9000);
+  }catch(e){ console.warn('role change check failed (non-fatal):',e); }
+}
+// ask = {username, from, to, staffId, followRoles}. followRoles (way a) also needs the profile's job roles to still give "to" after the password box.
+function changeLoginRole(ask){
+  if(!requireAdmin('change a login role')) return;
+  requireAdminPassword('change the sign-in role of "'+ask.username+'"', ()=>_finishChangeLoginRole(ask));
+}
+function _finishChangeLoginRole(ask){
+  const say=m=>{ showToast(m,7000); return false; };
+  const u=(DATA.users||[]).find(x=>x.username===ask.username);
+  if(!u) return say('That login is not in the list any more. Nothing was changed.');
+  if(_roleKey(u.role)==='admin') return say('An Admin login cannot be changed here. Nothing was changed.');
+  if(!_loginTypeAllowed(ask.to)) return say('That role is not available. Nothing was changed.');
+  if(_roleKey(u.role)!==_roleKey(ask.from)) return say('The role of "'+u.username+'" changed while you were confirming (it is now '+(_roleWord(u.role)||'unknown')+'). Nothing was changed.');
+  if(ask.followRoles){
+    const s=(DATA.staff||[]).find(x=>String(x.id)===String(ask.staffId));
+    if(!s||String(u.linkedStaffId||'')!==String(s.id)||staffLoginType(s)!==ask.to) return say('This person\'s job roles or login changed while you were confirming. Nothing was changed.');
+  }
+  const from=u.role;
+  updateData(d=>({...d,users:(d.users||[]).map(x=>x.username===ask.username?{...x,role:ask.to}:x)}));
+  logAuditEvent('UPDATE','User',`${u.username} · Role: ${roleLabel(from)} → ${roleLabel(ask.to)}`);
+  showToast('✅ "'+u.username+'" is now a '+_roleWord(ask.to)+' login. They are asked to sign in again at their phone\'s next sync.',7000);
+  return true;
+}
+// (a) the question after Edit details. The profile is already saved; "Not now" leaves the login as it is.
+function openLoginRoleChangePrompt(info){
+  window._lrAsk={staffId:info.staffId,username:info.username,from:info.from,to:info.to};
+  openModal(`
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">${dbIc('key')} Sign-in role</div>${_sfxX()}</div>
+    <div class="u-lh-1p6" style="font-size:18px;margin:6px 0 4px">Sign-in role changes from ${esc(_roleWord(info.from))} to ${esc(_roleWord(info.to))}. Apply?</div>
+    <div class="u-fs-cap u-c-muted u-mt-6 u-lh-1p6">${esc(info.name)}'s job roles now give a ${esc(_roleWord(info.to))} login, and the login "${esc(info.username)}" is still ${esc(_roleWord(info.from))}. Apply asks for your Admin password; they are then asked to sign in again at their phone's next sync. Not now leaves the login as it is. You can change it later: open the person's menu, then Sign-in, then Change login role.</div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Not now</button><button class="btn bg" onclick="_applyLoginRolePrompt()">Apply</button></div></div>`);
+}
+function _applyLoginRolePrompt(){
+  const a=window._lrAsk; window._lrAsk=null;
+  if(!a) return;
+  changeLoginRole({...a,followRoles:true});
+}
+// (b) the profile's menu
+function openChangeLoginRole(staffId){
+  if(!requireAdmin('change a login role')) return;
+  const s=(DATA.staff||[]).find(x=>String(x.id)===String(staffId));
+  const u=s?staffLoginOf(s.id):null;
+  if(!s||!u){ _sfxErr('This profile has no login to change.'); return; }
+  if(_roleKey(u.role)==='admin'){ _sfxErr('An Admin login cannot be changed here.'); return; }
+  const cur=_roleKey(u.role);
+  window._lrAsk={staffId:String(s.id),username:u.username,from:cur,to:''};
+  openModal(`
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">${dbIc('key')} Change login role — ${esc(s.name)}</div>${_sfxX()}</div>
+    <div class="fw"><div class="fl">Login</div>
+      <div class="u-lh-1p6">${esc(u.username)} · now ${esc(_roleWord(cur)||'Staff')}</div>
+    </div>
+    <div class="fw"><div class="fl">New role <span class="u-c-red">*</span></div>
+      <select class="fi" id="lr-role">${_loginTypeOptsHtml(cur)}</select>
+      <div class="u-fs-cap u-c-muted u-mt-6 u-lh-1p6">This person's job roles give a ${esc(_roleWord(staffLoginType(s)))} login. You can choose any of Staff, Manager or Cashier here; Admin is never offered. They are asked to sign in again at their phone's next sync.</div>
+    </div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="_confirmChangeLoginRole()">Apply</button></div></div>`);
+}
+function _confirmChangeLoginRole(){
+  const a=window._lrAsk; if(!a) return;
+  const to=document.getElementById('lr-role')?.value||'';
+  if(!_loginTypeAllowed(to)) return _sfxErr('Choose Staff, Manager or Cashier.','lr-role');
+  if(_roleKey(to)===_roleKey(a.from)) return _sfxErr('This login is already '+_roleWord(a.from)+'. Choose a different role.','lr-role');
+  window._lrAsk=null;
+  changeLoginRole({staffId:a.staffId,username:a.username,from:a.from,to,followRoles:false});
+}
+// ── LINK, CHANGE OR UNLINK A LOGIN (v0.3.186, login-link step 5) ─────────────────────────────────────────────────────────
+// Manager and Cashier logins made before staff profiles carried logins have no profile behind them. In Settings > User Accounts each such row says so and has Link; a linked one
+// says who it is linked to and has Change and Unlink. Until a login is linked it works exactly as it does today. Linking changes NO role (step 4 is the only way a role changes),
+// and it never makes a second login for a profile: only active profiles that have no login are offered. Admin logins are never linked; Staff logins are shown, not changed here
+// (they are made with a profile). What a link does: the login cannot be used while that profile is Suspended, Resigned or Terminated (staffStatusBlock), the records it enters name
+// the person (enteredByStaffId, and enteredByStaff() for older records), and a profile edit that changes the Login type can offer its role change (step 4).
+// All three need the Admin password, check again after it, and write an audit entry. A person who is signed in keeps the link their session started with until they sign in again.
+const _LINKABLE_ROLES=['data_entry','cashier'];
+function loginLinkable(u){ return !!u&&_LINKABLE_ROLES.indexOf(_roleKey(u.role))>=0; }
+// '' when this login may be linked to this staff profile, otherwise ONE plain line saying why.
+function loginLinkableProblem(u){
+  if(!u) return 'That login is not in the list any more.';
+  if(!loginLinkable(u)) return _roleKey(u.role)==='admin'?'An Admin login is never linked to a staff profile.':'Only Manager and Cashier logins can be linked here.';
+  return '';
+}
+function loginLinkProblem(u,staffId){
+  const p=loginLinkableProblem(u);
+  if(p) return p;
+  if(!staffId) return 'Choose a staff profile.';
+  return staffLoginProblem((DATA.staff||[]).find(x=>String(x.id)===String(staffId)));
+}
+function _userLinkHtml(u){
+  const k=_roleKey(u.role);
+  if(k==='admin') return '';
+  const cap=t=>`<div class="u-fs-cap u-c-muted u-mt-6 u-lh-1p6">${t}</div>`;
+  const s=u.linkedStaffId?(DATA.staff||[]).find(x=>String(x.id)===String(u.linkedStaffId)):null;
+  const who=u.linkedStaffId?(s?'Linked to <b>'+esc(s.name)+'</b>':'Linked to a staff profile that is no longer in the list'):'Not linked to a staff profile';
+  if(!loginLinkable(u)) return cap(who);
+  const n=esc(u.username);
+  const btns=u.linkedStaffId
+    ?`<button class="editbtn" onclick="openLinkLogin('${n}')">🔗 Change</button><button class="editbtn" onclick="unlinkLogin('${n}')">Unlink</button>`
+    :`<button class="editbtn" onclick="openLinkLogin('${n}')">🔗 Link</button>`;
+  return cap(who)+`<div style="display:flex;gap:6px;margin-top:6px">${btns}</div>`;
+}
+function _userRowHtml(u){
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border)">
+      <div><div style="font-weight:700">${esc(u.username)}</div><span class="bdg ${u.role==='admin'?'bg2':(u.role==='staff'?'br2':'ba2')}">${roleLabel(u.role)}</span>${_userLinkHtml(u)}</div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button class="editbtn" onclick="adminResetUserPass('${esc(u.username)}')">🔑 Reset</button>
+        ${u.username!==USER.username?`<button class="delbtn" onclick="removeUser('${esc(u.username)}')">🗑</button>`:''}
+      </div>
+    </div>`;
+}
+function _llInfoHtml(u,who){
+  const cap=t=>`<div class="u-fs-cap u-c-muted u-mt-6 u-lh-1p6">${t}</div>`;
+  let h='';
+  const s=who?(DATA.staff||[]).find(x=>String(x.id)===String(who)):null;
+  if(s){
+    const jobs=staffLoginType(s), cur=_roleKey(u.role);
+    h+=cap(jobs===cur?'Their job roles give a '+esc(_roleWord(jobs))+' login, the same as this login.'
+      :'Their job roles give a '+esc(_roleWord(jobs))+' login; this login is '+esc(_roleWord(cur))+'. Linking does not change the role. To change it, open the person\'s menu, then Sign-in, then Change login role.');
+  }
+  return h+cap('Linking does not change what this login can do. From then on it cannot be used while the profile is Suspended, Resigned or Terminated, and the records it enters name this person.');
+}
+function _onLlWhoChange(){
+  const a=window._llAsk, u=a?(DATA.users||[]).find(x=>x.username===a.username):null;
+  const box=document.getElementById('ll-info');
+  if(box&&u) box.innerHTML=_llInfoHtml(u,document.getElementById('ll-who')?.value||'');
+}
+function openLinkLogin(username){
+  if(!requireAdmin('link a login'))return;
+  const u=(DATA.users||[]).find(x=>x.username===username);
+  const p=loginLinkableProblem(u);
+  if(p){ _sfxErr(p); return; }
+  const cur=u.linkedStaffId?(DATA.staff||[]).find(s=>String(s.id)===String(u.linkedStaffId)):null;
+  const profs=loginProfiles();
+  window._llAsk={username:u.username,fromId:String(u.linkedStaffId||'')};
+  openModal(`
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">${dbIc('user')} ${u.linkedStaffId?'Change link':'Link login'} — ${esc(u.username)}</div>${_sfxX()}</div>
+    <div class="fw"><div class="fl">Login</div>
+      <div class="u-lh-1p6">${esc(u.username)} · ${esc(_roleWord(u.role))}${u.linkedStaffId?' · now linked to '+(cur?esc(cur.name):'a profile that is no longer in the list'):' · not linked'}</div>
+    </div>
+    <div class="fw"><div class="fl">Staff profile <span class="u-c-red">*</span></div>
+      <select class="fi" id="ll-who" onchange="_onLlWhoChange()">
+        <option value="">${profs.length?'Select a staff profile':'No staff profile is waiting for a login'}</option>
+        ${profs.map(s=>`<option value="${esc(s.id)}">${esc(s.name)} (${esc(staffRoleLabel(s))})</option>`).join('')}
+      </select>
+      <div id="ll-info">${_llInfoHtml(u,'')}</div>
+      <div class="u-fs-cap u-c-muted u-mt-6 u-lh-1p6">Only active staff profiles without a login are listed.</div>
+    </div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="_confirmLinkLogin()">${u.linkedStaffId?'Change link':'Link'}</button></div></div>`);
+}
+function _confirmLinkLogin(){
+  const a=window._llAsk; if(!a) return;
+  const who=document.getElementById('ll-who')?.value||'';
+  const u=(DATA.users||[]).find(x=>x.username===a.username);
+  const p=loginLinkProblem(u,who);
+  if(p) return _sfxErr(p,'ll-who');
+  window._llAsk=null;
+  const s=(DATA.staff||[]).find(x=>String(x.id)===String(who));
+  requireAdminPassword('link "'+a.username+'" to '+s.name, ()=>_finishLinkLogin(a.username,who,a.fromId));
+}
+function _finishLinkLogin(username,staffId,fromId){
+  const say=m=>{ showToast(m+' Nothing was changed.',7000); return false; };
+  const u=(DATA.users||[]).find(x=>x.username===username);
+  const p=loginLinkProblem(u,staffId);
+  if(p) return say(p);
+  if(String(u.linkedStaffId||'')!==String(fromId||'')) return say('The link of "'+username+'" changed while you were confirming.');
+  const s=(DATA.staff||[]).find(x=>String(x.id)===String(staffId));
+  const was=String(u.linkedStaffId||'');
+  updateData(d=>({...d,users:(d.users||[]).map(x=>x.username===username?{...x,linkedStaffId:String(s.id)}:x)}));
+  logAuditEvent('UPDATE','User',`${username} · ${was?'Link changed from staff ID '+was+' to ':'Linked to '}staff ID ${s.id} (${s.name})`);
+  showToast('✅ "'+username+'" is now linked to '+s.name+'.',6000);
+  return true;
+}
+function unlinkLogin(username){
+  if(!requireAdmin('unlink a login'))return;
+  const u=(DATA.users||[]).find(x=>x.username===username);
+  if(!u||!loginLinkable(u)){ _sfxErr(!u?'That login is not in the list any more.':'Only Manager and Cashier logins can be unlinked here.'); return; }
+  if(!u.linkedStaffId){ _sfxErr('"'+username+'" is not linked to a staff profile.'); return; }
+  const s=(DATA.staff||[]).find(x=>String(x.id)===String(u.linkedStaffId));
+  window._llAsk={username:u.username,fromId:String(u.linkedStaffId)};
+  openModal(`
+    <div class="sfx"><div class="sfx-h"><div class="mtitle">${dbIc('user')} Unlink login</div>${_sfxX()}</div>
+    <div class="u-lh-1p6" style="font-size:18px;margin:6px 0 4px">Unlink "${esc(u.username)}" from ${s?esc(s.name):'its staff profile'}?</div>
+    <div class="u-fs-cap u-c-muted u-mt-6 u-lh-1p6">The login keeps working with the same role. It will no longer be stopped when the profile is Suspended, Resigned or Terminated, and the records it enters from now on will not name this person. You can link it again later.</div>
+    <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn rd" onclick="_confirmUnlinkLogin()">Unlink</button></div></div>`);
+}
+function _confirmUnlinkLogin(){
+  const a=window._llAsk; if(!a) return;
+  window._llAsk=null;
+  requireAdminPassword('unlink "'+a.username+'" from its staff profile', ()=>_finishUnlinkLogin(a.username,a.fromId));
+}
+function _finishUnlinkLogin(username,fromId){
+  const say=m=>{ showToast(m+' Nothing was changed.',7000); return false; };
+  const u=(DATA.users||[]).find(x=>x.username===username);
+  if(!u) return say('That login is not in the list any more.');
+  if(!loginLinkable(u)) return say('Only Manager and Cashier logins can be unlinked here.');
+  if(!u.linkedStaffId||String(u.linkedStaffId)!==String(fromId||'')) return say('The link of "'+username+'" changed while you were confirming.');
+  const s=(DATA.staff||[]).find(x=>String(x.id)===String(fromId));
+  updateData(d=>({...d,users:(d.users||[]).map(x=>{ if(x.username!==username) return x; const {linkedStaffId,...rest}=x; return rest; })}));
+  logAuditEvent('UPDATE','User',`${username} · Unlinked from staff ID ${fromId}${s?' ('+s.name+')':''}`);
+  showToast('✅ "'+username+'" is no longer linked to a staff profile.',6000);
+  return true;
 }
 function removeUser(username){
   if(!requireAdmin('remove users'))return;
@@ -31152,6 +31425,9 @@ async function tabCloudDownload(tab, evt) {
     render();
     showToast('✅ Data downloaded from cloud');
     updateLastSyncDisplay();
+    // v0.3.176 (login-link step 6): a manual download replaces DATA outside the sync, so it needs the same signed-in checks as _fbAdopt: a suspension or a role change
+    // made on another phone reaches this session now, not only at the next sync.
+    if (USER) { setTimeout(_staffStatusEnforce, 0); setTimeout(_roleChangeEnforce, 0); }
   } catch(e) {
     showToast('❌ Download failed: ' + (e.message||'unknown error'));
   } finally {
@@ -31567,7 +31843,9 @@ const CHAPTERS=[
       'Open **Settings → Account & Security → User Accounts → + Add User**.',
       'Type a **username** (letters, numbers and underscores), the person\'s **email** (they confirm it the first time they sign in) and a **password** of at least 8 characters, typed twice. [[i:own_login]]',
       'Under **Login for**, choose the staff profile this login belongs to. Only active profiles without a login are listed, and a profile can have only one login. A new person? Register them first in **Staff → + Add Staff** and tick **Create a login for this person after saving**.',
-      'You do not choose the role. It comes from the **Login type** of the person\'s job role, set in **Staff → ⚙️ Roles & Rates** (the highest one if they hold several). To make another Admin, choose **Admin** under Login for. Roles are **Manager**, **Staff**, **Cashier (till only)** or **Admin**. See **Who can do what**. Next to each login there is 🔑 Reset (new password) and 🗑 (remove).'
+      'You do not choose the role. It comes from the **Login type** of the person\'s job role, set in **Staff → ⚙️ Roles & Rates** (the highest one if they hold several). To make another Admin, choose **Admin** under Login for. Roles are **Manager**, **Staff**, **Cashier (till only)** or **Admin**. See **Who can do what**. Next to each login there is 🔑 Reset (new password) and 🗑 (remove).',
+      'To change a login\'s role later, open the person in **Staff**, open their menu and choose **Sign-in → Change login role**. If you change a person\'s job roles so that their Login type changes, the app also asks whether to apply the new role. Either way they are asked to sign in again at their phone\'s next sync.',
+      'A Manager or Cashier login made before staff profiles had logins shows **Not linked** in the list. Tap **🔗 Link** to tie it to a staff profile (**Change** or **Unlink** later). Until it is linked it works as before, and linking changes no role.'
     ],{where:'Settings → Account & Security → User Accounts',go:'adduser',chk:'logins',f:'staff_multi_user'}),
     ST('Set the Manager PIN and the till rules',[
       'Each Admin and Manager: open **Settings → Account & Security → Manager PIN**. Type your account password, then a new 4 to 6 digit PIN twice. [[i:manager_pin]]',
