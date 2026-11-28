@@ -515,6 +515,18 @@ function sessionUser(){
   return (DATA.users||[]).find(x=>String(x.username||'').toLowerCase()===String(u).toLowerCase())||null;
 }
 
+// v0.3.175 (hierarchy step 8): the same sign-in rule as index.html's staffStatusBlock(): a login that belongs to a staff profile cannot use the till while that profile is
+// Suspended, Resigned or Terminated ('expelled' = the old word for Terminated). Admin logins, logins with no linked profile (Cashier, Manager) and odd status words are never blocked.
+// Kept as a copy here because the till page does not load index.html. It belongs in gate.js (shared by both pages); that file was not part of this change.
+const _STAFF_STATUS_BLOCKS={suspended:'suspended, so you cannot sign in right now',resigned:'marked as resigned, so you can no longer sign in',terminated:'marked as terminated, so you can no longer sign in',expelled:'marked as terminated, so you can no longer sign in'};
+function staffStatusBlock(u){
+  if(!u||u.role==='admin'||!u.linkedStaffId)return '';
+  const s=((DATA&&DATA.staff)||[]).find(x=>String(x.id)===String(u.linkedStaffId));
+  const st=s?String(s.status||'').toLowerCase():'';
+  if(!Object.prototype.hasOwnProperty.call(_STAFF_STATUS_BLOCKS,st))return '';
+  return 'Your staff profile is '+_STAFF_STATUS_BLOCKS[st]+'. Ask your Admin.';
+}
+
 // ── LICENSE / TIER: signed cache written by index.html, same rules as currentTier() ─
 async function loadLicense(){
   try{
@@ -4541,6 +4553,7 @@ async function boot(){
   if(!DATA)return card('📭','No data on this device','Open the main app and sign in first.',[['Open main app',toApp,true]]);
   USER=sessionUser();
   if(!USER)return card('🔑','Please sign in','Sign in on the main app, then open the Till from there.',[['Open main app',toApp,true]]);
+  {const sb=staffStatusBlock(USER);if(sb){USER=null;try{sessionStorage.removeItem(SESSION_KEY);}catch{}return card('⏸','Sign-in not available',sb,[['Back to app',toApp,true]]);}}   // v0.3.175 (hierarchy step 8)
   LAST_SEEN=readActive();                              // till settings: when this login last used the till, read BEFORE idleReset() stamps "now"
   LICENSE=await loadLicense();
   if(!hasFeature('pos_till'))return card('🔒','Till not available','The Till is not available on this account. Check the main app.',[['Back to app',toApp,true]]);

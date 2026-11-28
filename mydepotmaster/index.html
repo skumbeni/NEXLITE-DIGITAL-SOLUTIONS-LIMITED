@@ -3946,6 +3946,7 @@ async function _fbAdopt(key) {
   if (DATA.installId) _persistInstallId(DATA.installId);
   _fbBaselineSet({ key, ts: cloudTs, dev, h: cc.h, k: cc.k, lists: cc.lists, leg: cc.leg, dups: cc.dups });
   sv(DATA);
+  if (USER) setTimeout(_staffStatusEnforce, 0);   // v0.3.175 (hierarchy step 8): the merge may have brought in a suspension of this signed-in login
   return { adopted: m.take.length, conflicts: m.conflicts };
 }
 // After a merge changed DATA outside a pull: redraw (not under an open form) and say so.
@@ -6680,6 +6681,39 @@ function reportsToProblem(staffId,bossId){
   if(me&&staffBeneath(me).has(b)) return boss.name+' already sits beneath this person, so they cannot also be the person this one reports to. Choose someone else, or No one.';
   return '';
 }
+// ── SIGN-IN BLOCK BY STAFF STATUS (v0.3.175, hierarchy step 8) ───────────────
+// A login that belongs to a staff profile (linkedStaffId) cannot be used while that profile is Suspended, Resigned or Terminated ('expelled' is the old word for Terminated).
+// Reinstating sets the profile back to 'active', so the next sign-in simply works: nothing is stored about the block, the status is read live from DATA.staff every time.
+// staffStatusBlock(login): '' when the login may be used, otherwise ONE plain line saying why. It reads the staff list as it is NOW.
+//   Never blocked: an Admin login (an Admin can never lock the owner out of their own depot, and an Admin is who reinstates); a login with no linked profile (Manager, Cashier,
+//   or a Staff login not linked to anyone: there is no status to read); a linked profile that is not in the staff list; any status word other than the four below (odd data can never lock someone out).
+const _STAFF_STATUS_BLOCKS={suspended:'suspended, so you cannot sign in right now',resigned:'marked as resigned, so you can no longer sign in',terminated:'marked as terminated, so you can no longer sign in',expelled:'marked as terminated, so you can no longer sign in'};
+function staffStatusBlock(u){
+  if(!u||u.role==='admin'||!u.linkedStaffId) return '';
+  const s=(DATA.staff||[]).find(x=>String(x.id)===String(u.linkedStaffId));
+  const st=s?String(s.status||'').toLowerCase():'';
+  if(!Object.prototype.hasOwnProperty.call(_STAFF_STATUS_BLOCKS,st)) return '';
+  return 'Your staff profile is '+_STAFF_STATUS_BLOCKS[st]+'. Ask your Admin.';
+}
+// The one line on the sign-in screen (the same red line a wrong password uses).
+function _loginNotice(msg){
+  const e=document.getElementById('login-err');
+  if(e){ e.style.display='block'; e.textContent=msg; }
+}
+// _staffStatusEnforce(): the same rule for a login that is ALREADY signed in. Called whenever data from another device is merged in (end of _fbAdopt, which every pull
+// and every sync goes through), so a suspension made on the Admin's phone reaches a signed-in Staff login within the minute it next syncs. The sign-out is the ordinary
+// one (_doLogoutNow: ends the stay-signed-in token, the till handoff and other tabs) and nothing is deleted: this phone's unsent work stays and is sent at the next sign-in.
+function _staffStatusEnforce(){
+  try{
+    if(!USER) return;
+    const why=staffStatusBlock(_myUserRec()||USER);
+    if(!why) return;
+    _doLogoutNow();
+    showLoginScreen();
+    _loginNotice(why);
+    showToast('🔒 Signed out. '+why,9000);
+  }catch(e){ console.warn('staff status check failed (non-fatal):',e); }
+}
 // Tabs/sub-tabs a 'staff' login is never allowed onto — always redirected away.
 const STAFF_BLOCKED_TABS=['general','maize','books','contacts'];
 const STAFF_BLOCKED_STAB=['roster','stafflist','rolesrates'];
@@ -6761,7 +6795,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.174';
+const SW_VERSION  = 'v0.3.177';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -9459,6 +9493,20 @@ async function doLogin(){
     }
     // ─────────────────────────────────────────────────────────────────────────
     await _bfOk();
+
+    // v0.3.175 (hierarchy step 8): a correct password is not enough while the person's staff profile is Suspended, Resigned or Terminated.
+    // This is after the depot is known to be the right one (cross-depot guard above) and before anything is provisioned or signed in. The Firebase Auth session that the
+    // password check may just have opened is closed again, so this phone does not stay signed in to the depot as that person.
+    {
+      const _sb = staffStatusBlock(userObj);
+      if (_sb) {
+        fbAuthSignOutSilently();
+        btn.disabled=false; btn.textContent='Sign in';
+        err.style.display='block';
+        err.textContent=_sb;
+        return;
+      }
+    }
 
     // ── Phase 1: silent Firebase Auth migration ───────────────────────────────
     // Reached whenever the login above was confirmed the legacy way (not by
@@ -17852,12 +17900,22 @@ function _staffFormHtml(p,s,o){
       <div class="fw"><textarea class="fi u-rs-none u-h-auto" id="${p}-notes" aria-label="Notes" placeholder="e.g. Seasonal worker, probation until Dec 2025…" rows="2">${esc(s.notes||'')}</textarea></div>
     </div></details>`;
 }
+// v0.3.177 (login-link step 2): "Create a login for this person after saving". Shown only to an Admin on a plan that allows more than one user, because the login form it
+// opens (addUser) needs both; for anyone else the section is not there at all. Unticked by default: most staff never sign in. The tick is read by saveStaff.
+function _sfxLoginTickHtml(){
+  if(!isAdmin()||!hasFeature('staff_multi_user'))return '';
+  return `<div class="sfx-sec" role="group" aria-labelledby="sf-h-login"><div class="sfx-st" id="sf-h-login">Sign-in</div>
+      <label class="u-d-flex u-ai-center u-g-10 u-bg-surface u-bd-1p5-solid-border u-r-r u-p-10-12 u-cur-pointer u-fs-body"><input type="checkbox" id="sf-mklogin" aria-describedby="sf-mklogin-h"> Create a login for this person after saving</label>
+      <div class="u-fs-cap u-c-muted u-mt-5" id="sf-mklogin-h">Opens the login form as soon as the profile is saved. You can skip it and do it later from the profile.</div>
+    </div>`;
+}
 function openStaffForm(){
   if(isStaffRole()){_sfxBlock('Not available','Staff logins cannot register staff.');return;}
   if (isAtCap('staff', (DATA.staff||[]).length)) { showCapReachedPrompt('staff', 'Staff Profiles'); return; }
   openModal(`
     <div class="sfx"><div class="sfx-h"><div class="mtitle">${dbIc('userplus')} Register Staff</div>${_sfxX()}</div>
     ${_staffFormHtml('sf',null,{edit:false,empId:isAdmin()})}
+    ${_sfxLoginTickHtml()}
     <div class="mact"><button class="btn bo" onclick="closeModal()">Cancel</button><button class="btn bg" onclick="saveStaff()">Register</button></div></div>`);
 }
 function _toggleSalaryField(prefix){
@@ -17878,11 +17936,13 @@ function saveStaff(){if(staffWriteBlocked())return;if(isReadOnly()){_sfxErr('Thi
   if(payType==='salary'&&monthlySalary<=0){_sfxErr('Enter a monthly salary amount.','sf-salary');return;}
   const _rtp=reportsToProblem('',document.getElementById('sf-reportsto')?.value||'');   // v0.3.172 (step 2)
   if(_rtp){_sfxErr(_rtp,'sf-reportsto');return;}
+  const _mkLogin=!!document.getElementById('sf-mklogin')?.checked;   // v0.3.177: read now, while the pop-up is still open (a photo is read after it)
   const photoFile=document.getElementById('sf-photo')?.files?.[0]||null;
   const finish=(photoDataUrl)=>{
     const payload={id:uid(),name,role:roles[0],roles,contractType:document.getElementById('sf-contract').value||'permanent',reportsTo:document.getElementById('sf-reportsto')?.value||'',payType,monthlySalary,..._stRead('sf'),dateJoined:joined,dateOfBirth:document.getElementById('sf-dob')?.value||'',phone:document.getElementById('sf-phone').value,employeeId:(document.getElementById('sf-empid').value||'').trim(),emergencyContactName:uc(document.getElementById('sf-ecname').value),emergencyContactPhone:(document.getElementById('sf-ecphone').value||'').trim(),notes:uc(document.getElementById('sf-notes').value),status:'active',photoDataUrl:photoDataUrl||null};
     updateData(d=>({...d,staff:[...d.staff,payload]}));
     closeModal();
+    if(_mkLogin)addUser(payload.id);   // v0.3.177: the profile is saved first; cancelling the login form leaves it saved (Create login in its menu does it later)
   };
   if(photoFile){
     if(photoFile.size > STAFF_PHOTO_MAX_BYTES){ showToast('Photo too large (over 8MB), so the staff member was saved without it. Add a smaller photo later from the profile.',7000); finish(null); return; }
@@ -19494,7 +19554,7 @@ function openStaffDetail(id,st){
     s.dateOfBirth&&['Date of birth',fmtDate(s.dateOfBirth)],
     s.employeeId&&isAdmin()&&['Employee ID / NRC',esc(s.employeeId)],
     s.emergencyContactName&&['Emergency contact',esc(s.emergencyContactName)+(s.emergencyContactPhone?' \u00B7 '+esc(s.emergencyContactPhone):'')],
-    linkedUser&&['Sign-in login',esc(linkedUser.username)+' '+_stc('neu',roleLabel(linkedUser.role))],
+    linkedUser&&['Sign-in login',esc(linkedUser.username)+' '+_stc('neu',roleLabel(linkedUser.role))+(staffStatusBlock(linkedUser)?' '+_stc('warn','Sign-in blocked'):'')],   // v0.3.175: blocked while the profile is suspended, resigned or terminated
     s.notes&&['Notes',esc(s.notes)]
   ].filter(Boolean);
   const dl=rows=>`<dl class="mf-l">${rows.map(r=>`<div><dt>${r[0]}</dt><dd>${r[1]}</dd></div>`).join('')}</dl>`;
@@ -24243,13 +24303,17 @@ function renderRolesRatesTab(){
   return `
     <div class="card">
       <div class="ctitle">Staff Roles &amp; Rates</div>
-      <div class="iv-body iv-mute iv-mb12" style="line-height:1.7">Define job roles and their tasks with pay rates. These appear as dropdowns when registering staff and logging work.</div>
+      <div class="iv-body iv-mute iv-mb12" style="line-height:1.7">Define job roles and their tasks with pay rates. These appear as dropdowns when registering staff and logging work. The Login type is the sign-in level a person with that role gets when you create their login; changing it does not change logins that already exist.</div>
       <div id="roles-list">${renderRolesEditor()}</div>
       <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:12px">
         <div class="sh" style="margin-top:0">Add New Role</div>
         <div style="display:flex;gap:8px">
           <input class="fi" id="new-role-name" placeholder="E.G. FORKLIFT OPERATOR" style="flex:1" oninput="this.value=this.value.toUpperCase()"/>
           <button class="btn bg" style="width:auto;padding:10px 16px" onclick="addRole()">+ ADD</button>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px">
+          <label for="new-role-login" style="font-size:15px;font-weight:700;color:var(--muted);flex-shrink:0">Login type</label>
+          <select class="fi" id="new-role-login" style="flex:1;min-width:130px">${_loginTypeOptsHtml('staff')}</select>
         </div>
       </div>
     </div>`;
@@ -26125,6 +26189,39 @@ function _dedRefCard(sid,DR){
   return `<details style="margin-top:6px"><summary style="font-size:13px;color:var(--blue);cursor:pointer">🔎 Deduction references (${list.length})</summary>${body}<div style="font-size:12px;color:var(--muted);margin-top:6px">Reference only — nothing here changes a deduction or the pay.</div></details>`;
 }
 
+// ── LOGIN TYPE ON JOB ROLES (v0.3.176, login-link step 1) ─────────────────────
+// role.loginType = the sign-in level a login gets when it is made for a person who holds this job role: 'staff', 'data_entry' (shown as Manager) or 'cashier'
+// (the login role codes themselves). Missing, empty or unknown = 'staff', so every role made before this version counts as Staff and nothing changes for it.
+// Cashier is not offered in the Play build (the Add user form hides it there too) and counts as Staff there. Nothing reads this yet except the Staff Roles & Rates
+// screen; Settings > Add user will (step 3). A Login type edit never changes a login that already exists.
+const LOGIN_TYPES=[{value:'staff',label:'Staff'},{value:'data_entry',label:'Manager'},{value:'cashier',label:'Cashier'}];
+function loginTypeOptions(){return LOGIN_TYPES.filter(o=>!(o.value==='cashier'&&window.PLAY_MODE));}
+function _loginTypeAllowed(v){return loginTypeOptions().some(o=>o.value===v);}
+function loginTypeLabel(v){const o=LOGIN_TYPES.find(x=>x.value===v);return o?o.label:'Staff';}
+function roleLoginType(role){const v=role&&role.loginType;return _loginTypeAllowed(v)?v:'staff';}
+function _loginTypeOptsHtml(sel){return loginTypeOptions().map(o=>`<option value="${o.value}"${o.value===sel?' selected':''}>${o.label}</option>`).join('');}
+function setRoleLoginType(ri,val){
+  if(!requireAdmin('manage roles')){refreshRolesEditor();return;}
+  const role=(DATA.staffRoles||[])[ri];
+  if(!role||!_loginTypeAllowed(val)){refreshRolesEditor();return;}
+  const name=role.name, from=roleLoginType(role);
+  if(from===val)return;
+  requireAdminPassword('change the login type of "'+name+'"', ()=>{
+    // The role is found by its name (unique, addRole refuses a second one), not by its place in the list: a sync can move the list while the password box is open.
+    // If the role was removed meanwhile nothing is saved and nothing is logged.
+    if(!(DATA.staffRoles||[]).some(x=>x.name===name)){refreshRolesEditor();return;}
+    updateData(d=>{
+      const roles=JSON.parse(JSON.stringify(d.staffRoles||[]));
+      const r=roles.find(x=>x.name===name);
+      if(r)r.loginType=val;
+      return{...d,staffRoles:roles};
+    });
+    logAuditEvent('UPDATE','Role',`${name} · Login type: ${loginTypeLabel(from)} → ${loginTypeLabel(val)}`);
+    refreshRolesEditor();
+  });
+  refreshRolesEditor();   // the password box can be cancelled: until it is confirmed the pick-list shows what is saved
+}
+
 function renderRolesEditor(){
   const roles=DATA.staffRoles||[];
   if(roles.length===0)return'<div style="color:var(--muted);font-size:18px;margin-bottom:12px">No roles defined yet. Add a role below.</div>';
@@ -26172,10 +26269,15 @@ function renderRolesEditor(){
       </div>`;
     }).join('');
     const tasksSection=tasks||'<div style="color:var(--muted);font-size:17px;padding:6px 0">No tasks — add one below</div>';
+    const _lt=roleLoginType(role);
     return`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
         <div style="font-family:var(--fh);font-size:20px;font-weight:700;color:var(--white)">${esc(role.name)}</div>
         <button class="delbtn" title="Remove role" aria-label="Remove role" onclick="removeRole(${ri})">${dbIc('trash')} Role</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+        <label for="role-lt-${ri}" style="font-size:15px;font-weight:700;color:var(--muted);flex-shrink:0">Login type</label>
+        <select id="role-lt-${ri}" style="${_slSel}flex:1;min-width:130px;border:1.5px solid var(--border);" onchange="setRoleLoginType(${ri},this.value)">${_loginTypeOptsHtml(_lt)}</select>
       </div>
       <div style="font-size:15px;font-weight:700;color:var(--muted);letter-spacing:.8px;text-transform:uppercase;margin-bottom:8px">Tasks &amp; Pay Rates</div>
       ${tasksSection}
@@ -26198,10 +26300,13 @@ function addRole(){
   const name=uc(inp?.value||'');
   if(!name){alert('Enter a role name.');return;}
   if((DATA.staffRoles||[]).find(r=>r.name===name)){alert('Role already exists.');return;}
+  const _ltPick=document.getElementById('new-role-login')?.value||'staff';
+  const loginType=_loginTypeAllowed(_ltPick)?_ltPick:'staff';   // v0.3.176: the Login type picked beside the name (Staff when nothing valid is picked)
   requireAdminPassword('add this role', ()=>{
-    const newRole={id:'role_'+Date.now(),name,tasks:[]};
+    const newRole={id:'role_'+Date.now(),name,tasks:[],loginType};
     updateData(d=>({...d,staffRoles:[...(d.staffRoles||[]),newRole]}));
     if(inp)inp.value='';
+    const _ltSel=document.getElementById('new-role-login');if(_ltSel)_ltSel.value='staff';
     refreshRolesEditor();
   });
 }
@@ -27084,6 +27189,12 @@ async function startBioLogin(){
 
     const userObj=DATA.users.find(x=>x.username===username);
     if(!userObj)throw new Error('Account no longer exists. Please sign in with password.');
+
+    // v0.3.175 (hierarchy step 8): same block as the password login. The fingerprint stays registered, so reinstating the person brings it back.
+    {
+      const _sb=staffStatusBlock(userObj);
+      if(_sb){ fbAuthSignOutSilently(); resetBtn(); err.style.display='block'; err.textContent=_sb; return; }
+    }
 
     _bfOk();
     USER=Object.freeze({...userObj}); // freeze to prevent console mutation — matches password login
@@ -28113,6 +28224,17 @@ setTimeout(async ()=>{
     if (_stayUsername && !USER) {
       const _userObj = (DATA.users||[]).find(x=>(x.username||'').toLowerCase()===_stayUsername);
       if (_userObj) {
+        // v0.3.175 (hierarchy step 8): a suspended / resigned / terminated person is not restored. The token is ended (reinstating means signing in again), the Auth
+        // session is closed, and the sign-in screen says why. If this phone's copy is out of date the check runs again when the first sync arrives (_staffStatusEnforce).
+        const _sbAuto = staffStatusBlock(_userObj);
+        if (_sbAuto) {
+          _clearStaySignedIn();
+          try{sessionStorage.removeItem(_POS_SESSION_KEY);}catch{}
+          fbAuthSignOutSilently();
+          showLoginScreen();
+          _loginNotice(_sbAuto);
+          return;
+        }
         USER = Object.freeze({..._userObj});
         _idleReset();
         _recordLoginSession(_userObj.username, 'auto'); // fire-and-forget — see def.
