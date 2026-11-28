@@ -6795,7 +6795,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.178';
+const SW_VERSION  = 'v0.3.182';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -7251,10 +7251,10 @@ let STAFF_MODAL_PIN=false; // when true, staff profile modal stays open across a
 let TAB='dashboard';
 let SETTINGS_VIEW='menu'; // 'menu' or a category id — which Settings sub-page is showing
 let ONLINE=navigator.onLine;
-let PERIOD={dashboard:'monthly',general:'monthly',maize:'monthly',staff:'monthly',roleHistory:'all',productivity:'monthly'};
+let PERIOD={dashboard:'monthly',general:'monthly',maize:'monthly',staff:'monthly',roleHistory:'all',productivity:'monthly',paysum:'all'};
 let STAFF_LIST_Q=''; // search text of the Staff view
 let STAFF_LIST_ROLE_FILTER='all'; // which registered role to show in the Staff List (or 'all')
-let DATE_RANGE={general:{from:'',to:''},maize:{from:'',to:''},staff:{from:'',to:''},dashboard:{from:'',to:''},roleHistory:{from:'',to:''},productivity:{from:'',to:''}};
+let DATE_RANGE={general:{from:'',to:''},maize:{from:'',to:''},staff:{from:'',to:''},dashboard:{from:'',to:''},roleHistory:{from:'',to:''},productivity:{from:'',to:''},paysum:{from:'',to:'',date:''}};
 let STAB='logs'; // staff subtab
 let STAFF_LOG_TASK_FILTER='all'; // work logs task filter: 'all' or a specific task name
 let MTAB='received'; // commodity subtab
@@ -18827,26 +18827,110 @@ function saveBulkClockOut(){
 
 
 
+// ── PAYMENT SUMMARY BY ROLE: sub roles, range, pay date (v0.3.179) ────────────────────────────────────────────────────────
+// Each role row is followed by one row per sub role (the task on the work log: Loading > Stacking). Three views, picked in the card:
+//   All time  : every approved work log, as before.
+//   Range     : the work done between two dates, and how much of that work is paid now.
+//   Pay date  : what the payments made on one date settled, by role and sub role.
+// Paid comes from the same oldest-first allocation as the Work Logs "Paid / Partial / Unpaid" badges (_payAllocCore), so the sub rows add up to the role
+// row and the role rows to the total. Money paid ahead of any work (more than the person had earned) is kept in the role's own "Paid ahead" row, so the
+// All time totals are the ones the old table showed. Display only: nothing is saved.
+function _psMode(){const m=PERIOD.paysum;return(m==='range'||m==='paydate')?m:'all';}
+function _psAllocUpTo(sid,upTo,inclusive){   // the allocation using only the payments made up to (or before) one date
+  const k=String(sid);
+  const logs=approvedArr((DATA.staffLogs||[]).filter(l=>String(l.staffId)===k&&(!l.entryType||l.entryType==='work')));
+  const pays=approvedArr((DATA.staffPayments||[]).filter(p=>String(p.staffId)===k&&(inclusive?String(p.date)<=upTo:String(p.date)<upTo)));
+  const sp=_paySplit(pays);
+  return _payAllocCore(logs,sp.general+_lnPoolFor(k),sp.targets);
+}
+function _psPayDates(staffList){   // the dates a payment was made on, newest first, with that day's total
+  const ids=new Set(staffList.map(s=>String(s.id))),m={};
+  approvedArr(DATA.staffPayments||[]).forEach(p=>{if(!ids.has(String(p.staffId))||!p.date)return;m[p.date]=_payR2((m[p.date]||0)+Number(p.amount||0));});
+  return Object.keys(m).sort().reverse().map(d=>({date:d,total:m[d]}));
+}
+function _psCompute(staffList){
+  const mode=_psMode(),dr=DATE_RANGE.paysum||{},from=dr.from||'',to=dr.to||'';
+  const dates=_psPayDates(staffList);
+  const pd=(dates.find(x=>x.date===dr.date)||dates[0]||{}).date||'';
+  const G={};   // role -> {role,sids:Set,earned,paid,subs:{task -> {task,sids:Set,earned,paid}}}
+  const grp=r=>G[r]||(G[r]={role:r,sids:new Set(),earned:0,paid:0,subs:{}});
+  const add=(role,task,sid,earned,paid)=>{
+    const g=grp(role||'—');g.sids.add(String(sid));g.earned+=earned;g.paid+=paid;
+    if(task){const t=g.subs[task]||(g.subs[task]={task,sids:new Set(),earned:0,paid:0});t.sids.add(String(sid));t.earned+=earned;t.paid+=paid;}
+  };
+  staffList.forEach(s=>{
+    const sid=String(s.id),primary=s.role||staffRoleList(s)[0]||'—';
+    if(mode==='all')grp(primary).sids.add(sid);   // a person with no work yet still counts under their role
+    if(s.payType==='salary'){
+      if(mode==='all'){const b=_stfBalance(s.id);add(primary,'Salary',sid,b.net,b.paid);}
+      return;
+    }
+    if(mode==='paydate'){
+      if(!pd||!approvedArr(DATA.staffPayments||[]).some(p=>String(p.staffId)===sid&&p.date===pd))return;
+      const aft=_psAllocUpTo(sid,pd,true),bef=_psAllocUpTo(sid,pd,false),was=new Map(bef.rows.map(r=>[String(r.log.id),r.paid]));
+      aft.rows.forEach(r=>{
+        const d=_payR2(r.paid-(was.get(String(r.log.id))||0));
+        if(d>0.004)add(r.log.role||primary,r.log.task||'(no task)',sid,0,d);
+      });
+      const left=_payR2(aft.poolLeft-bef.poolLeft);
+      if(left>0.004)add(primary,'Paid ahead',sid,0,left);
+      return;
+    }
+    const al=_staffPayAlloc(s.id,0);
+    al.rows.forEach(r=>{
+      const d=String(r.log.date||'');
+      if(mode==='range'&&((from&&d<from)||(to&&d>to)))return;
+      add(r.log.role||primary,r.log.task||'(no task)',sid,r.net,r.paid);
+    });
+    if(mode==='all'&&al.poolLeft>0.004)add(primary,'Paid ahead',sid,0,al.poolLeft);
+  });
+  const roles=Object.values(G).filter(g=>mode==='all'||g.earned>0.004||g.paid>0.004).sort((a,b)=>a.role.localeCompare(b.role));
+  roles.forEach(g=>{g.list=Object.values(g.subs).sort((a,b)=>(a.task==='Paid ahead')-(b.task==='Paid ahead')||a.task.localeCompare(b.task));});
+  return {mode,roles,dates,pd,from,to};
+}
+function _psHtml(staffList){
+  const c=_psCompute(staffList),m=c.mode;
+  const btn=(k,l)=>`<button type="button" class="pb${m===k?' act':''}" onclick="setPeriod('paysum','${k}')">${l}</button>`;
+  const sels=m==='paydate'?(c.dates.length?`<div class="tb-per" style="margin-top:8px"><select aria-label="Pay date" onchange="setDateRange('paysum','date',this.value)">${c.dates.map(x=>`<option value="${esc(x.date)}"${x.date===c.pd?' selected':''}>${esc(fmtDate(x.date))} · ${zm(x.total)}</option>`).join('')}</select></div>`:''):(m==='range'?_pRangeInputs('paysum'):'');
+  const note=m==='range'?`Work done ${c.from?fmtDate(c.from):'from the start'} to ${c.to?fmtDate(c.to):'today'}, and how much of it is paid now.`
+    :m==='paydate'?(c.pd?`What the payments made on ${fmtDate(c.pd)} settled.`:'No payments recorded yet.'):'All approved work and payments to date.';
+  const pdm=m==='paydate';
+  const cnt=(a)=>a.sids.size;
+  const bal=(e,p)=>`<td class="iv-w7 iv-r" style="color:${(e-p)>0.004?'var(--amber)':'var(--green)'}">${zm(Math.max(0,_payR2(e-p)))}</td>`;
+  let tE=0,tP=0;const tS=new Set();
+  const body=c.roles.map(g=>{
+    tE+=g.earned;tP+=g.paid;g.sids.forEach(x=>tS.add(x));
+    const head=pdm
+      ?`<tr style="background:var(--surface2)"><td class="iv-w7">${esc(g.role)}</td><td class="iv-r">${cnt(g)}</td><td class="iv-blu iv-w7 iv-r">${zm(g.paid)}</td></tr>`
+      :`<tr style="background:var(--surface2)"><td class="iv-w7">${esc(g.role)}</td><td class="iv-r">${cnt(g)}</td><td class="iv-grn iv-w7 iv-r">${zm(g.earned)}</td><td class="iv-blu iv-w7 iv-r">${zm(g.paid)}</td>${bal(g.earned,g.paid)}</tr>`;
+    const subs=g.list.map(t=>pdm
+      ?`<tr><td class="iv-mute" style="padding-left:22px">↳ ${esc(t.task)}</td><td class="iv-r iv-mute">${cnt(t)}</td><td class="iv-blu iv-r">${zm(t.paid)}</td></tr>`
+      :`<tr><td class="iv-mute" style="padding-left:22px">↳ ${esc(t.task)}</td><td class="iv-r iv-mute">${cnt(t)}</td><td class="iv-grn iv-r">${zm(t.earned)}</td><td class="iv-blu iv-r">${zm(t.paid)}</td>${bal(t.earned,t.paid)}</tr>`).join('');
+    return head+subs;
+  }).join('');
+  const total=c.roles.length?(pdm
+    ?`<tr style="border-top:2px solid var(--border)"><td class="iv-w7">Total</td><td class="iv-r">${tS.size}</td><td class="iv-blu iv-w7 iv-r">${zm(tP)}</td></tr>`
+    :`<tr style="border-top:2px solid var(--border)"><td class="iv-w7">Total</td><td class="iv-r">${tS.size}</td><td class="iv-grn iv-w7 iv-r">${zm(tE)}</td><td class="iv-blu iv-w7 iv-r">${zm(tP)}</td>${bal(tE,tP)}</tr>`):'';
+  const thead=pdm
+    ?`<tr><th>Role / Sub role</th><th class="iv-r">Staff</th><th class="iv-r iv-blu">Paid</th></tr>`
+    :`<tr><th>Role / Sub role</th><th class="iv-r">Staff</th><th class="iv-r iv-grn">Total Earned</th><th class="iv-r iv-blu">Total Paid</th><th class="iv-r iv-amb">Unpaid Balance</th></tr>`;
+  return `<div class="card iv-p0">
+      <div class="ctitle iv-ct">Payment Summary by Role</div>
+      <div style="padding:0 14px 8px"><div style="display:flex;gap:6px;flex-wrap:wrap">${btn('all','All time')}${btn('range',dbIc('calendar')+' Range')}${btn('paydate',dbIc('calendar')+' Pay date')}</div>${sels}<div class="iv-mute iv-cap" style="margin-top:6px">${note}</div></div>
+      <div class="tw"><table>
+        <thead>${thead}</thead>
+        <tbody>${body||`<tr><td colspan="${pdm?3:5}" class="iv-mute" style="text-align:center;padding:14px">Nothing in this selection.</td></tr>`}${total}</tbody>
+      </table></div>
+    </div>`;
+}
+
 // ── RENDER PAYMENTS ──────────────────────────────────────────────────────────
 function renderPayments(){
   const staffList=ownScopedStaff();   // v0.3.173: pay screens stay own-only for a Staff login
   const payments=DATA.staffPayments||[];
   if(!_pxSel.size)_pxSelOn=false;   // v0.3.142: selecting ends when nothing is ticked and the page is drawn again
   const _payMap=_payAllocAll();   // paid / partial / unpaid per work log
-  // Summary by role — approved entries only (pending staff entries aren't official yet)
-  const byRole={};
-  staffList.forEach(s=>{
-    const _sb=_stfBalance(s.id),earned=_sb.net,paid=_sb.paid;   // v0.3.143: the one set of totals
-    if(!byRole[s.role])byRole[s.role]={earned:0,paid:0,count:0};
-    byRole[s.role].earned+=earned;byRole[s.role].paid+=paid;byRole[s.role].count++;
-  });
-  const roleRows=Object.entries(byRole).map(([role,v])=>`<tr>
-    <td class="iv-w7">${esc(role)}</td>
-    <td class="iv-r">${v.count}</td>
-    <td class="iv-grn iv-w7 iv-r">${zm(v.earned)}</td>
-    <td class="iv-blu iv-w7 iv-r">${zm(v.paid)}</td>
-    <td class="iv-w7 iv-r" style="color:${(v.earned-v.paid)>0?'var(--amber)':'var(--green)'}">${zm(v.earned-v.paid)}</td>
-  </tr>`).join('');
+  const _psCard=_psHtml(staffList);   // v0.3.179: Payment Summary by Role, with sub roles and All time / Range / Pay date
 
   // Per-staff detail — show all entries (badged if pending/rejected) but only
   // accumulate approved amounts into the running earned/paid balance
@@ -18940,13 +19024,7 @@ function renderPayments(){
     ${_tb}
     <div id="px-bar-wrap">${_pxBarHtml()}</div>
     <div id="px-wrap" class="${_pxSelOn?'px-sel':''}">
-    ${staffList.length===0?'':`<div class="card iv-p0">
-      <div class="ctitle iv-ct">Payment Summary by Role</div>
-      <div class="tw"><table>
-        <thead><tr><th>Role</th><th class="iv-r">Staff</th><th class="iv-r iv-grn">Total Earned</th><th class="iv-r iv-blu">Total Paid</th><th class="iv-r iv-amb">Unpaid Balance</th></tr></thead>
-        <tbody>${roleRows}</tbody>
-      </table></div>
-    </div>`}
+    ${staffList.length===0?'':_psCard}
     ${staffList.length===0?_stNoStaffEmpty():staffDetail}
     </div>`;
 }
@@ -21968,7 +22046,7 @@ function _prLock(){
     const L=_pr.lim,r2=_payR2,nums=(DATA.payrollRuns||[]).map(r=>r.number||0),number=(nums.length?Math.max(...nums):0)+1;
     const rec=stampEntry({id:uid(),number,status:'locked',date:today(),time:nowTime(),from:_pr.from,to:_pr.to,group:_pr.group||'',end:_prEnd(_pr.from,_pr.to),lwd:!!_pr.lwd,
       limit:{mode:L.mode,date:L.date,time:L.time,bags:L.bags,hold:L.hold,picks:[...(L.picks||[])]},
-      rows:B.R.rows.map(x=>({sid:String(x.s.id),name:x.s.name,role:staffRoleLabel(x.s),payType:x.s.payType==='salary'?'salary':'task',earnings:x.earnings,salary:x.salary,carry:x.carry||0,corr:x.corr||0,deductions:x.deductions,unpaidLeave:x.unpaidLeave,stat:x.stat||null,paid:x.paid,advance:x.advance,loan:x.loan||0,loanShort:x.loanShort||0,loanBal:_payR2(Math.max(0,(x.loanBal||0)-(x.loan||0))),loanItems:(x.loanItems||[]).map(i=>({loanId:i.loanId,amt:i.cut})),net:x.net,held:x.held,pay:x.pay,
+      rows:B.R.rows.map(x=>({sid:String(x.s.id),name:x.s.name,role:staffRoleLabel(x.s),payType:x.s.payType==='salary'?'salary':'task',earnings:x.earnings,tasks:x.tasks||[],salary:x.salary,carry:x.carry||0,corr:x.corr||0,deductions:x.deductions,unpaidLeave:x.unpaidLeave,stat:x.stat||null,paid:x.paid,advance:x.advance,loan:x.loan||0,loanShort:x.loanShort||0,loanBal:_payR2(Math.max(0,(x.loanBal||0)-(x.loan||0))),loanItems:(x.loanItems||[]).map(i=>({loanId:i.loanId,amt:i.cut})),net:x.net,held:x.held,pay:x.pay,
         work:x.s.payType==='salary'?0:r2(x.earnings-x.deductions),
         heldRows:(x.heldInfo&&x.held>0.004)?x.heldInfo.rows.map(r=>({logId:String(r.l.id),date:r.l.date,task:r.l.task||'',qty:r.qty,of:_prQty(r.l),amt:r.amt})):[]})),
       totals:{gross:B.R.gross,cuts:B.R.cuts,already:B.R.already,payNow:B.payNow,held:B.heldSum,loans:B.R.loans||0,stat:B.R.stat||0,statBy:B.R.statBy||null},carryTotal:B.heldSum,problems:{fix:P.fixN,total:P.items.length}});
@@ -22177,13 +22255,23 @@ function _prSlParts(x){
   [['Work deductions',x.deductions],['Unpaid leave',x.unpaidLeave],['NAPSA contribution',x.stat&&x.stat.napsa],['NHIMA contribution',x.stat&&x.stat.nhima],['PAYE (income tax)',x.stat&&x.stat.paye],['Earlier payments',x.paid],['Advances already given',x.advance],['Loan / advance instalment',x.loan]].forEach(([l,v])=>{if(nz(v))less.push([l,v]);});
   return{earn,less};
 }
+// v0.3.182: the run's work earnings by role and sub role. null for a run locked before this version (no `tasks` stored): its payslip keeps the one line.
+function _prSlTasks(x){
+  const tk=Array.isArray(x.tasks)?x.tasks.filter(t=>t&&Number(t.n)>0):[];
+  if(!tk.length)return null;
+  const G={};tk.forEach(t=>{const r=t.role||'\u2014';(G[r]=G[r]||{role:r,n:0,earn:0,subs:[]});const g=G[r];g.n+=Number(t.n||0);g.earn+=Number(t.earn||0);g.subs.push(t);});
+  return Object.values(G).sort((a,b)=>a.role.localeCompare(b.role));
+}
 function _prSlHtml(run,x){
   const di=DATA.depotInfo||{},st=(DATA.staff||[]).find(q=>String(q.id)===String(x.sid))||{};
   const P=_prSlParts(x),po=_prSlPay(run,x.sid),over=x.net<-0.004,held=Number(x.held||0)>0.004,hr=x.heldRows||[];
   const period=fmtDate(run.from)+' → '+fmtDate(run.end||run.to);
   const tr=(l,v,c)=>`<tr><td>${esc(l)}</td><td class="num"${c?` style="color:${c}"`:''}>${v}</td></tr>`;
   const none='<tr><td colspan="2" style="color:#888">None</td></tr>';
-  const earnRows=P.earn.map(([l,v])=>tr(l,zm(v))).join('')||none;
+  const _tk=_prSlTasks(x),ses=n=>n+' session'+(n!==1?'s':'');
+  const brk=_tk?_tk.map(g=>`<tr style="background:#f3f4f6;font-weight:700"><td>${esc(g.role)} \u2014 ${ses(g.n)}</td><td class="num">${zm(g.earn)}</td></tr>`
+    +g.subs.map(t=>`<tr><td style="padding-left:22px">\u21b3 ${esc(t.task||'(no task)')} \u00b7 ${ses(Number(t.n))}${t.qty?' \u00b7 '+esc(t.qty):''}</td><td class="num">${zm(t.earn)}</td></tr>`).join('')).join(''):'';
+  const earnRows=P.earn.map(([l,v])=>(l==='Work earnings'?brk:'')+tr(l,zm(v))).join('')||none;
   const lessRows=P.less.map(([l,v])=>tr(l,'− '+zm(v),'#c00')).join('')||none;
   const heldTbl=hr.length?`<div class="pay-section-title">Held to the next run</div>
 <table><thead><tr><th>Date</th><th>Task</th><th class="num">Qty held</th><th class="num">Amount</th></tr></thead><tbody>${hr.slice(0,15).map(h=>`<tr><td>${fmtDate(h.date)}</td><td>${esc(h.task)}</td><td class="num">${esc(String(h.qty))}${h.of&&h.of!==h.qty?' of '+esc(String(h.of)):''}</td><td class="num">${zm(h.amt)}</td></tr>`).join('')}${hr.length>15?`<tr><td colspan="4" style="color:#888">… and ${hr.length-15} more</td></tr>`:''}</tbody></table>`:'';
@@ -22217,7 +22305,11 @@ ${heldTbl}
 function _prSlText(run,x){
   const di=DATA.depotInfo||{},P=_prSlParts(x),po=_prSlPay(run,x.sid),over=x.net<-0.004,L=[];
   L.push(`*Payslip — ${di.name||'Payroll'}*`,`Run #${run.number} · ${fmtDate(run.from)} → ${fmtDate(run.end||run.to)}`,`Name: ${x.name}${x.role?' ('+x.role+')':''}`,'');
-  P.earn.forEach(([l,v])=>L.push(`${l}: ${zm(v)}`));
+  const _tk=_prSlTasks(x);
+  P.earn.forEach(([l,v])=>{
+    if(l==='Work earnings'&&_tk)_tk.forEach(g=>{L.push(`${g.role}: ${zm(g.earn)}`);g.subs.forEach(t=>L.push(`  - ${t.task||'(no task)'} (${t.n} session${Number(t.n)!==1?'s':''}${t.qty?' \u00b7 '+t.qty:''}): ${zm(t.earn)}`));});
+    L.push(`${l}: ${zm(v)}`);
+  });
   P.less.forEach(([l,v])=>L.push(`${l}: − ${zm(v)}`));
   L.push('',over?`*Overpaid (to recover): ${zm(-x.net)}*`:`*Net payable: ${zm(x.net)}*`);
   if(Number(x.held||0)>0.004)L.push(`Held to next run: ${zm(x.held)}`);
@@ -22443,6 +22535,19 @@ function _prHeldRows(x){
     return `<div style="font-size:13px;color:var(--amber)">${dbIc('pause')} ${fmtDate(l.date)} · ${esc(l.task||'—')} · ${r.f<0.9999?`${_payR2(q-r.qty).toLocaleString()} paid, ${r.qty.toLocaleString()} held of ${q.toLocaleString()}`:`${q.toLocaleString()} held`} ${u}</div>`;}).join('');
   return `<div style="margin-top:6px">${rows}${h.rows.length>3?`<div style="font-size:13px;color:var(--muted)">+ ${h.rows.length-3} more held</div>`:''}</div>`;
 }
+// v0.3.182: a person's counted work grouped by role and sub role (the task), for the run payslip. Quantity is kept as text ("60 bags · 8 hours")
+// so no unit name is ever used as a database key. Same logs as `earnings`, so the rows add up to it.
+function _prTaskRows(work){
+  const m={};
+  work.forEach(l=>{
+    const k=(l.role||'')+'|'+(l.task||''),u=_ppUnit(l);
+    const t=m[k]||(m[k]={role:l.role||'',task:l.task||'',n:0,earn:0,units:{}});
+    t.n++;t.earn=_payR2(t.earn+Number(l.earnings||0));
+    t.units[u]=_payR2((t.units[u]||0)+Number(l.qty!=null?l.qty:l.bags||0));
+  });
+  return Object.values(m).sort((a,b)=>a.role.localeCompare(b.role)||a.task.localeCompare(b.task))
+    .map(t=>({role:t.role,task:t.task,n:t.n,earn:t.earn,qty:_ppQtyText(t.units)}));
+}
 function _prCompute(from,to,group){
   const r2=_payR2,inP=d=>!!d&&d>=from&&d<=to;
   const staff=(DATA.staff||[]).filter(s=>!group||staffHasRole(s,group));
@@ -22480,7 +22585,7 @@ function _prCompute(from,to,group){
     if(!(earnings||salary||deductions||unpaidLeave||paid||advance||carry||ld.due>0.004||statTot>0.004)){hidden++;return;}
     const netPre=r2(earnings+salary+carry-deductions-unpaidLeave-paid-advance-statTot);
     const lc=_lnCut(ld.items,Math.max(0,netPre)),net=r2(netPre-lc.total);
-    rows.push({s,earnings,salary,carry,corr,deductions,unpaidDays,unpaidLeave,paid,advance,before,stat,netPre,net,sessions:work.length,
+    rows.push({s,earnings,tasks:salaried?[]:_prTaskRows(work),salary,carry,corr,deductions,unpaidDays,unpaidLeave,paid,advance,before,stat,netPre,net,sessions:work.length,
       loanDue:ld.due,loan:lc.total,loanItems:lc.items,loanAll:ld.items,loanShort:r2(ld.due-lc.total),loanBal:_lnOwedBy(sid)});
   });
   rows.sort((a,b)=>String(a.s.name||'').localeCompare(String(b.s.name||'')));
@@ -23819,6 +23924,27 @@ function generatePayslip(staffId, periodMonth, periodYear){
     gross=sLogs.reduce((a,b)=>a+Number(b.earnings||0),0);
     earningsRowLabel = `Gross Wages (${sLogs.length} session${sLogs.length!==1?'s':''})`;
   }
+  // v0.3.181: wages by role and sub role (the task on each log). Built from the same logs the Gross line adds up, so the rows add up to it.
+  // Salaried staff keep the one salary line.
+  let earnRows=`<tr><td>${earningsRowLabel}</td><td class="num">${zm(gross)}</td></tr>`;
+  if(!isSalaried&&sLogs.length){
+    const G={};
+    sLogs.forEach(l=>{
+      const role=l.role||s.role||'—',task=l.task||'(no task)';
+      const g=G[role]||(G[role]={role,n:0,earn:0,subs:{}});
+      const t=g.subs[task]||(g.subs[task]={task,n:0,earn:0,units:{}});
+      const e=Number(l.earnings||0),q=Number(l.qty!=null?l.qty:l.bags||0),u=_ppUnit(l);
+      g.n++;g.earn+=e;t.n++;t.earn+=e;t.units[u]=_payR2((t.units[u]||0)+q);
+    });
+    const ses=n=>n+' session'+(n!==1?'s':'');
+    earnRows=Object.values(G).sort((a,b)=>a.role.localeCompare(b.role)).map(g=>
+      `<tr style="background:#f3f4f6;font-weight:700"><td>${esc(g.role)} — ${ses(g.n)}</td><td class="num">${zm(g.earn)}</td></tr>`
+      +Object.values(g.subs).sort((a,b)=>a.task.localeCompare(b.task)).map(t=>{
+        const q=_ppQtyText(t.units);
+        return `<tr><td style="padding-left:22px">\u21b3 ${esc(t.task)} \u00b7 ${ses(t.n)}${q?' \u00b7 '+esc(q):''}</td><td class="num">${zm(t.earn)}</td></tr>`;
+      }).join('')).join('')
+      +`<tr style="font-weight:700"><td>${earningsRowLabel}</td><td class="num">${zm(gross)}</td></tr>`;
+  }
   // Collect all deduction lines across logs (applies to salaried staff too —
   // e.g. absence penalties logged against attendance entries)
   const dedLines=[];
@@ -23849,7 +23975,7 @@ ${_getBrandedHeader('Payslip — '+s.name)}
 <div class="pay-section-title">Earnings</div>
 <table>
   <thead><tr><th>Description</th><th style="text-align:right">Amount (ZMW)</th></tr></thead>
-  <tbody><tr><td>${earningsRowLabel}</td><td class="num">${zm(gross)}</td></tr></tbody>
+  <tbody>${earnRows}</tbody>
 </table>
 <div class="pay-section-title">Deductions</div>
 <table>
@@ -29225,13 +29351,39 @@ function exportCSV_StaffLogs(){
   _csvDownload(rows,_csvFilename('Staff_WorkLogs'));
 }
 function exportCSV_StaffPayments(){
-  // Fix: same self-scope leak as exportCSV_StaffLogs — a staff login should
-  // only ever export their own payment history.
-  const _sIds=ownScopedStaffIds();
-  const pays=filterPeriod((DATA.staffPayments||[]).filter(p=>_sIds.has(String(p.staffId))),PERIOD.staff,'date','staff').slice().sort((a,b)=>b.date.localeCompare(a.date));
-  const rows=[_csvRow(['Date','Staff','Amount','Notes'])];
-  pays.forEach(p=>rows.push(_csvRow([p.date,_staffName(p.staffId),p.amount||0,p.notes||''])));
-  _csvDownload(rows,_csvFilename('Staff_Payments'));
+  // v0.3.180: prints what the Payment Summary by Role card shows (sub roles; All time / Range / Pay date), then the payments behind it.
+  // A staff login still only gets its own people (ownScopedStaff / ownScopedStaffIds).
+  const sIds=ownScopedStaffIds(),staffList=ownScopedStaff();
+  const c=_psCompute(staffList),m=c.mode,pdm=m==='paydate',cu=cur()||'';
+  const fq=n=>(Math.round(Number(n||0)*100)/100).toFixed(2);
+  const un=(e,pd)=>fq(Math.max(0,e-pd));
+  const label=m==='range'?`Work done ${c.from?fmtDate(c.from):'from the start'} to ${c.to?fmtDate(c.to):'today'}`:pdm?(c.pd?`Payments made on ${fmtDate(c.pd)}`:'No payments recorded'):'All time';
+  const row=(name,o)=>pdm?[name,o.sids.size,fq(o.paid)]:[name,o.sids.size,fq(o.earned),fq(o.paid),un(o.earned,o.paid)];
+  const sRows=[];let tE=0,tP=0;const tS=new Set();
+  c.roles.forEach(g=>{
+    tE+=g.earned;tP+=g.paid;g.sids.forEach(x=>tS.add(x));
+    sRows.push(row(g.role,g));
+    g.list.forEach(t=>sRows.push(row('   \u21b3 '+t.task,t)));
+  });
+  if(c.roles.length)sRows.push(pdm?['TOTAL',tS.size,fq(tP)]:['TOTAL',tS.size,fq(tE),fq(tP),un(tE,tP)]);
+  const sHead=pdm?['Role / Sub role','Staff','Paid'+(cu?' ('+cu+')':'')]
+    :['Role / Sub role','Staff','Total Earned'+(cu?' ('+cu+')':''),'Total Paid','Unpaid Balance'];
+  // the payments behind the summary: the same selection (approved payments only, as in the summary)
+  let pays=approvedArr((DATA.staffPayments||[]).filter(p=>sIds.has(String(p.staffId))));
+  pays=pdm?pays.filter(p=>p.date===c.pd):(m==='range'?filterPeriod(pays,'range','date','paysum'):filterPeriod(pays,'all','date','staff'));
+  pays=pays.slice().sort((x,y)=>String(y.date).localeCompare(String(x.date)));
+  if(!sRows.length&&!pays.length){showToast('No data to export.');return;}
+  const pRows=pays.map(p=>{const st=(DATA.staff||[]).find(x=>String(x.id)===String(p.staffId));return[p.date,_staffName(p.staffId),st?staffRoleLabel(st):'',fq(p.amount),p.notes||''];});
+  const pTot=pays.reduce((a,p)=>a+Number(p.amount||0),0);
+  const sub=t=>`<div style="margin:14px 0 4px;font-weight:700;font-size:12pt">${esc(t)}</div>`;
+  const body=_pdfHeader('Staff Payments')
+    +sub('Payment Summary by Role \u2014 '+label)
+    +(sRows.length?_pdfTable(sHead,sRows):'<div>Nothing in this selection.</div>')
+    +sub(pdm?'Payments made on '+fmtDate(c.pd):(m==='range'?'Payments made in this range':'All payments'))
+    +(pRows.length?_pdfTable(['Date','Staff','Role','Amount'+(cu?' ('+cu+')':''),'Notes'],pRows):'<div>No payments in this selection.</div>')
+    +_pdfFooter(`${pRows.length} payment${pRows.length!==1?'s':''} \u00b7 ${cu?cu+' ':''}${fq(pTot)}`);
+  _pdfPrint(body,'MDM \u2014 Staff Payments');
+  showToast('📄 Opening PDF — use print dialog to save');
 }
 function exportCSV_LeaveLog(){
   // Fix: same self-scope leak — a staff login should only export their own leave log.

@@ -25,7 +25,22 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.178 (2026-11-28) — Login link step 3: Settings > Add user gives an EXISTING staff profile a login, and the role comes from the job role's Login type (index.html + sw.js; no new file; NO new field, NO database RULES change)
+// Current version: v0.3.182 (2026-11-28) — Payroll-run payslip (PDF and WhatsApp text): work earnings by role and sub role (index.html + sw.js; no new file; ONE NEW OPTIONAL FIELD on a payroll run row, NO database RULES change)
+//   - NEW FIELD: payrollRuns[].rows[].tasks = [{role,task,n,earn,qty}] (qty is text, e.g. "60 bags"). Written when a run is locked, from the same logs as `earnings`, so the rows add up to it. The depot data node has no per-field validation in database_rules.json, so nothing to publish.
+//   - The run payslip shows a subtotal row per role and one row per sub role under it, then the Work earnings line. The WhatsApp text gets the same lines.
+//   - RUNS LOCKED BEFORE THIS VERSION have no `tasks`: their payslip keeps the single Work earnings line (a locked run is a snapshot, so it is not rebuilt from today's logs).
+// Previous version: v0.3.181 (2026-11-28) — Payslip: the Earnings section lists wages by role and sub role (index.html + sw.js; no new file; NO new field, NO database RULES change)
+//   - Each role gets a subtotal row (sessions, amount), with one row per sub role (the task on the log: sessions, quantity per unit, amount) under it, then the Gross Wages line as before. Built from the same logs as Gross, so the rows add up to it.
+//   - Salaried staff keep the single salary line. Deductions, net pay and the rest of the payslip are unchanged.
+// Previous version: v0.3.180 (2026-11-28) — Payments: the Export / print on the Payments tab now follows the Payment Summary by Role card (index.html + sw.js; no new file; NO new field, NO database RULES change)
+//   - Prints the summary as the card shows it (roles with their sub roles, a Total row; All time, Range or Pay date), then the payments behind the same selection. Approved payments only, as in the summary.
+//   - Before, Export printed the payments list filtered by the Staff period (which has no control on this tab). It now follows the card's selection instead.
+// Previous version: v0.3.179 (2026-11-28) — Payments: "Payment Summary by Role" now lists the sub roles under each role and can be set to All time, a date Range, or one Pay date (index.html + sw.js; no new file; NO new field, NO database RULES change)
+//   - Each role row is followed by one row per sub role (the task on the work log), and a Total row closes the table. Staff counts are people with work in that role / sub role.
+//   - ALL TIME: the same figures as before (Paid ahead of any work is kept in the role's own "Paid ahead" row). RANGE: work done between the two dates and how much of it is paid now. PAY DATE: pick a date a payment was made on; shows what that day's payments settled, by role and sub role.
+//   - Paid per sub role uses the same oldest-first allocation as the Work Logs Paid / Partial / Unpaid badges (_payAllocCore). Salaried staff show under their role as "Salary" in All time only.
+//   - Display only: nothing is saved. New state is PERIOD.paysum and DATE_RANGE.paysum (both already in the render cache key).
+// Previous version: v0.3.178 (2026-11-28) — Login link step 3: Settings > Add user gives an EXISTING staff profile a login, and the role comes from the job role's Login type (index.html + sw.js; no new file; NO new field, NO database RULES change)
 //   - WHY: the Staff tab's Add staff is now the one place that makes a staff profile (Reports to and the staff cap are checked there once). Settings > Add user used to make a profile at the same time as a Staff login; that block is gone. The login's sign-in role is no longer typed: it is read from the Login type of the person's job role (step 1).
 //   - THE FORM (Settings > User Accounts > + Add User): Username and Email as before. NEW "Login for" pick-list: the ACTIVE staff profiles that have NO login yet (by name, each with its job roles), then "Admin (not linked to a staff profile)" last. Nothing is pre-selected, so an Admin login is never made by accident. NEW read-only "Role" line under it: the level (STAFF / MANAGER / CASHIER / ADMIN), a one-line description of it, and where it comes from. When the person holds several job roles with different Login types the line lists them ("Loader (Staff), Guard (Manager)") and says the highest level is used. When no profile is waiting for a login the list shows only the placeholder and Admin, with a note pointing to Add staff and its \"Create a login for this person after saving\" tick.
 //   - THE RULE (one place, loginTargetFor in index.html): a login's role is the HIGHEST Login type among the person's job roles: Manager over Cashier over Staff (staffLoginType). A job role with no Login type, an unknown one (including admin, constructor, __proto__, numbers), or one no longer in the roles list counts as Staff; a person with no roles counts as Staff; the Play build counts a stored Cashier as Staff. A Login type can never give Admin. The Admin option is the only way to make an Admin login, it is never linked to a profile, and a second or third Admin login is still allowed.
@@ -3034,7 +3049,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.178';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.182';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
