@@ -6795,7 +6795,7 @@ function copyNum(num) {
 // requests and serve the cached shell when the device is offline.
 // The blob-URL SW trick is removed — it cannot intercept navigate requests
 // on Android Chrome, which is why the app previously failed offline.
-const SW_VERSION  = 'v0.3.183';
+const SW_VERSION  = 'v0.3.184';
 
 // ── MEDIAN UPDATE HANDLER ────────────────────────────────────────────────────
 // Problem: Median's webview caches the HTML shell itself, so when a new version
@@ -7800,6 +7800,7 @@ function pBtns(tab){
   }).join('')+rangeInputs;
 }
 function setPeriod(tab,p){
+  if(tab==='paysum'&&_pxSel.size){_pxSel.clear();_pxSelOn=false;}   // v0.3.184: no payment stays ticked out of sight
   PERIOD[tab]=p;
   render();
   // render() only touches #content — the Role History period selector lives
@@ -7809,6 +7810,7 @@ function setPeriod(tab,p){
   if(tab==='productivity') openProductivity();
 }
 function setDateRange(tab,key,val){
+  if(tab==='paysum'&&_pxSel.size){_pxSel.clear();_pxSelOn=false;}
   DATE_RANGE[tab]=Object.assign({},DATE_RANGE[tab]||{},{[key]:val});
   render();
   if(tab==='roleHistory') openRoleWorkHistory();
@@ -18848,6 +18850,17 @@ function _psPayDates(staffList){   // the dates a payment was made on, newest fi
   approvedArr(DATA.staffPayments||[]).forEach(p=>{if(!ids.has(String(p.staffId))||!p.date)return;m[p.date]=_payR2((m[p.date]||0)+Number(p.amount||0));});
   return Object.keys(m).sort().reverse().map(d=>({date:d,total:m[d]}));
 }
+// v0.3.184: the card's selection as plain values, and the work entries a pay date settled (for the per-person lists below the card)
+function _psSel(staffList){
+  const dr=DATE_RANGE.paysum||{},dates=_psPayDates(staffList);
+  return{mode:_psMode(),from:dr.from||'',to:dr.to||'',pd:(dates.find(x=>x.date===dr.date)||dates[0]||{}).date||''};
+}
+function _psSettledOn(sid,pd){
+  const out=new Set();if(!pd)return out;
+  const aft=_psAllocUpTo(sid,pd,true),bef=_psAllocUpTo(sid,pd,false),was=new Map(bef.rows.map(r=>[String(r.log.id),r.paid]));
+  aft.rows.forEach(r=>{if(_payR2(r.paid-(was.get(String(r.log.id))||0))>0.004)out.add(String(r.log.id));});
+  return out;
+}
 function _psCompute(staffList){
   const mode=_psMode(),dr=DATE_RANGE.paysum||{},from=dr.from||'',to=dr.to||'';
   const dates=_psPayDates(staffList);
@@ -18930,6 +18943,7 @@ function renderPayments(){
   const payments=DATA.staffPayments||[];
   if(!_pxSel.size)_pxSelOn=false;   // v0.3.142: selecting ends when nothing is ticked and the page is drawn again
   const _payMap=_payAllocAll();   // paid / partial / unpaid per work log
+  const _vs=_psSel(staffList);   // v0.3.184: the per-person lists below follow the same All time / Range / Pay date choice
   const _psCard=_psHtml(staffList);   // v0.3.179: Payment Summary by Role, with sub roles and All time / Range / Pay date
 
   // Per-staff detail — show all entries (badged if pending/rejected) but only
@@ -18946,6 +18960,18 @@ function renderPayments(){
       ...sRep.map(r=>({type:'loan',date:r.date,id:r.id,amount:Number(r.amount||0),runNumber:r.runNumber,_rec:r})),
       ..._stRecs().filter(r=>r.staffId===String(s.id)).map(r=>({type:'loan',stat:true,date:r.date,id:r.id,amount:r.amount,runNumber:r.runNumber,_rec:r}))
     ].sort((a,b)=>a.date.localeCompare(b.date)||a.type.localeCompare(b.type));
+    // v0.3.184: only the entries inside the card's selection are listed. The running figures are still worked out over every entry, so they stay true.
+    const _settled=(_vs.mode==='paydate'&&s.payType!=='salary')?_psSettledOn(s.id,_vs.pd):null;
+    const vis=ev=>{
+      if(_vs.mode==='range')return!((_vs.from&&ev.date<_vs.from)||(_vs.to&&ev.date>_vs.to));
+      if(_vs.mode==='paydate'){
+        if(ev.type==='pay'||ev.type==='loan')return ev.date===_vs.pd;
+        if(ev.type==='earn')return!!_settled&&_settled.has(String(ev.id));
+        return false;
+      }
+      return true;
+    };
+    const shown=events.filter(vis),vPays=sPays.filter(p=>vis({type:'pay',date:p.date}));
     let cumEarned=0,cumPaid=0;
     const eRows=events.map(ev=>{
       if(ev.type==='earn'){if(isApproved(ev._rec))cumEarned+=ev.amount;
@@ -19002,7 +19028,8 @@ function renderPayments(){
           ${USER.role==='admin'?_slActCell('spay',ev.id,'Payment of '+zm(ev.amount)+', '+fmtDate(ev.date),{ed:_pEd}):'<td class="c-more c-act"></td>'}
         </tr>`;
       }
-    }).join('');
+    }).filter((_r,_i)=>vis(events[_i])).join('');
+    if(_vs.mode!=='all'&&!shown.length)return '';   // nothing for this person in the selection
     const _bal=_stfBalance(s.id),unpaid=_bal.unpaid;   // v0.3.143: equals the last row's running figures below
     return `<div class="card iv-mb14">
       <div class="ctitle iv-mb4">${esc(s.name)} <span class="tag iv-body iv-ml4">${esc(staffRoleLabel(s))}</span></div>
@@ -19012,7 +19039,8 @@ function renderPayments(){
       </div>
       ${_moreFigHtml([['Total earned',zm(_bal.net),''],['Total paid',zm(_bal.paid),'']])}
       ${events.length===0?'<div class="empty">No work or payments recorded yet.</div>':`
-      <div class="iv-hd2">${USER.role==='admin'&&sPays.length?`<label class="px-all iv-cap iv-ptr" style="display:flex;align-items:center;gap:6px"><input type="checkbox" data-pxall="${esc(String(s.id))}" ${sPays.every(p=>_pxSel.has(String(p.id)))?'checked':''} onchange="_pxAll('${s.id}',this.checked)" style="width:18px;height:18px"/> Select all paid</label>`:'<span></span>'}<button class="btn bg bsm" onclick="generatePayslip('${s.id}')">${dbIc('receipt')} Generate Payslip</button></div>
+      ${_vs.mode!=='all'?`<div class="iv-mute iv-cap" style="margin:6px 0">Showing ${shown.length} of ${events.length} entries \u00b7 ${_vs.mode==='range'?(_vs.from?fmtDate(_vs.from):'the start')+' \u2192 '+(_vs.to?fmtDate(_vs.to):'today'):'paid on '+fmtDate(_vs.pd)}</div>`:''}
+      <div class="iv-hd2">${USER.role==='admin'&&vPays.length?`<label class="px-all iv-cap iv-ptr" style="display:flex;align-items:center;gap:6px"><input type="checkbox" data-pxall="${esc(String(s.id))}" ${vPays.every(p=>_pxSel.has(String(p.id)))?'checked':''} onchange="_pxAll('${s.id}',this.checked)" style="width:18px;height:18px"/> Select all paid</label>`:'<span></span>'}<button class="btn bg bsm" onclick="generatePayslip('${s.id}')">${dbIc('receipt')} Generate Payslip</button></div>
       <div class="tw"><table class="rr rr2">
         <thead><tr><th>Date</th><th>Type</th><th>Details</th><th class="iv-r">Earned</th><th class="iv-r">Paid</th><th class="iv-r iv-grn">Earned to date</th><th class="iv-r iv-blu">Paid to date</th><th class="iv-r iv-amb">Unpaid</th><th></th></tr></thead>
         <tbody>${eRows}</tbody>
@@ -19025,7 +19053,7 @@ function renderPayments(){
     <div id="px-bar-wrap">${_pxBarHtml()}</div>
     <div id="px-wrap" class="${_pxSelOn?'px-sel':''}">
     ${staffList.length===0?'':_psCard}
-    ${staffList.length===0?_stNoStaffEmpty():staffDetail}
+    ${staffList.length===0?_stNoStaffEmpty():(staffDetail||'<div class="card"><div class="empty">Nothing in this selection.</div></div>')}
     </div>`;
 }
 
@@ -21096,9 +21124,11 @@ function _pxBar(){
   });
 }
 function _pxTog(id,on){id=String(id);if(on)_pxSel.add(id);else _pxSel.delete(id);_pxBar();}
-function _pxAll(sid,on){
-  (DATA.staffPayments||[]).filter(p=>String(p.staffId)===String(sid)).forEach(p=>{if(on)_pxSel.add(String(p.id));else _pxSel.delete(String(p.id));});
-  document.querySelectorAll('.px-chk').forEach(c=>{if(c.dataset.sid===String(sid))c.checked=!!on;});
+function _pxAll(sid,on){   // v0.3.184: only the payments listed on screen (a Range / Pay date view hides the rest)
+  document.querySelectorAll('.px-chk').forEach(c=>{
+    if(c.dataset.sid!==String(sid))return;
+    c.checked=!!on;if(on)_pxSel.add(String(c.dataset.id));else _pxSel.delete(String(c.dataset.id));
+  });
   _pxBar();
 }
 function _pxClear(){_pxSel.clear();_pxSelOn=false;_pxApplySel();}   // v0.3.142: also leaves selecting

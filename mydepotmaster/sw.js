@@ -25,7 +25,11 @@
 //   - On activate the SW posts NEW_VERSION → index.html clears the webview
 //     cache and navigates to the stamped URL.
 //
-// Current version: v0.3.183 (2026-11-28) — Staff payslip: a month, a date range, or a pay date (index.html + sw.js; no new file; NO new field, NO database RULES change)
+// Current version: v0.3.184 (2026-11-28) — Payments tab: each person's list follows the All time / Range / Pay date choice, so it is no longer endless (index.html + sw.js; no new file; NO new field, NO database RULES change)
+//   - RANGE lists only entries dated inside the range. PAY DATE lists that day's payments (and loan / tax lines) and the work entries those payments settled. A person with nothing in the selection is left out; "Showing N of M entries" says what is hidden.
+//   - The running Earned / Paid / Unpaid columns are still worked out over every entry, so each row's figures stay true. The Unpaid balance box and More figures stay all time.
+//   - "Select all paid" and the payment ticks now only touch the rows on screen, and changing the choice clears any ticks, so no payment can be ticked out of sight.
+// Previous version: v0.3.183 (2026-11-28) — Staff payslip: a month, a date range, or a pay date (index.html + sw.js; no new file; NO new field, NO database RULES change)
 //   - Generate Payslip asks "A month / A date range / A pay date". MONTH is unchanged. RANGE: the same payslip over From to To (work, payments and loan instalments inside it; salary prorated month by month; NAPSA/NHIMA/PAYE from the payroll runs locked inside the range).
 //   - PAY DATE (pick one of the dates this person was paid): the payment(s) of that day, the work they settled by role and sub role (same oldest-first allocation as the Payments tab), and what is still owed after them. Salaried staff get the payment and its total only.
 //   - Not changed: the payroll-run payslip (a locked run already is a period, and shows its own pay date).
@@ -3053,7 +3057,7 @@
 
 // ────────────────────────────────────────────────────────────────────────────
 
-const CACHE     = 'v0.3.183';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
+const CACHE     = 'v0.3.184';   // ← bump this whenever you deploy a new version (x.y.z, each group 0-9 then rolls over)
 const SHELL     = './';
 const FONTS_CSS = 'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700;800&display=swap';
 
